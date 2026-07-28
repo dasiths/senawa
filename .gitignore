@@ -1,0 +1,53 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Test and coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# Caches
+.cache/
+.turbo/
+.eslintcache
+.vitest/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Beads: the Dolt database is synced via refs/dolt/data, not via git.
+# Running `bd init` may add further entries of its own.
+.beads/embeddeddolt/
+.beads/dolt/
+.beads/*.db
+.beads/interactions.jsonl
+
+# Senawa: tracking files are committed on purpose, but sensor runs are
+# regenerable noise and worktrees are local scratch space.
+.agents/.copilot-tracking/**/sensors/runs/
+.worktrees/
+
+# Copilot CLI local artefacts
+copilot-session-*.md
+.copilot/
+.github/copilot/settings.local.json
+
+# Editor and OS
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
