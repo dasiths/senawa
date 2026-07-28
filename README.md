@@ -16,7 +16,7 @@ estimated_reading_time: 4
 
 ## Overview
 
-Senawa is an orchestration harness for [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli). A principal agent takes a high level request from you, decomposes it, and delegates the pieces to specialist subagents: a researcher, a planner, one or more implementors, and verifiers. The principal never reads your code. It coordinates, and it keeps its context small enough to see a multi-day piece of work through to the end.
+Senawa (සේනාව) is an orchestration harness for [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli). A principal agent takes a high level request from you, decomposes it, and delegates the pieces to specialist subagents: a researcher, a planner, one or more implementors, and verifiers. The principal never reads your code. It coordinates, and it keeps its context small enough to see a multi-day piece of work through to the end.
 
 Three ideas hold the design together.
 
