@@ -30,7 +30,9 @@ Because everything routes through that one seam, the harness can also write down
 
 ## Status
 
-Design stage. Nothing is implemented yet. The architecture, the CLI surface, the sensor and gate model, and the technology decision are written up in [the design document](docs/design/multi-agent-orchestration.md), which is the place to start.
+Design stage. Nothing is implemented yet, but the risky assumptions have been tested rather than assumed. Nine independent probes in [poc/](poc/README.md) ran against the real Copilot CLI, the Copilot SDK, and beads. Six design assumptions did not survive, and a throwaway prototype now runs the whole loop end to end.
+
+Start with [the design document](docs/design/multi-agent-orchestration.md), then read [the proof-of-concept findings](docs/design/poc-findings.md) before writing any code.
 
 ## How it fits together
 
@@ -72,7 +74,8 @@ You will need GitHub Copilot CLI with an active Copilot subscription, Node.js 22
 The tree below is the planned shape. Only `docs/` exists today.
 
 ```text
-docs/design/          architecture and decision records
+docs/design/          architecture, decision records, and proof-of-concept findings
+poc/                  throwaway probes that validated the design against reality
 packages/             core, graph, sensors, report, orchestrator, cli
 .github/agents/       role definitions for the principal and each subagent
 .github/hooks/        gate enforcement for sessions senawa does not host
@@ -83,6 +86,7 @@ sensors.yaml          sensor and gate definitions for this repository
 ## Further reading
 
 * [Multi-agent orchestration design](docs/design/multi-agent-orchestration.md)
+* [Proof-of-concept findings](docs/design/poc-findings.md)
 * [Refining Inferential Sensors in Coding Agent Harnesses](https://dasith.me/2026/06/20/refining-inferential-sensors/)
 * [Structured workflows for coding with AI agents using the Breadcrumb Protocol](https://dasith.me/2025/04/02/vibe-coding-breadcrumbs/)
 * [beads documentation](https://beads.gascity.com/)
