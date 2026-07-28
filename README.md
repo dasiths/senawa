@@ -26,6 +26,8 @@ Every agent talks to the system through one command, `senawa`. That single seam 
 
 Completion is granted, not claimed. A subagent that finishes work submits it; the harness runs sensors, evaluates gates, and either accepts the work or hands back actionable failures. This is the backpressure model described in [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/).
 
+Because everything routes through that one seam, the harness can also write down what happened. Every orchestration event lands in an append-only journal that no agent can author, and `senawa work report` renders it into a document you can read or attach to a pull request: which role did which task, on which model, how many times the harness sent the work back and why, what you decided, and what it cost.
+
 ## Status
 
 Design stage. Nothing is implemented yet. The architecture, the CLI surface, the sensor and gate model, and the technology decision are written up in [the design document](docs/design/multi-agent-orchestration.md), which is the place to start.
@@ -43,6 +45,9 @@ flowchart LR
     S --> G[(beads graph)]
     S --> SEN[sensors and gates]
     S --> T[tracking files]
+    S --> J[(journal)]
+    J --> RPT[run report]
+    RPT --> H
 ```
 
 ## Concepts
@@ -54,7 +59,9 @@ flowchart LR
 | Graph state | The dependency graph of tasks, gates, and their orchestration metadata, held in beads |
 | Sensor | A tool that measures a property of the work and returns an assessment plus evidence. Builds, tests, linters, and reviewer agents |
 | Gate | A rule that consumes sensor readings and resists progress when they are red |
-| Work directory | Per-request scratch space under `.agents/.copilot-tracking/`, holding research, plans, briefs, transcripts, and verdicts |
+| Journal | An append-only log of every orchestration event, written by the harness rather than by any agent |
+| Run report | A rendered account of how the work was done, regenerated from the journal, the graph, and telemetry |
+| Work directory | Per-request scratch space under `.agents/.copilot-tracking/`, holding research, plans, briefs, transcripts, verdicts, and the journal |
 
 ## Prerequisites
 
@@ -66,7 +73,7 @@ The tree below is the planned shape. Only `docs/` exists today.
 
 ```text
 docs/design/          architecture and decision records
-packages/             core, graph, sensors, orchestrator, cli
+packages/             core, graph, sensors, report, orchestrator, cli
 .github/agents/       role definitions for the principal and each subagent
 .github/hooks/        gate enforcement for sessions senawa does not host
 .beads/formulas/      reusable workflow templates
