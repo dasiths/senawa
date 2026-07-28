@@ -1,0 +1,53 @@
+version: 1
+
+defaults:
+  timeout_sec: 60
+  max_evidence_bytes: 2000
+
+# Ordered by cost. The runner MUST respect this: cheap deterministic sensors
+# first, short-circuiting the expensive ones, and inferential sensors last and
+# only on otherwise-green work.
+sensors:
+  - id: syntax-js
+    kind: deterministic
+    cost: trivial
+    run: node --check fixture/bad.js
+    parser: node-check
+
+  - id: syntax-py
+    kind: deterministic
+    cost: trivial
+    run: python3 -m py_compile fixture/broken.py
+    parser: python-compile
+
+  - id: lint
+    kind: deterministic
+    cost: cheap
+    run: npx --no-install eslint --no-config-lookup --format json fixture/bad.js
+    parser: eslint-json
+
+  - id: typecheck
+    kind: deterministic
+    cost: cheap
+    run: npx --no-install tsc --noEmit --pretty false --strict fixture/src/parse.ts
+    parser: tsc-text
+
+  - id: unit-tests
+    kind: deterministic
+    cost: medium
+    run: node fixture/hostile.mjs
+    parser: raw
+
+  - id: arch-review
+    kind: inferential
+    cost: expensive
+    trust: advisory
+    rubric: rubric.md
+    target: fixture/src/parse.ts
+
+gates:
+  - id: task-done
+    requires: [syntax-js, syntax-py, lint, typecheck, unit-tests]
+    advisory: [arch-review]
+    on_fail: rework
+    max_rework: 3
