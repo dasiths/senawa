@@ -28,6 +28,20 @@ Completion is granted, not claimed. A subagent that finishes work submits it; th
 
 Because everything routes through that one seam, the harness can also write down what happened. Every orchestration event lands in an append-only journal that no agent can author, and `senawa work report` renders it into a document you can read or attach to a pull request: which role did which task, on which model, how many times the harness sent the work back and why, what you decided, and what it cost.
 
+## Three loops, and where you sit
+
+Senawa runs three nested loops. You are not in the fast one, and you do not wait for the slow one.
+
+| Loop | Who runs it | Period | You |
+|------|-------------|--------|-----|
+| Inner | one worker, alone | seconds to minutes | absent by design; this is where the harness pushes back |
+| Middle | the principal agent | minutes to hours | only when a task needs a decision or gets stuck |
+| Outer | you | hours to days | you own the phase boundaries |
+
+You can act at seven points, three of them while work is in flight. A question from a worker parks **one task** on a gate; everything else keeps running. You can also steer a running worker, pause new dispatches without killing the run, and read the run report at any time.
+
+This is the shape [Addy Osmani calls loop engineering](https://addyosmani.com/blog/loop-engineering/): you design the system that prompts the agents rather than prompting them yourself. [Carlos Perez's follow-up](https://medium.com/intuitionmachine/from-loop-engineering-to-graph-engineering-d3ebeb08511c) argues that a single loop always fails, and that the fix is a graph of loops that check each other. Senawa takes that seriously without mistaking its task graph for a control graph: what keeps it honest is narrower than topology. Deterministic sensors that execute real code. A journal no agent can write. A frozen set of files the optimizer cannot weaken. And a human who decides what "better" means.
+
 ## Status
 
 Design stage. Nothing is implemented yet, but the risky assumptions have been tested rather than assumed. Nine independent probes in [poc/](poc/README.md) ran against the real Copilot CLI, the Copilot SDK, and beads. Six design assumptions did not survive, and a throwaway prototype now runs the whole loop end to end.
@@ -57,10 +71,12 @@ flowchart LR
 | Term | Meaning |
 |------|---------|
 | Principal agent | The single agent you talk to. Plans the workflow, delegates, and surfaces decisions back to you |
-| Subagent | A role-scoped worker with its own context window, model, reasoning effort, and tool permissions |
+| Subagent | A role-scoped worker with its own context window, model, reasoning effort, and tool permissions. A separate session, not an in-process helper |
 | Graph state | The dependency graph of tasks, gates, and their orchestration metadata, held in beads |
 | Sensor | A tool that measures a property of the work and returns an assessment plus evidence. Builds, tests, linters, and reviewer agents |
 | Gate | A rule that consumes sensor readings and resists progress when they are red |
+| Anchor | A reading that cannot be argued with. Every gate needs at least one, or the harness is only agreeing with itself |
+| Frozen set | Files no worker may write, such as the tests and the sensor definitions. Enforced, not requested |
 | Journal | An append-only log of every orchestration event, written by the harness rather than by any agent |
 | Run report | A rendered account of how the work was done, regenerated from the journal, the graph, and telemetry |
 | Work directory | Per-request scratch space under `.agents/.copilot-tracking/`, holding research, plans, briefs, transcripts, verdicts, and the journal |
@@ -87,8 +103,10 @@ sensors.yaml          sensor and gate definitions for this repository
 
 * [Multi-agent orchestration design](docs/design/multi-agent-orchestration.md)
 * [Proof-of-concept findings](docs/design/poc-findings.md)
+* [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/)
 * [Refining Inferential Sensors in Coding Agent Harnesses](https://dasith.me/2026/06/20/refining-inferential-sensors/)
 * [Structured workflows for coding with AI agents using the Breadcrumb Protocol](https://dasith.me/2025/04/02/vibe-coding-breadcrumbs/)
+* [Loop Engineering](https://addyosmani.com/blog/loop-engineering/) and [From Loop Engineering to Graph Engineering?](https://medium.com/intuitionmachine/from-loop-engineering-to-graph-engineering-d3ebeb08511c)
 * [beads documentation](https://beads.gascity.com/)
 * [Comparing GitHub Copilot CLI customization features](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/comparing-cli-features)
 

@@ -345,9 +345,14 @@ senawa task escalate <id> --reason "<text>"
 
 senawa ask <id> "<question>"                 # subagent -> human relay, opens a human gate
 senawa answer <msg-id> "<answer>"            # PA writes the human's answer, resolves the gate
+senawa steer <id> "<instruction>"            # human -> running worker, queued into the session
+senawa work pause | resume                   # stop dispatching; let in-flight work finish
+
+senawa tick                                  # heartbeat: check gates, dispatch ready, escalate stalls
 
 senawa sensor list [--json]
 senawa sensor run [--id S ...] [--task <id>] [--json]
+senawa sensor audit [--id S] [--samples N]   # measure sensor stability; the audit loop
 senawa gate check <gate-id> [--task <id>] [--json]
 
 senawa plan import <file> [--epic <id>]      # planner output -> beads subgraph
@@ -405,6 +410,16 @@ version: 1
 defaults:
   timeout_sec: 300
   max_evidence_bytes: 8000
+
+# Paths no worker may write, enforced at the preToolUse boundary rather than
+# merely requested in the brief. These are the rules an optimizing loop would
+# otherwise be tempted to weaken.
+frozen:
+  - sensors.yaml
+  - .agents/rubrics/**
+  - test/**
+  - tests/**
+  - .github/hooks/**
 
 sensors:
   - id: format
@@ -466,6 +481,7 @@ gates:
 
   - id: task-done
     requires: [typecheck, unit-tests]
+    must_not_regress: [coverage, public-api-surface, todo-count]
     advisory: [arch-review]
     on_fail: rework
     max_rework: 3
@@ -731,6 +747,119 @@ Do not change public behaviour. Do not touch files outside `src/ingest/`.
 
 That last block is the completion pressure control. A worker that cannot declare itself done, cannot widen its own scope, and cannot commit unaided has very few ways to fake progress.
 
+## Loops, control, and where the human sits
+
+Two essays published within weeks of each other describe the shape this design is reaching for, and reading them together is more useful than reading either alone.
+
+Addy Osmani's [Loop Engineering](https://addyosmani.com/blog/loop-engineering/) argues that the leverage has moved from writing prompts to designing the system that writes them: *"you build a small system that finds the work, hands it out, checks it, writes down what is done and then decides the next thing."* Carlos Perez's [From Loop Engineering to Graph Engineering](https://medium.com/intuitionmachine/from-loop-engineering-to-graph-engineering-d3ebeb08511c) is the sequel argument: one loop reliably fails in four specific ways, and the answer is a *graph of loops* that watch, feed, constrain, and correct one another.
+
+There is a trap in reading the second one from inside this design, and it is worth disarming immediately. **Senawa's beads DAG is a work-decomposition graph, not a control graph.** Perez is describing the topology of control, not the shape of the task list. Having a dependency graph of tasks earns nothing against his argument. What earns something is the arrangement of the loops that measure the work.
+
+### The three execution loops
+
+| Loop | Owner | Period | Human involvement |
+|------|-------|--------|-------------------|
+| **Inner**: edit, fast sensors on `postToolUse`, `senawa task done`, gate refuses with findings, fix, repeat | The worker session, alone | seconds to minutes | **Deliberately none.** This is where backpressure lives |
+| **Middle**: `task next`, `dispatch`, read the verdict, `work show`, next task | The principal agent | minutes to hours | Only when a task raises `needs_human` or exhausts its budget |
+| **Outer**: request, research, plan, execute, review | The human | hours to days | Owns the phase boundaries |
+
+Osmani's `/goal` primitive — *"it keeps working across turns until a verifiable stopping condition holds, and after every turn a separate small model checks whether you are done, so the agent that wrote the code isnt the one grading it"* — is precisely the inner loop plus the `task-done` gate. His "keep the maker away from the checker" is the implementor and verifier split. Those parts of this design need no revision; they were converging on the same shape.
+
+### Where the human can act
+
+Seven points, three of them mid-flight. The human does **not** wait for the work to finish.
+
+| Point | Loop | What it blocks |
+|-------|------|----------------|
+| The initial request to `senawa work start` | outer | nothing yet |
+| Research sign-off, a beads `human` gate | outer | the whole work item |
+| Plan approval, the `plan-accepted` gate | outer | the whole work item |
+| Answering `senawa ask` via `senawa answer` | middle | **one task only**; siblings keep running |
+| Reading `needs_human` in `senawa work show` | middle | nothing |
+| Responding to an escalation | middle | one task |
+| The `work-done` gate and the run report | outer | the whole work item |
+
+The fourth is the important one: a question parks a single task on a gate and the rest of the frontier carries on. A blocked question does not stall the work item.
+
+### What the human cannot do, and should be able to
+
+Every point above is **agent-initiated**. The human answers and approves; they cannot spontaneously intervene. That makes them a responder rather than a driver, and it is the largest gap in this design.
+
+Four controls close it. All four are cheap, and the substrate already supports them.
+
+**`senawa steer <task> "<instruction>"`** queues guidance into a running worker. The SDK's `session.send({ mode: "enqueue" })` appends to the session's queue and `mode: "immediate"` cuts in ahead of it; `session.abort()` stops the current turn outright. Steering is journalled as a first class event, because a human redirecting a worker mid-flight is exactly the kind of thing the run report should show.
+
+**`senawa work pause`** and **`resume`** stop new dispatches while letting in-flight tasks finish. Thinking time should not require killing the run.
+
+**`senawa tick`** is the heartbeat, and its absence is the sharpest thing the Osmani essay exposes. *"Automations are what make a loop an actual loop and not just one run you did once."* Today senawa only advances while a human watches it: `bd gate check` never runs on a timer, so `gh:pr` and `gh:run` gates never close by themselves and a stalled work item stays stalled. One idempotent command — check gates, dispatch what is ready, escalate what has stalled — run from cron, a CI schedule, or a `/loop`, is what turns this design from a harness into a loop.
+
+**A review cadence.** Approve the plan, then see nothing until `work-done`, and on a fifty-task item that is a long blind stretch. A `review_every: N` checkpoint, or a human gate on merge-slot acquisition, bounds it. Osmani names the risk directly: *"the faster the loop ships code you did not write, the bigger the gap between what exists and what you actually get."*
+
+### The control graph, in Perez's terms
+
+His four failure modes, honestly scored against this design.
+
+| Failure | How it would appear here | Status |
+|---------|--------------------------|--------|
+| **Goodhart**: the loop games its own measure | A worker edits the test instead of the code, or writes the narrowest change that turns the gate green | **Partly handled.** The brief forbids editing sensors and the harness verifies it, but no gate carries a counter-metric |
+| **Blindness upward**: nothing can ask whether the reference is right | The gate cannot ask whether this was the right task, or the plan the right plan | **Handled.** Plan approval is a slower human loop owning the faster loop's reference |
+| **Conflict**: independently built loops fight | Parallel implementors each turn their own gate green while collectively degrading the design | **Weak.** Merge slots serialize files; nothing arbitrates design conflict until `work-done` |
+| **Measurement decay**: nobody watches the watcher | A sensor becomes flaky and manufactures backpressure nobody can reproduce | **Specified, not built.** The metric is named; nothing runs it on a cadence |
+
+### Anchors: why this graph is not circular
+
+Perez's real warning is not about topology at all. It is that a graph of loops fails *circularly* — *"every loop watches another loop, and no loop touches the ground"* — and does so later, more expensively, and with more green lights on the way down. A harness where agents review agents, verified by agent verifiers, summarized in an agent-written report is exactly that failure waiting to happen.
+
+Three choices in this design are the anchors that prevent it, and they are worth naming as anchors rather than leaving as incidental decisions.
+
+| Anchor | In senawa |
+|--------|-----------|
+| Measurements that cannot be argued with | **Deterministic sensors.** Tests that actually executed, compilers that actually ran. This is why `trust: proof` is reserved for them and inferential sensors start advisory |
+| Rules the optimizing loop may never tune | **The frozen set** below |
+| A definition of "better" from outside the machinery | The human's request and the plan they approved. No loop in this design may revise its own root reference |
+
+The rule that follows: **an inferential sensor may never be the only reading behind a gate.** Opinion is allowed to add backpressure; it is never allowed to be the sole ground truth. Every gate must include at least one deterministic sensor, and `senawa gate check` refuses to evaluate a gate that does not.
+
+### The frozen set
+
+Perez's second anchor requires being explicit about what the optimizer may not touch, *"precisely because they are the rules the optimizer would be tempted to weaken."* Declared, not implied:
+
+```yaml
+frozen:
+  - sensors.yaml
+  - .agents/rubrics/**
+  - test/**
+  - tests/**
+  - .github/hooks/**
+```
+
+Enforced at the `preToolUse` boundary for every worker session, not merely stated in the brief. A worker that cannot pass the gate and cannot weaken the gate has one honest option left, which is the entire point of the design.
+
+### Counter-metrics
+
+The Goodhart answer is pairing, and the mechanism already exists in the source material without having been wired in. From [Refining Inferential Sensors](https://dasith.me/2026/06/20/refining-inferential-sensors/): *"A fitness function can return a count. On an older codebase you may not block because the count is above zero. You block because the count got worse."*
+
+So gates gain a second list. `requires` proves the work is green; `must_not_regress` catches the cheap way to win:
+
+```yaml
+  - id: task-done
+    requires: [typecheck, unit-tests]
+    must_not_regress: [coverage, public-api-surface, todo-count]
+    advisory: [arch-review]
+```
+
+A regression check is a counted reading compared against the value recorded when the task was claimed. It is a ratchet, not a threshold, which is what makes it adoptable on a codebase that is not already clean.
+
+### The audit loop
+
+The fourth failure has no owner until something runs on a cadence. `senawa sensor audit` is that loop: it replays recent verdicts, re-runs the stability measurement described under [Promoting an inferential sensor](#promoting-an-inferential-sensor-on-evidence), and reports sensors whose agreement has drifted or whose verdict distribution has gone noisy.
+
+It is deliberately independent of the loops it audits: it reads `journal.jsonl` and the reading cache rather than asking any agent how things are going. And it is the same cadence as `senawa tick`, so one scheduled command serves both the heartbeat Osmani wants and the audit Perez wants.
+
+### The honest summary
+
+Senawa was already a loop in Osmani's sense and was not yet a graph in Perez's. The work graph was never the thing his argument was about. What makes this design defensible is narrower and more boring than a topology: deterministic sensors that execute real code, a journal no agent can author, a frozen set the optimizer cannot reach, and a human who owns what "better" means. The additions above — counter-metrics, the audit loop, the heartbeat, and the ability to steer — are what turn a collection of loops into a control graph that stays in contact with the ground.
+
 ## Human in the loop, through the PA
 
 Subagents should not have `ask_user`. In headless worker sessions there is no user to ask, and in in-process subagents a direct question bypasses the PA's coordination. The relay instead:
@@ -959,6 +1088,10 @@ The blog's point applies directly: a gate's false positives and false negatives 
 | Subagent spans are absent from OTel in `-p` mode | Take cost from `session.usage_checkpoint` in the `--output-format json` stream |
 | One session per task floods the human's session picker | Dispatch under an isolated `baseDirectory` / `COPILOT_HOME`, and `deleteSession` once the transcript is archived |
 | `parentAgentTaskId` looks like a correlation hook and is not | It is read-only, intra-session telemetry. Correlate through `onGetTraceContext` and the journal's `trace_id` |
+| Nothing advances the work while no human is watching | `senawa tick` on a schedule; without it, `gh:pr` and `gh:run` gates never close and stalls are invisible |
+| A gate backed only by inferential sensors is ungrounded | `senawa gate check` refuses to evaluate a gate with no deterministic sensor in `requires` |
+| A worker weakens the check instead of passing it | The `frozen` set, enforced at `preToolUse`, not requested in the brief |
+| Every gate is green and the codebase is still worse | `must_not_regress` counter-metrics, ratcheted against the value at claim time |
 | Worktrees share one `.beads` workspace, so filesystem isolation is not graph isolation | Serialize writes through `senawa`, or use `bd init --server` |
 | Embedded Dolt single writer | Same; batch related writes with `bd batch` |
 | Unknown keys in formula `[steps.gate]` blocks are dropped silently | Verify with `bd formula show <formula> --json` before pouring |
@@ -1092,6 +1225,8 @@ Slice five adds the principal. Introduce `@senawa/orchestrator` on `@github/copi
 
 Slice six adds scale. Worktrees, parallel groups, merge slots, cost dashboards fed from `session.usage_checkpoint` and joined to the journal, and a formula that captures the whole workflow so `senawa work start` pours it in one step. Package the lot as a Copilot CLI plugin.
 
+Slice seven closes the control graph, and it is the difference between a harness and a loop. `senawa tick` on a schedule so gates close and stalls surface without a human present. `senawa steer`, `pause` and `resume` so the human can drive rather than only respond. `senawa sensor audit` so sensor quality is measured on a cadence rather than assumed. Counter-metrics on the gates that matter. None of it is large; all of it is what stops the system quietly agreeing with itself.
+
 ## Open questions worth deciding early
 
 1. Does `--autopilot` with `task_complete` and a `--max-autopilot-continues` budget replace the `subagentStop` retry loop for worker sessions? It is native, its continuation budget is configurable rather than fixed at eight, and it works identically in `-p` and under the SDK. The risk is that `task_complete` is the model's assertion of doneness, which is precisely the thing this design refuses to trust, so it would have to be wired so that calling it triggers the gate rather than ends the turn.
@@ -1100,12 +1235,16 @@ Slice six adds scale. Worktrees, parallel groups, merge slots, cost dashboards f
 4. Where does the attempt budget live: per task, per work item, or per AIU spend? A spend-based budget is the most honest, and Copilot CLI already reports AIU per span.
 5. Is the tracking directory committed to the repository or kept in a sibling branch? Committing is better for review; a sibling branch keeps history clean. The run report argues for committing, since its value is that a reviewer finds it without being told where to look.
 6. Does the journal ever get compacted? It is append-only by design, but a multi-week work item produces thousands of `sensor.read` events. Suggest keeping the journal whole and letting the renderer summarize, revisiting only if a real file gets uncomfortable.
+7. What is the right review cadence? A human who approves the plan and then sees nothing until `work-done` accumulates comprehension debt at exactly the rate the harness ships. Candidates: every N closed tasks, every merge-slot acquisition, or a token or spend threshold. This wants measuring against a real work item rather than deciding in the abstract.
+8. Which counter-metrics are worth the cost? `must_not_regress` is only useful with readings that are cheap, stable, and genuinely orthogonal to the gate they pair with. Coverage and public API surface are obvious candidates; most others are not.
 
 ## References
 
 * [Proof-of-Concept Findings](poc-findings.md), the evidence behind every measured claim in this document
 * [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/)
 * [Refining Inferential Sensors in Coding Agent Harnesses](https://dasith.me/2026/06/20/refining-inferential-sensors/)
+* [Loop Engineering](https://addyosmani.com/blog/loop-engineering/), Addy Osmani, on designing the system that prompts the agent rather than prompting it yourself
+* [From Loop Engineering to Graph Engineering?](https://medium.com/intuitionmachine/from-loop-engineering-to-graph-engineering-d3ebeb08511c), Carlos Perez, on why one loop fails and what a graph of loops needs to avoid failing circularly
 * [Structured workflows for coding with AI agents using the Breadcrumb Protocol](https://dasith.me/2025/04/02/vibe-coding-breadcrumbs/)
 * [beads](https://github.com/gastownhall/beads) and the [beads documentation](https://beads.gascity.com/)
 * [beads issue metadata and execution hints](https://beads.gascity.com/core-concepts/metadata)
