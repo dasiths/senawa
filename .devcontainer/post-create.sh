@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# registry.npmjs.org is not reachable from this container. Every package client
-# must resolve through the corporate feed proxy instead.
-readonly FEED_PROXY="https://packagefeedproxy.microsoft.io/npm/"
+# Use the registry injected by the devcontainer, or npm's public registry when
+# this script is run directly without an environment file.
+readonly PACKAGE_REGISTRY="${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org/}"
+export NPM_CONFIG_REGISTRY="${PACKAGE_REGISTRY}"
+export COREPACK_NPM_REGISTRY="${COREPACK_NPM_REGISTRY:-${PACKAGE_REGISTRY}}"
 # pnpm's "latest" dist-tag currently points at a 12.x prerelease, so pin a version
 # unless package.json declares one.
 readonly PNPM_DEFAULT_VERSION="10.34.5"
@@ -11,12 +13,12 @@ readonly PNPM_DEFAULT_VERSION="10.34.5"
 echo "==> Configuring git"
 git config --global --add safe.directory "${PWD}"
 
-echo "==> Pointing every npm client at the feed proxy"
+echo "==> Pointing every npm client at the package registry"
 # npm's builtin npmrc is read by npm, npx and pnpm for *every* user, including root
 # via sudo -- which strips NPM_CONFIG_REGISTRY from the environment.
 sudo touch /usr/local/etc/npmrc
 sudo sed -i '/^registry=/d' /usr/local/etc/npmrc
-sudo tee -a /usr/local/etc/npmrc >/dev/null <<<"registry=${FEED_PROXY}"
+sudo tee -a /usr/local/etc/npmrc >/dev/null <<<"registry=${PACKAGE_REGISTRY}"
 
 echo "==> Installing pnpm"
 # corepack cannot be used here: it resolves package managers via npm's per-version
@@ -41,14 +43,14 @@ elif [ -f package.json ]; then
   pnpm install
 fi
 
-echo "==> Verifying nothing bypasses the feed proxy"
+echo "==> Verifying the package registry"
 for client in "npm:$(npm config get registry)" \
               "pnpm:$(pnpm config get registry)" \
               "npm-as-root:$(sudo npm config get registry)"; do
   echo "    ${client%%:*} -> ${client#*:}"
   case "${client#*:}" in
-    "${FEED_PROXY}"*) ;;
-    *) echo "ERROR: ${client%%:*} resolves a registry outside the feed proxy" >&2; exit 1 ;;
+    "${PACKAGE_REGISTRY}"*) ;;
+    *) echo "ERROR: ${client%%:*} resolves a different package registry" >&2; exit 1 ;;
   esac
 done
 

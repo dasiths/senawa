@@ -85,6 +85,18 @@ flowchart LR
 
 You will need GitHub Copilot CLI with an active Copilot subscription, Node.js 22 or later, and the `bd` binary from beads. Git is assumed.
 
+### Package registry
+
+The devcontainer uses the public npm registry by default. On first creation it copies `.devcontainer/.env.example` to the gitignored `.devcontainer/.env` file automatically.
+
+To use a package proxy instead, create or edit the local file before rebuilding the devcontainer:
+
+```bash
+cp .devcontainer/.env.example .devcontainer/.env
+```
+
+Set both `NPM_CONFIG_REGISTRY` and `COREPACK_NPM_REGISTRY` in that file to the proxy URL. Keep credentials out of the URL; configure npm authentication through your user-level `.npmrc` or a secret store.
+
 ## Repository layout
 
 The tree below is the planned shape. Only `docs/` exists today.
