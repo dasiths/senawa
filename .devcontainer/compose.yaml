@@ -6,9 +6,6 @@ services:
       args:
         NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org/}
         COREPACK_NPM_REGISTRY: ${COREPACK_NPM_REGISTRY:-https://registry.npmjs.org/}
-    environment:
-      NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org/}
-      COREPACK_NPM_REGISTRY: ${COREPACK_NPM_REGISTRY:-https://registry.npmjs.org/}
     volumes:
       - ..:/workspaces/senawa:cached
     command: sleep infinity
