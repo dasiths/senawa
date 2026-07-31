@@ -87,7 +87,7 @@ You will need GitHub Copilot CLI with an active Copilot subscription, Node.js 22
 
 ### Package registry
 
-The devcontainer uses the public npm registry by default. On first creation it copies `.devcontainer/.env.example` to the gitignored `.devcontainer/.env` file automatically.
+The devcontainer uses the public npm registry by default. On first creation it copies `.devcontainer/.env.example` to the gitignored `.devcontainer/.env` file automatically. Docker Compose passes these values into the image build, so npm-based Dev Container Features use the configured registry before the container starts. The same values are available inside the running container.
 
 To use a package proxy instead, create or edit the local file before rebuilding the devcontainer:
 
@@ -95,7 +95,9 @@ To use a package proxy instead, create or edit the local file before rebuilding 
 cp .devcontainer/.env.example .devcontainer/.env
 ```
 
-Set both `NPM_CONFIG_REGISTRY` and `COREPACK_NPM_REGISTRY` in that file to the proxy URL. Keep credentials out of the URL; configure npm authentication through your user-level `.npmrc` or a secret store.
+Set both `NPM_CONFIG_REGISTRY` and `COREPACK_NPM_REGISTRY` in that file to the proxy URL, then rebuild the devcontainer. Variables exported by the host shell take precedence over `.devcontainer/.env` during Docker Compose interpolation.
+
+Build arguments and image environment variables are not secret storage. Keep credentials out of the URL; configure npm authentication through your user-level `.npmrc` or a secret store.
 
 ## Repository layout
 

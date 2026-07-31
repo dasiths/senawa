@@ -1,6 +1,8 @@
 {
   "name": "senawa",
-  "image": "mcr.microsoft.com/devcontainers/typescript-node:2-22-bookworm",
+  "dockerComposeFile": "compose.yaml",
+  "service": "senawa",
+  "workspaceFolder": "/workspaces/senawa",
   "features": {
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
       "version": "latest",
@@ -15,7 +17,6 @@
     "PNPM_HOME": "/home/node/.local/share/pnpm"
   },
   "initializeCommand": "test -f .devcontainer/.env || cp .devcontainer/.env.example .devcontainer/.env",
-  "runArgs": ["--env-file", ".devcontainer/.env"],
   "remoteEnv": {
     "PATH": "/home/node/.local/share/pnpm:${containerEnv:PATH}"
   },
