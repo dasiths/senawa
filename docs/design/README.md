@@ -8,12 +8,12 @@ keywords:
   - design
   - architecture
   - documentation map
-estimated_reading_time: 3
+estimated_reading_time: 4
 ---
 
 ## Overview
 
-Three documents carry the design, and they are deliberately separated by what
+Four documents carry the design, and they are deliberately separated by what
 kind of claim they hold. Keeping that separation is what stops the architecture
 document from quietly absorbing guesses, and what stops the evidence record from
 turning into a second design.
@@ -22,6 +22,7 @@ turning into a second design.
 |----------------------------------------------------------------|----------------------------------------------------------------------|---------------------------------------------------------|
 | [multi-agent-orchestration.md](multi-agent-orchestration.md)   | The architecture: how the harness works, the contracts, and the decisions behind them | The intended solution shape changes                     |
 | [poc-findings.md](poc-findings.md)                             | What execution established, including the assumptions that did not survive | A probe produces a new measurement                      |
+| [roads-not-taken.md](roads-not-taken.md)                       | The approaches we tried and dropped, and what would bring each one back | An approach leaves the architecture document            |
 | This file                                                      | The map of the folder                                                | A document is added, split, or retired                  |
 
 ## multi-agent-orchestration.md
@@ -52,6 +53,20 @@ This document should stay honest about its own limits. When a probe uses a fake
 host or a deterministic stand-in, the finding says so, because "confirmed
 offline" and "confirmed against a live model" are different kinds of evidence.
 
+## roads-not-taken.md
+
+The discard pile. Every approach that was in the architecture document and is no
+longer there gets an entry: what it was, why it was attractive, what removed it,
+and what evidence would justify revisiting it.
+
+It exists because an undocumented rejection is not a decision, it is a gap that
+refills. Without the record, a discarded idea returns looking new and costs the
+same argument a second time.
+
+The rule that keeps it from contradicting the architecture: an approach lives in
+exactly one of the two documents. When something is removed from the design, it
+moves here in the same change. If it ever returns, its entry here is deleted.
+
 ## Relationship to the probes
 
 Each folder under [`poc/`](../../poc/README.md) owns one subject and carries its
@@ -63,6 +78,8 @@ When new research changes our understanding, the order of operations is:
 1. Amend the probe that owns the subject and add a dated change log entry.
 2. Record the measurement in the findings document.
 3. Update the architecture document so it describes the shape we now intend.
+4. If the change removed an approach, move it to the roads-not-taken document
+   rather than deleting it.
 
 Doing it in that order keeps the architecture document a statement of intent
 backed by evidence, rather than a wish list that the probes are expected to

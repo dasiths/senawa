@@ -143,7 +143,7 @@ Build arguments and image environment variables are not secret storage. Keep cre
 The tree below is the planned shape. Only `docs/` and `poc/` exist today.
 
 ```text
-docs/design/                 architecture, the design map, and proof-of-concept findings
+docs/design/                 architecture, the design map, proof-of-concept findings, and roads not taken
 poc/                         throwaway probes that validated the design against reality
 packages/                    core, graph, sensors, report, orchestrator, cli
 .senawa/workflows/           phase definitions: gates, approvals, iteration budgets
@@ -161,6 +161,7 @@ sensors.yaml                 sensor extensions, configured sensors, and gates
 * [Design documents map](docs/design/README.md)
 * [Multi-agent orchestration design](docs/design/multi-agent-orchestration.md)
 * [Proof-of-concept findings](docs/design/poc-findings.md)
+* [Roads not taken](docs/design/roads-not-taken.md)
 * [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/)
 * [Refining Inferential Sensors in Coding Agent Harnesses](https://dasith.me/2026/06/20/refining-inferential-sensors/)
 * [Structured workflows for coding with AI agents using the Breadcrumb Protocol](https://dasith.me/2025/04/02/vibe-coding-breadcrumbs/)

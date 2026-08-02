@@ -731,6 +731,7 @@ senawa work finish                           # close epic, squash wisps, finaliz
 senawa approve <phase> [--note "<text>"]     # accept a phase artifact; records the channel used
 senawa reject <phase> --reason "<text>"      # start the next iteration with the reason as input
 senawa phase show <phase> [--iteration N]    # artifact, gate readings, and consumed versions
+senawa phase brief <phase>                   # render the brief the phase worker receives
 
 senawa task next [--role R] [--group G]      # next ready task, claimed atomically, with execution hints
 senawa task brief <id>                       # rendered prompt for a worker session
@@ -878,22 +879,29 @@ sensors:
   - id: typecheck
     extension: "@senawa/sensor-command"
     description: Type-check the project
+    cost: cheap
     config:
       command: "npx tsc --noEmit --pretty false"
       parser: tsc-text
-      cost: cheap
 
   - id: architecture-review
     extension: "@senawa/sensor-agent-review"
     description: Review changed code against structural architecture rules
+    cost: expensive
+    trust: advisory
     config:
       agent: architecture-reviewer
       model: claude-sonnet-4.6
       instructions: Review only structural architecture constraints.
       rubric: ".agents/rubrics/architecture.md"
-      cost: expensive
-      trust: advisory
 ```
+
+The split inside a sensor entry is deliberate. `config` belongs to the extension
+and is validated against the extension's config schema, so senawa never needs to
+understand what a `parser` or a `rubric` means. `cost`, `trust`, and `stability`
+belong to senawa, because it uses them to order execution cheapest first and to
+decide whether a reading is allowed to block. An extension cannot promote itself
+to blocking by writing a field into its own configuration.
 
 An inferential extension owns the decision to launch a reviewer session and the
 instructions and rubric passed to it. It does not own session isolation,
@@ -988,7 +996,6 @@ spec:
       executor:
         kind: agent
         role: researcher
-        prompt: prompts/research.md
         resumeAcrossIterations: true
         input:
           definition: phases.define.output
@@ -1007,7 +1014,6 @@ spec:
       executor:
         kind: agent
         role: planner
-        prompt: prompts/plan.md
         resumeAcrossIterations: true
         output:
           path: artifacts/plan.json
@@ -1092,21 +1098,29 @@ into implementation beads.
 A phase's instructions have two layers, and separating them is what keeps roles
 reusable across workflows.
 
-| Layer | Lives in | Scope |
-|-------|----------|-------|
-| Role | `.github/agents/researcher.agent.md` | Who the worker is: model, tools, permissions, durable persona |
-| Prompt | `.senawa/prompts/research.md` | What this phase wants: focus, quality bar, what to look for |
+| Layer | Lives in | Owned by | Holds |
+|-------|----------|----------|-------|
+| Role | `.github/agents/researcher.agent.md` | The repository | Who the worker is: model, tools, permissions, durable persona, and whatever this codebase wants a researcher to care about |
+| Scaffolding | senawa's own code | Senawa | How a phase is asked: which inputs to read, the output contract, the rules, and the iteration context |
 
-Collapsing them would mean either duplicating model and tool configuration into
-every workflow, or writing prompts that cannot be reused. Keeping them apart also
-means `senawa doctor` can verify that both the referenced role and the referenced
-prompt exist before anything is dispatched.
+The second layer is deliberately not a file the repository can edit. Phase
+scaffolding has to stay in step with the submission tool and the artifact schema
+that senawa itself generates, so an editable prompt file is a file that can
+silently break a phase, and it gives `senawa doctor` a third reference to
+validate for no capability the role profile does not already carry. Anything a
+particular repository wants a phase to emphasise belongs in the role profile,
+which is already the reusable unit. An earlier draft did put this layer in
+`.senawa/prompts/<phase>.md`; see [Roads Not Taken](roads-not-taken.md).
 
-The prompt file is static. Everything situational is **composed** at dispatch by
+So `executor` names a role and nothing else, and `senawa doctor` verifies that the
+referenced role resolves before anything is dispatched.
+
+The scaffolding is static. Everything situational is **composed** at dispatch by
 `senawa phase brief`, the phase-level counterpart of `senawa task brief`:
 
 ```text
-[the authored prompt, verbatim]
+[senawa's phase framing: you are running one phase of a workflow, the harness
+ grants completion and you do not, submit through the tool you were given]
 
 ## Request
 Refactor the ingest pipeline. Constraints: preserve public behaviour.
@@ -1131,9 +1145,18 @@ That last block is the mechanism the iteration model rests on. Without a defined
 place for the rejection reason to land, "build on top of the last run" is a
 sentiment rather than a behaviour.
 
-Prompts carry no variables and no template syntax. Logic has been kept out of
+The composed brief has two parts. `guidelines` holds what is stable across a
+phase's iterations, which is the framing, the rules, and the output contract;
+`turn` holds this iteration's request and its rejection context. On the SDK
+topology `guidelines` is passed as `systemMessage` and only `turn` is sent per
+turn. On the subprocess topology both are concatenated into the first prompt and
+only `turn` is sent on resume. Splitting them costs nothing on the path that
+cannot exploit it, and it stops the rules being re-sent, and quietly re-weighted
+against the newest instruction, on every iteration.
+
+Briefs carry no variables and no template syntax. Logic has been kept out of
 configuration everywhere else in this design, with a closed operator set in gates
-and no expression language in workflows, and a template engine in prompts would
+and no expression language in workflows, and a template engine here would
 reintroduce it. The composed sections already cover what a variable would be for.
 
 Inputs are passed as paths, not contents, for the same reason task briefs are
@@ -1285,8 +1308,9 @@ senawa work start "Refactor the ingest pipeline" \
 3. Merge the goal and optional input document, then validate the result against
    the workflow input schema.
 4. Copy the resolved workflow, referenced schemas, sensor manifests, gate
-   definitions, rubrics, and role identifiers into the work directory and
-   record one content fingerprint. An active run never follows later edits to
+   definitions, rubrics, and role definitions into the work directory and
+   record one content fingerprint. Role profiles are copied whole rather than
+   referenced by name, because an active run must not follow later edits to
    configuration silently.
 5. Create the beads epic and static phase nodes with their dependency edges.
    Dynamic implementation nodes are created later from the validated plan.
@@ -1330,87 +1354,128 @@ defaults:
 # otherwise be tempted to weaken.
 frozen:
   - sensors.yaml
+  - .senawa/workflows/**
+  - .senawa/schemas/**
+  - .github/agents/**
   - .agents/rubrics/**
   - test/**
   - tests/**
   - .github/hooks/**
 
+extensions:
+  - package: "@senawa/sensor-command"
+  - package: "@senawa/sensor-agent-review"
+
 sensors:
   - id: format
-    kind: deterministic
-    run: "ruff format --check ."
+    extension: "@senawa/sensor-command"
+    description: Check formatting
     cost: trivial
     scope: changed_files
+    config:
+      command: "ruff format --check ."
 
   - id: lint
-    kind: deterministic
-    run: "ruff check --output-format=json ."
+    extension: "@senawa/sensor-command"
+    description: Lint the changed files
     cost: cheap
     scope: changed_files
-    parser: ruff-json
+    config:
+      command: "ruff check --output-format=json ."
+      parser: ruff-json
 
   - id: typecheck
-    kind: deterministic
-    run: "pyright --outputjson"
+    extension: "@senawa/sensor-command"
+    description: Type-check the project
     cost: cheap
-    parser: pyright-json
+    config:
+      command: "pyright --outputjson"
+      parser: pyright-json
 
   - id: unit-tests
-    kind: deterministic
-    run: "pytest -q --json-report --json-report-file=-"
+    extension: "@senawa/sensor-command"
+    description: Run the unit suite
     cost: medium
-    parser: pytest-json
+    config:
+      command: "pytest -q --json-report --json-report-file=-"
+      parser: pytest-json
 
   - id: contract-tests
-    kind: deterministic
-    run: "pytest -q tests/contract"
+    extension: "@senawa/sensor-command"
+    description: Run the contract suite
     cost: expensive
+    config:
+      command: "pytest -q tests/contract"
+
+  - id: coverage
+    extension: "@senawa/sensor-command"
+    description: Report line coverage and whether it fell against the baseline
+    cost: medium
+    config:
+      command: "pytest -q --cov --cov-report=json"
+      parser: coverage-json
+      baseline: .senawa/baselines/coverage.json
 
   - id: arch-review
-    kind: inferential
-    agent: architecture-reviewer          # .github/agents/architecture-reviewer.agent.md
-    rubric: .agents/rubrics/architecture.md
-    model: gpt-5.4
+    extension: "@senawa/sensor-agent-review"
+    description: Review changed code against structural architecture rules
     cost: expensive
     trust: advisory
     stability:                             # measured, not asserted; see below
       samples: 5
       agreement: 1.0
       measured_on: structural-violations
-
-  - id: security-review
-    kind: inferential
-    builtin_agent: security-review
-    cost: expensive
-    trust: advisory
+    config:
+      agent: architecture-reviewer         # .github/agents/architecture-reviewer.agent.md
+      rubric: .agents/rubrics/architecture.md
+      model: gpt-5.4
 
 gates:
-  - id: may-edit
-    requires: []
-    description: Always open; placeholder for future path policy
-
   - id: may-commit
-    requires: [format, lint, typecheck]
+    description: The change is safe to commit
+    checks:
+      - sensor: format
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: lint
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: typecheck
+        expect: { path: /verdict, operator: equals, value: pass }
     on_fail: block
 
   - id: task-done
-    requires: [typecheck, unit-tests]
-    must_not_regress: [coverage, public-api-surface, todo-count]
-    advisory: [arch-review]
+    description: Implementation work satisfies its acceptance contract
+    checks:
+      - sensor: typecheck
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: unit-tests
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: coverage
+        expect: { path: /data/regression, operator: equals, value: false }
+      - sensor: arch-review
+        expect: { path: /verdict, operator: equals, value: pass }
+        advisory: true
     on_fail: rework
     max_rework: 3
     escalate_on_exhaustion: true
 
-  - id: plan-accepted
-    requires: [plan-lint]
-    human_approval: true
-    on_fail: block
-
   - id: work-done
-    requires: [typecheck, unit-tests, contract-tests]
-    advisory: [arch-review, security-review]
+    description: The whole change is ready for a human to review
+    checks:
+      - sensor: typecheck
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: unit-tests
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: contract-tests
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: arch-review
+        expect: { path: /verdict, operator: equals, value: pass }
+        advisory: true
     on_fail: block
 ```
+
+Human approval is not a field on a senawa gate. A phase declares
+`approval: human` in the workflow, and the driver implements it as a beads gate
+alongside the sensor gate, which is why the two survive a crash independently.
 
 Three composition rules follow directly from the blog and should be enforced by the runner rather than left to convention. Cheap deterministic sensors run first and short-circuit the expensive ones. Inferential sensors run last, only on otherwise green work, because they are the costly readings. Advisory findings never block on their own, but they always reach the agent.
 
@@ -1434,7 +1499,7 @@ The same rubric is gate-worthy on structural questions and pure noise on aesthet
 
 This is a naming collision worth heading off. A **senawa gate** is a rule in `sensors.yaml` that consumes sensor readings and decides whether work may advance. A **beads gate** is an issue of type `gate` that blocks its waiters until an external condition is met, and its vocabulary is fixed: `human`, `timer`, `gh:run`, `gh:pr`, and `bead`.
 
-They compose rather than compete. `task-done` is a senawa gate, evaluated by `senawa task done`. "The human has approved the research document" is a beads gate, created by `bd gate create --type=human --blocks <id>` and closed by `bd gate resolve`. The `plan-accepted` senawa gate has `human_approval: true`, which is implemented as a beads `human` gate underneath.
+They compose rather than compete. `task-done` is a senawa gate, evaluated by `senawa task done`. "The human has approved the research document" is a beads gate, created by `bd gate create --type=human --blocks <id>` and closed by `bd gate resolve`. A phase that declares `approval: human` gets both: the senawa gate decides whether the artifact is sound, and the beads gate holds the phase open until a person says so.
 
 Two details matter when wiring beads gates from formulas. The `[steps.gate]` block accepts exactly four fields, `type`, `id`, `await_id`, and `timeout`, and unknown TOML keys are dropped silently, so verify with `bd formula show <formula> --json` before pouring rather than trusting that an extra key took effect. And `bd gate check --escalate` marks gates whose condition failed outright, such as a PR closed without merging, which is the signal that should raise `needs_human` rather than leave the frontier quietly empty.
 
@@ -1807,6 +1872,9 @@ Perez's second anchor requires being explicit about what the optimizer may not t
 ```yaml
 frozen:
   - sensors.yaml
+  - .senawa/workflows/**
+  - .senawa/schemas/**
+  - .github/agents/**
   - .agents/rubrics/**
   - test/**
   - tests/**
@@ -1815,20 +1883,28 @@ frozen:
 
 Enforced at the `preToolUse` boundary for every worker session, not merely stated in the brief. A worker that cannot pass the gate and cannot weaken the gate has one honest option left, which is the entire point of the design.
 
+Workflows, schemas, and agent profiles are on the list for a reason that is easy to miss. A worker in an early phase can otherwise edit the definition of a phase that has not run yet, or loosen the role profile of the verifier that will judge it. The snapshot at kickoff already stops the current run from following such an edit; freezing the paths stops the edit reaching the next run.
+
 ### Counter-metrics
 
 The Goodhart answer is pairing, and the mechanism already exists in the source material without having been wired in. From [Refining Inferential Sensors](https://dasith.me/2026/06/20/refining-inferential-sensors/): *"A fitness function can return a count. On an older codebase you may not block because the count is above zero. You block because the count got worse."*
 
-So gates gain a second list. `requires` proves the work is green; `must_not_regress` catches the cheap way to win:
+So a gate does not only ask whether a reading passed. It also asks whether a counted reading got worse, which is an ordinary check with its pointer aimed at the extension's `data` rather than at the verdict:
 
 ```yaml
   - id: task-done
-    requires: [typecheck, unit-tests]
-    must_not_regress: [coverage, public-api-surface, todo-count]
-    advisory: [arch-review]
+    checks:
+      - sensor: unit-tests
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: coverage
+        expect: { path: /data/regression, operator: equals, value: false }
+      - sensor: public-api-surface
+        expect: { path: /data/regression, operator: equals, value: false }
+      - sensor: todo-count
+        expect: { path: /data/regression, operator: equals, value: false }
 ```
 
-A regression check is a counted reading compared against the value recorded when the task was claimed. It is a ratchet, not a threshold, which is what makes it adoptable on a codebase that is not already clean.
+Counter-metrics need no gate syntax of their own, which is the point. The sensor owns the baseline and reports whether the count moved the wrong way; the gate only reads the answer. A regression check compares against the value recorded when the task was claimed. It is a ratchet, not a threshold, which is what makes it adoptable on a codebase that is not already clean.
 
 ### The audit loop
 
@@ -1896,8 +1972,10 @@ thing.
 
 ### What the skill contains
 
-`.agents/skills/senawa/SKILL.md`, which Copilot CLI scans natively and VS Code
-picks up too. Seven sections, and the last two matter most:
+`.agents/skills/senawa/SKILL.md`. Copilot CLI discovers skills from
+`.github/skills/`, `.agents/skills/`, and `.claude/skills/`, measured against
+1.0.75, and VS Code picks the same file up. Seven sections, and the last two
+matter most:
 
 | Section | Purpose |
 |---------|---------|
@@ -1914,7 +1992,13 @@ one probe explained a denial by inventing a git pre-commit hook that did not
 exist. A principal agent doing that sends the human to debug the wrong thing, so
 the skill requires quotation rather than paraphrase.
 
-Write this file once the command surface has stopped moving. A skill that
+A reduced version of this file exists and has been driven live: mental model,
+command map, exit codes, reading status, and rules, in
+`poc/orchestration/skill/senawa/SKILL.md`. A real Copilot session carrying it
+started a run, read the pause back as an approval request, and approved a phase,
+without ever reaching for `bd` even though the run's state lived there.
+
+The remaining sections wait on the command surface settling. A skill that
 documents commands which no longer exist is worse than no skill, because it
 produces confident, wrong invocations rather than an admission of ignorance.
 
@@ -2025,16 +2109,16 @@ Four rules keep it trustworthy.
 
 ### The report
 
-`senawa work report` renders seven sections, in this order, because it is the order a reviewer asks the questions in.
+`senawa work report` renders eight sections, in this order, because it is the order a reviewer asks the questions in.
 
 1. **Request and outcome.** What was asked, what shipped, what was escalated or abandoned.
 2. **How the work was decomposed.** The graph as a diagram. `bd dep tree --format=mermaid` looked like the obvious source and is not: it follows dependency edges only, so an epic with two children renders as a single node. `@senawa/report` builds the diagram from the graph itself, including parent-child edges.
 3. **Who did what.** One row per task: role, model, effort, attempts, wall time, AIU.
 4. **Where the harness pushed back.** Every red gate, which sensor fired, the finding, and what changed in response. This is the section that justifies the whole design, so it leads with counts and does not hide them.
 5. **Where you pushed back.** Every phase you rejected, the reason you gave, how many iterations it took, and what changed between them. Approvals record the channel, so a plan you approved directly reads differently from one a principal agent relayed.
-5. **What the human decided.** Every `senawa ask` and its answer, plus every human gate resolution, with timestamps.
-6. **What was discovered mid-flight.** Every `discovered-from` child, and whether it was done, deferred, or left open.
-7. **What it cost.** AIU and wall time, by role and by model.
+6. **What the human decided.** Every `senawa ask` and its answer, plus every human gate resolution, with timestamps.
+7. **What was discovered mid-flight.** Every `discovered-from` child, and whether it was done, deferred, or left open.
+8. **What it cost.** AIU and wall time, by role and by model.
 
 A fragment of section four, to make the shape concrete:
 
@@ -2171,7 +2255,7 @@ The blog's point applies directly: a gate's false positives and false negatives 
 | An agent approves work on the human's behalf | Approvals record their channel, and `human-direct` requires the driver's terminal |
 | A gate backed only by inferential sensors is ungrounded | `senawa gate check` refuses to evaluate a gate with no deterministic sensor in `requires` |
 | A worker weakens the check instead of passing it | The `frozen` set, enforced at `preToolUse`, not requested in the brief |
-| Every gate is green and the codebase is still worse | `must_not_regress` counter-metrics, ratcheted against the value at claim time |
+| Every gate is green and the codebase is still worse | Counter-metric checks, ratcheted against the value at claim time |
 | Worktrees share one `.beads` workspace, so filesystem isolation is not graph isolation | Serialize writes through `senawa`, or use `bd init --server` |
 | Embedded Dolt single writer | Same; batch related writes with `bd batch` |
 | Unknown keys in formula `[steps.gate]` blocks are dropped silently | Verify with `bd formula show <formula> --json` before pouring |
@@ -2318,11 +2402,12 @@ Slice seven closes the control graph, and it is the difference between a harness
 5. Is the tracking directory committed to the repository or kept in a sibling branch? Committing is better for review; a sibling branch keeps history clean. The run report argues for committing, since its value is that a reviewer finds it without being told where to look.
 6. Does the journal ever get compacted? It is append-only by design, but a multi-week work item produces thousands of `sensor.read` events. Suggest keeping the journal whole and letting the renderer summarize, revisiting only if a real file gets uncomfortable.
 7. What is the right review cadence? A human who approves the plan and then sees nothing until `work-done` accumulates comprehension debt at exactly the rate the harness ships. Candidates: every N closed tasks, every merge-slot acquisition, or a token or spend threshold. This wants measuring against a real work item rather than deciding in the abstract.
-8. Which counter-metrics are worth the cost? `must_not_regress` is only useful with readings that are cheap, stable, and genuinely orthogonal to the gate they pair with. Coverage and public API surface are obvious candidates; most others are not.
+8. Which counter-metrics are worth the cost? A regression check is only useful with readings that are cheap, stable, and genuinely orthogonal to the gate they pair with. Coverage and public API surface are obvious candidates; most others are not.
 
 ## References
 
 * [Proof-of-Concept Findings](poc-findings.md), the evidence behind every measured claim in this document
+* [Roads Not Taken](roads-not-taken.md), the approaches this design tried and dropped, and what would bring each one back
 * [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/)
 * [Refining Inferential Sensors in Coding Agent Harnesses](https://dasith.me/2026/06/20/refining-inferential-sensors/)
 * [Loop Engineering](https://addyosmani.com/blog/loop-engineering/), Addy Osmani, on designing the system that prompts the agent rather than prompting it yourself
