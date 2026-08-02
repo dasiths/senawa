@@ -80,6 +80,21 @@ Final state: five accepted phases, four closed tasks, plan at v3, verify at
 iteration 2, 64 journal events, and every session under the work directory's own
 home rather than the user's.
 
+### The principal agent surface, live
+
+`pa-driven.sh` tests the chain the design is actually for: you, a Copilot session
+carrying the senawa skill, senawa, then the workers. The agent is given the skill
+and a `senawa` on its PATH. Real `bd` is shadowed by a shim that records any
+attempt to reach past the seam, because the design admits the agent is contained
+by instructions rather than enforcement, and that claim is only worth something
+if it is measured.
+
+Across three turns of one resumed session it listed the available workflows,
+started a run, read `needs` from the status projection and reported the artifact
+path rather than paraphrasing the artifact, then approved the phase and resumed.
+The harness recorded one approval, the define phase accepted, and the run moved
+on to research. The bd shim was never invoked.
+
 ### The per-task loop, live
 
 Capability removal is practical. The worker's environment is constructed rather
@@ -119,6 +134,8 @@ budget.
 |------------------|--------------------------------------------------------------------------|
 | `engine.mjs`     | Validation, kickoff, the blocking driver, approvals, iterations, reconciliation |
 | `run.sh`         | The full human journey: approve, reject, crash, resume, revise, accept    |
+| `pa-driven.sh`   | The same harness driven by a real Copilot session holding the skill       |
+| `skill/senawa/`  | The skill under test, copied into the scratch repository                 |
 | `senawa.mjs`     | Throwaway per-task harness: graph, sensors, gate, journal, run report     |
 | `end-to-end.sh`  | Live run: constructed worker environment, real dispatch, refusal, rework  |
 | `workflows/`     | A valid five-phase workflow and a deliberately invalid one               |
@@ -131,6 +148,7 @@ budget.
 
 ```bash
 bash poc/orchestration/run.sh          # offline, slow because it uses a real beads database
+bash poc/orchestration/pa-driven.sh    # spends AI credits
 bash poc/orchestration/end-to-end.sh   # spends AI credits
 ```
 
@@ -143,3 +161,4 @@ bash poc/orchestration/end-to-end.sh   # spends AI credits
 | 2026-08-02 | Merged the workflow engine and the end-to-end probe into one folder, since they are the same loop at two levels. Corrected the engine to refresh lifecycle status from beads on every tick rather than trusting its own JSON cache. |
 | 2026-08-02 | Replaced the scheduler model with a blocking driver. `work start` now drives to completion and exits 2 when a human is needed; `work resume` reconciles and continues. Added phase approvals, rejection with iterations that resume the phase session, versioned artifacts, additive `plan revise`, human acceptance as the completion condition, and an injected mid-dispatch crash proving intent-before-side-effect journalling is enough to recover. |
 | 2026-08-02 | Moved runtime state into beads, where the design always said it belonged. Phase status, iteration, session and version now live in bead metadata, transitions write `senawa:<state>` labels, and approvals are real `human` gates. Two bugs surfaced immediately: `bd list` hides closed issues, so finished tasks vanished from the frontier and `plan revise` would have recreated them, and reopening a phase without resolving its outstanding gate left the phase bead permanently blocked. |
+| 2026-08-02 | Added `pa-driven.sh` and the skill it tests. A real Copilot session, given only the skill, listed workflows, started a run, reported what the run needed, approved a phase and resumed, without ever calling `bd`. Also established that repository skills are discovered from `.github/skills/`. |

@@ -32,7 +32,7 @@ cross-cutting record; these folders are the machinery that produced it.
 | [model-routing](model-routing/README.md)         | Does per-task model selection survive delegation, and what does telemetry report? | AI credits |
 | [sdk-surface](sdk-surface/README.md)             | Which control points does the SDK expose, and do they compose safely?            | AI credits   |
 | [sensors](sensors/README.md)                     | Do sensor contracts, evidence hygiene, and inferential trust hold up?            | mixed        |
-| [orchestration](orchestration/README.md)         | Can the harness own the task loop and run a workflow from durable state?         | mixed        |
+| [orchestration](orchestration/README.md)         | Can the harness own the task loop, run a workflow from durable state, and be driven by an agent? | mixed |
 
 ## How these probes are maintained
 

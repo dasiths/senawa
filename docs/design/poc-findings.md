@@ -86,6 +86,9 @@ about the SDK should be re-checked when the mirror catches up.
 | 35 | Work can be added after verification without disturbing finished work | **Confirmed offline.** The frontier re-opened for one new task while three closed tasks were untouched |
 | 36 | Beads can hold all runtime state, leaving local files as identity plus cache | **Confirmed offline.** Phase iteration, session and version round-tripped through bead metadata, and deleting the cache mid-run changed nothing |
 | 37 | `bd list` is safe for deriving a task set | **Wrong.** It hides closed issues, so finished work disappears from a derived frontier unless `--all` is passed |
+| 38 | A repository skill is discovered without configuration | **Confirmed.** `.github/skills/<name>/SKILL.md` was listed by `copilot skill list` with no setup |
+| 39 | A Copilot session given only the skill can drive the harness | **Confirmed with a live model.** It listed workflows, started a run, read `needs`, approved a phase and resumed |
+| 40 | The skill's boundary holds in practice | **Observed once.** No direct `bd` calls across three turns, but this is instruction-only and one clean run is weak evidence |
 
 ## Hook latency
 
@@ -696,6 +699,48 @@ local state machine would have silently disagreed with.
 Both are arguments for the rule rather than against it: the graph enforced an
 invariant that the local copy had been quietly violating.
 
+## The principal agent surface
+
+`poc/orchestration/pa-driven.sh` tests the chain the design is for: a human, a
+Copilot session carrying the senawa skill, senawa, then the workers. The agent
+gets the skill and a `senawa` on its PATH. Real `bd` is replaced by a shim that
+records any attempt to use it, because the design concedes that the principal
+agent is contained by instructions rather than enforcement.
+
+**Repository skills are discovered with no configuration.** A `SKILL.md` under
+`.github/skills/senawa/` appeared in `copilot skill list` immediately. The CLI
+also scans `.agents/skills/` and `.claude/skills/`, so the design's earlier claim
+about `.agents/skills/` was right, just incomplete.
+
+**The skill was enough to drive the harness.** Across three turns of one resumed
+session the agent listed the available workflows, started a run with the right
+workflow, and reported what the run needed:
+
+```text
+The define phase needs your approval. Review the artifact at
+.agents/.copilot-tracking/run/artifacts/define/v1.json, then either:
+  senawa approve define
+  senawa reject define --reason "..."
+```
+
+That is the intended behaviour in one respect worth noting: it handed over the
+artifact path rather than paraphrasing the artifact and inviting approval of the
+paraphrase. It then approved the phase and resumed, and the harness recorded one
+approval with define accepted and research awaiting the next decision.
+
+**Exit code 2 was not treated as an error.** `work start` stops for a human by
+exiting 2, and the agent read that as a normal state rather than a failure,
+which the skill states explicitly and which is the difference between a usable
+surface and one that reports every approval as a crash.
+
+**No attempt to reach past the seam.** The recording `bd` shim was never invoked.
+
+That last result deserves caution rather than celebration. It is one run, three
+turns, one model, and instruction-only compliance was measured as unreliable
+elsewhere in this document: a worker ignored its brief in one end-to-end run.
+One clean observation is weak evidence that the boundary holds under pressure,
+which is exactly why the authority-carrying commands do not rest on it.
+
 ## Design changes from the probes
 
 1. Split the binary. `senawa-hook` (minimal, ~33 ms) for hooks; `senawa` (full)
@@ -797,6 +842,7 @@ bash poc/model-routing/run.sh         # spends AI credits
 bash poc/sdk-surface/run.sh           # spends AI credits
 node poc/sdk-surface/precedence.mjs   # spends AI credits
 bash poc/sensors/stability.sh         # spends AI credits
+bash poc/orchestration/pa-driven.sh   # spends AI credits
 bash poc/orchestration/end-to-end.sh  # spends AI credits
 ```
 
