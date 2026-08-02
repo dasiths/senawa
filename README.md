@@ -16,7 +16,7 @@ estimated_reading_time: 4
 
 ## Overview
 
-Senawa (සේනාව) is an orchestration harness for [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli). You give it a goal and a workflow; it decomposes the work and delegates the pieces to specialist worker sessions: a researcher, a planner, one or more implementors, and verifiers. The part that decides what runs next is a deterministic driver rather than a model, so no agent is ever in the control path.
+Senawa (සේනාව) is an orchestration harness for [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli). You talk to an ordinary Copilot session carrying the senawa skill, and it turns what you ask for into `senawa` commands. Senawa decomposes the work and delegates the pieces to specialist worker sessions: a researcher, a planner, one or more implementors, and verifiers. The part that decides what runs next is a deterministic driver rather than a model, so no agent is ever in the control path.
 
 Three ideas hold the design together.
 
@@ -38,7 +38,7 @@ Senawa runs three nested loops. You are not in the fast one, and you do not wait
 | Middle | the run driver, deterministic | minutes to hours | steer it any time; it never waits for you |
 | Outer | you | hours to days | you own the phase boundaries |
 
-`senawa work start` blocks and drives the run to completion, so the loop advances with nobody watching. Cancel it and `senawa work resume` picks up where it stopped. While it runs you can steer a worker, pause new dispatches, or abort a task, and every one of those lands in the run report.
+`senawa work start` drives the run and stops when it needs you, so the loop advances without anyone watching it. Cancel it and `senawa work resume` picks up where it stopped. When a principal agent starts it on your behalf it runs detached, which is what lets you keep asking questions and steering while the work continues.
 
 ## What a run looks like
 
@@ -47,21 +47,30 @@ ask for your approval, and any phase you are not happy with can be sent back to
 run again on top of what it already produced.
 
 ```text
-senawa work start "Add Entity Framework support for the persistence layer"
-
-define     -> you approve
-research   -> you approve
-plan       -> you reject: "no error handling on the adapter boundary"
-plan       -> iteration 2 resumes the same session and addresses it; you approve
-implement  -> tasks run, gates refuse bad work, workers fix it and resubmit
-verify     -> you add two more tasks instead of accepting
-implement  -> the frontier re-opens; finished tasks are untouched
-verify     -> you accept, which is what ends the run
+you   Add Entity Framework support for the persistence layer
+PA    [senawa workflow list] I can run standard-delivery or hotfix. Which?
+you   standard-delivery
+PA    [senawa work start] Define is ready: artifacts/define/v1.json
+you   looks right, go on
+PA    [senawa approve define] [senawa work resume] Research is ready: v1
+you   approve
+PA    [senawa approve research] [senawa work resume] Plan is ready: v1, 6 tasks
+you   no error handling on the adapter boundary
+PA    [senawa reject plan] [senawa work resume] Plan v2 adds two tasks for it
+you   approve
+PA    [senawa approve plan] [senawa work resume] Implementing. 4 of 6 closed.
+      bd-a1b2 was refused once on unit-tests and passed on its second attempt.
+PA    Verify is ready: v1
+you   add a task for structured logging
+PA    [senawa plan revise] [senawa work resume] Done, verify re-ran: v2
+you   accept
+PA    [senawa approve verify] [senawa work resume] Run accepted. Report at report.md
 ```
 
-Rejecting a phase is the normal case rather than an error path. Your reason
-becomes the input to the next iteration, and every artifact version is kept, so
-you can see what changed and why.
+Everything in brackets is a `senawa` command. Rejecting a phase is the normal
+case rather than an error path: your reason becomes the input to the next
+iteration, and every artifact version is kept, so you can see what changed and
+why.
 
 This is the shape [Addy Osmani calls loop engineering](https://addyosmani.com/blog/loop-engineering/): you design the system that prompts the agents rather than prompting them yourself. [Carlos Perez's follow-up](https://medium.com/intuitionmachine/from-loop-engineering-to-graph-engineering-d3ebeb08511c) argues that a single loop always fails, and that the fix is a graph of loops that check each other. Senawa takes that seriously without mistaking its task graph for a control graph: what keeps it honest is narrower than topology. Deterministic sensors that execute real code. A journal no agent can write. A frozen set of files the optimizer cannot weaken. And a human who decides what "better" means.
 
@@ -75,21 +84,22 @@ Start with [the design document](docs/design/multi-agent-orchestration.md), then
 
 ```mermaid
 flowchart LR
-    H[You] -->|work start| D[Run driver]
-    D --> R[Researcher]
-    D --> P[Planner]
-    D --> I[Implementors]
-    D --> V[Verifiers]
-    R & P & I & V --> S[senawa]
-    D --> S
+    H[You] <--> PA[Copilot with the senawa skill]
+    PA -->|start, show, approve, reject, steer| S[senawa]
+    S --> D{Run driver}
+    D --> W[Researcher, planner, implementors, verifiers]
+    W -->|senawa CLI only| S
     S --> G[(beads graph)]
     S --> SEN[sensors and gates]
-    S --> T[tracking files]
     S --> J[(journal)]
     J --> RPT[run report]
-    RPT --> H
-    H -. steer, pause, abort .-> D
+    RPT --> PA
 ```
+
+The chain is you, the principal agent, senawa, then the workers. Only the middle
+arrow is conversational. The principal agent relays your intent and explains what
+came back; it never decides what runs next, and it never reaches past `senawa` to
+the graph, the journal, or the workers.
 
 ## Concepts
 
@@ -98,7 +108,7 @@ flowchart LR
 | Workflow | A declarative sequence of phases, with their gates, approvals, and iteration budgets. Lives in the repository |
 | Phase | A stage of a workflow. Can be entered more than once, so rejecting one starts an iteration rather than an error |
 | Run driver | The process started by `senawa work start`. Performs every transition and decides what runs next |
-| Principal agent | An optional Copilot session with the senawa skill. Reads status, explains refusals, and relays your instructions. It cannot dispatch or close work |
+| Principal agent | The Copilot session you talk to, carrying the senawa skill. Relays your intent as `senawa` commands and explains what came back. It never decides what runs next, and the harness runs without it |
 | Worker session | A role-scoped worker with its own context window, model, reasoning effort, and tool permissions. A separate session, not an in-process helper |
 | Artifact | A phase's schema-validated output, versioned rather than overwritten. A plan's tasks become the implementation frontier |
 | Graph state | The dependency graph of phases, tasks, and gates, plus their orchestration metadata, held in beads |
