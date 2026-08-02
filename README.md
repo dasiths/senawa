@@ -1,6 +1,6 @@
 ---
 title: Senawa
-description: An orchestration harness for GitHub Copilot CLI where a principal agent delegates to role-specific subagents, tracks workflow state in a dependency graph, and refuses to let work advance until sensors say it is sound
+description: An orchestration harness for GitHub Copilot CLI where a deterministic driver runs a phased workflow, delegates each piece to role-scoped worker sessions, and refuses to let work advance until sensors say it is sound
 author: dasiths
 ms.date: 2026-08-02
 ms.topic: overview
@@ -38,13 +38,36 @@ Senawa runs three nested loops. You are not in the fast one, and you do not wait
 | Middle | the run driver, deterministic | minutes to hours | steer it any time; it never waits for you |
 | Outer | you | hours to days | you own the phase boundaries |
 
-`senawa work start` blocks and drives the run to completion, so the loop advances with nobody watching. Cancel it and `senawa work resume` picks up where it stopped. While it runs you can steer a worker, pause new dispatches, or abort a task from another terminal, and every one of those lands in the run report.
+`senawa work start` blocks and drives the run to completion, so the loop advances with nobody watching. Cancel it and `senawa work resume` picks up where it stopped. While it runs you can steer a worker, pause new dispatches, or abort a task, and every one of those lands in the run report.
+
+## What a run looks like
+
+A workflow is a sequence of phases you declare in the repository. Each one can
+ask for your approval, and any phase you are not happy with can be sent back to
+run again on top of what it already produced.
+
+```text
+senawa work start "Add Entity Framework support for the persistence layer"
+
+define     -> you approve
+research   -> you approve
+plan       -> you reject: "no error handling on the adapter boundary"
+plan       -> iteration 2 resumes the same session and addresses it; you approve
+implement  -> tasks run, gates refuse bad work, workers fix it and resubmit
+verify     -> you add two more tasks instead of accepting
+implement  -> the frontier re-opens; finished tasks are untouched
+verify     -> you accept, which is what ends the run
+```
+
+Rejecting a phase is the normal case rather than an error path. Your reason
+becomes the input to the next iteration, and every artifact version is kept, so
+you can see what changed and why.
 
 This is the shape [Addy Osmani calls loop engineering](https://addyosmani.com/blog/loop-engineering/): you design the system that prompts the agents rather than prompting them yourself. [Carlos Perez's follow-up](https://medium.com/intuitionmachine/from-loop-engineering-to-graph-engineering-d3ebeb08511c) argues that a single loop always fails, and that the fix is a graph of loops that check each other. Senawa takes that seriously without mistaking its task graph for a control graph: what keeps it honest is narrower than topology. Deterministic sensors that execute real code. A journal no agent can write. A frozen set of files the optimizer cannot weaken. And a human who decides what "better" means.
 
 ## Status
 
-Design stage. Nothing is implemented yet, but the risky assumptions have been tested rather than assumed. Eight probes in [poc/](poc/README.md) ran against the real Copilot CLI, the Copilot SDK, beads, and the proposed extension and workflow contracts. Six design assumptions did not survive, and throwaway prototypes now run both the worker rework loop and the declarative workflow engine end to end.
+Design stage. Nothing is implemented yet, but the risky assumptions have been tested rather than assumed. Eight probes in [poc/](poc/README.md) ran against the real Copilot CLI, the Copilot SDK, beads, and the proposed extension and workflow contracts. Six design assumptions did not survive, and throwaway prototypes now run the worker rework loop against a live model and the full phased workflow, including approvals, rejection and iteration, offline.
 
 Start with [the design document](docs/design/multi-agent-orchestration.md), then read [the proof-of-concept findings](docs/design/poc-findings.md) before writing any code.
 
@@ -72,17 +95,20 @@ flowchart LR
 
 | Term | Meaning |
 |------|---------|
-| Run driver | The foreground process started by `senawa work start`. Performs every transition and decides what runs next |
-| Principal agent | An optional agent you talk to about a run. Reads status and steers on your behalf; it cannot dispatch or close work |
+| Workflow | A declarative sequence of phases, with their gates, approvals, and iteration budgets. Lives in the repository |
+| Phase | A stage of a workflow. Can be entered more than once, so rejecting one starts an iteration rather than an error |
+| Run driver | The process started by `senawa work start`. Performs every transition and decides what runs next |
+| Principal agent | An optional Copilot session with the senawa skill. Reads status, explains refusals, and relays your instructions. It cannot dispatch or close work |
 | Worker session | A role-scoped worker with its own context window, model, reasoning effort, and tool permissions. A separate session, not an in-process helper |
-| Graph state | The dependency graph of tasks, gates, and their orchestration metadata, held in beads |
+| Artifact | A phase's schema-validated output, versioned rather than overwritten. A plan's tasks become the implementation frontier |
+| Graph state | The dependency graph of phases, tasks, and gates, plus their orchestration metadata, held in beads |
 | Sensor | A tool that measures a property of the work and returns an assessment plus evidence. Builds, tests, linters, and reviewer agents |
 | Gate | A rule that consumes sensor readings and resists progress when they are red |
 | Anchor | A reading that cannot be argued with. Every gate needs at least one, or the harness is only agreeing with itself |
 | Frozen set | Files no worker may write, such as the tests and the sensor definitions. Enforced, not requested |
 | Journal | An append-only log of every orchestration event, written by the harness rather than by any agent |
 | Run report | A rendered account of how the work was done, regenerated from the journal, the graph, and telemetry |
-| Work directory | Per-request scratch space under `.agents/.copilot-tracking/`, holding research, plans, briefs, transcripts, verdicts, and the journal |
+| Work directory | Per-run scratch space under `.agents/.copilot-tracking/`, holding the frozen definitions, versioned artifacts, transcripts, and the journal |
 
 ## Prerequisites
 
@@ -104,16 +130,20 @@ Build arguments and image environment variables are not secret storage. Keep cre
 
 ## Repository layout
 
-The tree below is the planned shape. Only `docs/` exists today.
+The tree below is the planned shape. Only `docs/` and `poc/` exist today.
 
 ```text
-docs/design/          architecture, decision records, and proof-of-concept findings
-poc/                  throwaway probes that validated the design against reality
-packages/             core, graph, sensors, report, orchestrator, cli
-.github/agents/       role definitions for the principal and each subagent
-.github/hooks/        gate enforcement for sessions senawa does not host
-.beads/formulas/      reusable workflow templates
-sensors.yaml          sensor and gate definitions for this repository
+docs/design/                 architecture, the design map, and proof-of-concept findings
+poc/                         throwaway probes that validated the design against reality
+packages/                    core, graph, sensors, report, orchestrator, cli
+.senawa/workflows/           phase definitions: gates, approvals, iteration budgets
+.senawa/schemas/             artifact contracts for each phase
+.senawa/extensions/          locally declared sensor extensions
+.agents/skills/senawa/       the skill that lets a Copilot session drive the harness
+.agents/rubrics/             rubrics for inferential sensors
+.github/agents/              role definitions for researcher, planner, implementor, verifier
+.github/hooks/               gate enforcement for sessions senawa does not host
+sensors.yaml                 sensor extensions, configured sensors, and gates
 ```
 
 ## Further reading

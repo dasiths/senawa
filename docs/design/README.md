@@ -26,12 +26,12 @@ turning into a second design.
 
 ## multi-agent-orchestration.md
 
-The architecture document. It describes the current solution shape: the
-principal agent and role-scoped worker sessions, beads as durable graph state,
-the `senawa` CLI as the single policy seam, sensor extensions and their JSON
-Schema contracts, gates and their expected results, declarative workflows and
-bounded loops, the journal and run report, and the failure modes worth designing
-against.
+The architecture document. It describes the current solution shape: a
+deterministic run driver, role-scoped worker sessions, beads as durable graph
+state, the `senawa` CLI as the single policy seam, sensor extensions and their
+JSON Schema contracts, gates and their expected results, declarative workflows
+with re-enterable phases and human approvals, the journal and run report, and the
+failure modes worth designing against.
 
 Read "How it works" first for the operating model, then the sections that go
 deep on whichever part you are building.
