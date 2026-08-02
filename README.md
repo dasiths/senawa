@@ -16,7 +16,7 @@ estimated_reading_time: 4
 
 ## Overview
 
-Senawa (සේනාව) is an orchestration harness for [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli). A principal agent takes a high level request from you, decomposes it, and delegates the pieces to specialist subagents: a researcher, a planner, one or more implementors, and verifiers. The principal never reads your code. It coordinates, and it keeps its context small enough to see a multi-day piece of work through to the end.
+Senawa (සේනාව) is an orchestration harness for [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli). You give it a goal and a workflow; it decomposes the work and delegates the pieces to specialist worker sessions: a researcher, a planner, one or more implementors, and verifiers. The part that decides what runs next is a deterministic driver rather than a model, so no agent is ever in the control path.
 
 Three ideas hold the design together.
 
@@ -24,7 +24,7 @@ Durable workflow state lives outside the model, as a dependency graph in [beads]
 
 Every agent talks to the system through one command, `senawa`. That single seam is where policy lives, which means guardrails are enforced rather than merely requested.
 
-Completion is granted, not claimed. A subagent that finishes work submits it; the harness runs sensors, evaluates gates, and either accepts the work or hands back actionable failures. This is the backpressure model described in [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/).
+Completion is granted, not claimed. A worker that finishes submits it; the harness runs sensors, evaluates gates, and either accepts the work or hands back actionable failures. This is the backpressure model described in [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/).
 
 Because everything routes through that one seam, the harness can also write down what happened. Every orchestration event lands in an append-only journal that no agent can author, and `senawa work report` renders it into a document you can read or attach to a pull request: which role did which task, on which model, how many times the harness sent the work back and why, what you decided, and what it cost.
 
@@ -35,10 +35,10 @@ Senawa runs three nested loops. You are not in the fast one, and you do not wait
 | Loop | Who runs it | Period | You |
 |------|-------------|--------|-----|
 | Inner | one worker, alone | seconds to minutes | absent by design; this is where the harness pushes back |
-| Middle | the principal agent | minutes to hours | only when a task needs a decision or gets stuck |
+| Middle | the run driver, deterministic | minutes to hours | steer it any time; it never waits for you |
 | Outer | you | hours to days | you own the phase boundaries |
 
-You can act at seven points, three of them while work is in flight. A question from a worker parks **one task** on a gate; everything else keeps running. You can also steer a running worker, pause new dispatches without killing the run, and read the run report at any time.
+`senawa work start` blocks and drives the run to completion, so the loop advances with nobody watching. Cancel it and `senawa work resume` picks up where it stopped. While it runs you can steer a worker, pause new dispatches, or abort a task from another terminal, and every one of those lands in the run report.
 
 This is the shape [Addy Osmani calls loop engineering](https://addyosmani.com/blog/loop-engineering/): you design the system that prompts the agents rather than prompting them yourself. [Carlos Perez's follow-up](https://medium.com/intuitionmachine/from-loop-engineering-to-graph-engineering-d3ebeb08511c) argues that a single loop always fails, and that the fix is a graph of loops that check each other. Senawa takes that seriously without mistaking its task graph for a control graph: what keeps it honest is narrower than topology. Deterministic sensors that execute real code. A journal no agent can write. A frozen set of files the optimizer cannot weaken. And a human who decides what "better" means.
 
@@ -52,26 +52,29 @@ Start with [the design document](docs/design/multi-agent-orchestration.md), then
 
 ```mermaid
 flowchart LR
-    H[You] <--> PA[Principal agent]
-    PA --> R[Researcher]
-    PA --> P[Planner]
-    PA --> I[Implementors]
-    PA --> V[Verifiers]
+    H[You] -->|work start| D[Run driver]
+    D --> R[Researcher]
+    D --> P[Planner]
+    D --> I[Implementors]
+    D --> V[Verifiers]
     R & P & I & V --> S[senawa]
+    D --> S
     S --> G[(beads graph)]
     S --> SEN[sensors and gates]
     S --> T[tracking files]
     S --> J[(journal)]
     J --> RPT[run report]
     RPT --> H
+    H -. steer, pause, abort .-> D
 ```
 
 ## Concepts
 
 | Term | Meaning |
 |------|---------|
-| Principal agent | The single agent you talk to. Plans the workflow, delegates, and surfaces decisions back to you |
-| Subagent | A role-scoped worker with its own context window, model, reasoning effort, and tool permissions. A separate session, not an in-process helper |
+| Run driver | The foreground process started by `senawa work start`. Performs every transition and decides what runs next |
+| Principal agent | An optional agent you talk to about a run. Reads status and steers on your behalf; it cannot dispatch or close work |
+| Worker session | A role-scoped worker with its own context window, model, reasoning effort, and tool permissions. A separate session, not an in-process helper |
 | Graph state | The dependency graph of tasks, gates, and their orchestration metadata, held in beads |
 | Sensor | A tool that measures a property of the work and returns an assessment plus evidence. Builds, tests, linters, and reviewer agents |
 | Gate | A rule that consumes sensor readings and resists progress when they are red |

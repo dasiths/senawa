@@ -1,0 +1,32 @@
+apiVersion: senawa.dev/workflow/v1
+kind: Workflow
+
+metadata:
+  name: invalid-shapes
+  description: Deliberately invalid, one violation per rule doctor is meant to catch
+
+spec:
+  inputSchema: ../schemas/work-request.schema.json
+  completesWhen: shipping-accepted
+  phases:
+    - id: one
+      dependsOn: [two]
+      executor:
+        kind: agent
+        role: researcher
+        output: artifacts/one.json
+        reentrant: true
+      exit:
+        gate: missing-gate
+        approval: whoever
+      iteration:
+        max: forever
+        onUpstreamChange: sometimes
+    - id: two
+      dependsOn: [one]
+      executor:
+        kind: task-frontier
+        role: implementor
+        resumeAcrossIterations: true
+      loop:
+        until: all-selected-tasks-closed

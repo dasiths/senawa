@@ -24,38 +24,61 @@ compiles phases into durable state and advances them without a human watching.
 
 ### The workflow engine, offline
 
-Structural errors are found before anything is dispatched. Against an invalid
-workflow, `doctor` reported a dependency cycle, a missing gate, a missing rework
-budget, and a missing dispatch-failure budget in one pass. `workflow list`,
-`workflow info`, and a Mermaid preview describe the run before it costs anything.
+Structural errors are found before anything is dispatched. Against a deliberately
+invalid workflow, `doctor` reported ten violations in one pass: a dependency
+cycle, a missing gate, an unknown approval value, a non-finite `iteration.max`,
+an unknown staleness policy, `reentrant` on an agent phase,
+`resumeAcrossIterations` on a task frontier, missing rework and dispatch budgets,
+and a `completesWhen` naming a phase that does not exist.
 
 Kickoff is one transaction. `work start` validates the merged input against the
 workflow input schema, copies the workflow, sensor and gate configuration, and
 schemas into the work directory, records a single content fingerprint, then
-creates the epic and five phase beads with their dependency edges.
+creates the epic and five phase beads with their dependency edges. It then
+drives, in the foreground, until it needs a human.
+
+Runtime state lives in the graph, not beside it. Phase status, iteration, session
+identifier and artifact version are held in bead metadata; transitions go through
+`bd set-state`, so a `senawa:awaiting_approval` label answers "what needs a
+human" without reading a local file; and waiting for approval is a beads `human`
+gate that genuinely blocks the phase. `work.json` holds only run identity, and
+the probe deletes `cache.json` mid-run to prove nothing depends on it.
 
 The run follows its frozen snapshot. The probe edits the source workflow
 immediately after kickoff; the run completes from the snapshot and reports
 `sourceChanged: true` rather than silently adopting the edit.
 
-Advancing is restart-safe. Nine separate processes each called `tick` and
-advanced exactly one transition, refreshing phase, task, and epic status from
-beads rather than trusting a cached projection:
+Phases stop for approval and can be sent back. The probe rejects the plan with a
+reason, and the planner's own session resumes to produce v2, which contains the
+task the rejection asked for. Artifacts are versioned rather than overwritten, so
+v1 remains readable next to v2.
+
+A killed driver is recoverable. The probe kills the process after the worker has
+acted but before the outcome is journalled. On resume, reconciliation finds the
+intent with no outcome, sees that the turn completed, and gates the work the
+worker actually produced rather than dispatching it again.
+
+Iteration is additive. After verification the probe adds a task with
+`plan revise`, the implementation frontier re-opens, the new task runs, and the
+three already-closed tasks are untouched. Verification runs a second time, and
+the run ends only when the human accepts it.
+
+A representative run:
 
 ```text
-define closed
-research closed
-plan closed, two dependent implementation beads imported
-implement-api failed attempt 1
-implement-api passed attempt 2 in the same recorded session
-update-caller passed attempt 1
-implementation frontier closed
-verification closed
-work closed
+define        approved, iteration 1
+research      approved, iteration 1
+plan          rejected, then approved at iteration 2 (v2 adds error handling)
+implement     driver killed mid-dispatch, reconciled, one refusal, three tasks closed
+verify        reached, then superseded by a plan revision
+implement     re-opened, add-logging closed
+verify        iteration 2, approved
+work          accepted
 ```
 
-The task-frontier loop honours dependencies, bounded rework, and closure by the
-harness. The epic ended closed in the real beads database.
+Final state: five accepted phases, four closed tasks, plan at v3, verify at
+iteration 2, 64 journal events, and every session under the work directory's own
+home rather than the user's.
 
 ### The per-task loop, live
 
@@ -84,20 +107,23 @@ budget.
 
 * Real agent phases submitting schema-valid artifacts, since the workflow hosts
   are deterministic fakes
-* Human approval parked across a restart while sibling work continues
-* Crash safety between a graph write and the journal or state write
 * Parallel task-frontier execution, worktrees, and merge-slot integration
+* Inline TTY controls, which the design specifies but this probe replaces with
+  separate command invocations
+* That a real Copilot session resumes usefully across many phase iterations,
+  which is where background compaction eventually bites
 
 ## Layout
 
 | Path             | Role                                                                    |
 |------------------|--------------------------------------------------------------------------|
-| `engine.mjs`     | Workflow validation, kickoff, snapshotting, and the bounded tick engine   |
-| `run.sh`         | Offline workflow run: doctor, preview, kickoff, nine ticks, final state   |
+| `engine.mjs`     | Validation, kickoff, the blocking driver, approvals, iterations, reconciliation |
+| `run.sh`         | The full human journey: approve, reject, crash, resume, revise, accept    |
 | `senawa.mjs`     | Throwaway per-task harness: graph, sensors, gate, journal, run report     |
 | `end-to-end.sh`  | Live run: constructed worker environment, real dispatch, refusal, rework  |
 | `workflows/`     | A valid five-phase workflow and a deliberately invalid one               |
 | `schemas/`       | Work request input schema                                                |
+| `extra-tasks.json` | The tasks added after verification, to prove revision is additive      |
 | `sensors.yaml`   | Gates and sensor declarations used by the engine                         |
 | `fixture/`       | The small buggy program the live worker is asked to fix                  |
 
@@ -115,3 +141,5 @@ bash poc/orchestration/end-to-end.sh   # spends AI credits
 | 2026-07-28 | End-to-end probe. Established that capability removal works, that only the orchestrator changes bead status, that worker compliance is unreliable but harmless, and that forwarding an unsupported effort hint destroys a task budget. |
 | 2026-08-02 | Added the workflow engine: declarative phases, structural validation before dispatch, frozen definition snapshots, plan expansion into dependent beads, and restart-safe bounded ticks. |
 | 2026-08-02 | Merged the workflow engine and the end-to-end probe into one folder, since they are the same loop at two levels. Corrected the engine to refresh lifecycle status from beads on every tick rather than trusting its own JSON cache. |
+| 2026-08-02 | Replaced the scheduler model with a blocking driver. `work start` now drives to completion and exits 2 when a human is needed; `work resume` reconciles and continues. Added phase approvals, rejection with iterations that resume the phase session, versioned artifacts, additive `plan revise`, human acceptance as the completion condition, and an injected mid-dispatch crash proving intent-before-side-effect journalling is enough to recover. |
+| 2026-08-02 | Moved runtime state into beads, where the design always said it belonged. Phase status, iteration, session and version now live in bead metadata, transitions write `senawa:<state>` labels, and approvals are real `human` gates. Two bugs surfaced immediately: `bd list` hides closed issues, so finished tasks vanished from the frontier and `plan revise` would have recreated them, and reopening a phase without resolving its outstanding gate left the phase bead permanently blocked. |

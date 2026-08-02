@@ -7,35 +7,52 @@ metadata:
 
 spec:
   inputSchema: ../schemas/work-request.schema.json
+  completesWhen: verify-accepted
+
   phases:
     - id: define
       executor:
         kind: agent
         role: definer
+        resumeAcrossIterations: true
         output: artifacts/definition.json
       exit:
         gate: artifact-accepted
+        approval: human
+      iteration:
+        max: 5
+        onUpstreamChange: flag
 
     - id: research
       dependsOn: [define]
       executor:
         kind: agent
         role: researcher
+        resumeAcrossIterations: true
         output: artifacts/research.json
       exit:
         gate: artifact-accepted
+        approval: human
+      iteration:
+        max: 5
+        onUpstreamChange: flag
 
     - id: plan
       dependsOn: [research]
       executor:
         kind: agent
         role: planner
+        resumeAcrossIterations: true
         output: artifacts/plan.json
       actions:
         - kind: import-plan
           source: phases.plan.output
       exit:
         gate: artifact-accepted
+        approval: human
+      iteration:
+        max: 5
+        onUpstreamChange: flag
 
     - id: implement
       dependsOn: [plan]
@@ -43,6 +60,7 @@ spec:
         kind: task-frontier
         role: implementor
         concurrency: 1
+        reentrant: true
       loop:
         until: all-selected-tasks-closed
         each:
@@ -53,12 +71,20 @@ spec:
           dispatch:
             maxFailures: 2
           onExhausted: escalate
+      iteration:
+        max: 10
+        onUpstreamChange: independent
 
     - id: verify
       dependsOn: [implement]
       executor:
         kind: agent
         role: verifier
+        resumeAcrossIterations: true
         output: artifacts/verification.json
       exit:
         gate: work-done
+        approval: human
+      iteration:
+        max: 10
+        onUpstreamChange: independent

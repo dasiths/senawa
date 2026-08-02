@@ -1,0 +1,5 @@
+{
+  "tasks": [
+    { "key": "add-logging", "title": "Add structured logging", "dependsOn": ["update-caller"] }
+  ]
+}

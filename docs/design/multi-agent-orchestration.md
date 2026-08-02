@@ -1,6 +1,6 @@
 ---
 title: Senawa Multi-Agent Orchestration Design
-description: Architecture for a principal agent that orchestrates research, planning, implementation, and verification subagents on GitHub Copilot CLI, with beads as graph state, a sensor/gate CLI as the backpressure seam, and an append-only journal as the provenance record
+description: Architecture for a deterministic run driver that orchestrates research, planning, implementation, and verification worker sessions on GitHub Copilot CLI, with beads as graph state, a sensor/gate CLI as the backpressure seam, and an append-only journal as the provenance record
 author: Senawa
 ms.date: 2026-08-02
 ms.topic: concept
@@ -13,16 +13,16 @@ keywords:
   - sensors
   - gates
   - workflow provenance
-estimated_reading_time: 40
+estimated_reading_time: 45
 ---
 
 ## Purpose
 
-This document proposes an architecture for a principal agent (PA) that decomposes a high level human request into research, planning, implementation, and verification work, delegates each piece to a subagent (SA), and refuses to let work advance until sensors say it is sound.
+This document proposes an architecture for a harness that decomposes a high level human request into research, planning, implementation, and verification work, delegates each piece to a role-scoped worker session, and refuses to let work advance until sensors say it is sound. The component that decides what runs next is a deterministic run driver rather than a model.
 
 Three ideas carry the design:
 
-1. Durable graph state lives outside the model, in [beads](https://github.com/gastownhall/beads). The PA queries a bounded view of it instead of remembering it.
+1. Durable graph state lives outside the model, in [beads](https://github.com/gastownhall/beads). The driver reloads it on every transition instead of holding a plan in memory, and no agent is trusted to remember one.
 2. Every agent interacts with the system through one CLI, `senawa`. Agents never call `bd` directly and never run test commands directly. That single seam is where policy lives.
 3. Completion is not something an agent asserts. It is something the harness grants, after sensors return readings and gates consume them. This is the backpressure model from [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/).
 
@@ -62,16 +62,31 @@ Three consequences follow, and they are non-negotiable:
 | Work directory      | Frozen definitions, artifacts, evidence, transcripts, and the journal       | `senawa` only     |
 | Journal             | Append-only orchestration events                                            | `senawa` only     |
 | Worker session      | A role-scoped Copilot session with its own model, tools, and resumable identity | The runtime, dispatched by `senawa` |
+| Run driver          | The foreground process started by `senawa work start`, which performs every transition | n/a               |
+| Principal agent     | An optional conversational surface for the human, outside the control path | n/a               |
 
 Definitions are inputs. Beads is the runtime truth. The journal is the history.
 Keeping those three separate is what makes a run restartable and auditable.
+
+That rule has a sharp consequence worth stating before it is broken. Every
+durable fact about where a run has got to lives in beads: phase status and
+iteration, session identifiers, artifact versions, attempt counts, and the
+approval a phase is waiting on. Local files hold only two things, the run's
+identity written once at kickoff and a derived cache. Delete the cache and
+`senawa work resume` rebuilds it. Where the two disagree, beads wins.
+
+The journal is the one legitimate exception, because it records intent, actor,
+channel, cost and findings that the graph cannot reconstruct, and at roughly
+760 ms per bead write storing thousands of events there would be absurd.
+
+One omission in that table is deliberate. No agent appears in the column that
+decides what runs next, because nothing in the control path is a model.
 
 ### A run, start to finish
 
 ```bash
 senawa doctor
 senawa work start "Refactor the ingest pipeline" --workflow standard-delivery --input request.json
-senawa tick
 ```
 
 1. `senawa doctor` loads the declared extensions, compiles every schema, and
@@ -84,10 +99,11 @@ senawa tick
    epic and the static phase nodes in beads with their dependency edges.
 3. From that moment the run reads its frozen snapshot. Editing the source
    definitions afterwards is reported as drift rather than silently adopted, so a
-   long-running work item cannot change its own rules halfway through.
-4. `senawa tick` advances the run. It is idempotent and restart-safe: a fresh
-   process reloads status from beads, performs the next legal transition, and
-   exits. Run it from a schedule and the work advances without a human watching.
+   run cannot change its own rules halfway through.
+4. The same command then drives the run in the foreground, performing one
+   transition at a time until the work terminates. Every transition reloads
+   status from beads rather than trusting anything held in memory, which is what
+   makes an interrupted run resumable rather than merely restartable.
 5. An agent phase dispatches one role-scoped session, which submits its artifact
    through a schema-backed tool. The artifact is persisted only after validation.
    The planner's validated artifact is what `senawa plan import` turns into
@@ -96,26 +112,206 @@ senawa tick
    atomically, dispatches or resumes one worker session, evaluates the per-task
    gate, and hands red findings back to the same session. It closes the task only
    when the gate passes, and it repeats until every selected task is closed.
-7. `senawa work report` renders the run from the journal, the graph, and the
-   cost stream at any point, including while work is still in flight.
+7. The command exits when the work is accepted, when a budget or policy stops it,
+   or when the operator interrupts it. `senawa work report` renders the run at
+   any point, including from a second terminal while work is still in flight.
+
+The exit code carries the outcome, because a factory needs to script on it:
+
+| Exit | Meaning                                                          | Resumable  |
+|------|------------------------------------------------------------------|------------|
+| 0    | The run completed and you accepted it                            | not needed |
+| 2    | Stopped for a human: an approval is due, or a budget was exhausted | yes      |
+| 130  | Interrupted by the operator                                      | yes        |
+| 1    | Unexpected error                                                 | yes        |
+
+On a terminal an approval is a prompt rather than an exit. Exit 2 is what that
+same moment looks like headless, which is why it names the phase and prints the
+artifact path.
+
+`senawa work start` is therefore a constructor and a driver in one command. It
+is not a scheduler, and nothing outside it is required to make the work advance.
+
+### Foreground and detached
+
+The driver blocks by default, which is right for a human in a terminal and wrong
+for a principal agent relaying on your behalf. An agent that shell-executes a
+blocking command holds its turn open for the length of the run, cannot show you
+anything, and cannot pass your steering through while it waits.
+
+| Mode | Used by | Behaviour |
+|------|---------|-----------|
+| Foreground, the default | A human at a terminal | Blocks, streams progress, offers the inline controls |
+| `--detach` | A principal agent | Returns a handle immediately; the run continues under its lease |
+
+Detached is not a scheduler and does not weaken anything. The driver still
+blocks-and-drives internally, still holds the lease, and still stops at the same
+approvals. Only the caller's relationship to it changes. With nothing blocked,
+`senawa work show` answers where the run is, `senawa work log --follow` streams
+it, and `senawa steer` reaches a live worker while the conversation continues.
+
+A detached driver writes its progress to `driver.log` in the work directory
+rather than to a terminal, which is what `senawa work log` reads.
+
+### Reading a detached run
+
+The same information has two access patterns, and giving an agent the wrong one
+recreates the problem detaching solved.
+
+| Caller | Command | Why |
+|--------|---------|-----|
+| Human | `senawa work log --follow` | Blocks and streams, which is what watching means |
+| Principal agent | `senawa work log --since <seq>` | Returns immediately with what is new, then exits |
+
+The journal's monotonic `seq` makes the cursor free, and it also keeps a relayed
+conversation cheap: the agent never re-reads what it already told you, so its
+context grows with the conversation rather than with the run.
+
+`senawa work wait` is the exception that is allowed to block, because it is
+bounded. It returns as soon as the run needs a human or the timeout expires,
+which is what makes "kick it off and tell me when the plan is ready" work without
+an agent polling in a loop. Use a timeout an agent host will tolerate; without
+one, this is just the blocking problem again wearing a different name.
+
+### Resuming an interrupted run
+
+A blocking driver will be cancelled, disconnected, and crashed, so resumability
+is a property of how transitions are recorded rather than an afterthought. Every
+transition writes its intent before the side effect and its outcome after:
+
+```text
+task.dispatching   { task, attempt, session_id }      <- written first
+   ... spawn or resume the worker session ...
+task.dispatched    { task, attempt, session_id, resolved_model }
+```
+
+`senawa work resume` reconciles any intent that has no outcome. Because session
+identifiers are chosen by the harness rather than the runtime, it can look up
+that exact session and decide what really happened:
+
+| Reconciliation finds           | Action                                       |
+|--------------------------------|----------------------------------------------|
+| Session exists, turn completed | Adopt the result, run the gate, continue     |
+| Session exists, turn unfinished| Resume the same session with the same brief  |
+| Session missing                | Re-dispatch, counted as a dispatch failure   |
+
+Interrupting is two-stage, so cancellation never has to mean losing a turn. The
+first interrupt stops new dispatches and lets the in-flight turn finish. The
+second aborts the current turn and marks the task interrupted. Both leave a run
+that `resume` can pick up.
+
+One driver may hold a run at a time. The work directory carries a lease with the
+process identity and a heartbeat, and `resume` refuses while that lease is live,
+taking over once it goes stale. Atomic claiming already prevents two drivers
+dispatching the same task, but it does not order phase transitions or journal
+writes, which is what the lease protects.
+
+### The loops
+
+Three loops, and only the middle one changed when the driver moved into the
+foreground. The human is absent from the inner loop by construction and can
+reach into it at any time through steering.
 
 ```mermaid
 flowchart TB
-    D[Workflow, sensors, gates] -->|doctor + work start| S[Frozen snapshot]
-    S --> G[(beads graph)]
-    T[senawa tick] --> G
-    T --> P{Phase executor}
-    P -->|agent| A[Role-scoped session]
-    P -->|task-frontier| W[Worker session per task]
-    A & W --> SUB[Schema-validated submission]
-    SUB --> GATE[Gate: readings vs expectations]
-    GATE -->|accepted| CLOSE[Harness closes the node]
-    GATE -->|refused| REWORK[Resume same session with findings]
-    REWORK --> W
-    CLOSE --> G
-    GATE --> J[(journal)]
-    J --> R[Run report]
+    subgraph outer["Outer loop: the human, hours to days"]
+        REQ[Request, workflow, sensors, gates] --> START[senawa work start]
+        REPORT[Run report] --> REQ
+    end
+
+    subgraph middle["Middle loop: the run driver, minutes to hours"]
+        START --> ADV{Next legal transition}
+        ADV -->|phase or task ready| DISPATCH[Dispatch or resume a session]
+        ADV -->|everything closed| ACCEPTED[Work accepted]
+        VERDICT[Gate verdict] --> ADV
+    end
+
+    subgraph inner["Inner loop: one worker alone, seconds to minutes"]
+        DISPATCH --> EDIT[Edit, fast sensors on postToolUse]
+        EDIT --> SUBMIT[Submit through senawa]
+        SUBMIT --> GATE[Gate: deterministic, then inferential]
+        GATE -->|refused with findings| EDIT
+    end
+
+    GATE -->|accepted| VERDICT
+    ACCEPTED --> REPORT
+    ADV --> JOURNAL[(journal + beads)]
+    STEER[[Steering inbox]] -. read between transitions .-> ADV
+    HUMAN[Human, or the principal agent on their behalf] -. senawa steer, pause, abort .-> STEER
+    JOURNAL -. senawa work show, report .-> HUMAN
 ```
+
+| Loop   | Owner              | Decides                                  | Human involvement                          |
+|--------|--------------------|------------------------------------------|--------------------------------------------|
+| Inner  | One worker session | How to do the assigned task              | None by design; this is where refusals bite |
+| Middle | The run driver     | What runs next and whether it is accepted | Steering, which never blocks the loop      |
+| Outer  | The human          | What is worth doing and what better means | Owns it entirely                           |
+
+### Where the principal agent sits
+
+Outside the control path, and optional. It is a conversational surface over the
+same CLI: it reads status and the journal, renders reports, relays questions, and
+issues steering commands the human asks for. It cannot dispatch, close, reorder,
+or reprioritise work.
+
+That restriction buys three things. Control flow stops depending on a model's
+judgement, so the same workflow advances the same way twice and the journal is an
+explanation rather than an anecdote. The trust boundary gets crisp, because no
+model sits anywhere in the control path rather than merely being kept away from
+completion. And the harness runs headless with no agent at all, which is the
+sharpest available test of whether it actually holds.
+
+The principal is still worth having at both ends of the outer loop: turning a
+vague request into a valid work request, explaining in natural language why the
+harness refused something, and walking the report afterwards.
+
+### Example scenarios
+
+**A clean run, nobody watching.** The operator starts the work and walks away.
+The driver closes the define, research, and plan phases, imports six
+implementation tasks, and works the frontier. Every task passes its gate on the
+first attempt. The command exits 0 and `report.md` shows six tasks, one attempt
+each, and the total spend.
+
+**Backpressure does its job.** One task fails `unit-tests` on attempt one. The
+driver resumes that same session with the failing findings attached, the worker
+fixes the cause, and attempt two passes. The human sees three lines stream past
+and nothing else happens. The report later shows the refusal, which is the
+evidence that the gate was real.
+
+**A budget stops the run.** A task exhausts `max_attempts` because the plan asked
+for something the tests contradict. The driver escalates, stops dispatching, and
+exits 2 naming the task and the failing sensor. The human reads the findings,
+revises the plan or the acceptance criteria, and runs `senawa work resume`. The
+remaining tasks were never touched.
+
+**Steering without stopping.** Halfway through, the human notices the implementor
+is about to repeat a pattern they want dropped. From a second terminal they run
+`senawa steer bd-a1b2 "prefer the existing adapter; do not introduce a new
+factory"`. The driver picks the instruction up at the next safe point and folds
+it into that task's brief. Nothing pauses, and the steering event appears in the
+report beside the work it changed.
+
+**The laptop closes.** The driver dies mid-dispatch, leaving a `task.dispatching`
+intent with no outcome. On `senawa work resume`, reconciliation finds the session
+by its identifier, sees the turn completed, runs the gate on what the worker
+actually produced, and carries on. No work is repeated and no attempt is wasted.
+
+**You send the plan back.** The planner submits, the driver stops at the
+`plan-accepted` gate, and you read `artifacts/plan/v1.json`. It has no error
+handling anywhere, so you run `senawa reject plan --reason "no error handling on
+the adapter boundary; add tasks for it"`. The driver resumes the planner's own
+session with that reason attached, so it does not re-derive the codebase, and
+submits `v2.json`. You approve. Implementation starts from v2, and the report
+later shows the plan took two iterations and why.
+
+**Verification finds a gap and you add work.** Verify comes back clean but you
+notice a case nobody covered. Rather than starting a second work item, you run
+`senawa plan revise --add extra-tasks.json`. The three closed implementation
+tasks stay closed, two new tasks are appended, the implementation phase re-opens
+because its frontier is no longer empty, and the driver works them exactly as it
+worked the first three. You verify again, and this time you accept, which is what
+ends the run.
 
 ### How a gate reaches a verdict
 
@@ -149,11 +345,28 @@ or silently giving up.
 
 ### Where the human sits
 
-The human owns the phase boundaries and the definition of better. They approve
-research and plans, answer questions that park one task without stalling the
-rest, steer a running worker, pause and resume dispatch, and read the run report.
-They are deliberately absent from the inner loop, which is where backpressure
-does its work.
+The human owns the phase boundaries and the definition of better. They are
+deliberately absent from the inner loop, which is where backpressure does its
+work, and they are not required by the middle loop either.
+
+What they keep is the ability to intervene without joining the loop. Steering
+commands are written to a durable inbox from any terminal, and the driver reads
+that inbox between transitions rather than mid-transition, so an instruction can
+never corrupt the intent-and-outcome record that `resume` depends on.
+
+| Action                          | Applied at                       | Effect                                  |
+|---------------------------------|----------------------------------|-----------------------------------------|
+| `senawa approve <phase>`        | At the phase gate                | Accepts the artifact and unblocks downstream |
+| `senawa reject <phase>`         | At the phase gate                | Starts the next iteration with your reason as input |
+| `senawa plan revise --add`      | After verification               | Appends tasks without disturbing closed work |
+| `senawa steer <task> "..."`     | Next dispatch or rework prompt   | Guidance is folded into the brief       |
+| `senawa steer <task> --now`     | Immediately                      | Enqueued into the live session          |
+| `senawa work pause` and `resume`| Between transitions              | Stops new dispatch, lets in-flight finish |
+| `senawa task abort <id>`        | Between transitions              | Ends that task and records why          |
+| `senawa work budget --aiu N`    | Between transitions              | Raises or lowers the spend ceiling      |
+
+Every one of those is a first-class journal event, so the run report shows where
+a human redirected the work and what happened next.
 
 ## What the substrate actually gives us
 
@@ -162,8 +375,8 @@ The design leans on capabilities that exist in Copilot CLI today (verified 2026-
 | Capability | Where it lives | Why it matters here |
 |------------|----------------|---------------------|
 | Custom agents | `.github/agents/*.agent.md` with `description` (required), `name`, `tools`, `model`, `mcp-servers`, `infer` | Each role (researcher, planner, implementor, verifier) becomes a profile with its own model and tool surface. There is no reasoning-effort field; see the note below |
-| Subagents | `task` tool, invoked by the main agent | Delegated work gets a separate context window; the PA stays small |
-| Agent messaging | `list_agents`, `read_agent`, `write_agent` tools, with `scope` values `siblings` and `children` | The PA can send follow-up instructions into a still-running subagent instead of restarting it |
+| Subagents | `task` tool, invoked by the main agent | Delegated work gets a separate context window, which is what keeps read-only fan-out cheap |
+| Agent messaging | `list_agents`, `read_agent`, `write_agent` tools, with `scope` values `siblings` and `children` | Follow-up instructions can reach a still-running subagent instead of restarting it |
 | Hooks | `.github/hooks/*.json`, `~/.copilot/hooks/*.json`, repository and user `settings.json`, plugin `hooks.json`, machine-wide policy files | Deterministic interception at `preToolUse`, `permissionRequest`, `postToolUse`, `postToolUseFailure`, `subagentStart`, `subagentStop`, `agentStop`, `sessionStart`, `sessionEnd`, `preCompact`, `userPromptTransformed`, `notification` |
 | Hook decision control | `permissionDecision` on `preToolUse`; `behavior` plus `message` and `interrupt` on `permissionRequest`; `decision: "block"` with a `reason` on `agentStop` and `subagentStop`; `additionalContext` on `postToolUse` and `subagentStart` | Gates that the model cannot route around, denials that carry an explanation, and forced continuation prompts |
 | Programmatic mode | `copilot -p`, `--agent`, `--model`, `--effort`, `--output-format json`, `--session-id`, `--resume`, `--share`, `--allow-tool`, `--deny-tool`, `--available-tools`, `--excluded-tools`, `--add-dir` | Per task control of model, effort, tool visibility, permissions, and a resumable session identity |
@@ -180,7 +393,7 @@ Four limits shape everything downstream.
 
 Subagent concurrency is capped by plan (2 on Free, 4 on Pro, 8 on Max, 16 on Business, 32 on Enterprise), so read the cap at startup rather than hard-coding it. A `subagentStop` hook that keeps returning `block` is overridden after eight consecutive continuations. Command hooks are fail-closed on crash or non-zero exit but always fail-open on timeout, while HTTP hooks are fail-open on everything, so a policy check that can be slow is not a policy check.
 
-The fourth limit is subtler and breaks a premise the rest of the design depends on. Agent profiles carry `model` but have no reasoning-effort field at all: effort comes from `--effort`, the `effortLevel` setting, or the SDK's `reasoningEffort`. Worse, when the session model is `Auto`, subagents inherit the resolved session model and ignore their profile's `model` entirely. Per-role model selection therefore only works if the principal session pins an explicit model. Never run the PA on `Auto`.
+The fourth limit is subtler and breaks a premise the rest of the design depends on. Agent profiles carry `model` but have no reasoning-effort field at all: effort comes from `--effort`, the `effortLevel` setting, or the SDK's `reasoningEffort`. Worse, when the session model is `Auto`, subagents inherit the resolved session model and ignore their profile's `model` entirely. Per-role model selection therefore only works if the dispatching session pins an explicit model. Never dispatch on `Auto`.
 
 ## Topology choice
 
@@ -188,13 +401,13 @@ There are two credible shapes, and the right answer is a hybrid.
 
 ### Topology A, in-process subagents
 
-The human runs `copilot --agent principal`. The PA delegates with the `task` tool. Subagents run inside the same process tree with their own context windows.
+A session delegates with the `task` tool, and subagents run inside the same process tree with their own context windows.
 
-This is cheap, native, and parallel. `subagentStart` can prepend a task brief; `subagentStop` can force a retry. The PA talks to the human with `ask_user`. Weaknesses: the model is fixed by the agent profile rather than per task and reasoning effort cannot be set per profile at all, work dies with the session, and the built-in `general-purpose` agent emits neither `subagentStart` nor `subagentStop`, so hook based gating silently does not apply to it. Use `infer: false` on any profile that must only run when senawa dispatches it.
+This is cheap, native, and parallel. `subagentStart` can prepend a task brief; `subagentStop` can force a retry. The parent session talks to the human with `ask_user`. Weaknesses: the model is fixed by the agent profile rather than per task and reasoning effort cannot be set per profile at all, work dies with the session, and the built-in `general-purpose` agent emits neither `subagentStart` nor `subagentStop`, so hook based gating silently does not apply to it. Use `infer: false` on any profile that must only run when senawa dispatches it.
 
 ### Topology B1, worker sessions as subprocesses
 
-The PA (or the `senawa` CLI acting on its behalf) spawns a fresh `copilot -p` process per task:
+The driver spawns a fresh `copilot -p` process per task:
 
 ```bash
 copilot -p "$(senawa task brief bd-a1b2)" \
@@ -262,7 +475,7 @@ Five things get materially better. Hooks stop being shell scripts parsing JSON o
 
 Three cautions, one of them structural.
 
-The structural one: **the SDK's hook surface is not the CLI's hook surface.** It exposes `onPreToolUse`, `onPostToolUse`, `onPostToolUseFailure`, `onUserPromptSubmitted`, `onSessionStart`, `onSessionEnd`, and `onErrorOccurred`. There is no `onSubagentStop` and no `onAgentStop`. The "worker keeps getting handed its failures until it is green, without the PA in the loop" mechanism described under Topology B1 does not exist here. In B2 the orchestrator rebuilds it explicitly: call `sendAndWait`, run the gate, and if the verdict is red send the rework prompt into the same session and wait again, bounded by `max_attempts`. That is arguably better, because the budget is the harness's rather than a hard-coded cap of eight, but it is code you write rather than configuration you declare.
+The structural one: **the SDK's hook surface is not the CLI's hook surface.** It exposes `onPreToolUse`, `onPostToolUse`, `onPostToolUseFailure`, `onUserPromptSubmitted`, `onSessionStart`, `onSessionEnd`, and `onErrorOccurred`. There is no `onSubagentStop` and no `onAgentStop`. The "worker keeps getting handed its failures until it is green, without anything outside the session in the loop" mechanism described under Topology B1 does not exist here. In B2 the orchestrator rebuilds it explicitly: call `sendAndWait`, run the gate, and if the verdict is red send the rework prompt into the same session and wait again, bounded by `max_attempts`. That is arguably better, because the budget is the harness's rather than a hard-coded cap of eight, but it is code you write rather than configuration you declare.
 
 The second: SDK sessions do not read `.github/hooks/*.json`, so any policy you want applied to both SDK sessions and plain `copilot` sessions has to exist in two forms driven by one shared implementation in `@senawa/core`.
 
@@ -290,7 +503,17 @@ const client = new CopilotClient({
 });
 ```
 
-Measured: a default client saw 34 sessions before a worker was created under an isolated `baseDirectory`, and 34 after. The isolated client saw its own. The same trick works for the subprocess path with `COPILOT_HOME=… copilot -p --session-id …`, and `client.deleteSession(id)` removes the session once its transcript has been archived into the work directory.
+Measured: a default client saw 34 sessions before a worker was created under an isolated `baseDirectory`, and 34 after. The isolated client saw its own. The same trick works for the subprocess path with `COPILOT_HOME=… copilot -p --session-id …`.
+
+This is a hard requirement rather than a nicety: **no session senawa creates may ever appear in the human's session picker.** Every dispatch, on either topology, runs under the work directory's own home. Nothing else in this design is allowed to weaken that, including session retention.
+
+Retention and visibility are separate concerns, and it is worth keeping them apart. `client.deleteSession(id)` removes a session once its transcript has been archived into the work directory, but a phase session must survive while its phase can still be re-entered, or the next iteration cannot resume the context that makes iterating cheap. Because the session lives under `<work_dir>/.copilot-home` either way, keeping it costs the human nothing: it was never in their history to begin with. The rule is therefore about lifetime, not exposure:
+
+| Session | Deleted when |
+|---------|--------------|
+| Task worker | Its task closes and the transcript is archived |
+| Phase agent | Its phase is accepted, not when it submits |
+| Any session | At `senawa work finish`, unconditionally |
 
 Three consequences worth stating.
 
@@ -302,20 +525,22 @@ Three consequences worth stating.
 
 ```mermaid
 flowchart TB
-    H[Human] <-->|ask_user| PA[Principal agent<br/>interactive copilot session]
-    PA -->|task tool| EX[explore subagents<br/>read only, in process]
-    PA -->|senawa dispatch| W1[copilot -p --agent implementor<br/>worktree A]
-    PA -->|senawa dispatch| W2[copilot -p --agent implementor<br/>worktree B]
-    PA -->|senawa dispatch| V[copilot -p --agent verifier<br/>read only]
-    W1 & W2 & V -->|senawa CLI only| S[(senawa)]
+    H[Human] -->|senawa work start| D[Run driver<br/>blocking foreground process]
+    D --> S[(senawa)]
+    D -->|dispatch| W1[implementor session<br/>worktree A]
+    D -->|dispatch| W2[implementor session<br/>worktree B]
+    D -->|dispatch| V[verifier session<br/>read only]
+    W1 & W2 & V -->|senawa CLI only| S
+    H <-.-> PA[Principal agent<br/>optional, outside the control path]
+    PA -.->|status and steering only| S
     S --> BD[(beads graph<br/>Dolt)]
-    S --> SEN[sensors.yaml<br/>runners]
+    S --> SEN[sensors.yaml<br/>extensions]
     S --> FS[.agents/.copilot-tracking/]
 ```
 
 ## Graph state
 
-The PA needs to know the shape of the workflow without holding it in context. Beads provides that natively: a dependency aware issue graph where `bd ready` computes the claimable frontier, hash IDs avoid multi-writer collisions, and arbitrary JSON metadata carries orchestration state.
+The driver needs the shape of the workflow without holding it in memory. Beads provides that natively: a dependency aware issue graph where `bd ready` computes the claimable frontier, hash IDs avoid multi-writer collisions, and arbitrary JSON metadata carries orchestration state.
 
 ### Mapping the workflow onto beads
 
@@ -335,7 +560,36 @@ The PA needs to know the shape of the workflow without holding it in context. Be
 | Structural validation of a plan before it is accepted | `bd swarm validate <epic>` |
 | Reusable end-to-end shape | Formula in `.beads/formulas/*.formula.toml`, cooked to a proto, poured into a molecule |
 
-The important consequence: the PA never invents a task list in its head. It pours a molecule, then repeatedly asks for the frontier. Closing work reshapes the graph, and the graph decides what is next.
+The important consequence: nothing invents a task list in its head. The driver pours a molecule, then repeatedly asks for the frontier. Closing work reshapes the graph, and the graph decides what is next.
+
+### What lives outside beads, and why
+
+The temptation with a slow graph is to keep a parallel copy and treat it as the
+real one. That produces two sources of truth that diverge exactly when it
+matters, during a crash. So the split is deliberate rather than incidental:
+
+| State | Home | Reason |
+|-------|------|--------|
+| Epic, phases, tasks, dependencies, statuses | Beads | It is a dependency graph |
+| Iteration, session id, artifact version, attempt, resolved model | Bead metadata | Measured to round-trip intact, nested, with numbers preserved |
+| Phase state transitions | `bd set-state` | Writes an event bead and a `senawa:<state>` label, so audit and cheap query come free |
+| Waiting for an approval | A beads `human` gate blocking the phase | The frontier is then genuinely empty rather than empty because our code says so |
+| Journal | `journal.jsonl` | Ordered, high frequency, and not derivable from the graph |
+| Driver lease | `driver.lock` | A heartbeat every few seconds is the wrong shape for an issue tracker |
+| Steering inbox | `steering.jsonl` | Transient, consumed and discarded |
+| Artifacts, snapshot, sessions, sensor cache | Files | They are files; beads holds the pointers |
+
+Three beads capabilities are easy to reimplement badly and worth using directly.
+`bd list --label senawa:awaiting_approval` answers "what needs a human" without
+reading any local file. A `human` gate makes waiting structural. And
+`discovered-from` edges give plan revision the provenance the run report needs
+anyway.
+
+This costs real time. At 166 to 563 ms per read and around 760 ms per write, a
+transition that touches the graph three or four times costs one to two seconds.
+That is affordable when each task takes minutes of model time, and it is the
+reason `@senawa/graph` caches reads rather than the reason to keep a second copy
+of the truth.
 
 ### The bd integration contract
 
@@ -354,7 +608,7 @@ BD_NON_INTERACTIVE=1 DO_NOT_TRACK=1 \
 
 **Batch related writes, but know what batch cannot do.** `bd batch` runs multiple writes in one transaction, and its grammar is its own rather than the CLI's: `create <type> <priority> <title>`, `update <id> <key>=<value>`, `close`, `dep add`. Crucially **`update` accepts only `status`, `priority`, `title` and `assignee`** — `metadata=` is rejected. Metadata writes stay separate calls, so "close the task and record its verdict in one batch" is only partly achievable.
 
-**Cache reads, because `bd` is slow.** Measured best-of-three on a small database: `bd ready --json` 299 ms, `bd show --json` 166-563 ms, `bd list --json` 378-440 ms, a single `bd create` around 760 ms. A `senawa work show` that makes four calls costs roughly two seconds. `@senawa/graph` therefore keeps a read cache invalidated on write. Two consequences follow immediately: no hook may ever touch the graph, and the PA's polling interval has to be deliberate rather than incidental.
+**Cache reads, because `bd` is slow.** Measured best-of-three on a small database: `bd ready --json` 299 ms, `bd show --json` 166-563 ms, `bd list --json` 378-440 ms, a single `bd create` around 760 ms. A `senawa work show` that makes four calls costs roughly two seconds. `@senawa/graph` therefore keeps a read cache invalidated on write. Two consequences follow immediately: no hook may ever touch the graph, and the driver's read pattern has to be deliberate rather than incidental.
 
 **Validate plans structurally before accepting them.** `bd swarm validate <epic>` checks dependency direction (requirement-based rather than temporal, which is the mistake agents actually make), orphans, missing dependencies, cycles, and disconnected subgraphs. It also reports the ready fronts as numbered waves, the maximum parallelism, and an estimate of the worker-sessions required. That is the `plan-lint` sensor behind the `plan-accepted` gate, and it exists already. `bd swarm create` and `bd swarm status` cover epic-level parallel coordination on the same graph.
 
@@ -421,7 +675,7 @@ The `execution_*` keys are not invented here. They are an existing beads convent
 
 `senawa.state` is a denormalized cache of the same value that `bd set-state` writes as a label, kept in metadata so one `bd show --json` returns the whole picture. The event beads remain the source of truth. Note that they are created as **children** of the issue and are excluded from `bd list --type event`; they only surface through `bd list --all`, which the journal reader must account for. Metadata and state cannot share a `bd batch`, so `senawa` writes the state transition and the metadata payload as separate calls.
 
-### Keeping the PA's context small
+### The status projection
 
 `senawa work show` returns a token-bounded projection, never the whole graph:
 
@@ -429,22 +683,31 @@ The `execution_*` keys are not invented here. They are an existing beads convent
 {
   "work": "2026-07-28-refactor-ingest",
   "epic": "bd-7k1p",
-  "phase": "execute",
+  "status": "awaiting_approval",
+  "needs": { "action": "approve", "phase": "plan", "artifact": "artifacts/plan/v2.json" },
+  "phase": "plan",
+  "progress": { "phases": "3/5 accepted", "tasks": "2/4 closed" },
   "counts": { "pending": 4, "ready": 2, "in_flight": 3, "rework": 1, "done": 9, "escalated": 0 },
   "frontier": [
     { "id": "bd-a1b2", "title": "Split parse_batch into stages", "group": "ingest-adapters", "role": "implementor" },
     { "id": "bd-c3d4", "title": "Extract retry policy", "group": "ingest-adapters", "role": "implementor" }
   ],
-  "needs_human": [],
   "recent_events": [
     "bd-9x2m rework 2/3: unit-tests red (3 failures)",
     "bd-4t8n done"
   ],
+  "cursor": 128,
   "budget": { "aiu_spent": 41.2, "aiu_cap": 250 }
 }
 ```
 
-Hard rule: the projection is capped (suggest 1,500 tokens). Anything larger is a file path, not a payload. Combined with a `sessionStart` and `preCompact` hook that re-runs `senawa prime`, the PA can drive a multi-day workflow without its context ever growing with the work.
+`status` and `needs` exist so that "is it done?" is answerable in one call with
+no interpretation. `status` is one of `running`, `awaiting_approval`, `paused`,
+`escalated`, or `finished`, and `needs` is either null or exactly the action a
+human owes the run. Everything else in the projection is detail for when the
+answer is "not yet".
+
+Hard rule: the projection is capped (suggest 1,500 tokens). Anything larger is a file path, not a payload. The cap exists because this projection is what a human glances at from a second terminal, what a principal agent reads to answer questions about the run, and what a `sessionStart` hook injects, and none of those should grow with the size of the work. The driver does not consume it at all; it reads the graph directly.
 
 ## The senawa CLI
 
@@ -456,10 +719,18 @@ This is the load bearing piece. Agents get one tool surface, and every policy de
 senawa init                                  # scaffold .beads, sensors.yaml, agents, hooks
 senawa prime                                 # compact workflow context for sessionStart/preCompact
 
-senawa work start "<goal>" [--workflow W]    # validate, snapshot, and start a workflow
-senawa work show [--json]                    # bounded projection for the PA
+senawa work start "<goal>" [--workflow W] [--detach]  # validate, snapshot, then drive
+senawa work resume [<work>] [--detach]       # reconcile an interrupted or paused run and keep driving
+senawa work step [<work>]                    # perform exactly one transition, for debugging and CI
+senawa work show [--json]                    # status projection, safe to call from another terminal
+senawa work log [--since <seq>] [--follow]   # --since returns and exits; --follow streams
+senawa work wait [--until <what>] [--timeout <s>]  # block until the run needs a human, bounded
 senawa work report [--format md|json]        # render the human-facing run report
 senawa work finish                           # close epic, squash wisps, finalize the report
+
+senawa approve <phase> [--note "<text>"]     # accept a phase artifact; records the channel used
+senawa reject <phase> --reason "<text>"      # start the next iteration with the reason as input
+senawa phase show <phase> [--iteration N]    # artifact, gate readings, and consumed versions
 
 senawa task next [--role R] [--group G]      # next ready task, claimed atomically, with execution hints
 senawa task brief <id>                       # rendered prompt for a worker session
@@ -469,12 +740,12 @@ senawa task discover <id> "<title>"          # create a discovered-from child
 senawa task done <id> --summary "<text>"     # REQUEST completion; runs the gate; may refuse
 senawa task escalate <id> --reason "<text>"
 
-senawa ask <id> "<question>"                 # subagent -> human relay, opens a human gate
-senawa answer <msg-id> "<answer>"            # PA writes the human's answer, resolves the gate
-senawa steer <id> "<instruction>"            # human -> running worker, queued into the session
-senawa work pause | resume                   # stop dispatching; let in-flight work finish
-
-senawa tick                                  # heartbeat: check gates, dispatch ready, escalate stalls
+senawa ask <id> "<question>"                 # worker -> human relay, opens a human gate
+senawa answer <msg-id> "<answer>"            # record the human's answer, resolves the gate
+senawa steer <id> "<instruction>" [--now]    # write to the steering inbox; --now cuts into the session
+senawa work pause                            # stop dispatching; let in-flight work drain, then exit
+senawa task abort <id> --reason "<text>"     # end one task without killing the run
+senawa work budget --aiu N                   # adjust the spend ceiling mid-run
 
 senawa sensor list [--json]
 senawa sensor info <id> [--json]             # description plus config, input, and output contracts
@@ -491,10 +762,13 @@ senawa doctor                                # validate extensions, sensors, gat
 
 senawa plan import <file> [--epic <id>]      # planner output -> beads subgraph
 senawa plan validate [--epic <id>]           # bd swarm validate + senawa's own structural rules
+senawa plan revise --add <file>              # append tasks without disturbing closed work
 senawa dispatch <id>                         # spawn/resume the worker session for a task
 ```
 
 There is no `senawa task claim`. Claiming is folded into `senawa task next`, which wraps `bd ready --claim --json` so that selecting a task and owning it are one atomic operation. A separate claim command is a race waiting to be lost, and the atomicity is measured: six concurrent claimants received six distinct tasks.
+
+There is also only one `resume`. Pausing sets a durable flag that makes the driver drain and exit, and `senawa work resume` clears it, reconciles anything that was in flight, and starts driving again. Whether the run stopped because a human paused it, because the process was cancelled, or because the machine died, the command to make it advance again is the same.
 
 `senawa init` is also more than a scaffolder. It runs `bd init` with the flags that stop it blocking on an interactive prompt, which is not optional for any automated path.
 
@@ -691,24 +965,31 @@ metadata:
 
 spec:
   inputSchema: "./schemas/work-request.schema.json"
+  completesWhen: verify-accepted          # default: all-phases-closed
 
   phases:
     - id: define
       executor:
         kind: agent
         role: definer
+        resumeAcrossIterations: true
         output:
           path: artifacts/definition.json
           schema: "./schemas/definition.schema.json"
       exit:
         gate: definition-accepted
         approval: human
+      iteration:
+        max: 5
+        onUpstreamChange: flag
 
     - id: research
       dependsOn: [define]
       executor:
         kind: agent
         role: researcher
+        prompt: prompts/research.md
+        resumeAcrossIterations: true
         input:
           definition: phases.define.output
         output:
@@ -717,12 +998,17 @@ spec:
       exit:
         gate: research-accepted
         approval: human
+      iteration:
+        max: 5
+        onUpstreamChange: flag
 
     - id: plan
       dependsOn: [research]
       executor:
         kind: agent
         role: planner
+        prompt: prompts/plan.md
+        resumeAcrossIterations: true
         output:
           path: artifacts/plan.json
           schema: "./schemas/plan.schema.json"
@@ -732,6 +1018,9 @@ spec:
       exit:
         gate: plan-accepted
         approval: human
+      iteration:
+        max: 5
+        onUpstreamChange: flag
 
     - id: implement
       dependsOn: [plan]
@@ -741,6 +1030,7 @@ spec:
         selector:
           phase: implement
         concurrency: auto
+        reentrant: true
       loop:
         until: all-selected-tasks-closed
         each:
@@ -751,18 +1041,30 @@ spec:
           dispatch:
             maxFailures: 2
           onExhausted: escalate
+      iteration:
+        max: 10
+        onUpstreamChange: independent
 
     - id: verify
       dependsOn: [implement]
       executor:
         kind: agent
         role: verifier
+        resumeAcrossIterations: true
         output:
           path: artifacts/verification.json
           schema: "./schemas/verification.schema.json"
       exit:
         gate: work-done
+        approval: human
+      iteration:
+        max: 10
+        onUpstreamChange: independent
 ```
+
+`approval` is optional. A phase without it advances on its gate alone, which is
+what lets the same workflow run attended while you are still designing it and
+unattended once you trust it.
 
 Version one has a small executor vocabulary: `agent` for one schema-constrained
 agent artifact, `task-frontier` for the implementation frontier, `sensor-only`
@@ -784,6 +1086,179 @@ sensors. The phase declares an output schema, the worker receives one submission
 tool with that schema, and Senawa persists the artifact only after validation.
 The planner's validated artifact is then safe for `senawa plan import` to turn
 into implementation beads.
+
+### Where the instructions come from
+
+A phase's instructions have two layers, and separating them is what keeps roles
+reusable across workflows.
+
+| Layer | Lives in | Scope |
+|-------|----------|-------|
+| Role | `.github/agents/researcher.agent.md` | Who the worker is: model, tools, permissions, durable persona |
+| Prompt | `.senawa/prompts/research.md` | What this phase wants: focus, quality bar, what to look for |
+
+Collapsing them would mean either duplicating model and tool configuration into
+every workflow, or writing prompts that cannot be reused. Keeping them apart also
+means `senawa doctor` can verify that both the referenced role and the referenced
+prompt exist before anything is dispatched.
+
+The prompt file is static. Everything situational is **composed** at dispatch by
+`senawa phase brief`, the phase-level counterpart of `senawa task brief`:
+
+```text
+[the authored prompt, verbatim]
+
+## Request
+Refactor the ingest pipeline. Constraints: preserve public behaviour.
+
+## Inputs, read these rather than re-deriving them
+- artifacts/define/v1.json
+- artifacts/research/v2.json
+
+## Output
+Submit through submit_phase_result. Validated against schemas/plan.schema.json.
+
+## Rules
+- You may not accept your own work.
+- Do not write outside src/ingest/.
+
+## Iteration 2 of 5
+Your previous submission is at artifacts/plan/v1.json.
+It was sent back: "no error handling on the adapter boundary; add tasks for it".
+```
+
+That last block is the mechanism the iteration model rests on. Without a defined
+place for the rejection reason to land, "build on top of the last run" is a
+sentiment rather than a behaviour.
+
+Prompts carry no variables and no template syntax. Logic has been kept out of
+configuration everywhere else in this design, with a closed operator set in gates
+and no expression language in workflows, and a template engine in prompts would
+reintroduce it. The composed sections already cover what a variable would be for.
+
+Inputs are passed as paths, not contents, for the same reason task briefs are
+mostly pointers. `phases.research.output` resolves to whichever version is
+current at dispatch, and the resolved version is recorded on
+`phase.iteration_started`, which is what makes staleness detectable later.
+
+### Artifact contracts
+
+Every phase artifact is schema-validated before it is persisted, but who owns the
+schema depends on who reads it.
+
+| Consumer | Shape owned by | Example |
+|----------|----------------|---------|
+| Another agent phase, as context | The workflow author | `research.json` feeding the planner |
+| A senawa action that parses it | Senawa | `plan.json` feeding `import-plan` |
+
+The second kind needs a real contract, because senawa turns the document into
+graph nodes. `import-plan` consumes this shape:
+
+```json
+{
+  "tasks": [
+    {
+      "key": "split-parse-batch",
+      "title": "Split parse_batch into stages",
+      "dependsOn": ["extract-reader"],
+      "paths": ["src/ingest/parse.py"],
+      "acceptance": ["parse_batch delegates to named stage functions"],
+      "role": "implementor",
+      "execution": { "model": "claude-sonnet-4.6", "effort": "high", "group": "ingest-adapters" }
+    }
+  ]
+}
+```
+
+Every field earns its place downstream:
+
+| Field | Becomes |
+|-------|---------|
+| `key` | Stable identity, so `plan revise` can be additive and idempotent |
+| `dependsOn` | Beads edges, checked for direction by `bd swarm validate` |
+| `paths` | The task's declared write scope, enforced at the `preToolUse` boundary |
+| `acceptance` | The acceptance section of the task brief |
+| `role` | Which agent profile the worker session runs |
+| `execution` | Hints mapped through the model capability table, dropped where unsupported |
+
+A workflow may extend that schema with `allOf` but may not redefine it, because
+the importer is senawa's rather than the author's. `senawa doctor` checks the
+compatibility, so a planner cannot be asked for a shape the harness cannot
+consume.
+
+This is the seam where a document becomes work: the planner writes an artifact,
+the artifact is validated, and only then does it become tasks that the
+implementation phase iterates over.
+
+### Phases are re-enterable
+
+A phase is a stage that can be entered more than once, not a node that runs once
+and closes. That single change is what supports the working pattern this design
+is actually for: read what came back, send it around again with better input,
+and keep going until you are satisfied.
+
+```text
+pending -> running -> awaiting_approval -> accepted
+                             |
+                             +-> rejected -> running (iteration n+1)
+```
+
+`senawa reject <phase> --reason "..."` starts the next iteration, and the reason
+is not merely recorded. It becomes input to that iteration, appended to the
+phase's session exactly as gate findings are appended during task rework.
+
+**Iterations resume rather than restart.** With `resumeAcrossIterations`, the
+next iteration continues the same session, which was measured to recall its own
+work without re-reading files. Rejecting a plan therefore costs one more turn
+rather than a full rediscovery of the codebase. One consequence follows for
+session lifecycle: a phase session must survive until its phase is accepted,
+rather than being deleted as soon as its transcript is archived.
+
+**Artifacts are versioned, never overwritten.** Three iterations produce three
+artifacts, and every phase records which upstream versions it consumed. That is
+the only way staleness becomes detectable rather than silent.
+
+```text
+artifacts/
+  research/
+    v1.json
+    v2.json
+    current -> v2.json
+```
+
+**Upstream change has a declared policy**, because re-running research after the
+plan was approved has to mean something specific:
+
+| `onUpstreamChange` | Behaviour                                              | Use for                     |
+|--------------------|--------------------------------------------------------|-----------------------------|
+| `cascade`          | Downstream phases reopen automatically                 | Premises that invalidate everything after them |
+| `flag`             | Downstream stays closed, is marked stale, and says so  | The sensible default        |
+| `independent`      | No relationship enforced                               | Implementation and verification, where iteration must be additive |
+
+**Plan revision is additive.** `senawa plan revise --add <file>` appends tasks
+after verification without disturbing what already passed. Closed tasks are
+never reopened, new tasks arrive as children carrying revision provenance, the
+re-entrant implementation phase reopens because its selector now finds unclosed
+work, and `bd swarm validate` runs again over the enlarged graph so `plan-lint`
+still guards it.
+
+**The human owns termination.** With `completesWhen`, the run ends when the named
+phase is accepted rather than when the graph happens to drain. Verify, add more
+work, run again, verify again, and the run ends when you say it does.
+
+Three budgets now bound the system, and they count different failures:
+
+| Budget                  | Counts                              | Exhausted means            |
+|-------------------------|-------------------------------------|----------------------------|
+| `rework.maxAttempts`    | Task rework after a red gate        | Escalate that task         |
+| `dispatch.maxFailures`  | Sessions that never started         | Escalate to the operator   |
+| `iteration.max`         | Human rejections of a phase         | Stop and ask, rather than loop forever |
+
+One caution about resumed phase sessions. Across many iterations a session
+accumulates context, and the runtime's background compaction will eventually
+summarise parts of it. The artifact, not the session, remains the source of
+truth: each iteration re-reads `current` rather than trusting the model to
+remember what it wrote three iterations ago. Resume is continuity, not storage.
 
 ### Starting a workflow
 
@@ -817,21 +1292,25 @@ senawa work start "Refactor the ingest pipeline" \
    Dynamic implementation nodes are created later from the validated plan.
 6. Write `work.json`, emit `work.started` and `workflow.instantiated`, and make
    the first phase ready.
-7. Return the work identifier, first frontier, and any immediate human action.
+7. Begin driving, and keep driving until the run terminates.
 
-The command does not need the principal agent to interpret the workflow. After
-startup, `senawa tick` is the idempotent engine: it checks external gates,
-advances ready phases, dispatches within configured concurrency, evaluates
-quality gates, schedules bounded rework, and surfaces escalations. The principal
-consumes the bounded projection from `senawa work show`; it does not implement
-the state machine in its prompt.
+The command does not need the principal agent to interpret the workflow. Once the
+graph exists the driver owns every transition: it advances ready phases,
+dispatches within the configured concurrency, evaluates quality gates, schedules
+bounded rework, applies steering between transitions, and escalates when a budget
+is exhausted. A principal agent, where one is used at all, reads `senawa work
+show` and the journal. It does not implement the state machine in its prompt and
+it does not decide what runs next.
 
 `senawa doctor` validates workflows before a run exists. In addition to the
 sensor checks, it rejects duplicate phase IDs, dependency cycles, missing roles
 or gates, incompatible artifact references, unbounded loops, invalid selectors,
-and blocking gates without deterministic anchors. `senawa workflow render`
-shows the static phase graph and labels the dynamic frontier so a human can
-inspect the shape before spending any AI credits.
+and blocking gates without deterministic anchors. It also checks the iteration
+model: `completesWhen` names a real phase, every `iteration.max` is finite,
+`resumeAcrossIterations` appears only on agent phases, `reentrant` only on task
+frontiers, and `onUpstreamChange` is one of the three allowed policies.
+`senawa workflow render` shows the static phase graph and labels the dynamic
+frontier so a human can inspect the shape before spending any AI credits.
 
 ## Sensors and gates
 
@@ -961,7 +1440,7 @@ Two details matter when wiring beads gates from formulas. The `[steps.gate]` blo
 
 ### Reading cache and fingerprints
 
-Every reading is keyed by `(sensor_id, tree_hash_of_relevant_paths, sensor_definition_hash)`. Re-running `senawa task done` after an unrelated edit reuses green readings instead of paying for them again. Cache entries live under the work directory and the digest is written to bead metadata, which gives the PA a cheap way to answer "is this still green" without re-running anything.
+Every reading is keyed by `(sensor_id, tree_hash_of_relevant_paths, sensor_definition_hash)`. Re-running `senawa task done` after an unrelated edit reuses green readings instead of paying for them again. Cache entries live under the work directory and the digest is written to bead metadata, which gives the driver a cheap way to answer "is this still green" without re-running anything.
 
 ### Sensor output hygiene
 
@@ -982,6 +1461,79 @@ Instructions alone produce advisory gates. Five mechanisms make them real, and t
 | SDK `onPermissionRequest` | Strong | In-process, no timeout, returns feedback the model can act on |
 | `permissionRequest` / `preToolUse` command hooks | Moderate | Fail-closed on error, but **always fail-open on timeout** |
 | `--deny-tool` patterns | Weak | Stem matching only; trivially evaded through a shell wrapper |
+
+### Who may call what
+
+The CLI is one API with four callers, and they are not equally trusted. The
+principal agent is the most restricted of them rather than the most privileged,
+because it is the one that talks in natural language and therefore the one whose
+intent cannot be verified.
+
+| Command group | Driver | Human | Worker | Principal agent |
+|---------------|--------|-------|--------|-----------------|
+| `task next`, `dispatch`, `gate check`, `plan import` | yes | debugging only | no | no |
+| `work start`, `resume`, `pause` | n/a | yes | no | relays when asked |
+| `work budget` | no | yes | no | no |
+| `approve`, `reject`, `plan revise` | no | yes | no | relays only, and only when asked |
+| `steer`, `task abort` | no | yes | no | drafts and relays |
+| `task done`, `ask`, `discover`, `note` | no | no | yes | no |
+| `work show`, `work report`, `workflow info`, `doctor`, `sensor info` | yes | yes | no | yes |
+
+The distinction inside that table is between operating the harness and
+exercising judgement. Starting, resuming, and pausing a run are operational: you
+asked, and relaying the request costs nothing that you did not already intend.
+Raising a spend ceiling and accepting work are judgements, so the first is denied
+outright and the second is relayed but recorded with its channel.
+
+One clarification prevents a persistent confusion: the driver does not shell out
+to itself. `senawa task next` and `senawa dispatch` are the same code paths the
+driver calls in process. They exist as commands for debugging, for scripting, and
+for the subprocess topology.
+
+Enforcement differs by caller, and the difference is honest rather than uniform.
+
+**Workers are contained by construction.** Their environment is built rather than
+filtered, `bd` is absent from `PATH`, and under the SDK topology they have no
+shell at all: their callable surface is the set of typed tools registered for
+that session. The `senawa` on a worker's `PATH` is a wrapper pinned to its own
+task, so `task done` cannot mean somebody else's work.
+
+**The principal agent is not contained, and cannot be.** It runs in the human's
+session, on the human's machine, with the human's authority. The skill defines
+its surface, and instructions are the weakest mechanism in the table above, which
+we measured directly when a worker ignored its brief in one run and a model
+invented a refusal mechanism in another. So the skill is a statement of intent,
+not a boundary.
+
+That is acceptable for most of the surface, because a principal agent acting on
+your behalf is the entire point. It is not acceptable for the commands that carry
+your judgement.
+
+### Approval carries a channel
+
+The realistic failure is not malice. You say "looks good, go ahead", the agent
+helpfully approves, and your approval is now a paraphrase of a paraphrase. That
+is the anchor breaking quietly, which is exactly the circular failure the anchors
+exist to prevent.
+
+The answer is not to forbid it, because forcing you into another window at the
+moment you are most engaged is worse. The answer is to record how it happened:
+
+```json
+{"event": "phase.approved", "phase": "plan",
+ "actor": {"kind": "human", "via": "principal-agent"}}
+```
+
+and to let the workflow declare how strict it needs to be:
+
+| `approval` value | Means |
+|------------------|-------|
+| `human` | Any channel, including relayed by a principal agent |
+| `human-direct` | Must come from the driver's own terminal, which an agent cannot reach |
+
+Most workflows want `human`. Something with production consequences wants
+`human-direct`. Either way the report can say plainly whether you approved a plan
+or approved a summary of one.
 
 ### Environment and tool surface per worker session
 
@@ -1063,7 +1615,7 @@ What each one buys:
 
 `subagentStart` prepends the task brief and the house rules to the subagent's prompt, which means the rules cannot be dropped by a sloppy delegation prompt.
 
-`subagentStop` and `agentStop` return `{"decision":"block","reason":"<failures>"}` when the task-done gate is red, forcing another turn with the failures as the prompt. In Topology A and B1 this runs inside the worker's own process, so a worker self-corrects before the PA is even involved. In B2 it does not exist at all, because the SDK exposes no subagent or agent stop hook, and the orchestrator drives the retry loop explicitly instead.
+`subagentStop` and `agentStop` return `{"decision":"block","reason":"<failures>"}` when the task-done gate is red, forcing another turn with the failures as the prompt. In Topology A and B1 this runs inside the worker's own process, so a worker self-corrects before the driver is even involved. In B2 it does not exist at all, because the SDK exposes no subagent or agent stop hook, and the driver runs the retry loop explicitly instead.
 
 ### Guardrails on the guardrails
 
@@ -1082,60 +1634,55 @@ Also respect the runaway guard: `subagentStop` blocking eight times in a row get
 ```mermaid
 sequenceDiagram
     participant H as Human
-    participant PA as Principal agent
+    participant D as Run driver
     participant R as Researcher
     participant P as Planner
     participant I as Implementor
     participant V as Verifier
     participant S as senawa + sensors
 
-    H->>PA: "Help me refactor this project"
-    PA->>S: senawa work start "refactor ingest"
-    S-->>PA: epic bd-7k1p, work dir, molecule poured
-    PA->>R: dispatch research task
+    H->>D: senawa work start "refactor ingest"
+    D->>S: validate, snapshot, create epic and phases
+    D->>R: dispatch research phase
     R->>S: senawa ask "Scope: ingest only, or the whole pipeline?"
-    S-->>PA: needs_human
-    PA->>H: ask_user
-    H-->>PA: "Ingest only"
-    PA->>S: senawa answer
-    S-->>R: resume with answer
-    R->>S: senawa task done (writes research.md)
-    S-->>PA: accepted, human gate opened
-    PA->>H: review research?
-    H-->>PA: approved
-    PA->>P: dispatch planning task
-    P->>S: senawa plan import plan.md
-    S-->>PA: 7 child tasks with deps and execution hints
-    loop while frontier not empty
-        PA->>S: senawa work show
-        PA->>I: dispatch task (model/effort from metadata)
+    S-->>D: question raised
+    D->>H: surface inline
+    H-->>D: "Ingest only"
+    D->>R: resume the same session with the answer
+    R->>S: submit research artifact
+    S-->>D: schema valid, gate accepted
+    D->>P: dispatch planning phase
+    P->>S: submit plan artifact
+    D->>S: senawa plan import
+    S-->>D: 7 tasks with deps and execution hints
+    loop until every selected task is closed
+        D->>S: senawa task next
+        D->>I: dispatch or resume worker session
         I->>S: senawa task done
-        S->>S: deterministic sensors
-        alt red
+        S->>S: deterministic sensors, then inferential
+        alt refused
             S-->>I: rework prompt with findings
-        else green
-            S->>V: verifier as inferential sensor
-            alt findings block
-                S-->>I: rework prompt with findings
-            else clean
-                S-->>PA: task closed, frontier updated
-            end
+        else accepted
+            S-->>D: task closed, frontier updated
         end
+        D->>D: read the steering inbox
     end
-    PA->>S: senawa gate check work-done
-    PA->>H: summary + diff
+    D->>V: dispatch verify phase
+    V->>S: submit verification artifact
+    D->>S: gate check work-done
+    D-->>H: exit 0, path to report.md
 ```
 
-### The inner loop, precisely
+### The dispatch step, precisely
 
-For each dispatch the PA performs exactly four bounded operations:
+For each dispatch the driver performs exactly four bounded operations:
 
 1. `senawa task next --role implementor` claims one task atomically and returns it with its execution hints.
 2. `senawa dispatch <id>` starts or resumes the worker session with the right model, effort, worktree, and tool policy.
-3. The worker loops internally against sensors until green or out of attempts. The PA is not in this loop.
-4. `senawa work show` returns the updated bounded projection.
+3. The worker loops internally against sensors until green or out of attempts. Nothing outside the session is in that loop.
+4. The gate verdict is recorded, and the steering inbox is read before the next transition is chosen.
 
-The PA's context grows by roughly a hundred tokens per task, not by the size of the work. That is the map-reduce the request calls for: the PA maps tasks onto workers and reduces their verdicts, never their diffs. Everything it does not keep is still in the journal, which is what makes forgetting safe.
+None of that requires a model. The driver holds no context that grows with the work, because everything it needs is in beads and everything it did is in the journal. A fifty-task run therefore costs the same per decision as a five-task one, and the same four operations describe both.
 
 ### Hints are hints, not flags
 
@@ -1154,7 +1701,7 @@ Without that split, one bad flag burns a task's entire rework allowance and the 
 
 ### Dynamic context injection
 
-The brief a worker receives is assembled by `senawa task brief`, not written by the PA in prose. It is deterministic, templated, and mostly pointers:
+The brief a worker receives is assembled by `senawa task brief`, not written by an agent in prose. It is deterministic, templated, and mostly pointers:
 
 ```markdown
 # Task bd-a1b2: Split parse_batch into stages
@@ -1195,7 +1742,7 @@ There is a trap in reading the second one from inside this design, and it is wor
 | Loop | Owner | Period | Human involvement |
 |------|-------|--------|-------------------|
 | **Inner**: edit, fast sensors on `postToolUse`, `senawa task done`, gate refuses with findings, fix, repeat | The worker session, alone | seconds to minutes | **Deliberately none.** This is where backpressure lives |
-| **Middle**: `task next`, `dispatch`, read the verdict, `work show`, next task | The principal agent | minutes to hours | Only when a task raises `needs_human` or exhausts its budget |
+| **Middle**: claim, dispatch, evaluate the gate, apply steering, choose the next transition | The run driver, deterministic | minutes to hours | Steering only; the loop never waits for a human |
 | **Outer**: request, research, plan, execute, review | The human | hours to days | Owns the phase boundaries |
 
 Osmani's `/goal` primitive — *"it keeps working across turns until a verifiable stopping condition holds, and after every turn a separate small model checks whether you are done, so the agent that wrote the code isnt the one grading it"* — is precisely the inner loop plus the `task-done` gate. His "keep the maker away from the checker" is the implementor and verifier split. Those parts of this design need no revision; they were converging on the same shape.
@@ -1207,28 +1754,26 @@ Seven points, three of them mid-flight. The human does **not** wait for the work
 | Point | Loop | What it blocks |
 |-------|------|----------------|
 | The initial request to `senawa work start` | outer | nothing yet |
-| Research sign-off, a beads `human` gate | outer | the whole work item |
-| Plan approval, the `plan-accepted` gate | outer | the whole work item |
+| Approvals declared in the workflow | outer | that phase |
 | Answering `senawa ask` via `senawa answer` | middle | **one task only**; siblings keep running |
-| Reading `needs_human` in `senawa work show` | middle | nothing |
-| Responding to an escalation | middle | one task |
+| `senawa steer`, at any moment | middle | nothing |
+| `senawa work pause` | middle | new dispatches only |
+| Responding to an escalation, then `senawa work resume` | outer | the run has already exited |
 | The `work-done` gate and the run report | outer | the whole work item |
 
-The fourth is the important one: a question parks a single task on a gate and the rest of the frontier carries on. A blocked question does not stall the work item.
+Two of those matter most. Steering changes the work without stopping it, and a question parks a single task while the rest of the frontier carries on.
 
-### What the human cannot do, and should be able to
+### Driving rather than only responding
 
-Every point above is **agent-initiated**. The human answers and approves; they cannot spontaneously intervene. That makes them a responder rather than a driver, and it is the largest gap in this design.
+An earlier draft left every intervention point **agent-initiated**. The human could answer and approve but could not spontaneously intervene, which made them a responder rather than a driver. Three controls close that, and the substrate already supports all of them.
 
-Four controls close it. All four are cheap, and the substrate already supports them.
+**`senawa steer <task> "<instruction>"`** writes to a durable steering inbox that the driver reads between transitions, so guidance lands in the next brief or rework prompt without ever interrupting a transition in progress. With `--now` it goes straight into the live session: the SDK's `session.send({ mode: "enqueue" })` appends to the queue, `mode: "immediate"` cuts in ahead of it, and `session.abort()` stops the current turn outright. Steering is journalled as a first class event, because a human redirecting a worker mid-flight is exactly the kind of thing the run report should show.
 
-**`senawa steer <task> "<instruction>"`** queues guidance into a running worker. The SDK's `session.send({ mode: "enqueue" })` appends to the session's queue and `mode: "immediate"` cuts in ahead of it; `session.abort()` stops the current turn outright. Steering is journalled as a first class event, because a human redirecting a worker mid-flight is exactly the kind of thing the run report should show.
-
-**`senawa work pause`** and **`resume`** stop new dispatches while letting in-flight tasks finish. Thinking time should not require killing the run.
-
-**`senawa tick`** is the heartbeat, and its absence is the sharpest thing the Osmani essay exposes. *"Automations are what make a loop an actual loop and not just one run you did once."* Today senawa only advances while a human watches it: `bd gate check` never runs on a timer, so `gh:pr` and `gh:run` gates never close by themselves and a stalled work item stays stalled. One idempotent command — check gates, dispatch what is ready, escalate what has stalled — run from cron, a CI schedule, or a `/loop`, is what turns this design from a harness into a loop.
+**`senawa work pause`** stops new dispatches and lets in-flight tasks drain, and **`senawa work resume`** picks the run back up. Thinking time should not require killing a run, and killing a run should not lose one.
 
 **A review cadence.** Approve the plan, then see nothing until `work-done`, and on a fifty-task item that is a long blind stretch. A `review_every: N` checkpoint, or a human gate on merge-slot acquisition, bounds it. Osmani names the risk directly: *"the faster the loop ships code you did not write, the bigger the gap between what exists and what you actually get."*
+
+Osmani's other point, that *"automations are what make a loop an actual loop and not just one run you did once"*, is satisfied by the driver itself rather than by a scheduler. Once `work start` is running the loop advances with nobody watching. What senawa deliberately does not do is advance a run that nobody started, because unattended spend without an owner is a liability rather than a feature.
 
 ### The control graph, in Perez's terms
 
@@ -1289,23 +1834,103 @@ A regression check is a counted reading compared against the value recorded when
 
 The fourth failure has no owner until something runs on a cadence. `senawa sensor audit` is that loop: it replays recent verdicts, re-runs the stability measurement described under [Promoting an inferential sensor](#promoting-an-inferential-sensor-on-evidence), and reports sensors whose agreement has drifted or whose verdict distribution has gone noisy.
 
-It is deliberately independent of the loops it audits: it reads `journal.jsonl` and the reading cache rather than asking any agent how things are going. And it is the same cadence as `senawa tick`, so one scheduled command serves both the heartbeat Osmani wants and the audit Perez wants.
+It is deliberately independent of the loops it audits: it reads `journal.jsonl` and the reading cache rather than asking any agent how things are going. It runs on its own cadence rather than inside a run, so a drifting sensor is caught by measurement rather than by a worker complaining about a refusal it cannot reproduce.
 
 ### The honest summary
 
-Senawa was already a loop in Osmani's sense and was not yet a graph in Perez's. The work graph was never the thing his argument was about. What makes this design defensible is narrower and more boring than a topology: deterministic sensors that execute real code, a journal no agent can author, a frozen set the optimizer cannot reach, and a human who owns what "better" means. The additions above — counter-metrics, the audit loop, the heartbeat, and the ability to steer — are what turn a collection of loops into a control graph that stays in contact with the ground.
+Senawa was already a loop in Osmani's sense and was not yet a graph in Perez's. The work graph was never the thing his argument was about. What makes this design defensible is narrower and more boring than a topology: deterministic sensors that execute real code, a journal no agent can author, a frozen set the optimizer cannot reach, and a human who owns what "better" means. The additions above, counter-metrics, the audit loop, and the ability to steer, are what turn a collection of loops into a control graph that stays in contact with the ground.
 
-## Human in the loop, through the PA
+## Human in the loop, through the driver
 
-Subagents should not have `ask_user`. In headless worker sessions there is no user to ask, and in in-process subagents a direct question bypasses the PA's coordination. The relay instead:
+Worker sessions should not have `ask_user`. In a headless session there is no user to ask, and a direct prompt would block a worker on a human the driver cannot see. The relay instead:
 
-1. The SA calls `senawa ask <task-id> "<question>"`.
-2. `senawa` creates a beads issue of type `message` threaded to the task, opens a `human` gate blocking the task, sets state to `awaiting_human`, and returns a marker telling the SA to stop and summarize what it has.
-3. `senawa work show` now reports `needs_human`, so the PA sees it on its next poll.
-4. The PA asks the human with `ask_user`, then calls `senawa answer <msg-id> "<answer>"`, which resolves the gate and appends the answer to the task's notes.
-5. `senawa dispatch <id>` resumes the same worker session (`copilot --resume=<session-id>`) with the answer, so the SA keeps everything it had already learned.
+1. The worker calls `senawa ask <task-id> "<question>"`.
+2. `senawa` creates a beads issue of type `message` threaded to the task, opens a `human` gate blocking the task, sets state to `awaiting_human`, and returns a marker telling the worker to stop and summarize what it has.
+3. The driver sees the question at its next transition. On a terminal it surfaces it inline; without one it records it and keeps working on unblocked tasks, escalating only if nothing else can proceed.
+4. `senawa answer <msg-id> "<answer>"` resolves the gate and appends the answer to the task's notes, whether it comes from the human directly or from a principal agent relaying for them.
+5. `senawa dispatch <id>` resumes the same worker session with the answer, so it keeps everything it had already learned.
 
-This gives the back-and-forth the request describes, it is durable across restarts, and every question and answer ends up in the graph as an auditable artifact rather than in a transcript nobody re-reads.
+This gives a durable back-and-forth: it survives restarts, it parks one task rather than the run, and every question and answer ends up in the graph as an auditable artifact rather than in a transcript nobody re-reads.
+
+## How you interact with a run
+
+There is a temptation to build a dashboard. Resist it for now, because the
+driver already blocks in a terminal, which means the window into the work mostly
+exists for free. What is missing is not display but input, and that is small.
+
+| Level | What it is | Cost |
+|-------|------------|------|
+| 0 | The driver streams readable progress to stdout while it runs | Free, it is already in the foreground |
+| 1 | Inline controls on the driver's own stdin when it has a TTY | Small, a readline loop |
+| 2 | A senawa skill, so the human can work in natural language | One markdown file |
+| 3 | A TUI over a control plane | Deferred until levels 0 to 2 prove insufficient |
+
+Level 1 is what removes the second terminal. While the driver runs, `p` pauses,
+`s` opens a one-line steer prompt for the selected task, `a` approves a pending
+phase, `x` aborts a task, and `d` opens the diff in `$BROWSER`. Terminals are bad
+at diffs, long artifacts, and graphs, so for those three the driver shells out to
+a locally rendered page rather than trying to draw them.
+
+### The principal agent's world is the CLI
+
+Level 2 is a skill rather than a bespoke agent runtime, which is why it works
+identically in VS Code and in Copilot CLI, and why `principal.agent.md` is not
+needed at all.
+
+The boundary is the same one workers get, aimed one level up: **`senawa` is the
+principal agent's entire world view.** It never learns that beads exists, never
+runs `bd`, never reads `journal.jsonl` or the tracking directory. It sees command
+output and nothing else. Task identifiers are opaque handles to it, so replacing
+the graph implementation later does not invalidate everything the skill taught.
+
+What it does with that surface is the work you would otherwise do by hand:
+turning a vague goal into a valid work request, reading status back to you in a
+sentence, explaining why a gate refused something by quoting the actual sensor
+and finding, diffing one plan iteration against the last, and drafting the
+rejection reason you half-articulated.
+
+What it does not do is decide what runs next. That is a graph question with a
+deterministic answer, and answering it with a model would cost reproducibility,
+headless runs, and the ability to say that two runs of one workflow did the same
+thing.
+
+### What the skill contains
+
+`.agents/skills/senawa/SKILL.md`, which Copilot CLI scans natively and VS Code
+picks up too. Seven sections, and the last two matter most:
+
+| Section | Purpose |
+|---------|---------|
+| Mental model | Work items have phases, phases produce artifacts, the harness grants completion |
+| Command map | Which command answers which kind of question |
+| Reading a verdict | Readings, findings, advisory against blocking, attempts remaining |
+| Writing a steer | Scope to one task, state the change, do not restate the brief |
+| Iterating | When to reject a phase rather than steer a task |
+| Explaining refusals | Quote the sensor and the finding verbatim; never describe a mechanism you did not read |
+| Boundaries | No `bd`, no journal, no tracking files, no deciding what runs next, no approving unasked |
+
+The refusal rule earns its place from evidence rather than caution. A model in
+one probe explained a denial by inventing a git pre-commit hook that did not
+exist. A principal agent doing that sends the human to debug the wrong thing, so
+the skill requires quotation rather than paraphrase.
+
+Write this file once the command surface has stopped moving. A skill that
+documents commands which no longer exist is worse than no skill, because it
+produces confident, wrong invocations rather than an admission of ignorance.
+
+### Why the TUI is deferred rather than rejected
+
+A TUI needs the driver to expose an event stream and a command channel, because
+anything outside the driver's process has to watch somehow. That is genuinely
+useful and genuinely additive: the journal is append-only with a monotonic `seq`
+and a single writer, so "subscribe from `seq` N" gives replay and reconnect for
+free, and the socket already exists in this design as the hook shim's escape
+hatch.
+
+It is deferred because it should be built against a measured complaint rather
+than a guess. Run a real work item first. If streamed stdout plus inline controls
+plus the browser escape hatch leaves you wanting, the missing thing will be
+specific, and the control plane can be added without changing anything above it.
 
 ## Context offloading layout
 
@@ -1313,12 +1938,23 @@ This gives the back-and-forth the request describes, it is durable across restar
 .agents/
   .copilot-tracking/
     2026-07-28-refactor-ingest/
-      work.json               # epic id, molecule id, phase, budget
+      work.json               # run identity, written once: workflow, epic, fingerprint, input
+      cache.json              # derived projection of graph state; safe to delete
+      driver.lock             # lease: pid, host, heartbeat
+      steering.jsonl          # inbox the driver reads between transitions
+      driver.log              # progress output when the driver is detached
       journal.jsonl           # append-only event log, the provenance record
       report.md               # rendered run report, regenerated from the journal
-      .copilot-home/          # COPILOT_HOME for worker sessions, kept out of ~/.copilot
-      research.md             # researcher output, human approved
-      plan.md                 # planner output, human approved
+      snapshot/               # frozen workflow, sensors, gates, schemas, rubrics
+      .copilot-home/          # COPILOT_HOME for every session senawa creates
+      artifacts/
+        research/
+          v1.json             # every iteration kept, never overwritten
+          v2.json
+          current -> v2.json
+        plan/
+          v1.json
+          current -> v1.json
       decisions.md            # append-only decision log with rationale
       questions.jsonl         # every senawa ask / answer pair
       sensors/
@@ -1371,7 +2007,9 @@ One event per line, append-only, monotonic `seq`, one writer. Since every graph 
  "nano_aiu": 3100}
 ```
 
-The event vocabulary is small and closed: `work.started`, `plan.imported`, `plan.validated`, `task.dispatched`, `dispatch.failed`, `task.claimed`, `sensor.read`, `gate.evaluated`, `task.reworked`, `question.asked`, `question.answered`, `task.discovered`, `task.escalated`, `task.closed`, `work.finished`.
+The event vocabulary is small and closed: `work.started`, `workflow.instantiated`, `phase.started`, `phase.iteration_started`, `phase.submitted`, `phase.approved`, `phase.rejected`, `phase.marked_stale`, `plan.imported`, `plan.validated`, `plan.revised`, `task.dispatching`, `task.dispatched`, `dispatch.failed`, `task.claimed`, `sensor.read`, `gate.evaluated`, `task.reworked`, `question.asked`, `question.answered`, `task.discovered`, `task.escalated`, `task.aborted`, `task.closed`, `steer.received`, `steer.applied`, `work.paused`, `work.resumed`, `work.finished`.
+
+Two of those exist purely for resumability. `task.dispatching` is written before the session is started or resumed, and `task.dispatched` after, so an intent with no outcome is the signal that reconciliation is needed. Everything else is written after the fact.
 
 Four rules keep it trustworthy.
 
@@ -1393,6 +2031,7 @@ Four rules keep it trustworthy.
 2. **How the work was decomposed.** The graph as a diagram. `bd dep tree --format=mermaid` looked like the obvious source and is not: it follows dependency edges only, so an epic with two children renders as a single node. `@senawa/report` builds the diagram from the graph itself, including parent-child edges.
 3. **Who did what.** One row per task: role, model, effort, attempts, wall time, AIU.
 4. **Where the harness pushed back.** Every red gate, which sensor fired, the finding, and what changed in response. This is the section that justifies the whole design, so it leads with counts and does not hide them.
+5. **Where you pushed back.** Every phase you rejected, the reason you gave, how many iterations it took, and what changed between them. Approvals record the channel, so a plan you approved directly reads differently from one a principal agent relayed.
 5. **What the human decided.** Every `senawa ask` and its answer, plus every human gate resolution, with timestamps.
 6. **What was discovered mid-flight.** Every `discovered-from` child, and whether it was done, deferred, or left open.
 7. **What it cost.** AIU and wall time, by role and by model.
@@ -1417,9 +2056,9 @@ The advisory reading on attempt 2 did not block. The worker addressed it anyway.
 
 ### Two documents, two audiences
 
-It is worth being explicit that this is not the same thing as `senawa work show`. That command is a projection for a model, hard-capped at roughly 1,500 tokens, and it deliberately forgets everything that is not currently actionable. The report is for a human, has no token budget, and deliberately forgets nothing. Conflating them would either blow out the PA's context or produce a report that only lists what is still open, which is exactly the wrong half.
+It is worth being explicit that this is not the same thing as `senawa work show`. That command is a projection, hard-capped at roughly 1,500 tokens, and it deliberately forgets everything that is not currently actionable. The report is for a human, has no token budget, and deliberately forgets nothing. Conflating them would either blow out the context of whatever agent is reading status or produce a report that only lists what is still open, which is exactly the wrong half.
 
-The PA is allowed to call `senawa work report --format md` and hand the human a path. It is not allowed to read the result into its own context.
+A principal agent is allowed to call `senawa work report --format md` and hand the human a path. It is not allowed to read the result into its own context.
 
 ### Rendering is a trust boundary
 
@@ -1509,7 +2148,7 @@ The blog's point applies directly: a gate's false positives and false negatives 
 | HTTP hooks fail open on network errors and non-2xx alike | Use command hooks for anything load bearing |
 | Subagent concurrency capped by plan | Read the cap at startup, size the dispatch pool accordingly, queue the rest |
 | Model and effort fixed at launch | Read `execution_*` metadata before spawning, never after |
-| Session model `Auto` silently overrides every subagent's profile `model` | Pin an explicit model on the principal session; never run the PA on `Auto` |
+| Session model `Auto` silently overrides every subagent's profile `model` | Pin an explicit model on any session senawa dispatches; never dispatch on `Auto` |
 | `--deny-tool 'shell(x:*)'` is stem matching and is trivially shelled around | Remove the capability from the worker's environment; use `--excluded-tools` for tool surface |
 | `--deny-tool 'write(PATH)'` has no glob support | Enforce path scope in a `preToolUse` or `permissionRequest` hook, not in a deny rule |
 | `bd` list commands carry no `schema_version` by default | `bd show` lacks it too. Set `BD_JSON_ENVELOPE=1` on every `bd` invocation and read `.data` |
@@ -1523,7 +2162,13 @@ The blog's point applies directly: a gate's false positives and false negatives 
 | Subagent spans are absent from OTel in `-p` mode | Take cost from `session.usage_checkpoint` in the `--output-format json` stream |
 | One session per task floods the human's session picker | Dispatch under an isolated `baseDirectory` / `COPILOT_HOME`, and `deleteSession` once the transcript is archived |
 | `parentAgentTaskId` looks like a correlation hook and is not | It is read-only, intra-session telemetry. Correlate through `onGetTraceContext` and the journal's `trace_id` |
-| Nothing advances the work while no human is watching | `senawa tick` on a schedule; without it, `gh:pr` and `gh:run` gates never close and stalls are invisible |
+| Nothing advances the work while no human is watching | The driver advances it; `senawa work start` blocks until the run terminates |
+| The driver is cancelled or crashes mid-transition | Intent is journalled before the side effect, and `senawa work resume` reconciles by session id |
+| Two drivers on one work item | A lease in the work directory, refreshed by heartbeat; `resume` refuses while it is live |
+| A blocking run spends unattended | An AIU ceiling in `work.json`, per-task attempt budgets, and `senawa work pause` |
+| A phase is rejected forever without converging | `iteration.max`, after which the run stops and asks rather than looping |
+| Re-running a phase silently invalidates work downstream of it | Consumed artifact versions are recorded, and `onUpstreamChange` declares the policy |
+| An agent approves work on the human's behalf | Approvals record their channel, and `human-direct` requires the driver's terminal |
 | A gate backed only by inferential sensors is ungrounded | `senawa gate check` refuses to evaluate a gate with no deterministic sensor in `requires` |
 | A worker weakens the check instead of passing it | The `frozen` set, enforced at `preToolUse`, not requested in the brief |
 | Every gate is green and the codebase is still worse | `must_not_regress` counter-metrics, ratcheted against the value at claim time |
@@ -1534,7 +2179,7 @@ The blog's point applies directly: a gate's false positives and false negatives 
 | Sensor output as an injection vector | Normalize, cap, and strip control characters before it reaches any context |
 | Run report rendered into a PR body as an injection vector | Escape every interpolated string, refuse raw HTML, length-cap each field |
 | Over-gating creating false backpressure | Start inferential sensors advisory; promote only on measured trust |
-| PA context creep | Cap `senawa work show`, re-prime on `preCompact`, keep the PA's tool list minimal |
+| Status readers accumulating context | Cap `senawa work show`, and keep the principal agent's tool list minimal |
 | Escaped scope, worker doing unrequested work | Enforce declared paths via `preToolUse`; require `senawa task discover` for anything else |
 
 ## Technology choices
@@ -1565,7 +2210,7 @@ Hook latency is not a theoretical concern. A `preToolUse` hook runs before every
 
 Bundling is worth a factor of three: module resolution is the tax, not V8 startup. But the more useful number is the gap between 33 ms and 66 ms, which is entirely dependencies the hot path does not need. A hook decision requires no argument parsing, no subprocess spawning, and no schema validation beyond three field checks.
 
-**So ship two binaries from one codebase.** `senawa-hook` is the minimal entry point wired into `.github/hooks/*.json`; `senawa` is the full CLI that workers and the PA call, where 66 ms is irrelevant next to sensor runtime and the 300-500 ms that any `bd` call costs. Keep a test asserting the hook binary stays under about 40 ms, because that number is what makes hook-based gating viable.
+**So ship two binaries from one codebase.** `senawa-hook` is the minimal entry point wired into `.github/hooks/*.json`; `senawa` is the full CLI that workers and the driver call, where 66 ms is irrelevant next to sensor runtime and the 300-500 ms that any `bd` call costs. Keep a test asserting the hook binary stays under about 40 ms, because that number is what makes hook-based gating viable.
 
 One build detail that is not optional. esbuild's ESM output cannot `require` CommonJS dependencies, and `commander` and `yaml` are both CJS, so every bundle needs a `createRequire` banner:
 
@@ -1613,7 +2258,7 @@ Write senawa in TypeScript on Node 22 or later, as a single pnpm workspace.
 | `@senawa/graph` | The beads adapter; shells out to `bd --json` under `BD_JSON_ENVELOPE=1`, validates `schema_version`, caches reads, serializes writes |
 | `@senawa/sensors` | The runner plus normalizers that turn tsc, pyright, pytest, ruff, and eslint output into one `findings[]` shape, with the evidence-hygiene regression suite |
 | `@senawa/report` | The journal writer and the run report renderer, including the mermaid graph, with escaping at the trust boundary |
-| `@senawa/orchestrator` | The principal agent runtime, built on `@github/copilot-sdk` |
+| `@senawa/orchestrator` | The run driver: the transition function, the driver loop, worker session hosting on `@github/copilot-sdk`, reconciliation, the lease, and the inline TTY controls |
 | `senawa` | The command line, built with `commander`, bundled to one file with esbuild, published with a shebang |
 | `senawa-hook` | The minimal hook entry point. No commander, no zod, no execa. Bundled separately and budgeted at 40 ms |
 | `.github/extensions/senawa/` | Optional: exposes `task done`, `ask`, and `discover` as native tools and slash commands inside interactive sessions |
@@ -1654,19 +2299,21 @@ Slice three adds graph state. Add beads, implement `senawa work start`, `task ne
 
 Slice three-and-a-half adds the journal, and it belongs here rather than at the end. `@senawa/report` starts as an append-only writer that every state-changing command in slice three already calls, plus a `senawa work report` that renders whatever exists. It is a few hundred lines while there are five event kinds, and it is a retrofit across every call site if you leave it until slice six. Backfilling provenance is not possible: the events you did not write are gone.
 
-Slice four adds the roles. Write `researcher`, `planner`, `implementor`, and `verifier` agent profiles, plus `senawa dispatch` with its model capability table, `senawa plan import`, and `senawa plan validate` over `bd swarm validate`. Start with the subprocess path (Topology B1) because it is easy to debug: you can read the exact command and rerun it by hand. Run one full loop end to end on a small refactor, then read the generated `report.md` and check that it describes what actually happened. A throwaway version of exactly this slice exists in `poc/orchestration` and is worth reading first.
+Slice four adds the roles and the phases. Write `researcher`, `planner`, `implementor`, and `verifier` agent profiles, plus `senawa dispatch` with its model capability table, `senawa plan import`, and `senawa plan validate` over `bd swarm validate`. Add `approve` and `reject` with phase iterations and versioned artifacts here, not later, because a phase that cannot be sent back is not a phase you would actually use. Start with the subprocess path (Topology B1) because it is easy to debug: you can read the exact command and rerun it by hand. Run one full loop end to end on a small refactor, reject something deliberately, then read the generated `report.md` and check that it describes what actually happened. A throwaway version of this slice exists in `poc/orchestration` and is worth reading first.
 
-Slice five adds the principal. Introduce `@senawa/orchestrator` on `@github/copilot-sdk`, move dispatch to hosted sessions (Topology B2), and implement the `ask` and `answer` relay on `onUserInputRequest`. Rebuild the rework loop explicitly, since the SDK has no `subagentStop`. Write `principal.agent.md` with a deliberately narrow tool list, pinned to an explicit model.
+Slice five adds the hosted driver. Introduce `@senawa/orchestrator` on `@github/copilot-sdk`, move dispatch to hosted sessions (Topology B2), and implement the `ask` and `answer` relay on `onUserInputRequest`. Rebuild the rework loop explicitly, since the SDK has no `subagentStop`. Add the driver lease, the intent-and-outcome journalling, and `senawa work resume`, because they are what make a blocking driver safe to cancel. Add the inline TTY controls in the same slice: once the driver blocks, steering it from the same terminal is the difference between usable and irritating.
 
-Slice six adds scale. Worktrees, parallel groups, merge slots, cost dashboards fed from `session.usage_checkpoint` and joined to the journal, and a formula that captures the whole workflow so `senawa work start` pours it in one step. Package the lot as a Copilot CLI plugin.
+Slice five-and-a-half is the skill. `.agents/skills/senawa/SKILL.md` teaches an ordinary Copilot session to drive the harness in natural language. It is one file, it works in both VS Code and the CLI, and it replaces the principal agent runtime entirely. Write it after the command surface has stopped moving, because a skill that documents commands that no longer exist is worse than no skill.
 
-Slice seven closes the control graph, and it is the difference between a harness and a loop. `senawa tick` on a schedule so gates close and stalls surface without a human present. `senawa steer`, `pause` and `resume` so the human can drive rather than only respond. `senawa sensor audit` so sensor quality is measured on a cadence rather than assumed. Counter-metrics on the gates that matter. None of it is large; all of it is what stops the system quietly agreeing with itself.
+Slice six adds scale. Worktrees, parallel groups, merge slots, `senawa plan revise` for additive re-planning, cost dashboards fed from `session.usage_checkpoint` and joined to the journal, and a formula that captures the whole workflow so `senawa work start` pours it in one step. Package the lot as a Copilot CLI plugin.
+
+Slice seven closes the control graph, and it is the difference between a harness and a loop. The steering inbox, `senawa work pause`, and `senawa task abort` so the human can drive rather than only respond. `senawa sensor audit` so sensor quality is measured on a cadence rather than assumed. Counter-metrics on the gates that matter. None of it is large; all of it is what stops the system quietly agreeing with itself.
 
 ## Open questions worth deciding early
 
 1. Does `--autopilot` with `task_complete` and a `--max-autopilot-continues` budget replace the `subagentStop` retry loop for worker sessions? It is native, its continuation budget is configurable rather than fixed at eight, and it works identically in `-p` and under the SDK. The risk is that `task_complete` is the model's assertion of doneness, which is precisely the thing this design refuses to trust, so it would have to be wired so that calling it triggers the gate rather than ends the turn.
 2. Should the verifier be an inferential sensor invoked by the gate (proposed here), or a first class graph node with its own bead? The sensor framing keeps the graph smaller; the bead framing gives verification its own place in the run report.
-3. How much should the PA be allowed to re-plan? A PA that can add tasks mid-flight is more capable and much harder to reason about. Suggest starting with re-planning only through an explicit `senawa plan revise` that re-invokes the planner, runs `senawa plan validate`, and requires human approval.
+3. Should `plan revise` ever be non-additive? It is additive by design, so closed work is never disturbed, but that means a plan revision cannot retract a task that turned out to be wrong. Suggest leaving retraction to `senawa task abort` with a reason, and revisiting only if the two mechanisms prove awkward together in practice.
 4. Where does the attempt budget live: per task, per work item, or per AIU spend? A spend-based budget is the most honest, and Copilot CLI already reports AIU per span.
 5. Is the tracking directory committed to the repository or kept in a sibling branch? Committing is better for review; a sibling branch keeps history clean. The run report argues for committing, since its value is that a reviewer finds it without being told where to look.
 6. Does the journal ever get compacted? It is append-only by design, but a multi-week work item produces thousands of `sensor.read` events. Suggest keeping the journal whole and letting the renderer summarize, revisiting only if a real file gets uncomfortable.

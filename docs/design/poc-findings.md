@@ -78,9 +78,14 @@ about the SDK should be re-checked when the mirror catches up.
 | 27 | Sensors can be loaded as explicit extensions with JSON Schema contracts | **Confirmed offline.** Manifests, configuration, input, and output were validated through one registry |
 | 28 | One CLI can discover, explain, diagnose, and run configured sensors | **Confirmed offline.** `list`, `info`, `doctor`, targeted `run`, and all-sensor `run` completed coherently |
 | 29 | An inferential extension can reject malformed structured submissions | **Confirmed with a fake host.** One invalid submission was rejected and the second schema-valid result was accepted |
-| 30 | Declarative workflow errors can be found before dispatch | **Confirmed offline.** Doctor rejected a cycle, a missing gate, and two missing loop budgets together |
+| 30 | Declarative workflow errors can be found before dispatch | **Confirmed offline.** Doctor reported ten distinct structural violations in one pass |
 | 31 | Workflow kickoff can freeze definitions and compile phases into beads | **Confirmed offline.** The source changed after start while the run completed from its five-phase snapshot |
-| 32 | A task-frontier loop can survive process restarts and bounded rework | **Confirmed offline.** Nine fresh ticks completed two dependent tasks, including one resumed second attempt |
+| 32 | A blocking driver can run a phased workflow to human acceptance | **Confirmed offline.** `work start` drove, exited 2 for each approval, and `work resume` continued |
+| 33 | A cancelled driver can resume without losing or repeating work | **Confirmed offline.** Intent journalled before the side effect let resume adopt a completed turn and gate it |
+| 34 | A rejected phase can iterate on top of its previous output | **Confirmed offline.** The planner's session resumed and v2 contained what the rejection asked for |
+| 35 | Work can be added after verification without disturbing finished work | **Confirmed offline.** The frontier re-opened for one new task while three closed tasks were untouched |
+| 36 | Beads can hold all runtime state, leaving local files as identity plus cache | **Confirmed offline.** Phase iteration, session and version round-tripped through bead metadata, and deleting the cache mid-run changed nothing |
+| 37 | `bd list` is safe for deriving a task set | **Wrong.** It hides closed issues, so finished work disappears from a derived frontier unless `--all` is passed |
 
 ## Hook latency
 
@@ -582,21 +587,24 @@ has not been exercised. The SDK surface probe already proves that the SDK
 accepts raw JSON Schema tool parameters, but the complete inferential sensor
 assembly needs one live probe.
 
-## Workflow definition, kickoff, and bounded loops
+## Workflow definition, iteration, and the blocking driver
 
-`poc/orchestration/engine.mjs` tests the revised workflow shape against a real
-beads database with deterministic fake agent and sensor hosts. The workflow
-contains five phases: define, research, plan, implement, and verify. Plan
-expansion adds two dependent implementation tasks beneath the implementation
-phase.
+`poc/orchestration/engine.mjs` runs the current design shape against a real beads
+database with deterministic fake agent and sensor hosts. The workflow has five
+phases: define, research, plan, implement, and verify. Three of them require
+approval, and the run completes when the human accepts verification rather than
+when the graph drains.
 
-Before kickoff, doctor reported the valid five-phase workflow and three gates.
-Against an invalid fixture it reported all of the intended structural failures
-in one pass: a dependency cycle, a missing gate, a missing rework limit, and a
-missing dispatch-failure limit. `workflow list`, `workflow info`, and a Mermaid
-preview also returned enough information to inspect the run before starting it.
+### Structural errors surface before anything is dispatched
 
-Kickoff used the proposed command:
+Against a deliberately invalid workflow, `doctor` reported ten violations in one
+pass rather than failing at the first: a dependency cycle, a missing gate, an
+unknown approval value, a non-finite `iteration.max`, an unknown
+`onUpstreamChange` policy, `reentrant` on an agent phase,
+`resumeAcrossIterations` on a task frontier, missing rework and dispatch
+budgets, and a `completesWhen` naming a phase that does not exist.
+
+### Kickoff freezes, then drives
 
 ```bash
 senawa work start "Refactor the ingest pipeline" \
@@ -604,38 +612,89 @@ senawa work start "Refactor the ingest pipeline" \
    --input request.json
 ```
 
-The command validated the merged input, copied the workflow, sensor and gate
-configuration, and input schema into the work directory, recorded one SHA-256
-fingerprint, then created an epic and five phase beads with dependency edges.
-It returned the work identity and `define` as the first frontier.
+The command validated the merged input, copied the workflow, sensors, gates and
+schemas into the work directory, recorded one SHA-256 fingerprint, created the
+epic and five phase beads with their dependency edges, and then drove in the
+foreground until it needed a human, exiting 2 with the phase name and the
+artifact path.
 
-The probe changed the source workflow after kickoff. Nine separate Node
-processes then called `tick`, which proves that no in-memory orchestrator state
-was required:
+The probe edits the source workflow immediately after kickoff. The run completes
+from its snapshot and reports `sourceChanged: true`, so drift is visible rather
+than silently adopted.
+
+### Rejection is the mechanism that makes phases useful
+
+The probe rejects the plan with a reason. The planner's own session resumes for
+iteration 2, and v2 contains the task the rejection asked for. Both versions
+remain on disk, because artifacts are versioned rather than overwritten.
+
+That is the first probe to demonstrate the working pattern the design is for:
+read what came back, send it around again with better input, and keep going.
+
+### A killed driver is recoverable
+
+The probe kills the process after the worker has acted but before the outcome is
+journalled. On resume, reconciliation finds the intent with no outcome,
+determines that the turn had completed, and gates what the worker actually
+produced instead of dispatching again. The gate then refuses that work on
+attempt one and accepts it on attempt two, so the recovery path and the
+backpressure path compose rather than interfering.
+
+This is the first direct evidence that writing intent before a side effect is
+sufficient for a blocking driver to be safe to cancel.
+
+### Iteration after verification is additive
+
+Reaching verification, the probe adds a task with `plan revise` instead of
+accepting. The implementation frontier re-opens, the new task runs, and the three
+already-closed tasks are untouched. Verification then runs a second time, and the
+run ends only when the human accepts it.
+
+A representative run:
 
 ```text
-define closed
-research closed
-plan closed, two implementation beads imported
-implement-api failed attempt 1
-implement-api passed attempt 2 in the same recorded session
-update-caller passed attempt 1
-implementation frontier closed
-verification closed
-work closed
+define        approved, iteration 1
+research      approved, iteration 1
+plan          rejected, then approved at iteration 2 (v2 adds error handling)
+implement     driver killed mid-dispatch, reconciled, one refusal, three closed
+verify        reached, then superseded by a plan revision
+implement     re-opened, add-logging closed
+verify        iteration 2, approved
+work          accepted
 ```
 
-The final projection reported five closed phases, two closed implementation
-tasks, 30 journal events, and `sourceChanged: true`. The epic was closed in the
-real beads database. Runtime decisions came from the frozen snapshot despite
-the changed source definition. Before every transition and status projection,
-the fresh process reloaded phase, task, and epic status from beads rather than
-trusting the denormalized JSON cache.
+Final state: five accepted phases, four closed tasks, the plan at v3, verify at
+iteration 2, 64 journal events, and the epic closed by the harness. Every session
+the run created lives under the work directory's own home, never the user's.
 
-This establishes the compiler and lifecycle shape, not autonomous delivery.
-The fake hosts do not test schema-constrained phase submissions, human approval,
-real Copilot session dispatch, parallel task-frontier execution, or recovery
-from a process killed during a state transition. Those are the next probes.
+### What this does not establish
+
+The hosts are deterministic fakes, so this says nothing about real agents
+submitting schema-valid artifacts, or about whether a live session still resumes
+usefully after several phase iterations once background compaction has summarised
+it. Parallel frontier execution, worktrees, merge slots, and the inline TTY
+controls are all untested.
+
+### Holding state in the graph, and the two bugs that found
+
+An earlier revision of this probe kept phase status, iteration, session and
+artifact version in a local JSON file, which contradicted the design's own rule
+that beads is the runtime truth. Moving that state into bead metadata, with
+`bd set-state` for transitions and a real `human` gate for approvals, worked and
+immediately exposed two defects that the local copy had been hiding.
+
+`bd list` hides closed issues. A task set derived from it loses finished work, so
+the implementation frontier looked incomplete and `plan revise` would have
+recreated tasks that had already passed their gate. `--all` is required, and the
+result must be filtered, because event beads come back too.
+
+Reopening a phase without resolving its outstanding approval gate leaves the
+phase bead permanently blocked. `bd` refuses to close an issue blocked by an open
+one, which is the correct behaviour and exactly the sort of thing a parallel
+local state machine would have silently disagreed with.
+
+Both are arguments for the rule rather than against it: the graph enforced an
+invariant that the local copy had been quietly violating.
 
 ## Design changes from the probes
 
@@ -687,8 +746,25 @@ from a process killed during a state transition. Those are the next probes.
     snapshot. Later source edits are drift to report, not live configuration.
 22. Reject arbitrary or unbounded workflow loops. Task rework and dispatch
     failures require separate finite budgets.
-23. Keep `senawa tick` idempotent and restart-safe. A fresh process must be able
-    to advance the next transition from durable state alone.
+23. Keep the transition function idempotent and restart-safe. A fresh process
+    must be able to advance the next transition from durable state alone, which
+    is what makes both `work step` and `work resume` possible.
+24. Make `senawa work start` blocking. It creates the run and drives it, exiting
+    0 on acceptance, 2 when a human is needed, and 130 when interrupted.
+25. Journal intent before every side effect and outcome after it, so `senawa work
+    resume` can reconcile by session identifier rather than guessing.
+26. Treat phases as re-enterable stages with versioned artifacts, resumed
+    sessions, and a finite `iteration.max`, because rejecting a phase is the
+    normal case rather than an error path.
+27. Keep the principal agent outside the control path. It is a skill over the
+    same CLI, and `senawa` is its entire world view.
+28. Hold every durable runtime fact in beads: phase status, iteration, session
+    identifiers, artifact versions, and attempts. Local files hold run identity
+    and a cache that must be safe to delete.
+29. Pass `--all` to any `bd list` used to derive a working set, and filter event
+    beads out of the result. Without it, closed work silently disappears.
+30. Resolve a phase's human gate whenever the phase leaves the awaiting state,
+    including when a plan revision reopens it, or the phase bead can never close.
 
 ## What remains unvalidated
 
@@ -703,9 +779,9 @@ from a process killed during a state transition. Those are the next probes.
 | SDK behaviour at 1.0.8+ | The npm mirror serves 1.0.7 | Re-run the SDK surface probe when the mirror updates |
 | Does a live inferential extension receive a schema-valid tool submission? | The sensors probe uses a fake structured-agent host | Run the same extension through an isolated SDK reviewer session |
 | Do real agent phases submit schema-valid artifacts and resume correctly? | The orchestration probe uses deterministic fake agents | Replace one agent executor at a time with isolated SDK sessions |
-| Is a tick crash-safe between a beads write and journal/state write? | Every probe transition completed normally | Inject termination at each persistence boundary and resume |
+| Does a resumed session still help after several phase iterations? | The probe's fake sessions never compact | Iterate one real phase five times and compare cost and quality against a fresh brief |
 | Can one task-frontier safely run several workers and integrate them? | The orchestration probe uses concurrency 1 | Add worktrees, parallel claims, and a merge-slot integration probe |
-| Does workflow human approval survive restart and allow siblings to continue? | The orchestration probe omits human gates | Add a parked approval with an independent ready branch, restart, then resolve |
+| Are the inline TTY controls usable while output is streaming? | The probe issues commands separately rather than from the driver's stdin | Build the readline loop and steer a live run from the same terminal |
 
 ## Reproducing
 
