@@ -1,0 +1,64 @@
+apiVersion: senawa.dev/workflow/v1
+kind: Workflow
+
+metadata:
+  name: standard-delivery
+  description: Define, research, plan, implement, and verify a change
+
+spec:
+  inputSchema: ../schemas/work-request.schema.json
+  phases:
+    - id: define
+      executor:
+        kind: agent
+        role: definer
+        output: artifacts/definition.json
+      exit:
+        gate: artifact-accepted
+
+    - id: research
+      dependsOn: [define]
+      executor:
+        kind: agent
+        role: researcher
+        output: artifacts/research.json
+      exit:
+        gate: artifact-accepted
+
+    - id: plan
+      dependsOn: [research]
+      executor:
+        kind: agent
+        role: planner
+        output: artifacts/plan.json
+      actions:
+        - kind: import-plan
+          source: phases.plan.output
+      exit:
+        gate: artifact-accepted
+
+    - id: implement
+      dependsOn: [plan]
+      executor:
+        kind: task-frontier
+        role: implementor
+        concurrency: 1
+      loop:
+        until: all-selected-tasks-closed
+        each:
+          gate: task-done
+          rework:
+            resumeSession: true
+            maxAttempts: 3
+          dispatch:
+            maxFailures: 2
+          onExhausted: escalate
+
+    - id: verify
+      dependsOn: [implement]
+      executor:
+        kind: agent
+        role: verifier
+        output: artifacts/verification.json
+      exit:
+        gate: work-done

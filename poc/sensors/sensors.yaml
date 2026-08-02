@@ -1,0 +1,33 @@
+version: 1
+
+extensions:
+  - path: ./extensions/command.mjs
+  - path: ./extensions/agent-review.mjs
+
+sensors:
+  - id: syntax
+    extension: command
+    description: Check that the fixture is valid JavaScript
+    config:
+      command: [node, "--check", fixture/subject.mjs]
+    input:
+      cwd: .
+
+  - id: architecture-review
+    extension: agent-review
+    description: Review changed files against the structural architecture rubric
+    config:
+      instructions: Review only the supplied subject against the supplied rubric.
+      rubric: rubric.md
+      subject: fixture/src/parse.ts
+    input:
+      changedFiles: [fixture/src/parse.ts]
+
+gates:
+  - id: task-done
+    checks:
+      - sensor: syntax
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: architecture-review
+        expect: { path: /verdict, operator: equals, value: pass }
+        advisory: true

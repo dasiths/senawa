@@ -2,7 +2,7 @@
 title: Senawa Multi-Agent Orchestration Design
 description: Architecture for a principal agent that orchestrates research, planning, implementation, and verification subagents on GitHub Copilot CLI, with beads as graph state, a sensor/gate CLI as the backpressure seam, and an append-only journal as the provenance record
 author: Senawa
-ms.date: 2026-07-28
+ms.date: 2026-08-02
 ms.topic: concept
 keywords:
   - multi-agent orchestration
@@ -28,6 +28,132 @@ Three ideas carry the design:
 
 > [!IMPORTANT]
 > Claims in this document that were checked by execution rather than by reading documentation are marked as measured, and the evidence is in [Proof-of-Concept Findings](poc-findings.md). Six assumptions in earlier drafts did not survive that process. Read the findings before implementing.
+
+## How it works
+
+This section describes the current solution shape end to end. Later sections go
+deep on each part; this one is the operating model, and it is the section to
+update first whenever that model changes.
+
+### The operating rule
+
+Agents do the work. The harness decides what runs next and whether anything is
+finished. Every mechanism below exists to keep that division intact under
+pressure, because the failure this design is built against is not a model that
+writes bad code. It is a model that writes bad code and then reports success.
+
+Three consequences follow, and they are non-negotiable:
+
+* A worker cannot close its own task, mutate the graph, or weaken a check
+* A gate needs at least one deterministic reading, so opinion never becomes the
+  only ground truth
+* The record of what happened is a side effect of harness operations, never
+  something an agent authors
+
+### The moving parts
+
+| Part                | What it is                                                                 | Written by        |
+|---------------------|----------------------------------------------------------------------------|-------------------|
+| Workflow definition | A declarative template of phases, roles, artifacts, gates, and bounded loops | A human, in the repository |
+| Sensor extension    | A versioned implementation type exposing JSON Schemas for config, input, and output | A human or a package |
+| Sensor instance     | One configured sensor in `sensors.yaml`                                     | A human           |
+| Gate                | A named set of sensor invocations plus the results they must produce        | A human           |
+| Graph state         | The live epic, phases, tasks, dependencies, and gates in beads              | `senawa` only     |
+| Work directory      | Frozen definitions, artifacts, evidence, transcripts, and the journal       | `senawa` only     |
+| Journal             | Append-only orchestration events                                            | `senawa` only     |
+| Worker session      | A role-scoped Copilot session with its own model, tools, and resumable identity | The runtime, dispatched by `senawa` |
+
+Definitions are inputs. Beads is the runtime truth. The journal is the history.
+Keeping those three separate is what makes a run restartable and auditable.
+
+### A run, start to finish
+
+```bash
+senawa doctor
+senawa work start "Refactor the ingest pipeline" --workflow standard-delivery --input request.json
+senawa tick
+```
+
+1. `senawa doctor` loads the declared extensions, compiles every schema, and
+   validates sensors, gates, workflows, roles, and loop budgets. Structural
+   mistakes surface here, before anything is dispatched and before any credits
+   are spent.
+2. `senawa work start` validates the request against the workflow input schema,
+   copies the workflow, sensor and gate configuration, schemas, and rubrics into
+   the work directory, and records one content fingerprint. It then creates the
+   epic and the static phase nodes in beads with their dependency edges.
+3. From that moment the run reads its frozen snapshot. Editing the source
+   definitions afterwards is reported as drift rather than silently adopted, so a
+   long-running work item cannot change its own rules halfway through.
+4. `senawa tick` advances the run. It is idempotent and restart-safe: a fresh
+   process reloads status from beads, performs the next legal transition, and
+   exits. Run it from a schedule and the work advances without a human watching.
+5. An agent phase dispatches one role-scoped session, which submits its artifact
+   through a schema-backed tool. The artifact is persisted only after validation.
+   The planner's validated artifact is what `senawa plan import` turns into
+   implementation tasks.
+6. The implementation phase runs a task frontier. It claims a ready task
+   atomically, dispatches or resumes one worker session, evaluates the per-task
+   gate, and hands red findings back to the same session. It closes the task only
+   when the gate passes, and it repeats until every selected task is closed.
+7. `senawa work report` renders the run from the journal, the graph, and the
+   cost stream at any point, including while work is still in flight.
+
+```mermaid
+flowchart TB
+    D[Workflow, sensors, gates] -->|doctor + work start| S[Frozen snapshot]
+    S --> G[(beads graph)]
+    T[senawa tick] --> G
+    T --> P{Phase executor}
+    P -->|agent| A[Role-scoped session]
+    P -->|task-frontier| W[Worker session per task]
+    A & W --> SUB[Schema-validated submission]
+    SUB --> GATE[Gate: readings vs expectations]
+    GATE -->|accepted| CLOSE[Harness closes the node]
+    GATE -->|refused| REWORK[Resume same session with findings]
+    REWORK --> W
+    CLOSE --> G
+    GATE --> J[(journal)]
+    J --> R[Run report]
+```
+
+### How a gate reaches a verdict
+
+A sensor produces a schema-valid assessment carrying a verdict, a summary, and
+findings. A gate declares which sensors it consults and what each result must
+look like, addressed by JSON Pointer so a gate can read an extension's own
+`data` without embedding code in configuration.
+
+Evaluation follows four rules:
+
+* Cheap deterministic sensors run first and short-circuit the expensive ones
+* Inferential sensors run last, and only on otherwise green work
+* Advisory readings never block on their own, but they always reach the worker
+* A sensor that fails to execute produces an error, which is distinct from a
+  valid negative reading and is never treated as one
+
+A refusal is not a bare denial. The worker receives the failed readings and their
+findings, sanitized and size-capped, and it receives them in the session that
+already knows the change.
+
+### Bounded by construction
+
+Nothing in a workflow repeats without a declared limit. Task rework carries a
+finite attempt budget, and dispatch failures carry a separate one, because an
+infrastructure error is an operator problem that no amount of rework will fix.
+Counting them together was measured to burn a task's entire allowance and then
+report the failure as the worker's fault.
+
+When a budget is exhausted the run escalates to the human rather than continuing
+or silently giving up.
+
+### Where the human sits
+
+The human owns the phase boundaries and the definition of better. They approve
+research and plans, answer questions that park one task without stalling the
+rest, steer a running worker, pause and resume dispatch, and read the run report.
+They are deliberately absent from the inner loop, which is where backpressure
+does its work.
 
 ## What the substrate actually gives us
 
@@ -330,7 +456,7 @@ This is the load bearing piece. Agents get one tool surface, and every policy de
 senawa init                                  # scaffold .beads, sensors.yaml, agents, hooks
 senawa prime                                 # compact workflow context for sessionStart/preCompact
 
-senawa work start "<goal>"                   # create epic + tracking dir, pour the workflow molecule
+senawa work start "<goal>" [--workflow W]    # validate, snapshot, and start a workflow
 senawa work show [--json]                    # bounded projection for the PA
 senawa work report [--format md|json]        # render the human-facing run report
 senawa work finish                           # close epic, squash wisps, finalize the report
@@ -351,9 +477,17 @@ senawa work pause | resume                   # stop dispatching; let in-flight w
 senawa tick                                  # heartbeat: check gates, dispatch ready, escalate stalls
 
 senawa sensor list [--json]
-senawa sensor run [--id S ...] [--task <id>] [--json]
+senawa sensor info <id> [--json]             # description plus config, input, and output contracts
+senawa sensor run [<id>] [--task <id>] [--json]
 senawa sensor audit [--id S] [--samples N]   # measure sensor stability; the audit loop
 senawa gate check <gate-id> [--task <id>] [--json]
+
+senawa workflow list [--json]
+senawa workflow info <name> [--json]
+senawa workflow validate [name]
+senawa workflow render <name> [--format mermaid|json]
+
+senawa doctor                                # validate extensions, sensors, gates, workflows, and roles
 
 senawa plan import <file> [--epic <id>]      # planner output -> beads subgraph
 senawa plan validate [--epic <id>]           # bd swarm validate + senawa's own structural rules
@@ -397,6 +531,307 @@ The worker receives actionable evidence rather than a bare refusal, which is pre
 ### Why a CLI rather than an MCP server
 
 MCP tool schemas cost tokens in every context window, and this harness runs many sessions. A CLI costs one line of instruction, and hooks can gate shell invocations by pattern. The recommendation is CLI-first, with an optional thin MCP wrapper later for editor-side use. Beads reached the same conclusion for the same reason.
+
+## Extension and workflow contracts
+
+The first sensor probe proved that unrelated tools can be normalized into one
+reading shape, but its implementation hard-codes commands and parsers in the
+runner. The inferential half is weaker still: it asks a model for JSON and then
+extracts the first substring that looks like an object. Neither mechanism is a
+stable extension boundary.
+
+Senawa instead treats a sensor extension as a versioned implementation type and
+an entry in `sensors.yaml` as a configured instance of that type. JSON Schema is
+the runtime contract. TypeScript generics make extension authoring pleasant,
+but the CLI never trusts a generic type at a process or package boundary.
+
+```ts
+interface ISensor<TInput, TOutput extends SensorAssessment> {
+  readonly manifest: SensorManifest;
+  run(input: TInput, context: SensorContext): Promise<TOutput>;
+}
+
+interface SensorExtension<TConfig, TInput, TOutput extends SensorAssessment> {
+  readonly manifest: SensorManifest;
+  create(config: TConfig): ISensor<TInput, TOutput>;
+}
+
+interface SensorManifest {
+  apiVersion: "senawa.dev/sensor/v1";
+  name: string;
+  version: string;
+  description: string;
+  configSchema: JsonSchema;
+  inputSchema: JsonSchema;
+  outputSchema: JsonSchema;
+}
+```
+
+Every output extends one common assessment envelope so gates can reason about
+all sensors without understanding their private payloads:
+
+```ts
+interface SensorAssessment {
+  verdict: "pass" | "fail";
+  summary: string;
+  findings: SensorFinding[];
+  data?: unknown;
+}
+```
+
+Senawa validates four boundaries: the manifest during discovery, configuration
+during `senawa doctor`, input immediately before execution, and output before it
+can be cached, journalled, or consumed by a gate. A runtime error produces a
+sensor error, not a `fail` assessment. Required sensor errors block progression
+but remain distinguishable from a valid negative reading.
+
+### Explicit extension discovery
+
+Extensions are declared rather than discovered by scanning installed packages.
+Loading every package with a matching name would execute code merely because it
+is present in `node_modules`, and it would make two identical checkouts resolve
+different sensor sets.
+
+```yaml
+version: 1
+
+extensions:
+  - package: "@senawa/sensor-command"
+  - package: "@senawa/sensor-agent-review"
+  - path: "./.senawa/extensions/api-contract/index.mjs"
+
+sensors:
+  - id: typecheck
+    extension: "@senawa/sensor-command"
+    description: Type-check the project
+    config:
+      command: "npx tsc --noEmit --pretty false"
+      parser: tsc-text
+      cost: cheap
+
+  - id: architecture-review
+    extension: "@senawa/sensor-agent-review"
+    description: Review changed code against structural architecture rules
+    config:
+      agent: architecture-reviewer
+      model: claude-sonnet-4.6
+      instructions: Review only structural architecture constraints.
+      rubric: ".agents/rubrics/architecture.md"
+      cost: expensive
+      trust: advisory
+```
+
+An inferential extension owns the decision to launch a reviewer session and the
+instructions and rubric passed to it. It does not own session isolation,
+permissions, budgets, or journalling. Those capabilities arrive through
+`SensorContext`. The reviewer receives one `submit_sensor_result` tool whose
+parameters are the extension's output JSON Schema. Senawa validates the tool
+arguments again, returns actionable schema errors for a bounded retry, and
+ignores ordinary assistant prose. A reviewer that never submits a valid result
+produces a sensor error. The main agent therefore receives a validated reading,
+never text that it must parse.
+
+### Gates consume contracts
+
+A gate is a named collection of sensor invocations and expected results. The
+common assessment envelope keeps the common case concise, while JSON Pointer
+allows a gate to inspect extension-specific `data` without embedding JavaScript
+in configuration.
+
+```yaml
+gates:
+  - id: task-done
+    description: Implementation work satisfies its acceptance contract
+    checks:
+      - sensor: typecheck
+        expect:
+          path: /verdict
+          operator: equals
+          value: pass
+      - sensor: unit-tests
+        expect:
+          path: /verdict
+          operator: equals
+          value: pass
+      - sensor: coverage
+        expect:
+          path: /data/regression
+          operator: equals
+          value: false
+      - sensor: architecture-review
+        expect:
+          path: /verdict
+          operator: equals
+          value: pass
+        advisory: true
+    on_fail: rework
+```
+
+The initial operator vocabulary is deliberately closed: `equals`, `notEquals`,
+`greaterThan`, `greaterThanOrEqual`, `contains`, `matches`, and `exists`.
+`senawa doctor` rejects unknown operators, missing sensor references, pointer
+and schema combinations that can never match, and blocking gates with no
+deterministic anchor.
+
+### Declarative workflows
+
+A workflow is a static orchestration template above the beads runtime graph.
+It describes phase dependencies, agent roles, artifact contracts, quality gates,
+human approvals, and bounded loop policies. Starting a workflow compiles that
+template into beads nodes. The workflow file does not become a second mutable
+source of runtime truth.
+
+```yaml
+apiVersion: senawa.dev/workflow/v1
+kind: Workflow
+
+metadata:
+  name: standard-delivery
+  description: Define, research, plan, implement, and verify a change
+
+spec:
+  inputSchema: "./schemas/work-request.schema.json"
+
+  phases:
+    - id: define
+      executor:
+        kind: agent
+        role: definer
+        output:
+          path: artifacts/definition.json
+          schema: "./schemas/definition.schema.json"
+      exit:
+        gate: definition-accepted
+        approval: human
+
+    - id: research
+      dependsOn: [define]
+      executor:
+        kind: agent
+        role: researcher
+        input:
+          definition: phases.define.output
+        output:
+          path: artifacts/research.json
+          schema: "./schemas/research.schema.json"
+      exit:
+        gate: research-accepted
+        approval: human
+
+    - id: plan
+      dependsOn: [research]
+      executor:
+        kind: agent
+        role: planner
+        output:
+          path: artifacts/plan.json
+          schema: "./schemas/plan.schema.json"
+      actions:
+        - kind: import-plan
+          source: phases.plan.output
+      exit:
+        gate: plan-accepted
+        approval: human
+
+    - id: implement
+      dependsOn: [plan]
+      executor:
+        kind: task-frontier
+        role: implementor
+        selector:
+          phase: implement
+        concurrency: auto
+      loop:
+        until: all-selected-tasks-closed
+        each:
+          gate: task-done
+          rework:
+            resumeSession: true
+            maxAttempts: 3
+          dispatch:
+            maxFailures: 2
+          onExhausted: escalate
+
+    - id: verify
+      dependsOn: [implement]
+      executor:
+        kind: agent
+        role: verifier
+        output:
+          path: artifacts/verification.json
+          schema: "./schemas/verification.schema.json"
+      exit:
+        gate: work-done
+```
+
+Version one has a small executor vocabulary: `agent` for one schema-constrained
+agent artifact, `task-frontier` for the implementation frontier, `sensor-only`
+for a gate with no agent, `human` for an explicit decision, and `foreach` for a
+schema-valid collection. It has no general expression language and no arbitrary
+`while`. Every repeated action names a termination condition and a finite
+attempt or dispatch-failure budget.
+
+The `task-frontier` executor is the researched implementation loop made
+declarative. It atomically claims a ready bead, dispatches or resumes one worker
+session, evaluates the per-task gate, sends red findings back to the same
+session, and closes the bead only after the gate passes. It repeats until every
+task selected for the phase is closed. Dependency ordering still comes from
+beads, and newly imported or discovered tasks become visible through the same
+frontier query.
+
+Agent phase outputs use the same structured-submission rule as inferential
+sensors. The phase declares an output schema, the worker receives one submission
+tool with that schema, and Senawa persists the artifact only after validation.
+The planner's validated artifact is then safe for `senawa plan import` to turn
+into implementation beads.
+
+### Starting a workflow
+
+The normal entry point remains goal-oriented:
+
+```bash
+senawa work start "Refactor the ingest pipeline" --workflow standard-delivery
+```
+
+Structured fields can supplement the goal when a workflow requires them:
+
+```bash
+senawa work start "Refactor the ingest pipeline" \
+  --workflow standard-delivery \
+  --input request.json
+```
+
+`work start` is one transaction from the user's perspective:
+
+1. Resolve the named workflow, or the repository default when `--workflow` is
+   omitted.
+2. Run the relevant `doctor` checks for extensions, sensors, gates, roles,
+   schemas, phase dependencies, artifact references, and loop bounds.
+3. Merge the goal and optional input document, then validate the result against
+   the workflow input schema.
+4. Copy the resolved workflow, referenced schemas, sensor manifests, gate
+   definitions, rubrics, and role identifiers into the work directory and
+   record one content fingerprint. An active run never follows later edits to
+   configuration silently.
+5. Create the beads epic and static phase nodes with their dependency edges.
+   Dynamic implementation nodes are created later from the validated plan.
+6. Write `work.json`, emit `work.started` and `workflow.instantiated`, and make
+   the first phase ready.
+7. Return the work identifier, first frontier, and any immediate human action.
+
+The command does not need the principal agent to interpret the workflow. After
+startup, `senawa tick` is the idempotent engine: it checks external gates,
+advances ready phases, dispatches within configured concurrency, evaluates
+quality gates, schedules bounded rework, and surfaces escalations. The principal
+consumes the bounded projection from `senawa work show`; it does not implement
+the state machine in its prompt.
+
+`senawa doctor` validates workflows before a run exists. In addition to the
+sensor checks, it rejects duplicate phase IDs, dependency cycles, missing roles
+or gates, incompatible artifact references, unbounded loops, invalid selectors,
+and blocking gates without deterministic anchors. `senawa workflow render`
+shows the static phase graph and labels the dynamic frontier so a human can
+inspect the shape before spending any AI credits.
 
 ## Sensors and gates
 
@@ -1219,7 +1654,7 @@ Slice three adds graph state. Add beads, implement `senawa work start`, `task ne
 
 Slice three-and-a-half adds the journal, and it belongs here rather than at the end. `@senawa/report` starts as an append-only writer that every state-changing command in slice three already calls, plus a `senawa work report` that renders whatever exists. It is a few hundred lines while there are five event kinds, and it is a retrofit across every call site if you leave it until slice six. Backfilling provenance is not possible: the events you did not write are gone.
 
-Slice four adds the roles. Write `researcher`, `planner`, `implementor`, and `verifier` agent profiles, plus `senawa dispatch` with its model capability table, `senawa plan import`, and `senawa plan validate` over `bd swarm validate`. Start with the subprocess path (Topology B1) because it is easy to debug: you can read the exact command and rerun it by hand. Run one full loop end to end on a small refactor, then read the generated `report.md` and check that it describes what actually happened. A throwaway version of exactly this slice exists in `poc/09-end-to-end` and is worth reading first.
+Slice four adds the roles. Write `researcher`, `planner`, `implementor`, and `verifier` agent profiles, plus `senawa dispatch` with its model capability table, `senawa plan import`, and `senawa plan validate` over `bd swarm validate`. Start with the subprocess path (Topology B1) because it is easy to debug: you can read the exact command and rerun it by hand. Run one full loop end to end on a small refactor, then read the generated `report.md` and check that it describes what actually happened. A throwaway version of exactly this slice exists in `poc/orchestration` and is worth reading first.
 
 Slice five adds the principal. Introduce `@senawa/orchestrator` on `@github/copilot-sdk`, move dispatch to hosted sessions (Topology B2), and implement the `ask` and `answer` relay on `onUserInputRequest`. Rebuild the rework loop explicitly, since the SDK has no `subagentStop`. Write `principal.agent.md` with a deliberately narrow tool list, pinned to an explicit model.
 

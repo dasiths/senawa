@@ -1,0 +1,19 @@
+version: 1
+
+extensions:
+  - path: ./extensions/command.mjs
+
+sensors:
+  - id: broken
+    extension: command
+    description: This configuration deliberately violates the extension schema
+    config:
+      command: node --check fixture/subject.mjs
+    input:
+      cwd: .
+
+gates:
+  - id: impossible
+    checks:
+      - sensor: missing-sensor
+        expect: { path: /verdict, operator: magic, value: pass }

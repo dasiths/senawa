@@ -1,8 +1,8 @@
 ---
 title: Senawa Proof-of-Concept Findings
-description: What eight independent probes established about Copilot CLI hooks, sessions, models, the copilot SDK, and beads, and which design assumptions survived contact with the substrate
+description: What the Senawa probes established about Copilot CLI hooks, sessions, models, extensions, workflows, the Copilot SDK, and beads
 author: Senawa
-ms.date: 2026-07-28
+ms.date: 2026-08-02
 ms.topic: reference
 keywords:
   - proof of concept
@@ -11,7 +11,7 @@ keywords:
   - beads
   - hooks
   - backpressure
-estimated_reading_time: 20
+estimated_reading_time: 25
 ---
 
 ## Purpose
@@ -23,7 +23,9 @@ happened when each one was executed instead.
 
 Every result below was produced by a script in [`poc/`](../../poc/README.md).
 The probes are independent: no shared state, no ordering requirement. Re-running
-any of them reproduces the corresponding section.
+any of them reproduces the corresponding section. Each probe folder carries its
+own README with the goal, the limits, and a dated change log, so this document
+stays the cross-cutting record rather than the only one.
 
 Read this before implementing. Six design assumptions did not survive, two of
 them in ways that would have produced a harness that looked like it was
@@ -72,12 +74,18 @@ about the SDK should be re-checked when the mirror catches up.
 | 23 | Workers reliably follow "submit through senawa" | **Unreliable.** Observed both compliance and silent non-compliance across runs |
 | 24 | Worker sessions inevitably pollute the user's session history | **Wrong.** `baseDirectory` isolates them completely |
 | 25 | `parentAgentTaskId` can correlate a worker session to its parent | **Wrong.** It is read-only telemetry for in-process subagents, and is absent from `MessageOptions` |
-| 26 | Cross-session distributed tracing is possible | **Confirmed.** `onGetTraceContext` injects W3C context into `session.create`, `session.resume` and `session.send` |
+| 26 | Cross-session distributed tracing is possible | **Partly checked.** The SDK types expose W3C context, but no probe currently joins emitted spans across sessions |
+| 27 | Sensors can be loaded as explicit extensions with JSON Schema contracts | **Confirmed offline.** Manifests, configuration, input, and output were validated through one registry |
+| 28 | One CLI can discover, explain, diagnose, and run configured sensors | **Confirmed offline.** `list`, `info`, `doctor`, targeted `run`, and all-sensor `run` completed coherently |
+| 29 | An inferential extension can reject malformed structured submissions | **Confirmed with a fake host.** One invalid submission was rejected and the second schema-valid result was accepted |
+| 30 | Declarative workflow errors can be found before dispatch | **Confirmed offline.** Doctor rejected a cycle, a missing gate, and two missing loop budgets together |
+| 31 | Workflow kickoff can freeze definitions and compile phases into beads | **Confirmed offline.** The source changed after start while the run completed from its five-phase snapshot |
+| 32 | A task-frontier loop can survive process restarts and bounded rework | **Confirmed offline.** Nine fresh ticks completed two dependent tasks, including one resumed second attempt |
 
-## 1. Hook latency
+## Hook latency
 
-`poc/01-hook-latency` builds the same `preToolUse` decision two ways and times
-a cold start, best of 20.
+[`poc/hook-latency`](../../poc/hook-latency/README.md) builds the same
+`preToolUse` decision two ways and times a cold start, best of 20.
 
 | Invocation | Measured |
 |------------|----------|
@@ -112,11 +120,11 @@ Without it the bundle throws `Dynamic require of "node:events" is not supported`
 at import time. This is not optional and it is not obvious; it cost two failed
 runs to find.
 
-## 2. Hooks really do enforce, and really do fail open
+## Hooks really do enforce, and really do fail open
 
-`poc/04-hooks-enforcement` runs four real Copilot sessions against a scratch git
-repository, asking each to run `git commit --allow-empty -m HOOK_POC_MARKER`,
-and then counts commits.
+[`poc/hook-enforcement`](../../poc/hook-enforcement/README.md) runs four real
+Copilot sessions against a scratch git repository, asking each to run
+`git commit --allow-empty -m HOOK_POC_MARKER`, and then counts commits.
 
 | Scenario | Hook fired | Commit created | Reading |
 |----------|-----------|----------------|---------|
@@ -146,10 +154,10 @@ mechanism. Denial reasons should therefore name the harness explicitly
 ("senawa refused this: ..."), or the model will misattribute the refusal and may
 try to work around the wrong obstacle.
 
-## 3. The SDK: two confirmations and one trap
+## The SDK: two confirmations and one trap
 
-`poc/07-sdk-surface` reads the shipped `.d.ts` rather than the README, then runs
-a live session.
+[`poc/sdk-surface`](../../poc/sdk-surface/README.md) reads the shipped `.d.ts`
+rather than the README, then runs a live session.
 
 ### Hook surface, from the type declarations
 
@@ -177,7 +185,7 @@ first.
 
 ### The trap: `onPreToolUse` silences `onPermissionRequest`
 
-`poc/07-sdk-surface/precedence.mjs` runs the same shell request three ways with
+`poc/sdk-surface/precedence.mjs` runs the same shell request three ways with
 a permission handler that always rejects shell commands.
 
 | `onPreToolUse` returns | `onPreToolUse` calls | `onPermissionRequest` calls | Command ran? |
@@ -200,9 +208,10 @@ When the handler is allowed to run, its `feedback` string reaches the model
 intact: the agent reported "refused because the `may-commit` permission is
 currently red", which is the actionable backpressure the design is after.
 
-## 4. Sessions and the rework loop
+## Sessions and the rework loop
 
-`poc/05-session-resume` is the cleanest result in this document.
+[`poc/worker-sessions`](../../poc/worker-sessions/README.md) is the cleanest
+result in this document.
 
 - `--session-id <uuid>` creates a session at a caller-chosen identifier.
 - `--resume=<uuid> -p "..."` continues it non-interactively.
@@ -221,10 +230,11 @@ terminal `result`. **`session.usage_checkpoint` means the journal can capture
 cost from `-p` runs without standing up an OTel collector at all**, which is a
 significantly cheaper path to the per-task accounting the design wants.
 
-## 5. Model routing and subagent hooks
+## Model routing and subagent hooks
 
-`poc/06-model-routing` uses the OTel file exporter as the measuring instrument,
-because asking a model which model it is produces confident fiction.
+[`poc/model-routing`](../../poc/model-routing/README.md) uses the OTel file
+exporter as the measuring instrument, because asking a model which model it is
+produces confident fiction.
 
 **Custom agents are discovered and delegated to correctly.** A
 `.github/agents/senawa-probe.agent.md` profile appeared in the agent list
@@ -261,9 +271,10 @@ exported there was no way to observe which model the subagent actually received.
 The design's rule stands on documentation alone: pin an explicit model on the
 principal session. This is the highest-value unvalidated claim remaining.
 
-## 6. The beads contract
+## The beads contract
 
-`poc/02-beads-contract` walks the whole `@senawa/graph` surface.
+[`poc/beads-graph`](../../poc/beads-graph/README.md) walks the whole
+`@senawa/graph` surface in `contract.sh`.
 
 ### `bd init` blocks forever on a prompt
 
@@ -335,9 +346,9 @@ with two child tasks it emitted a single node for the epic. It follows
 dependency edges, not parent-child. The run report's decomposition diagram must
 be generated from the graph by `@senawa/report`, not delegated to `bd`.
 
-## 7. Concurrency
+## Concurrency
 
-`poc/03-beads-concurrency` runs six workers against one database.
+`poc/beads-graph/concurrency.sh` runs six workers against one database.
 
 **`bd ready --claim` is atomic.** Six concurrent claims returned six distinct
 issue ids with no duplicates. The frontier is safe for parallel pull, which is
@@ -374,10 +385,10 @@ around two seconds. Two consequences:
 2. **`@senawa/graph` needs a read cache** with explicit invalidation on write,
    or the PA's polling loop will dominate wall-clock time.
 
-## 8. The sensor model
+## The sensor model
 
-`poc/08-sensors` is the first probe that tests the design's actual subject
-matter rather than its plumbing.
+[`poc/sensors`](../../poc/sensors/README.md) is the first probe that tests the
+design's actual subject matter rather than its plumbing.
 
 ### Normalization holds across four tools
 
@@ -463,11 +474,11 @@ cost 23 ms. One inferential run cost **16,000-30,000 ms**. That is a factor of
 roughly a thousand, which is why inferential sensors run last and only on
 otherwise-green work.
 
-## 9. The whole loop, end to end
+## The whole loop, end to end
 
-`poc/09-end-to-end` is a throwaway `senawa` that runs the real thing: a beads
-graph, a real `copilot -p` worker, real sensors, a real refusal, and a rendered
-report. It is CLI only — no MCP, no SDK.
+`poc/orchestration/end-to-end.sh` is a throwaway `senawa` that runs the real
+thing: a beads graph, a real `copilot -p` worker, real sensors, a real refusal,
+and a rendered report. It is CLI only, with no MCP and no SDK.
 
 It works. A representative run:
 
@@ -488,7 +499,8 @@ Four things this established that no isolated probe could.
 not filtered: a bin directory containing exactly the executables it may reach,
 with `bd` deliberately absent. `PATH` verification confirmed the worker could
 reach `senawa` and could not reach `bd`. This is far simpler to reason about
-than a deny list, and it is the direct application of the POC 04 finding.
+than a deny list, and it is the direct application of the hook enforcement
+finding.
 
 **The bead status is the proof.** Across every run, including failed ones, the
 task's status only ever changed when the orchestrator changed it. The worker
@@ -515,6 +527,117 @@ a reason that had nothing to do with the code. **A dispatch failure is not a
 work failure, and the gate cannot tell the difference.** The design needs a
 distinct `dispatch.failed` event and a separate budget, or a misconfigured flag
 burns a task's entire rework allowance and reports it as the worker's fault.
+
+## Worker session isolation
+
+`poc/worker-sessions/isolation.mjs` created one SDK session under an isolated
+`baseDirectory` and one subprocess session under an isolated `COPILOT_HOME`.
+Neither appeared in the default client's session list. `deleteSession` removed
+the SDK session from the isolated home after its transcript could be archived.
+
+This confirms the session-hygiene mechanism for both dispatch paths. It does
+not confirm the distributed-tracing claim that was previously grouped with the
+probe. The installed SDK types expose `traceparent` on tool invocations and an
+`onGetTraceContext` callback, but the probe never installs a collector or joins
+spans across two sessions. That remains an integration test.
+
+## Sensor extensions and contracts
+
+`poc/sensors/cli.mjs` replaces the hard-coded branches from the original sensor
+runner with two explicitly declared extensions. Each extension exports a
+versioned manifest with a description and JSON Schemas for configuration,
+input, and output. Ajv compiles every schema when the registry loads.
+
+The CLI exercised the intended user surface:
+
+```text
+senawa doctor
+senawa sensor list
+senawa sensor info architecture-review
+senawa sensor run syntax
+senawa sensor run
+```
+
+Doctor loaded two extensions, validated two configured sensors and one gate,
+then rejected a separate fixture for four independent reasons: a command with
+the wrong type, a missing sensor reference, an unknown expectation operator,
+and a blocking gate with no deterministic anchor.
+
+The inferential extension receives its instructions, rubric, subject, output
+schema, and bounded submission count. A fake structured-agent host deliberately
+submitted `{verdict: "maybe"}` first. Schema validation rejected it, then
+accepted the second result. This proves the host-extension contract and retry
+semantics without spending credits.
+
+The first run also caught a contract leak in the POC itself. The host appended
+`submissionAttempts` beside the declared assessment, so output validation
+rejected the otherwise successful reading. Moving the diagnostic under the
+extension's declared `data` property fixed it. Production code should normally
+put host diagnostics in Senawa's outer `SensorReading` metadata instead, leaving
+the extension assessment about the measured subject.
+
+Two claims remain outside this offline result. A real SDK reviewer has not yet
+called the schema-backed submission tool, and package-name extension resolution
+has not been exercised. The SDK surface probe already proves that the SDK
+accepts raw JSON Schema tool parameters, but the complete inferential sensor
+assembly needs one live probe.
+
+## Workflow definition, kickoff, and bounded loops
+
+`poc/orchestration/engine.mjs` tests the revised workflow shape against a real
+beads database with deterministic fake agent and sensor hosts. The workflow
+contains five phases: define, research, plan, implement, and verify. Plan
+expansion adds two dependent implementation tasks beneath the implementation
+phase.
+
+Before kickoff, doctor reported the valid five-phase workflow and three gates.
+Against an invalid fixture it reported all of the intended structural failures
+in one pass: a dependency cycle, a missing gate, a missing rework limit, and a
+missing dispatch-failure limit. `workflow list`, `workflow info`, and a Mermaid
+preview also returned enough information to inspect the run before starting it.
+
+Kickoff used the proposed command:
+
+```bash
+senawa work start "Refactor the ingest pipeline" \
+   --workflow standard-delivery \
+   --input request.json
+```
+
+The command validated the merged input, copied the workflow, sensor and gate
+configuration, and input schema into the work directory, recorded one SHA-256
+fingerprint, then created an epic and five phase beads with dependency edges.
+It returned the work identity and `define` as the first frontier.
+
+The probe changed the source workflow after kickoff. Nine separate Node
+processes then called `tick`, which proves that no in-memory orchestrator state
+was required:
+
+```text
+define closed
+research closed
+plan closed, two implementation beads imported
+implement-api failed attempt 1
+implement-api passed attempt 2 in the same recorded session
+update-caller passed attempt 1
+implementation frontier closed
+verification closed
+work closed
+```
+
+The final projection reported five closed phases, two closed implementation
+tasks, 30 journal events, and `sourceChanged: true`. The epic was closed in the
+real beads database. Runtime decisions came from the frozen snapshot despite
+the changed source definition. Before every transition and status projection,
+the fresh process reloaded phase, task, and epic status from beads rather than
+trusting the denormalized JSON cache.
+
+This establishes the compiler and lifecycle shape, not autonomous delivery.
+The fake hosts do not test schema-constrained phase submissions, human approval,
+real Copilot session dispatch, parallel task-frontier execution, or recovery
+from a process killed during a state transition. Those are the next probes.
+
+## Design changes from the probes
 
 1. Split the binary. `senawa-hook` (minimal, ~33 ms) for hooks; `senawa` (full)
    for everything else. Update the latency section's numbers to 66 ms and 183 ms.
@@ -548,7 +671,7 @@ burns a task's entire rework allowance and reports it as the worker's fault.
 15. Adopt the inferential promotion criterion: N runs over representative input,
     promote to blocking only at 100% verdict agreement, and record the sample
     size in `sensors.yaml` next to `trust`.
-16. Keep `poc/08-sensors/fixture/hostile.mjs` as a regression test for evidence
+16. Keep `poc/sensors/fixture/hostile.mjs` as a regression test for evidence
     hygiene in `@senawa/sensors`.
 17. Dispatch every worker session under an isolated `baseDirectory` (SDK) or
     `COPILOT_HOME` (subprocess), so the human's session picker stays theirs.
@@ -556,34 +679,49 @@ burns a task's entire rework allowance and reports it as the worker's fault.
 18. Specify the trace propagation contract: one span per dispatch, W3C context
     returned from `onGetTraceContext`, and `trace_id` recorded on every journal
     event so the two systems can be joined after the fact.
+19. Make sensor discovery explicit and schema-driven. Validate extension
+    manifests, configuration, inputs, and outputs before readings reach gates.
+20. Keep host metadata outside sensor assessments unless an extension declares
+    it in `data`; JSON Schema must reject undeclared fields.
+21. Compile workflow definitions into beads at kickoff and run from a frozen
+    snapshot. Later source edits are drift to report, not live configuration.
+22. Reject arbitrary or unbounded workflow loops. Task rework and dispatch
+    failures require separate finite budgets.
+23. Keep `senawa tick` idempotent and restart-safe. A fresh process must be able
+    to advance the next transition from durable state alone.
 
 ## What remains unvalidated
 
 | Question | Why it was not settled | How to settle it |
 |----------|------------------------|------------------|
 | Does session model `Auto` override a subagent profile's `model`? | No subagent spans are exported in `-p` mode | Run the probe inside an SDK-hosted session, or with an OTLP collector rather than the file exporter |
-| Does `subagentStop` returning `block` actually force another turn, and cap at 8? | Not probed; needs a deliberately failing worker | Extend `poc/04` with a `subagentStop` hook that blocks a counted number of times |
+| Does `subagentStop` returning `block` actually force another turn, and cap at 8? | Not probed; needs a deliberately failing worker | Extend the hook enforcement probe with a `subagentStop` hook that blocks a counted number of times |
 | Does `--worktree` isolate two implementors safely end to end? | Experimental flag, needs two concurrent writers on real files | A two-worker probe with a deliberate file conflict |
-| Does inferential stability hold on *real diffs* rather than whole files? | `poc/08` measured whole-file review on two hand-built subjects | Repeat the measurement against 20 real commits from this repository |
+| Does inferential stability hold on *real diffs* rather than whole files? | The sensors probe measured whole-file review on two hand-built subjects | Repeat the measurement against 20 real commits from this repository |
 | Does `senawa prime` fit a `sessionStart` hook's budget? | Depends on the `bd` read cache that does not exist yet | Re-measure once `@senawa/graph` caching lands |
 | Does the human relay survive a real multi-day pause? | Every probe ran to completion in minutes | Park a task on a `human` gate, restart everything, resume |
-| SDK behaviour at 1.0.8+ | The npm mirror serves 1.0.7 | Re-run `poc/07` when the mirror updates |
+| SDK behaviour at 1.0.8+ | The npm mirror serves 1.0.7 | Re-run the SDK surface probe when the mirror updates |
+| Does a live inferential extension receive a schema-valid tool submission? | The sensors probe uses a fake structured-agent host | Run the same extension through an isolated SDK reviewer session |
+| Do real agent phases submit schema-valid artifacts and resume correctly? | The orchestration probe uses deterministic fake agents | Replace one agent executor at a time with isolated SDK sessions |
+| Is a tick crash-safe between a beads write and journal/state write? | Every probe transition completed normally | Inject termination at each persistence boundary and resume |
+| Can one task-frontier safely run several workers and integrate them? | The orchestration probe uses concurrency 1 | Add worktrees, parallel claims, and a merge-slot integration probe |
+| Does workflow human approval survive restart and allow siblings to continue? | The orchestration probe omits human gates | Add a parked approval with an independent ready branch, restart, then resolve |
 
 ## Reproducing
 
 ```bash
-bash poc/01-hook-latency/run.sh        # offline
-bash poc/02-beads-contract/run.sh      # offline, slow (bd init)
-bash poc/03-beads-concurrency/run.sh   # offline, slow
-bash poc/04-hooks-enforcement/run.sh   # spends AI credits
-bash poc/05-session-resume/run.sh      # spends AI credits
-bash poc/06-model-routing/run.sh       # spends AI credits
-bash poc/07-sdk-surface/run.sh         # spends AI credits
-node poc/07-sdk-surface/precedence.mjs # spends AI credits
-node poc/08-sensors/runner.mjs         # offline
-bash poc/08-sensors/run.sh             # spends AI credits (inferential half)
-bash poc/09-end-to-end/run.sh          # spends AI credits
-bash poc/10-session-isolation/run.sh   # spends AI credits
+bash poc/hook-latency/run.sh          # offline
+bash poc/beads-graph/run.sh           # offline, slow (bd init)
+bash poc/sensors/run.sh               # offline
+bash poc/orchestration/run.sh         # offline, slow (real beads database)
+
+bash poc/hook-enforcement/run.sh      # spends AI credits
+bash poc/worker-sessions/run.sh       # spends AI credits
+bash poc/model-routing/run.sh         # spends AI credits
+bash poc/sdk-surface/run.sh           # spends AI credits
+node poc/sdk-surface/precedence.mjs   # spends AI credits
+bash poc/sensors/stability.sh         # spends AI credits
+bash poc/orchestration/end-to-end.sh  # spends AI credits
 ```
 
 The end-to-end probe is non-deterministic by nature: the worker sometimes fixes

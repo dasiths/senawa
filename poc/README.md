@@ -1,41 +1,61 @@
-# Senawa proof-of-concept probes
+---
+title: Senawa Proof-of-Concept Probes
+description: Executable probes for the assumptions behind Senawa's orchestration design, one folder per subject
+author: Senawa
+ms.date: 2026-08-02
+ms.topic: reference
+keywords:
+  - proof of concept
+  - multi-agent orchestration
+  - sensors
+  - workflows
+estimated_reading_time: 4
+---
 
-Throwaway code. Each directory answers one question from
-[the design](../docs/design/multi-agent-orchestration.md) with evidence, and is
-independent of every other directory: no shared state, no ordering requirement,
-no shared build. Delete any of them without consequence.
+## Overview
 
-Findings are written up in [poc-findings.md](../docs/design/poc-findings.md).
-That document is the durable output; this directory is the scaffolding that
-produced it.
+Throwaway code with a durable purpose. Each folder answers one question from
+[the design](../docs/design/multi-agent-orchestration.md) with evidence you can
+reproduce, and every folder carries a README stating its goal, what it proved,
+what it did not prove, and a dated change log.
 
-| Probe | Question | Cost |
-|-------|----------|------|
-| `01-hook-latency` | Is a bundled Node CLI fast enough to run as a `preToolUse` hook? | offline |
-| `02-beads-contract` | Does the `bd` JSON contract behave the way `@senawa/graph` needs? | offline, slow |
-| `03-beads-concurrency` | Is `--claim` genuinely atomic, and what happens to concurrent writers? | offline, slow |
-| `04-hooks-enforcement` | Do hooks actually block, and do they fail open on timeout? | AI credits |
-| `05-session-resume` | Does a resumed worker session remember what it built? | AI credits |
-| `06-model-routing` | Does per-task model selection survive delegation? Do subagent hooks fire? | AI credits |
-| `07-sdk-surface` | Which control points does the SDK really expose, and do they compose? | AI credits |
-| `08-sensors` | Do sensors normalize, short-circuit, cache, and stay safe? Are inferential verdicts stable? | mixed |
-| `09-end-to-end` | Does the whole loop work: graph, dispatch, refusal, rework, report? | AI credits |
-| `10-session-isolation` | Can worker sessions stay out of the user's history and still be correlated? | AI credits |
+Findings are consolidated in
+[poc-findings.md](../docs/design/poc-findings.md). That document is the
+cross-cutting record; these folders are the machinery that produced it.
 
-OpenTelemetry was folded into `06-model-routing`, which uses the span export as
-its measuring instrument rather than trusting a model's account of itself.
+| Probe                                            | Question                                                                        | Cost         |
+|--------------------------------------------------|---------------------------------------------------------------------------------|--------------|
+| [hook-latency](hook-latency/README.md)           | Is a bundled Node CLI fast enough to run as a `preToolUse` hook?                | offline      |
+| [hook-enforcement](hook-enforcement/README.md)   | Do hooks genuinely block a tool call, and how do they fail?                      | AI credits   |
+| [beads-graph](beads-graph/README.md)             | Does the `bd` contract behave the way the graph adapter needs, under contention? | offline      |
+| [worker-sessions](worker-sessions/README.md)     | Do worker sessions resume with their own memory and stay out of the user's history? | AI credits |
+| [model-routing](model-routing/README.md)         | Does per-task model selection survive delegation, and what does telemetry report? | AI credits |
+| [sdk-surface](sdk-surface/README.md)             | Which control points does the SDK expose, and do they compose safely?            | AI credits   |
+| [sensors](sensors/README.md)                     | Do sensor contracts, evidence hygiene, and inferential trust hold up?            | mixed        |
+| [orchestration](orchestration/README.md)         | Can the harness own the task loop and run a workflow from durable state?         | mixed        |
 
-`09-end-to-end` is the closest thing here to a prototype: a throwaway `senawa`
-in one file, CLI only, that runs a real worker against a real graph and refuses
-its work when the sensors are red.
+## How these probes are maintained
+
+One folder per subject, and the count stays small on purpose. When new research
+changes our understanding, amend the probe that owns that subject and add a
+dated entry to its change log rather than adding another folder. A probe folder
+should always describe the current solution shape; its README carries the
+history that explains how the shape got there.
+
+Two conventions keep that workable. `run.sh` is the safe default entry point for
+a folder and never spends AI credits unless its header says so, and anything
+that does spend credits lives in a separately named script. Superseded code is
+either deleted or renamed to describe the evidence it still provides, so nothing
+in a folder is left implying a mechanism we no longer intend to build.
 
 ## Running
 
-Each probe has a `run.sh` that is safe to execute from anywhere:
+Every probe is runnable from anywhere in the repository:
 
 ```bash
-bash poc/02-beads-contract/run.sh
+bash poc/sensors/run.sh
 ```
 
-Probes that spend AI credits say so in their header and use
-`claude-haiku-4.5` unless the question is specifically about model selection.
+Offline probes need no Copilot subscription. Probes that spend credits say so in
+their header and use `claude-haiku-4.5` unless the question is specifically
+about model selection.

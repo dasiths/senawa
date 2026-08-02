@@ -1,0 +1,29 @@
+version: 1
+
+sensors:
+  - id: artifact-present
+    kind: deterministic
+    description: Confirm that a phase produced its declared artifact
+  - id: task-tests
+    kind: deterministic
+    description: Exercise bounded task rework in the proof of concept
+  - id: architecture-review
+    kind: inferential
+    description: Represent a structured advisory reviewer
+
+gates:
+  - id: artifact-accepted
+    checks:
+      - sensor: artifact-present
+        expect: { path: /verdict, operator: equals, value: pass }
+  - id: task-done
+    checks:
+      - sensor: task-tests
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: architecture-review
+        expect: { path: /verdict, operator: equals, value: pass }
+        advisory: true
+  - id: work-done
+    checks:
+      - sensor: artifact-present
+        expect: { path: /verdict, operator: equals, value: pass }

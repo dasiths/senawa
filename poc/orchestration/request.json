@@ -1,0 +1,4 @@
+{
+  "repository": "fixture",
+  "constraints": ["preserve public behavior"]
+}

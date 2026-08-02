@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["goal", "repository"],
+  "properties": {
+    "goal": { "type": "string", "minLength": 1 },
+    "repository": { "type": "string", "minLength": 1 },
+    "constraints": { "type": "array", "items": { "type": "string" } }
+  }
+}

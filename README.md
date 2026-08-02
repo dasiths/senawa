@@ -2,7 +2,7 @@
 title: Senawa
 description: An orchestration harness for GitHub Copilot CLI where a principal agent delegates to role-specific subagents, tracks workflow state in a dependency graph, and refuses to let work advance until sensors say it is sound
 author: dasiths
-ms.date: 2026-07-28
+ms.date: 2026-08-02
 ms.topic: overview
 keywords:
   - multi-agent orchestration
@@ -44,7 +44,7 @@ This is the shape [Addy Osmani calls loop engineering](https://addyosmani.com/bl
 
 ## Status
 
-Design stage. Nothing is implemented yet, but the risky assumptions have been tested rather than assumed. Nine independent probes in [poc/](poc/README.md) ran against the real Copilot CLI, the Copilot SDK, and beads. Six design assumptions did not survive, and a throwaway prototype now runs the whole loop end to end.
+Design stage. Nothing is implemented yet, but the risky assumptions have been tested rather than assumed. Eight probes in [poc/](poc/README.md) ran against the real Copilot CLI, the Copilot SDK, beads, and the proposed extension and workflow contracts. Six design assumptions did not survive, and throwaway prototypes now run both the worker rework loop and the declarative workflow engine end to end.
 
 Start with [the design document](docs/design/multi-agent-orchestration.md), then read [the proof-of-concept findings](docs/design/poc-findings.md) before writing any code.
 
@@ -101,6 +101,7 @@ sensors.yaml          sensor and gate definitions for this repository
 
 ## Further reading
 
+* [Design documents map](docs/design/README.md)
 * [Multi-agent orchestration design](docs/design/multi-agent-orchestration.md)
 * [Proof-of-concept findings](docs/design/poc-findings.md)
 * [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/)
