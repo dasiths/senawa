@@ -209,19 +209,27 @@ writes, which is what the lease protects.
 ### The loops
 
 Three loops, and only the middle one changed when the driver moved into the
-foreground. The human is absent from the inner loop by construction and can
-reach into it at any time through steering.
+foreground. The human is absent from the inner loop by construction and reaches
+the middle one two different ways, which the diagram distinguishes because
+confusing them is what makes the design look either more or less autonomous than
+it is.
 
 ```mermaid
 flowchart TB
-    subgraph outer["Outer loop: the human, hours to days"]
+    subgraph outer["Outer loop: you, or the principal agent relaying, hours to days"]
         REQ[Request, workflow, sensors, gates] --> START[senawa work start]
-        REPORT[Run report] --> REQ
+        NEEDS[/Exit 2, naming the phase and the artifact path/] --> YOU{You decide}
+        YOU -->|senawa approve| RESUME[senawa work resume]
+        YOU -->|senawa reject, with a reason| RESUME
+        REPORT[Run report] --> YOU
+        YOU --> REQ
     end
 
     subgraph middle["Middle loop: the run driver, minutes to hours"]
         START --> ADV{Next legal transition}
+        RESUME --> ADV
         ADV -->|phase or task ready| DISPATCH[Dispatch or resume a session]
+        ADV -->|a human owes the run something| NEEDS
         ADV -->|everything closed| ACCEPTED[Work accepted]
         VERDICT[Gate verdict] --> ADV
     end
@@ -237,15 +245,28 @@ flowchart TB
     ACCEPTED --> REPORT
     ADV --> JOURNAL[(journal + beads)]
     STEER[[Steering inbox]] -. read between transitions .-> ADV
-    HUMAN[Human, or the principal agent on their behalf] -. senawa steer, pause, abort .-> STEER
-    JOURNAL -. senawa work show, report .-> HUMAN
+    YOU -. senawa steer, pause, abort, at any time .-> STEER
+    JOURNAL -. senawa work show, log .-> YOU
 ```
 
-| Loop   | Owner              | Decides                                  | Human involvement                          |
-|--------|--------------------|------------------------------------------|--------------------------------------------|
-| Inner  | One worker session | How to do the assigned task              | None by design; this is where refusals bite |
-| Middle | The run driver     | What runs next and whether it is accepted | Steering, which never blocks the loop      |
-| Outer  | The human          | What is worth doing and what better means | Owns it entirely                           |
+The two entry points are the solid path and the dotted one, and they differ in
+whether the run is waiting for you.
+
+**Approval stops the run.** The driver reaches a phase whose exit gate declares
+`approval: human`, writes the beads gate, and exits 2 naming the phase and the
+artifact. Nothing advances until `senawa approve` or `senawa reject` is followed
+by `senawa work resume`. This is the outer loop tightening around a single phase
+rather than around the whole run, which is what makes rejection cheap.
+
+**Steering does not.** A steer lands in an inbox the driver reads between
+transitions, so it changes what happens next without the run ever having stopped
+to ask. You are not in the inner loop, and adding a steer does not put you there.
+
+| Loop   | Owner              | Decides                                   | Human involvement                                        |
+|--------|--------------------|-------------------------------------------|----------------------------------------------------------|
+| Inner  | One worker session | How to do the assigned task               | None by design; this is where refusals bite              |
+| Middle | The run driver     | What runs next and whether it is accepted | Stops for declared approvals; steering reaches it without stopping it |
+| Outer  | The human          | What is worth doing and what better means | Owns it entirely                                         |
 
 ### Where the principal agent sits
 
