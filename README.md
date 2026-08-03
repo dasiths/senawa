@@ -96,10 +96,11 @@ flowchart LR
     RPT --> PA
 ```
 
-The chain is you, the principal agent, senawa, then the workers. Only the middle
-arrow is conversational. The principal agent relays your intent and explains what
+The chain is you, the principal agent, senawa, then the workers. Only the link to
+the principal agent is conversational. It relays your intent and explains what
 came back; it never decides what runs next, and it never reaches past `senawa` to
-the graph, the journal, or the workers.
+the graph, the journal, or the workers. You can also drive `senawa` yourself, and
+the harness runs headless with no agent at all.
 
 ## Concepts
 

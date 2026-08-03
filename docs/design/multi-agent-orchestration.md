@@ -63,7 +63,7 @@ Three consequences follow, and they are non-negotiable:
 | Journal             | Append-only orchestration events                                            | `senawa` only     |
 | Worker session      | A role-scoped Copilot session with its own model, tools, and resumable identity | The runtime, dispatched by `senawa` |
 | Run driver          | The foreground process started by `senawa work start`, which performs every transition | n/a               |
-| Principal agent     | An optional conversational surface for the human, outside the control path | n/a               |
+| Principal agent     | The Copilot session the human talks to, carrying the senawa skill. Relays their intent as commands; decides nothing | n/a               |
 
 Definitions are inputs. Beads is the runtime truth. The journal is the history.
 Keeping those three separate is what makes a run restartable and auditable.
@@ -249,21 +249,32 @@ flowchart TB
 
 ### Where the principal agent sits
 
-Outside the control path, and optional. It is a conversational surface over the
-same CLI: it reads status and the journal, renders reports, relays questions, and
-issues steering commands the human asks for. It cannot dispatch, close, reorder,
-or reprioritise work.
+On the interaction path, and off the control path. Those are two different axes,
+and conflating them is the fastest way to misread this design.
 
-That restriction buys three things. Control flow stops depending on a model's
+On the interaction path it is the front door. It is a Copilot session carrying
+the senawa skill, and in normal use it is what you talk to: it turns a vague
+goal into a valid work request, starts the run, reads status back to you in a
+sentence, explains why a gate refused something by quoting the sensor that
+refused it, drafts the rejection reason you half-articulated, and relays your
+approval when you give it. That is not a peripheral role. It is most of what
+using the harness feels like.
+
+Off the control path it decides nothing. It cannot dispatch a session, close a
+task, reorder or reprioritise work, or advance a phase. Every command it issues
+is one you asked for, and the run advances because the driver advances it. The
+harness runs to completion with no principal agent at all, which is the sharpest
+available test of whether the control path is really deterministic.
+
+So "optional" describes the architecture, not the ergonomics. The harness does
+not depend on it; you probably will.
+
+That separation buys three things. Control flow stops depending on a model's
 judgement, so the same workflow advances the same way twice and the journal is an
 explanation rather than an anecdote. The trust boundary gets crisp, because no
 model sits anywhere in the control path rather than merely being kept away from
-completion. And the harness runs headless with no agent at all, which is the
-sharpest available test of whether it actually holds.
-
-The principal is still worth having at both ends of the outer loop: turning a
-vague request into a valid work request, explaining in natural language why the
-harness refused something, and walking the report afterwards.
+completion. And a headless run and a conversational run are the same run, so
+nothing about the harness has to be rebuilt for CI.
 
 ### Example scenarios
 
@@ -525,14 +536,14 @@ Three consequences worth stating.
 
 ```mermaid
 flowchart TB
-    H[Human] -->|senawa work start| D[Run driver<br/>blocking foreground process]
-    D --> S[(senawa)]
+    H[Human] -->|work start, approve, reject, steer| S[(senawa CLI)]
+    H <--> PA[Principal agent<br/>a Copilot session carrying the senawa skill]
+    PA -->|relays the same commands, decides nothing| S
+    S --> D[Run driver<br/>blocking process, owns every transition]
     D -->|dispatch| W1[implementor session<br/>worktree A]
     D -->|dispatch| W2[implementor session<br/>worktree B]
     D -->|dispatch| V[verifier session<br/>read only]
     W1 & W2 & V -->|senawa CLI only| S
-    H <-.-> PA[Principal agent<br/>optional, outside the control path]
-    PA -.->|status and steering only| S
     S --> BD[(beads graph<br/>Dolt)]
     S --> SEN[sensors.yaml<br/>extensions]
     S --> FS[.agents/.copilot-tracking/]
@@ -2387,7 +2398,7 @@ Slice four adds the roles and the phases. Write `researcher`, `planner`, `implem
 
 Slice five adds the hosted driver. Introduce `@senawa/orchestrator` on `@github/copilot-sdk`, move dispatch to hosted sessions (Topology B2), and implement the `ask` and `answer` relay on `onUserInputRequest`. Rebuild the rework loop explicitly, since the SDK has no `subagentStop`. Add the driver lease, the intent-and-outcome journalling, and `senawa work resume`, because they are what make a blocking driver safe to cancel. Add the inline TTY controls in the same slice: once the driver blocks, steering it from the same terminal is the difference between usable and irritating.
 
-Slice five-and-a-half is the skill. `.agents/skills/senawa/SKILL.md` teaches an ordinary Copilot session to drive the harness in natural language. It is one file, it works in both VS Code and the CLI, and it replaces the principal agent runtime entirely. Write it after the command surface has stopped moving, because a skill that documents commands that no longer exist is worse than no skill.
+Slice five-and-a-half is the skill. `.agents/skills/senawa/SKILL.md` teaches an ordinary Copilot session to drive the harness in natural language. It is one file, it works in both VS Code and the CLI, and it removes any need for a bespoke principal agent runtime. A reduced version already exists in `poc/orchestration/skill/senawa/SKILL.md` and has been driven live; expand it once the command surface has stopped moving, because a skill that documents commands that no longer exist is worse than no skill.
 
 Slice six adds scale. Worktrees, parallel groups, merge slots, `senawa plan revise` for additive re-planning, cost dashboards fed from `session.usage_checkpoint` and joined to the journal, and a formula that captures the whole workflow so `senawa work start` pours it in one step. Package the lot as a Copilot CLI plugin.
 
