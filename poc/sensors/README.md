@@ -1,17 +1,4 @@
----
-title: Sensors Probe
-description: Whether sensors can be schema-contracted extensions that normalize, cache, defang hostile output, and earn trust
-author: Senawa
-ms.date: 2026-08-02
-ms.topic: reference
-keywords:
-  - sensors
-  - extensions
-  - json schema
-  - evidence hygiene
-  - inferential trust
-estimated_reading_time: 5
----
+# Sensors Probe
 
 ## Goal
 

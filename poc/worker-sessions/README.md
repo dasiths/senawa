@@ -1,16 +1,4 @@
----
-title: Worker Sessions Probe
-description: Whether worker sessions resume with their own memory and stay out of the human's session history
-author: Senawa
-ms.date: 2026-08-02
-ms.topic: reference
-keywords:
-  - session resume
-  - session isolation
-  - rework loop
-  - copilot home
-estimated_reading_time: 3
----
+# Worker Sessions Probe
 
 ## Goal
 

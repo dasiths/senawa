@@ -1,18 +1,9 @@
----
-title: Senawa Proof-of-Concept Findings
-description: What the Senawa probes established about Copilot CLI hooks, sessions, models, extensions, workflows, the Copilot SDK, and beads
-author: Senawa
-ms.date: 2026-08-02
-ms.topic: reference
-keywords:
-  - proof of concept
-  - github copilot cli
-  - copilot sdk
-  - beads
-  - hooks
-  - backpressure
-estimated_reading_time: 25
----
+# Senawa Proof-of-Concept Findings
+
+> [!NOTE]
+> This evidence record is preserved in the WIP archive. Use the
+> [numbered design guides](../README.md) for current architecture. Claims here
+> remain authoritative for what the corresponding probes measured.
 
 ## Purpose
 
@@ -21,7 +12,7 @@ GitHub Copilot CLI, `@github/copilot-sdk`, and `bd` actually do. Most of those
 claims came from reading reference documentation. This document records what
 happened when each one was executed instead.
 
-Every result below was produced by a script in [`poc/`](../../poc/README.md).
+Every result below was produced by a script in [`poc/`](../../../poc/README.md).
 The probes are independent: no shared state, no ordering requirement. Re-running
 any of them reproduces the corresponding section. Each probe folder carries its
 own README with the goal, the limits, and a dated change log, so this document
@@ -92,7 +83,7 @@ about the SDK should be re-checked when the mirror catches up.
 
 ## Hook latency
 
-[`poc/hook-latency`](../../poc/hook-latency/README.md) builds the same
+[`poc/hook-latency`](../../../poc/hook-latency/README.md) builds the same
 `preToolUse` decision two ways and times a cold start, best of 20.
 
 | Invocation | Measured |
@@ -130,7 +121,7 @@ runs to find.
 
 ## Hooks really do enforce, and really do fail open
 
-[`poc/hook-enforcement`](../../poc/hook-enforcement/README.md) runs four real
+[`poc/hook-enforcement`](../../../poc/hook-enforcement/README.md) runs four real
 Copilot sessions against a scratch git repository, asking each to run
 `git commit --allow-empty -m HOOK_POC_MARKER`, and then counts commits.
 
@@ -164,7 +155,7 @@ try to work around the wrong obstacle.
 
 ## The SDK: two confirmations and one trap
 
-[`poc/sdk-surface`](../../poc/sdk-surface/README.md) reads the shipped `.d.ts`
+[`poc/sdk-surface`](../../../poc/sdk-surface/README.md) reads the shipped `.d.ts`
 rather than the README, then runs a live session.
 
 ### Hook surface, from the type declarations
@@ -218,7 +209,7 @@ currently red", which is the actionable backpressure the design is after.
 
 ## Sessions and the rework loop
 
-[`poc/worker-sessions`](../../poc/worker-sessions/README.md) is the cleanest
+[`poc/worker-sessions`](../../../poc/worker-sessions/README.md) is the cleanest
 result in this document.
 
 - `--session-id <uuid>` creates a session at a caller-chosen identifier.
@@ -240,7 +231,7 @@ significantly cheaper path to the per-task accounting the design wants.
 
 ## Model routing and subagent hooks
 
-[`poc/model-routing`](../../poc/model-routing/README.md) uses the OTel file
+[`poc/model-routing`](../../../poc/model-routing/README.md) uses the OTel file
 exporter as the measuring instrument, because asking a model which model it is
 produces confident fiction.
 
@@ -281,7 +272,7 @@ principal session. This is the highest-value unvalidated claim remaining.
 
 ## The beads contract
 
-[`poc/beads-graph`](../../poc/beads-graph/README.md) walks the whole
+[`poc/beads-graph`](../../../poc/beads-graph/README.md) walks the whole
 `@senawa/graph` surface in `contract.sh`.
 
 ### `bd init` blocks forever on a prompt
@@ -395,7 +386,7 @@ around two seconds. Two consequences:
 
 ## The sensor model
 
-[`poc/sensors`](../../poc/sensors/README.md) is the first probe that tests the
+[`poc/sensors`](../../../poc/sensors/README.md) is the first probe that tests the
 design's actual subject matter rather than its plumbing.
 
 ### Normalization holds across four tools

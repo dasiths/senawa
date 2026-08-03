@@ -1,18 +1,4 @@
----
-title: Senawa
-description: An orchestration harness for GitHub Copilot CLI where a deterministic driver runs a phased workflow, delegates each piece to role-scoped worker sessions, and refuses to let work advance until sensors say it is sound
-author: dasiths
-ms.date: 2026-08-02
-ms.topic: overview
-keywords:
-  - multi-agent orchestration
-  - github copilot cli
-  - harness engineering
-  - backpressure
-  - sensors
-  - beads
-estimated_reading_time: 4
----
+# Senawa
 
 ## Overview
 
@@ -22,21 +8,29 @@ Three ideas hold the design together.
 
 Durable workflow state lives outside the model, as a dependency graph in [beads](https://github.com/gastownhall/beads). Agents ask the graph what is workable rather than remembering a plan.
 
-Every agent talks to the system through one command, `senawa`. That single seam is where policy lives, which means guardrails are enforced rather than merely requested.
+Every agent-facing operation crosses the Senawa boundary. The principal agent
+uses the CLI. Hosted workers use typed Senawa tools, and subprocess workers use a
+restricted CLI wrapper. That single seam is where policy lives, which means
+guardrails are enforced rather than merely requested.
 
-Completion is granted, not claimed. A worker that finishes submits it; the harness runs sensors, evaluates gates, and either accepts the work or hands back actionable failures. This is the backpressure model described in [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/).
+Completion is granted, not claimed. A worker requests completion; the harness
+runs sensors, evaluates gates, and either accepts the work or hands back
+actionable failures. The driver remains authoritative even when a worker ends a
+turn without making the request. This is the backpressure model described in
+[Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/).
 
 Because everything routes through that one seam, the harness can also write down what happened. Every orchestration event lands in an append-only journal that no agent can author, and `senawa work report` renders it into a document you can read or attach to a pull request: which role did which task, on which model, how many times the harness sent the work back and why, what you decided, and what it cost.
 
 ## Three loops, and where you sit
 
-Senawa runs three nested loops. You are not in the fast one, and you do not wait for the slow one.
+Senawa runs three nested loops. Each outer layer sets a reference the layer
+inside it cannot redefine.
 
 | Loop | Who runs it | Period | You |
 |------|-------------|--------|-----|
+| Outer | you | hours to days | you own the request, declared phase decisions, and definition of better |
+| Middle | the run driver, deterministic | minutes to hours | steer it any time; it asks at declared approvals and escalations |
 | Inner | one worker, alone | seconds to minutes | absent by design; this is where the harness pushes back |
-| Middle | the run driver, deterministic | minutes to hours | steer it any time; it never waits for you |
-| Outer | you | hours to days | you own the phase boundaries |
 
 `senawa work start` drives the run and stops when it needs you, so the loop advances without anyone watching it. Cancel it and `senawa work resume` picks up where it stopped. When a principal agent starts it on your behalf it runs detached, which is what lets you keep asking questions and steering while the work continues.
 
@@ -50,21 +44,29 @@ run again on top of what it already produced.
 you   Add Entity Framework support for the persistence layer
 PA    [senawa workflow list] I can run standard-delivery or hotfix. Which?
 you   standard-delivery
-PA    [senawa work start] Define is ready: artifacts/define/v1.json
+PA    [senawa work start "<goal>" --workflow standard-delivery --detach] Started.
+PA    [senawa work wait --timeout 300] Define is ready: artifacts/define/v1.json
 you   looks right, go on
-PA    [senawa approve define] [senawa work resume] Research is ready: v1
+PA    [senawa approve define] [senawa work resume --detach]
+PA    [senawa work wait --timeout 300] Research is ready: v1
 you   approve
-PA    [senawa approve research] [senawa work resume] Plan is ready: v1, 6 tasks
+PA    [senawa approve research] [senawa work resume --detach]
+PA    [senawa work wait --timeout 300] Plan is ready: v1, 6 tasks
 you   no error handling on the adapter boundary
-PA    [senawa reject plan] [senawa work resume] Plan v2 adds two tasks for it
+PA    [senawa reject plan --reason "<reason>"] [senawa work resume --detach]
+PA    [senawa work wait --timeout 300] Plan v2 adds two tasks for it
 you   approve
-PA    [senawa approve plan] [senawa work resume] Implementing. 4 of 6 closed.
+PA    [senawa approve plan] [senawa work resume --detach] Implementing.
+you   how is it going?
+PA    [senawa work show] 4 of 6 closed.
       bd-a1b2 was refused once on unit-tests and passed on its second attempt.
-PA    Verify is ready: v1
-you   add a task for structured logging
-PA    [senawa plan revise] [senawa work resume] Done, verify re-ran: v2
+PA    [senawa work wait --timeout 300] Verify is ready: v1
+you   add the tasks in extra-tasks.json
+PA    [senawa plan revise --add extra-tasks.json] [senawa work resume --detach]
+PA    [senawa work wait --timeout 300] Done, verify re-ran: v2
 you   accept
-PA    [senawa approve verify] [senawa work resume] Run accepted. Report at report.md
+PA    [senawa approve verify] [senawa work resume --detach]
+PA    [senawa work wait --timeout 300] Run accepted. Report at report.md
 ```
 
 Everything in brackets is a `senawa` command. Rejecting a phase is the normal
@@ -72,35 +74,51 @@ case rather than an error path: your reason becomes the input to the next
 iteration, and every artifact version is kept, so you can see what changed and
 why.
 
+Additive plan revision currently consumes a schema-valid task file. Turning a
+free-form request into that file is not part of the principal agent contract.
+
 This is the shape [Addy Osmani calls loop engineering](https://addyosmani.com/blog/loop-engineering/): you design the system that prompts the agents rather than prompting them yourself. [Carlos Perez's follow-up](https://medium.com/intuitionmachine/from-loop-engineering-to-graph-engineering-d3ebeb08511c) argues that a single loop always fails, and that the fix is a graph of loops that check each other. Senawa takes that seriously without mistaking its task graph for a control graph: what keeps it honest is narrower than topology. Deterministic sensors that execute real code. A journal no agent can write. A frozen set of files the optimizer cannot weaken. And a human who decides what "better" means.
 
 ## Status
 
-Design stage. Nothing is implemented yet, but the risky assumptions have been tested rather than assumed. Eight probes in [poc/](poc/README.md) ran against the real Copilot CLI, the Copilot SDK, beads, and the proposed extension and workflow contracts. Six design assumptions did not survive, and throwaway prototypes now run the worker rework loop against a live model and the full phased workflow, including approvals, rejection and iteration, offline.
+Production implementation has not started, but the risky assumptions have been
+tested rather than assumed. Eight probes in [poc/](poc/README.md) exercise the
+real Copilot CLI, Copilot SDK, beads, and the proposed extension and workflow
+contracts. The principal-agent surface and per-task rework loop use live models.
+The full five-phase workflow, including approval, rejection, crash recovery, and
+additive revision, uses deterministic worker hosts.
 
-Start with [the design document](docs/design/multi-agent-orchestration.md), then read [the proof-of-concept findings](docs/design/poc-findings.md) before writing any code.
+Start with the [design index and reading order](docs/design/README.md). It moves
+from the system model and workflow lifecycle into agents, quality enforcement,
+runtime state, provenance, and implementation. Probe evidence and abandoned
+directions remain available in the clearly labeled WIP archive.
 
 ## How it fits together
 
 ```mermaid
 flowchart LR
     H[You] <--> PA[Copilot with the senawa skill]
-    PA -->|start, show, approve, reject, steer| S[senawa]
+    PA -->|relay start, show, approve, reject, steer| S[senawa]
+    H -->|direct commands| S
     S --> D{Run driver}
     D --> W[Researcher, planner, implementors, verifiers]
-    W -->|senawa CLI only| S
+    W -->|typed Senawa tools or restricted CLI| S
     S --> G[(beads graph)]
     S --> SEN[sensors and gates]
     S --> J[(journal)]
+    W --> T[(telemetry)]
+    G --> RPT[run report]
     J --> RPT[run report]
+    T --> RPT
+    RPT --> H
     RPT --> PA
 ```
 
-The chain is you, the principal agent, senawa, then the workers. Only the link to
-the principal agent is conversational. It relays your intent and explains what
-came back; it never decides what runs next, and it never reaches past `senawa` to
-the graph, the journal, or the workers. You can also drive `senawa` yourself, and
-the harness runs headless with no agent at all.
+The normal conversational path is you, the principal agent, Senawa, then the
+workers. The principal agent relays your intent and explains what came back; it
+never decides what runs next, and it never reaches past Senawa to the graph, the
+journal, or the workers. You can also drive Senawa directly, and the harness runs
+headless with no principal agent at all.
 
 ## Concepts
 
@@ -115,11 +133,11 @@ the harness runs headless with no agent at all.
 | Graph state | The dependency graph of phases, tasks, and gates, plus their orchestration metadata, held in beads |
 | Sensor | A tool that measures a property of the work and returns an assessment plus evidence. Builds, tests, linters, and reviewer agents |
 | Gate | A rule that consumes sensor readings and resists progress when they are red |
-| Anchor | A reading that cannot be argued with. Every gate needs at least one, or the harness is only agreeing with itself |
+| Anchor | A deterministic reading that cannot be argued with. Every blocking gate needs at least one, or the harness is only agreeing with itself |
 | Frozen set | Files no worker may write, such as the tests and the sensor definitions. Enforced, not requested |
 | Journal | An append-only log of every orchestration event, written by the harness rather than by any agent |
 | Run report | A rendered account of how the work was done, regenerated from the journal, the graph, and telemetry |
-| Work directory | Per-run scratch space under `.agents/.copilot-tracking/`, holding the frozen definitions, versioned artifacts, transcripts, and the journal |
+| Work directory | Durable per-run files under `.agents/.copilot-tracking/`, including frozen definitions, versioned artifacts, transcripts, evidence, and the journal |
 
 ## Prerequisites
 
@@ -144,7 +162,8 @@ Build arguments and image environment variables are not secret storage. Keep cre
 The tree below is the planned shape. Only `docs/` and `poc/` exist today.
 
 ```text
-docs/design/                 architecture, the design map, proof-of-concept findings, and roads not taken
+docs/design/                 numbered current-state guides and their reading index
+docs/design/wip/             archived monolith, proof-of-concept findings, and roads not taken
 poc/                         throwaway probes that validated the design against reality
 packages/                    core, graph, sensors, report, orchestrator, cli
 .senawa/workflows/           phase definitions: gates, approvals, iteration budgets
@@ -159,10 +178,11 @@ sensors.yaml                 sensor extensions, configured sensors, and gates
 
 ## Further reading
 
-* [Design documents map](docs/design/README.md)
-* [Multi-agent orchestration design](docs/design/multi-agent-orchestration.md)
-* [Proof-of-concept findings](docs/design/poc-findings.md)
-* [Roads not taken](docs/design/roads-not-taken.md)
+* [Design index and reading order](docs/design/README.md)
+* [System model](docs/design/01-system-model.md)
+* [Workflows and lifecycle](docs/design/02-workflows-and-lifecycle.md)
+* [Agents and interaction](docs/design/03-agents-and-interaction.md)
+* [WIP archive](docs/design/wip/README.md)
 * [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/)
 * [Refining Inferential Sensors in Coding Agent Harnesses](https://dasith.me/2026/06/20/refining-inferential-sensors/)
 * [Structured workflows for coding with AI agents using the Breadcrumb Protocol](https://dasith.me/2025/04/02/vibe-coding-breadcrumbs/)

@@ -1,16 +1,4 @@
----
-title: Hook Enforcement Probe
-description: Whether Copilot CLI hooks genuinely block a tool call, and how they fail
-author: Senawa
-ms.date: 2026-08-02
-ms.topic: reference
-keywords:
-  - hooks
-  - enforcement
-  - fail open
-  - backpressure
-estimated_reading_time: 3
----
+# Hook Enforcement Probe
 
 ## Goal
 

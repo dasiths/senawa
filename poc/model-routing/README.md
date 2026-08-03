@@ -1,16 +1,4 @@
----
-title: Model Routing Probe
-description: Whether per-task model selection survives delegation, and what telemetry actually reports
-author: Senawa
-ms.date: 2026-08-02
-ms.topic: reference
-keywords:
-  - model routing
-  - subagent hooks
-  - opentelemetry
-  - reasoning effort
-estimated_reading_time: 3
----
+# Model Routing Probe
 
 ## Goal
 

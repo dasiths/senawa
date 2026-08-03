@@ -1,86 +1,88 @@
----
-title: Senawa Design Documents
-description: What each document in the design folder owns, and which one to update when understanding changes
-author: Senawa
-ms.date: 2026-08-02
-ms.topic: reference
-keywords:
-  - design
-  - architecture
-  - documentation map
-estimated_reading_time: 4
----
+# Senawa Design
 
-## Overview
+The design is split by reader question. Numbered guides describe the current
+architecture. The [WIP archive](wip/README.md) preserves the monolith, probe
+findings, and abandoned approaches that led to it.
 
-Four documents carry the design, and they are deliberately separated by what
-kind of claim they hold. Keeping that separation is what stops the architecture
-document from quietly absorbing guesses, and what stops the evidence record from
-turning into a second design.
+Current guidance wins when the archive disagrees with it. Probe findings remain
+the authority for what was measured.
 
-| Document                                                       | Owns                                                                 | Update it when                                          |
-|----------------------------------------------------------------|----------------------------------------------------------------------|---------------------------------------------------------|
-| [multi-agent-orchestration.md](multi-agent-orchestration.md)   | The architecture: how the harness works, the contracts, and the decisions behind them | The intended solution shape changes                     |
-| [poc-findings.md](poc-findings.md)                             | What execution established, including the assumptions that did not survive | A probe produces a new measurement                      |
-| [roads-not-taken.md](roads-not-taken.md)                       | The approaches we tried and dropped, and what would bring each one back | An approach leaves the architecture document            |
-| This file                                                      | The map of the folder                                                | A document is added, split, or retired                  |
+## Recommended reading order
 
-## multi-agent-orchestration.md
+Read the guides in order on a first pass. The sequence moves from mental model to
+behavioral contracts, then into implementation internals.
 
-The architecture document. It describes the current solution shape: a
-deterministic run driver, role-scoped worker sessions, beads as durable graph
-state, the `senawa` CLI as the single policy seam, sensor extensions and their
-JSON Schema contracts, gates and their expected results, declarative workflows
-with re-enterable phases and human approvals, the journal and run report, and the
-failure modes worth designing against.
+| Order | Guide | Question it answers | Concepts introduced |
+|-------|-------|---------------------|---------------------|
+| 1 | [System Model](01-system-model.md) | What is Senawa, and who controls it? | Nested loops, principal agent, driver, workers, bounded autonomy |
+| 2 | [Workflows and Lifecycle](02-workflows-and-lifecycle.md) | How does a request become restartable work? | Workflows, phases, artifacts, iteration, approval, resume |
+| 3 | [Agents and Interaction](03-agents-and-interaction.md) | What may each session do, and how does the human participate? | Principal agent, worker roles, command authority, interaction modes, isolation |
+| 4 | [Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md) | How does Senawa decide that work is sound? | Sensor extensions, assessments, gates, backpressure, frozen set, policy layers |
+| 5 | [Runtime and State](05-runtime-and-state.md) | Where does live state reside, and how does execution recover? | Beads graph, driver transitions, leases, reconciliation, cache, parallelism |
+| 6 | [Provenance and Observability](06-provenance-and-observability.md) | How can a run be audited after its sessions are gone? | Work directory, journal, report, traces, costs, rendering safety |
+| 7 | [Implementation and Operations](07-implementation-and-operations.md) | How should the system be built and operated? | Packages, CLI groups, build slices, substrate limits, open decisions |
 
-Read "How it works" first for the operating model, then the sections that go
-deep on whichever part you are building.
+## Reading paths
 
-Claims that were checked by execution are marked as measured, and every measured
-claim has a corresponding entry in the findings document. Claims that rest on
-documentation alone should say so, because the probes have already contradicted
-the reference more than once.
+### Product and architecture review
 
-## poc-findings.md
+Read [System Model](01-system-model.md),
+[Workflows and Lifecycle](02-workflows-and-lifecycle.md), and
+[Agents and Interaction](03-agents-and-interaction.md). These establish the
+human experience, authority boundaries, and lifecycle without requiring beads or
+SDK implementation detail.
 
-The evidence record. It states each claim that was tested, the verdict, and what
-the result forces the design to change. It is organised by subject rather than
-by chronology, and it ends with the questions that remain open and how to settle
-them.
+### Quality and policy implementation
 
-This document should stay honest about its own limits. When a probe uses a fake
-host or a deterministic stand-in, the finding says so, because "confirmed
-offline" and "confirmed against a live model" are different kinds of evidence.
+Read [Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md), then
+the command authority and containment sections in
+[Agents and Interaction](03-agents-and-interaction.md).
 
-## roads-not-taken.md
+### Runtime implementation
 
-The discard pile. Every approach that was in the architecture document and is no
-longer there gets an entry: what it was, why it was attractive, what removed it,
-and what evidence would justify revisiting it.
+Read [Runtime and State](05-runtime-and-state.md), followed by
+[Provenance and Observability](06-provenance-and-observability.md) and
+[Implementation and Operations](07-implementation-and-operations.md).
 
-It exists because an undocumented rejection is not a decision, it is a gap that
-refills. Without the record, a discarded idea returns looking new and costs the
-same argument a second time.
+### Decision archaeology
 
-The rule that keeps it from contradicting the architecture: an approach lives in
-exactly one of the two documents. When something is removed from the design, it
-moves here in the same change. If it ever returns, its entry here is deleted.
+Start with the archived [POC Findings](wip/poc-findings.md), then use
+[Roads Not Taken](wip/roads-not-taken.md) and the
+[original monolith](wip/multi-agent-orchestration.md) for rationale and context.
 
-## Relationship to the probes
+## Concept ownership
 
-Each folder under [`poc/`](../../poc/README.md) owns one subject and carries its
-own README with a goal, its limits, and a dated change log. The findings document
-is the cross-cutting summary; the probe READMEs are the local history.
+Each concept has one primary home. Other guides link to it rather than redefining
+it.
 
-When new research changes our understanding, the order of operations is:
+| Concept | Primary guide |
+|---------|---------------|
+| Nested control loops and authority | [System Model](01-system-model.md) |
+| Workflow schema, phase iteration, and artifacts | [Workflows and Lifecycle](02-workflows-and-lifecycle.md) |
+| Principal agent, workers, sessions, and human interaction | [Agents and Interaction](03-agents-and-interaction.md) |
+| Sensors, gate language, backpressure, and enforcement | [Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md) |
+| Beads mapping, state machine, driver, resume, and concurrency | [Runtime and State](05-runtime-and-state.md) |
+| Journal, report, traces, and cost attribution | [Provenance and Observability](06-provenance-and-observability.md) |
+| Package boundaries, CLI grouping, build plan, and open questions | [Implementation and Operations](07-implementation-and-operations.md) |
+| Measurements and invalidated assumptions | [WIP POC Findings](wip/poc-findings.md) |
+| Discarded approaches and revival conditions | [WIP Roads Not Taken](wip/roads-not-taken.md) |
 
-1. Amend the probe that owns the subject and add a dated change log entry.
-2. Record the measurement in the findings document.
-3. Update the architecture document so it describes the shape we now intend.
-4. If the change removed an approach, move it to the roads-not-taken document
-   rather than deleting it.
+## Documentation rules
 
-Doing it in that order keeps the architecture document a statement of intent
-backed by evidence, rather than a wish list that the probes are expected to
-justify later.
+* Current-state behavior belongs in exactly one numbered guide.
+* Cross-cutting summaries link to the owning guide instead of copying contracts.
+* Measurements belong in the probe README and archived findings record.
+* Displaced rationale belongs in Roads Not Taken.
+* The WIP monolith is preserved and does not receive new current-state design.
+* A behavior described as measured links to the evidence that established it.
+
+## Relationship to probes
+
+Each folder under [poc/](../../poc/README.md) owns one subject and includes its
+goal, limits, reproduction command, and dated changes. When evidence changes the
+architecture:
+
+1. Update the owning probe.
+2. Record the result in the archived findings document.
+3. Update the numbered guide that owns the concept.
+4. Move superseded rationale to Roads Not Taken.

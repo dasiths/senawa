@@ -1,16 +1,4 @@
----
-title: Beads Graph Probe
-description: Whether the bd JSON contract and its concurrency behaviour support senawa's graph adapter
-author: Senawa
-ms.date: 2026-08-02
-ms.topic: reference
-keywords:
-  - beads
-  - graph state
-  - concurrency
-  - json contract
-estimated_reading_time: 4
----
+# Beads Graph Probe
 
 ## Goal
 

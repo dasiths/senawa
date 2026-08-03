@@ -1,15 +1,4 @@
----
-title: Hook Latency Probe
-description: Whether a bundled Node CLI starts fast enough to run as a preToolUse hook on every tool call
-author: Senawa
-ms.date: 2026-08-02
-ms.topic: reference
-keywords:
-  - hook latency
-  - esbuild
-  - preToolUse
-estimated_reading_time: 3
----
+# Hook Latency Probe
 
 ## Goal
 

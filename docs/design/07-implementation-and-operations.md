@@ -1,0 +1,178 @@
+# Implementation and Operations
+
+## Current status
+
+Senawa is in design and proof-of-concept stage. The production packages described
+here do not exist yet. The probes establish the risky substrate assumptions,
+including hook behavior, session resume, beads contracts, sensor extensions,
+workflow iteration, crash recovery, state authority, and the principal agent
+surface.
+
+The archived [POC findings](wip/poc-findings.md) distinguish live-model evidence,
+offline deterministic simulation, and documentation-only claims.
+
+## Technology choice
+
+Implement the core in TypeScript on Node.js 22 or later.
+
+The choice is based on one toolchain across the CLI, orchestrator, graph adapter,
+sensor schemas, and report renderer; acceptable bundled hook startup; and rapid
+iteration on schema-heavy contracts that are still changing.
+
+Go remains the strongest alternative for a future hook shim or stable rewrite.
+Beads being written in Go does not justify linking its internals. Senawa consumes
+the documented `bd --json` contract with `BD_JSON_ENVELOPE=1`.
+
+## Package boundaries
+
+| Package | Responsibility |
+|---------|----------------|
+| `@senawa/core` | Pure schemas, gate evaluation, fingerprints, state transitions, event contracts, and brief composition |
+| `@senawa/graph` | Beads subprocess adapter, envelope validation, read cache, and serialized writes |
+| `@senawa/sensors` | Extension loading, execution, normalization, caching, and evidence hygiene |
+| `@senawa/report` | Journal writer, report renderer, graph diagrams, and output escaping |
+| `@senawa/orchestrator` | Driver loop, session hosting, reconciliation, lease, steering, and TTY controls |
+| `senawa` | Full command-line interface |
+| `senawa-hook` | Minimal hook entry point with no graph or heavy dependencies |
+
+The sensor executable boundary remains language-agnostic. Project-specific checks
+may be shell, Python, Go, or any executable that implements the declared JSON
+contract.
+
+## Build and tooling
+
+Use a pnpm workspace with Vitest, Zod, execa, esbuild, and Biome.
+
+Build two bundles:
+
+| Bundle | Budget | Contents |
+|--------|--------|----------|
+| `senawa-hook` | Approximately 40 ms startup | Hook payload parsing and local policy decision |
+| `senawa` | Approximately 70 ms startup | Full CLI and orchestration dependencies |
+
+ESM bundles that include CommonJS dependencies require the esbuild
+`createRequire` banner. CI must import both built bundles so runtime-only dynamic
+require failures do not escape the build.
+
+If hook startup later becomes material, keep the orchestrator warm behind a Unix
+socket and replace the shell hook with a small compiled client. Do not rewrite
+the orchestration system to solve a measured hot-path problem.
+
+## CLI groups
+
+The command surface is grouped by responsibility:
+
+| Group | Representative commands | Primary caller |
+|-------|-------------------------|----------------|
+| Run lifecycle | `work start`, `resume`, `show`, `log`, `wait`, `pause`, `finish` | Human or principal agent |
+| Human decisions | `approve`, `reject`, `answer`, `steer`, `task abort`, `work budget` | Human, sometimes relayed |
+| Phase inspection | `phase show`, `phase brief` | Human, principal agent, driver |
+| Worker contract | `task done`, `ask`, `discover`, `note` | Worker wrapper |
+| Driver internals | `task next`, `dispatch`, `gate check`, `plan import` | Driver or debugging |
+| Sensor management | `sensor list`, `info`, `run`, `audit` | Human, CI, driver |
+| Workflow management | `workflow list`, `info`, `validate`, `render` | Human or principal agent |
+| Diagnostics | `doctor`, `prime`, `work report` | All trusted operational callers |
+
+The complete argument grammar belongs in generated CLI reference once the
+implementation begins. Design documents define authority and behavior, not a
+second parser specification.
+
+## Build order
+
+### Slice 0: workspace and contracts
+
+Create the pnpm workspace, pure schemas, tests, and two bundles. Add startup and
+hostile-output regression tests immediately.
+
+### Slice 1: quality seam
+
+Implement `init`, sensor discovery, `sensor run`, `gate check`, and `doctor`.
+This yields one command that answers whether work satisfies declared policy,
+without any agents.
+
+### Slice 2: enforcement
+
+Add fast post-edit feedback and pre-tool policy interception. Verify that hooks
+return an empty response or denial, never `allow`, and measure timeout behavior.
+
+### Slice 3: graph and journal
+
+Add the beads adapter, work creation, atomic claim, completion requests, bounded
+status, and append-only events. Drive one task manually and prove it cannot close
+while its gate is red.
+
+### Slice 4: phases and subprocess workers
+
+Add role profiles, versioned phase artifacts, plan import and validation,
+approval, rejection, and session resume. Use the subprocess topology first
+because exact commands and transcripts are easy to inspect.
+
+### Slice 5: hosted driver
+
+Move workers to SDK-hosted independent sessions. Add the lease, intent-outcome
+reconciliation, human question relay, steering inbox, and inline terminal
+controls.
+
+### Slice 6: conversational surface and scale
+
+Expand the Senawa skill, add worktrees, parallel groups, merge slots, additive
+planning, cost dashboards, and reusable workflow formulas.
+
+### Slice 7: control quality
+
+Add sensor stability audits, counter-metrics, review cadence, and operational
+alerts for hook latency and sensor drift.
+
+## Required validations
+
+Each implementation slice should preserve these executable properties:
+
+* Invalid configuration fails before any model dispatch.
+* A worker cannot resolve `bd` or mutate graph state directly.
+* A red gate prevents task closure and returns actionable findings.
+* Deleting the projection cache does not change resumed state.
+* A crash between intent and outcome reconciles without duplicate work.
+* Closed tasks survive additive plan revision.
+* Worker sessions never appear in the human session store.
+* A principal agent uses only Senawa and never chooses a transition.
+* Every run can be reconstructed from graph state, journal, and artifacts.
+
+## Known substrate constraints
+
+| Constraint | Design response |
+|------------|-----------------|
+| Command hook timeout fails open | Keep policy hooks fast and instrument latency |
+| SDK has no stop hooks | Driver owns the explicit retry loop |
+| Model `Auto` overrides profile model | Pin a model for every dispatched session |
+| Some models reject reasoning effort | Resolve hints through a capability table |
+| Beads reads take hundreds of milliseconds | Cache reads and never call beads from hooks |
+| `bd list` hides closed work by default | Reconstruct with `--all` and filter events |
+| `bd batch` cannot write metadata | Keep metadata updates as explicit calls |
+| Worktrees share one beads database | Serialize graph writes through Senawa |
+| Session picker has no hidden-session flag | Use isolated `COPILOT_HOME` or `baseDirectory` |
+| Inferential output can vary | Start advisory and promote only for measured scopes |
+
+## Open decisions
+
+The following decisions need production evidence rather than more abstract
+design:
+
+1. Whether worker autopilot can trigger the gate without trusting
+   `task_complete` as proof of completion
+2. Whether verification is best represented as a sensor, a phase node, or both
+3. Whether any plan revision should retract work rather than append or abort
+4. Whether run-wide spend should supplement per-task and per-phase limits
+5. Whether the tracking directory belongs on the main branch or an archive branch
+6. Whether long journals require segmentation while preserving append-only order
+7. Which review cadence prevents comprehension debt on large frontiers
+8. Which counter-metrics remain cheap, stable, and independent of primary gates
+
+Decisions removed from the current architecture remain in the archived
+[Roads Not Taken](wip/roads-not-taken.md). They should return to current guidance
+only when new evidence changes their constraints.
+
+## Evidence and history
+
+The [WIP archive](wip/README.md) preserves the original monolithic design, probe
+findings, and discarded approaches. Use it to audit why a decision exists. Use
+the numbered guides for the design currently intended for implementation.

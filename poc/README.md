@@ -1,27 +1,16 @@
----
-title: Senawa Proof-of-Concept Probes
-description: Executable probes for the assumptions behind Senawa's orchestration design, one folder per subject
-author: Senawa
-ms.date: 2026-08-02
-ms.topic: reference
-keywords:
-  - proof of concept
-  - multi-agent orchestration
-  - sensors
-  - workflows
-estimated_reading_time: 4
----
+# Senawa Proof-of-Concept Probes
 
 ## Overview
 
 Throwaway code with a durable purpose. Each folder answers one question from
-[the design](../docs/design/multi-agent-orchestration.md) with evidence you can
+[the design](../docs/design/README.md) with evidence you can
 reproduce, and every folder carries a README stating its goal, what it proved,
 what it did not prove, and a dated change log.
 
 Findings are consolidated in
-[poc-findings.md](../docs/design/poc-findings.md). That document is the
-cross-cutting record; these folders are the machinery that produced it.
+[the archived POC findings](../docs/design/wip/poc-findings.md). That document
+is the cross-cutting evidence record; these folders are the machinery that
+produced it. Current architecture lives in the numbered design guides.
 
 | Probe                                            | Question                                                                        | Cost         |
 |--------------------------------------------------|---------------------------------------------------------------------------------|--------------|

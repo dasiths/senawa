@@ -1,17 +1,4 @@
----
-title: Orchestration Probe
-description: Whether the harness can own the task loop and run a declarative workflow from durable state
-author: Senawa
-ms.date: 2026-08-02
-ms.topic: reference
-keywords:
-  - orchestration
-  - workflow engine
-  - backpressure
-  - beads
-  - rework loop
-estimated_reading_time: 5
----
+# Orchestration Probe
 
 ## Goal
 

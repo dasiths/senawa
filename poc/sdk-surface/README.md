@@ -1,16 +1,4 @@
----
-title: SDK Surface Probe
-description: Which control points the Copilot SDK exposes, and whether they compose safely
-author: Senawa
-ms.date: 2026-08-02
-ms.topic: reference
-keywords:
-  - copilot sdk
-  - hooks
-  - permissions
-  - tools
-estimated_reading_time: 3
----
+# SDK Surface Probe
 
 ## Goal
 

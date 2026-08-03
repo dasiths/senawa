@@ -1,0 +1,283 @@
+# Workflows and Lifecycle
+
+## Purpose
+
+A workflow is the static contract that Senawa compiles into a live beads graph.
+It defines phases, dependencies, roles, artifacts, gates, approval points, and
+finite loop policies. The workflow never becomes a second mutable source of
+runtime state.
+
+## Workflow contract
+
+```yaml
+apiVersion: senawa.dev/workflow/v1
+kind: Workflow
+metadata:
+  name: standard-delivery
+spec:
+  inputSchema: ./schemas/work-request.schema.json
+  completesWhen: verify-accepted
+  phases:
+    - id: define
+      executor:
+        kind: agent
+        role: definer
+        resumeAcrossIterations: true
+        output:
+          path: artifacts/definition.json
+          schema: ./schemas/definition.schema.json
+      exit:
+        gate: definition-accepted
+        approval: human
+      iteration:
+        max: 5
+        onUpstreamChange: flag
+
+    - id: research
+      dependsOn: [define]
+      executor:
+        kind: agent
+        role: researcher
+        resumeAcrossIterations: true
+        input:
+          definition: phases.define.output
+        output:
+          path: artifacts/research.json
+          schema: ./schemas/research.schema.json
+      exit:
+        gate: research-accepted
+        approval: human
+      iteration:
+        max: 5
+        onUpstreamChange: flag
+
+    - id: plan
+      dependsOn: [research]
+      executor:
+        kind: agent
+        role: planner
+        resumeAcrossIterations: true
+        output:
+          path: artifacts/plan.json
+          schema: ./schemas/plan.schema.json
+      actions:
+        - kind: import-plan
+          source: phases.plan.output
+      exit:
+        gate: plan-accepted
+        approval: human
+      iteration:
+        max: 5
+        onUpstreamChange: flag
+
+    - id: implement
+      dependsOn: [plan]
+      executor:
+        kind: task-frontier
+        role: implementor
+        selector:
+          phase: implement
+        concurrency: auto
+        reentrant: true
+      loop:
+        until: all-selected-tasks-closed
+        each:
+          gate: task-done
+          rework:
+            resumeSession: true
+            maxAttempts: 3
+          dispatch:
+            maxFailures: 2
+          onExhausted: escalate
+      iteration:
+        max: 10
+        onUpstreamChange: independent
+
+    - id: verify
+      dependsOn: [implement]
+      executor:
+        kind: agent
+        role: verifier
+        resumeAcrossIterations: true
+        output:
+          path: artifacts/verification.json
+          schema: ./schemas/verification.schema.json
+      exit:
+        gate: work-done
+        approval: human
+      iteration:
+        max: 10
+        onUpstreamChange: independent
+```
+
+The first version uses a closed executor vocabulary:
+
+| Executor | Behavior |
+|----------|----------|
+| `agent` | Produces one schema-constrained phase artifact |
+| `task-frontier` | Claims and completes dependency-aware implementation tasks |
+| `sensor-only` | Evaluates a gate without an agent artifact |
+| `human` | Waits for an explicit human decision |
+| `foreach` | Applies a bounded operation to a schema-valid collection |
+
+There is no general expression language and no arbitrary `while`. Every loop
+names its termination condition and finite limits.
+
+## Starting a run
+
+```bash
+senawa work start "Refactor the ingest pipeline" \
+  --workflow standard-delivery \
+  --input request.json
+```
+
+From the caller's perspective, startup is one transaction:
+
+1. Resolve the named workflow or repository default.
+2. Validate extensions, sensors, gates, roles, schemas, references, dependencies,
+   selectors, and finite limits.
+3. Merge the goal and optional input, then validate the workflow input contract.
+4. Snapshot the resolved definitions and record one content fingerprint.
+5. Create the epic and static phase nodes with dependency edges.
+6. Record `work.started` and `workflow.instantiated`.
+7. Acquire the driver lease and begin advancing the graph.
+
+An active run reads its snapshot. Later source edits are drift, not silent changes
+to the current rules.
+
+## Phase lifecycle
+
+A phase can be entered more than once:
+
+```text
+pending -> running -> awaiting_approval -> accepted
+                             |
+                             +-> rejected -> running (iteration n+1)
+```
+
+`senawa reject <phase> --reason "..."` starts the next iteration. The reason is
+both journalled and passed into the resumed phase session. Rejection is a normal
+refinement mechanism, not an error path.
+
+### Versioned artifacts
+
+Artifacts are validated before persistence and never overwritten:
+
+```text
+artifacts/
+  plan/
+    v1.json
+    v2.json
+    current -> v2.json
+```
+
+Each phase iteration records the exact upstream versions it consumed. Session
+memory provides continuity, but the artifact remains the source of truth.
+
+### Upstream changes
+
+| Policy | Behavior | Typical use |
+|--------|----------|-------------|
+| `cascade` | Reopen downstream phases automatically | A changed premise invalidates all later work |
+| `flag` | Keep downstream phases closed but mark them stale | Human review should decide whether rerun is needed |
+| `independent` | Do not infer invalidation | Additive implementation and verification |
+
+### Additive planning
+
+`senawa plan revise --add <file>` appends new tasks without reopening completed
+ones. Stable task keys make revision idempotent. The implementation phase becomes
+ready again when its selector finds open work, and structural plan validation runs
+against the enlarged graph.
+
+Task retraction is intentionally separate: `senawa task abort <id> --reason` ends
+one task while preserving why it was removed.
+
+## Artifact contracts
+
+Agent phase output uses the same structured submission rule as inferential sensor
+output. The phase receives one submission tool backed by its JSON Schema. Senawa
+persists only schema-valid arguments.
+
+Artifacts consumed by Senawa itself have Senawa-owned schemas. The plan importer,
+for example, expects stable task identity and enough information to enforce
+scope:
+
+```json
+{
+  "tasks": [
+    {
+      "key": "split-parse-batch",
+      "title": "Split parse_batch into stages",
+      "dependsOn": ["extract-reader"],
+      "paths": ["src/ingest/parse.py"],
+      "acceptance": ["parse_batch delegates to named stage functions"],
+      "role": "implementor",
+      "execution": {
+        "model": "claude-sonnet-4.6",
+        "effort": "high",
+        "group": "ingest-adapters"
+      }
+    }
+  ]
+}
+```
+
+| Field | Runtime use |
+|-------|-------------|
+| `key` | Stable identity across plan revisions |
+| `dependsOn` | Beads dependency edges |
+| `paths` | Enforced write scope |
+| `acceptance` | Task brief and completion contract |
+| `role` | Worker profile selection |
+| `execution` | Portable dispatch hints |
+
+A repository may extend a Senawa-owned schema with `allOf`; it may not redefine
+the shape consumed by the importer.
+
+## Phase briefs
+
+`senawa phase brief <phase>` composes two parts:
+
+| Part | Contents | Lifetime |
+|------|----------|----------|
+| `guidelines` | Harness framing, rules, and output contract | Stable across iterations |
+| `turn` | Request, input paths, current versions, and rejection context | Specific to one iteration |
+
+Under the SDK topology, guidelines extend the system message and the turn becomes
+the user prompt. Under the subprocess topology, both are concatenated on the
+first turn and only the turn is sent on resume.
+
+Repository-specific persona and emphasis belong in
+`.github/agents/<role>.agent.md`. Harness scaffolding stays in Senawa code so it
+cannot drift away from the submission tool and schema Senawa generates.
+
+## Approval semantics
+
+A phase may declare one of two approval channels:
+
+| Value | Meaning |
+|-------|---------|
+| `human` | Direct approval or an explicit decision relayed by the principal agent |
+| `human-direct` | Input must come from the driver's own terminal |
+
+A sensor gate and a human approval are separate conditions. The sensor gate can
+be recomputed from readings. Approval is a durable event represented by a beads
+human gate. A crash between those conditions does not lose either result.
+
+## Exit and resume
+
+| Exit | Meaning | Resume |
+|------|---------|--------|
+| `0` | Completion condition accepted | Not needed |
+| `2` | Human decision or exhausted budget | Yes |
+| `130` | Operator interruption | Yes |
+| `1` | Unexpected error | Yes, after correction |
+
+`senawa work resume` is the only recovery command. It clears a deliberate pause
+when present, reconciles incomplete intent records, and resumes driving. The
+caller does not need to know why the process stopped.
+
+## Next reading
+
+Continue with [Agents and Interaction](03-agents-and-interaction.md) for the
+principal agent, workers, session isolation, and command authority.

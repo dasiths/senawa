@@ -1,16 +1,9 @@
----
-title: Roads Not Taken
-description: Approaches this design tried and abandoned, why each one went, what replaced it, and what evidence would bring it back
-author: Senawa
-ms.date: 2026-08-02
-ms.topic: concept
-keywords:
-  - design history
-  - rejected approaches
-  - architecture decisions
-  - rationale
-estimated_reading_time: 12
----
+# Roads Not Taken
+
+> [!NOTE]
+> This is decision history, not a list of current alternatives. Start with the
+> [numbered design guides](../README.md), then return here before reviving a
+> discarded approach.
 
 ## Purpose
 

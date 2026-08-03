@@ -1,20 +1,9 @@
----
-title: Senawa Multi-Agent Orchestration Design
-description: Architecture for a deterministic run driver that orchestrates research, planning, implementation, and verification worker sessions on GitHub Copilot CLI, with beads as graph state, a sensor/gate CLI as the backpressure seam, and an append-only journal as the provenance record
-author: Senawa
-ms.date: 2026-08-02
-ms.topic: concept
-keywords:
-  - multi-agent orchestration
-  - github copilot cli
-  - beads
-  - harness engineering
-  - backpressure
-  - sensors
-  - gates
-  - workflow provenance
-estimated_reading_time: 45
----
+# Senawa Multi-Agent Orchestration Design
+
+> [!WARNING]
+> This is the original working design, preserved for rationale and history. It
+> is not current implementation guidance. Start with the
+> [numbered design guides](../README.md).
 
 ## Purpose
 
@@ -208,49 +197,60 @@ writes, which is what the lease protects.
 
 ### The loops
 
-Three loops, and only the middle one changed when the driver moved into the
-foreground. The human is absent from the inner loop by construction and reaches
-the middle one two different ways, which the diagram distinguishes because
-confusing them is what makes the design look either more or less autonomous than
-it is.
+Three loops, nested. The outer loop owns the middle one, and the middle one owns
+the inner one, which is why the diagram draws them inside each other rather than
+side by side. Only the middle changed when the driver moved into the foreground.
+
+Read it from the outside in. Each layer decides something the layer inside it is
+not allowed to question, and hands down a narrower job than it was given.
 
 ```mermaid
 flowchart TB
-    subgraph outer["Outer loop: you, or the principal agent relaying, hours to days"]
+    subgraph outer["Outer loop, you or the principal agent relaying, hours to days"]
         REQ[Request, workflow, sensors, gates] --> START[senawa work start]
-        NEEDS[/Exit 2, naming the phase and the artifact path/] --> YOU{You decide}
+        NEEDS[/Exit 2, naming the phase and the artifact/] --> YOU{You decide}
         YOU -->|senawa approve| RESUME[senawa work resume]
         YOU -->|senawa reject, with a reason| RESUME
         REPORT[Run report] --> YOU
         YOU --> REQ
+
+        subgraph middle["Middle loop, the run driver, minutes to hours"]
+            ADV{Next legal transition} -->|phase or task ready| DISPATCH[Dispatch or resume a session]
+            ADV -->|everything closed| ACCEPTED[Work accepted]
+            VERDICT[Gate verdict] --> ADV
+            ADV --> JOURNAL[(journal + beads)]
+            STEER[[Steering inbox]] -. read between transitions .-> ADV
+
+            subgraph inner["Inner loop, one worker alone, seconds to minutes"]
+                EDIT[Edit, fast sensors on postToolUse] --> SUBMIT[Submit through senawa]
+                SUBMIT --> GATE[Gate: deterministic, then inferential]
+                GATE -->|refused with findings| EDIT
+            end
+        end
     end
 
-    subgraph middle["Middle loop: the run driver, minutes to hours"]
-        START --> ADV{Next legal transition}
-        RESUME --> ADV
-        ADV -->|phase or task ready| DISPATCH[Dispatch or resume a session]
-        ADV -->|a human owes the run something| NEEDS
-        ADV -->|everything closed| ACCEPTED[Work accepted]
-        VERDICT[Gate verdict] --> ADV
-    end
-
-    subgraph inner["Inner loop: one worker alone, seconds to minutes"]
-        DISPATCH --> EDIT[Edit, fast sensors on postToolUse]
-        EDIT --> SUBMIT[Submit through senawa]
-        SUBMIT --> GATE[Gate: deterministic, then inferential]
-        GATE -->|refused with findings| EDIT
-    end
-
-    GATE -->|accepted| VERDICT
+    START --> ADV
+    RESUME --> ADV
+    ADV -->|a human owes the run something| NEEDS
     ACCEPTED --> REPORT
-    ADV --> JOURNAL[(journal + beads)]
-    STEER[[Steering inbox]] -. read between transitions .-> ADV
+    DISPATCH --> EDIT
+    GATE -->|accepted| VERDICT
     YOU -. senawa steer, pause, abort, at any time .-> STEER
     JOURNAL -. senawa work show, log .-> YOU
 ```
 
-The two entry points are the solid path and the dotted one, and they differ in
-whether the run is waiting for you.
+| Loop   | Owner              | Decides                                   | Human involvement                                        |
+|--------|--------------------|-------------------------------------------|----------------------------------------------------------|
+| Outer  | You                | What is worth doing, and what better means | Owns it entirely                                        |
+| Middle | The run driver     | What runs next, and whether it is accepted | Stops for declared approvals; steering reaches it without stopping it |
+| Inner  | One worker session | How to do the assigned task               | None by design; this is where refusals bite              |
+
+The nesting is what makes the human's absence from the inner loop safe rather
+than reckless. You are not missing from it by oversight: the layer above it is
+deterministic, and the layer above that is you.
+
+Crossing a boundary happens two ways, and they differ in whether the run is
+waiting for you.
 
 **Approval stops the run.** The driver reaches a phase whose exit gate declares
 `approval: human`, writes the beads gate, and exits 2 naming the phase and the
@@ -261,12 +261,6 @@ rather than around the whole run, which is what makes rejection cheap.
 **Steering does not.** A steer lands in an inbox the driver reads between
 transitions, so it changes what happens next without the run ever having stopped
 to ask. You are not in the inner loop, and adding a steer does not put you there.
-
-| Loop   | Owner              | Decides                                   | Human involvement                                        |
-|--------|--------------------|-------------------------------------------|----------------------------------------------------------|
-| Inner  | One worker session | How to do the assigned task               | None by design; this is where refusals bite              |
-| Middle | The run driver     | What runs next and whether it is accepted | Stops for declared approvals; steering reaches it without stopping it |
-| Outer  | The human          | What is worth doing and what better means | Owns it entirely                                         |
 
 ### Where the principal agent sits
 
@@ -1838,9 +1832,9 @@ There is a trap in reading the second one from inside this design, and it is wor
 
 | Loop | Owner | Period | Human involvement |
 |------|-------|--------|-------------------|
-| **Inner**: edit, fast sensors on `postToolUse`, `senawa task done`, gate refuses with findings, fix, repeat | The worker session, alone | seconds to minutes | **Deliberately none.** This is where backpressure lives |
-| **Middle**: claim, dispatch, evaluate the gate, apply steering, choose the next transition | The run driver, deterministic | minutes to hours | Steering only; the loop never waits for a human |
 | **Outer**: request, research, plan, execute, review | The human | hours to days | Owns the phase boundaries |
+| **Middle**: claim, dispatch, evaluate the gate, apply steering, choose the next transition | The run driver, deterministic | minutes to hours | Steering only; the loop never waits for a human |
+| **Inner**: edit, fast sensors on `postToolUse`, `senawa task done`, gate refuses with findings, fix, repeat | The worker session, alone | seconds to minutes | **Deliberately none.** This is where backpressure lives |
 
 Osmani's `/goal` primitive — *"it keeps working across turns until a verifiable stopping condition holds, and after every turn a separate small model checks whether you are done, so the agent that wrote the code isnt the one grading it"* — is precisely the inner loop plus the `task-done` gate. His "keep the maker away from the checker" is the implementor and verifier split. Those parts of this design need no revision; they were converging on the same shape.
 
