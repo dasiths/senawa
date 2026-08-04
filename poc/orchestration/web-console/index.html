@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Senawa Run Console</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <strong class="brand">SENAWA</strong>
+      <span class="product">Run console</span>
+    </div>
+    <div class="run-state">
+      <span id="connection" class="connection">Connecting</span>
+      <span id="run-status" class="status-pill">Loading</span>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="overview" aria-label="Run overview">
+      <div class="section-label">Active workflow</div>
+      <h1 id="workflow-name">Loading run</h1>
+      <dl class="metrics">
+        <div><dt>Phases</dt><dd id="phase-progress">-</dd></div>
+        <div><dt>Active</dt><dd id="active-phase">-</dd></div>
+        <div><dt>Event cursor</dt><dd id="event-cursor">0</dd></div>
+      </dl>
+      <div class="legend" aria-label="Graph legend">
+        <span><i class="dot running"></i>Running</span>
+        <span><i class="dot waiting"></i>Needs you</span>
+        <span><i class="dot accepted"></i>Accepted</span>
+        <span><i class="dot pending"></i>Pending</span>
+      </div>
+    </aside>
+
+    <section class="main-stage">
+      <div class="section-heading">
+        <div>
+          <div class="section-label">Workflow graph</div>
+          <h2>Execution path</h2>
+        </div>
+        <span id="needs-human" class="needs-human" hidden>Decision required</span>
+      </div>
+      <div id="graph" class="graph" aria-label="Workflow phase graph"></div>
+
+      <div class="divider"></div>
+
+      <section class="console-section" aria-labelledby="console-title">
+        <div class="console-heading">
+          <div>
+            <div class="section-label">Agent output</div>
+            <h2 id="console-title">Select a phase</h2>
+          </div>
+          <div class="console-meta">
+            <span id="stream-state">Disconnected</span>
+            <span id="line-count">0 records</span>
+          </div>
+        </div>
+        <div id="terminal" class="terminal" role="log" aria-live="polite"></div>
+      </section>
+    </section>
+
+    <aside class="controls" aria-label="Run controls">
+      <div class="section-label">Selected phase</div>
+      <h2 id="selected-name">None</h2>
+      <p id="selected-detail" class="selected-detail">Choose a graph node to inspect its session.</p>
+
+      <div id="approval-controls" class="control-group" hidden>
+        <label for="reject-reason">Decision note</label>
+        <textarea id="reject-reason" rows="4" placeholder="Why should this phase run again?"></textarea>
+        <div class="button-row">
+          <button id="approve" class="primary" type="button">Approve</button>
+          <button id="reject" class="danger" type="button">Reject</button>
+        </div>
+      </div>
+
+      <div id="steer-controls" class="control-group" hidden>
+        <label for="steer-instruction">Steering instruction</label>
+        <textarea id="steer-instruction" rows="4" placeholder="Applied at the next safe transition"></textarea>
+        <button id="steer" class="primary" type="button">Send steer</button>
+      </div>
+
+      <div class="control-group audit">
+        <div class="section-label">Last command</div>
+        <p id="last-command">No browser command sent.</p>
+      </div>
+    </aside>
+  </main>
+</body>
+</html>

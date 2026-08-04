@@ -105,6 +105,77 @@ failed too. One bad flag consumed an entire task budget and reported it as the
 worker's fault, which is why dispatch failures need their own event and their own
 budget.
 
+### The browser run console, offline
+
+The question is whether a local HTTP application can show an active workflow,
+replay and then tail each worker's complete output, and relay human commands
+without requiring a terminal attachment or a WebSocket protocol.
+
+`web-console.mjs` starts the five-phase workflow with deterministic child
+processes. It captures stdout and stderr separately, assigns a monotonic sequence
+to every record, appends the record to a per-phase JSONL file before broadcasting
+it, and exposes two Server-Sent Event streams: run changes and selected-phase
+output. The browser uses ordinary POST requests for structured commands.
+
+The automated probe established:
+
+* The graph projection contained five phase nodes and four dependency edges.
+* Clicking a phase could replay all six existing output records and continue
+  with live records from the same stream.
+* Disconnecting after output sequence 2 and reconnecting from its cursor resumed
+  at sequence 3 with no duplicate or gap.
+* Stdout, stderr, and browser control records remained distinguishable, and the
+  define and research streams did not leak into one another.
+* Browser approval accepted define and started research. Steering was accepted
+  only while research was running and was recorded in that phase's stream.
+* An arbitrary `shell` command was rejected, as was a command carrying a foreign
+  Origin.
+* The interface rendered without pane overlap at 1440 pixels and without
+  page-level horizontal overflow at 390 pixels. The workflow graph alone scrolls
+  horizontally on the narrow layout.
+
+SSE plus command POSTs is sufficient for the first implementation. The data is
+one-way except for discrete human commands, SSE already reconnects, and
+`Last-Event-ID` maps directly to the durable sequence. A WebSocket adds connection
+state and a second command protocol without solving a requirement this probe
+found.
+
+The production output source differs by worker topology. Subprocess workers emit
+Copilot JSONL on stdout and diagnostics on stderr. SDK-hosted workers expose typed
+session events, optional streaming deltas, and an experimental cursor-based event
+log with catch-up and long-poll reads. Senawa should normalize both into its own
+durable per-session output records rather than expose terminal escape sequences
+or make the browser depend on an experimental SDK cursor.
+
+The command handler in this probe is a deterministic stand-in. A production HTTP
+adapter must invoke the same authority-checked core operations as the CLI and
+driver. If it implements phase transitions itself, it becomes the second control
+path the architecture forbids.
+
+The blocking lifecycle determines where the server lives. The driver exits when
+a human decision is due, which is exactly when the browser must remain available.
+The first production shape should therefore be a separate loopback process,
+`senawa web <work>`, rather than a listener owned only by the driver process. It
+can start or resume the driver detached, survive its exit, and keep serving the
+same run.
+
+| Production concern | Required shape |
+|--------------------|----------------|
+| Run graph | A JSON projection of phase and task nodes, dependency edges, state, role, session ID, and available human actions |
+| Output capture | Drain every process or SDK event source regardless of viewers, normalize records, persist first, then fan out |
+| Replay | One monotonic cursor per session output stream; bounded SSE clients reconnect from durable storage |
+| Commands | HTTP schema maps to explicit core operations such as approve, reject, steer, pause, abort, and resume; never accept a shell string |
+| Driver lifecycle | A web supervisor survives exit 2 and starts or resumes the detached driver after a decision |
+| Authority | The same state validation, lease checks, journal events, and approval channel used by CLI calls |
+| Security | Loopback binding, one-time capability bootstrap, SameSite cookie, Origin checks, no CORS, output escaping, and no remote mode by default |
+| Graph rendering | Use a maintained DAG visualization library for dynamic task frontiers; the hand-built linear graph is POC-only |
+| Slow viewers | Never let an HTTP client backpressure worker pipes; cap live queues and make durable replay the recovery path |
+| Retention | Rotate or segment large output logs and preserve them with the run report according to the tracking policy |
+
+Raw output is sensitive. It can contain source, prompts, tool arguments, paths,
+and imperfectly redacted process diagnostics. Remote binding, shared access, and
+TLS are separate decisions rather than flags the local POC should imply are safe.
+
 ## What it does not prove
 
 * Real agent phases submitting schema-valid artifacts, since the workflow hosts
@@ -114,6 +185,13 @@ budget.
   separate command invocations
 * That a real Copilot session resumes usefully across many phase iterations,
   which is where background compaction eventually bites
+* Live Copilot subprocess JSONL or SDK events flowing through the browser stream
+* Output replay after the web server itself restarts
+* Backpressure and memory behavior under high-volume output or many viewers
+* Production authentication, TLS, remote access, and multi-user authorization;
+  the probe binds to loopback and uses one capability token
+* That the HTTP command adapter calls real Senawa command handlers instead of a
+  parallel state transition implementation
 
 ## Layout
 
@@ -125,6 +203,9 @@ budget.
 | `skill/senawa/`  | The skill under test, copied into the scratch repository                 |
 | `senawa.mjs`     | Throwaway per-task harness: graph, sensors, gate, journal, run report     |
 | `end-to-end.sh`  | Live run: constructed worker environment, real dispatch, refusal, rework  |
+| `web-console.mjs` | Loopback HTTP server, durable output capture, SSE replay, and command adapter |
+| `web-console/`   | Responsive workflow graph, agent output viewer, and contextual controls  |
+| `web-console-test.mjs` | Offline replay, reconnect, isolation, authorization, and command assertions |
 | `workflows/`     | A valid five-phase workflow and a deliberately invalid one               |
 | `schemas/`       | Work request input schema                                                |
 | `extra-tasks.json` | The tasks added after verification, to prove revision is additive      |
@@ -135,6 +216,8 @@ budget.
 
 ```bash
 bash poc/orchestration/run.sh          # offline, slow because it uses a real beads database
+node poc/orchestration/web-console-test.mjs # offline, no AI credits
+node poc/orchestration/web-console.mjs # opens a local run console until interrupted
 bash poc/orchestration/pa-driven.sh    # spends AI credits
 bash poc/orchestration/end-to-end.sh   # spends AI credits
 ```
@@ -149,3 +232,4 @@ bash poc/orchestration/end-to-end.sh   # spends AI credits
 | 2026-08-02 | Replaced the scheduler model with a blocking driver. `work start` now drives to completion and exits 2 when a human is needed; `work resume` reconciles and continues. Added phase approvals, rejection with iterations that resume the phase session, versioned artifacts, additive `plan revise`, human acceptance as the completion condition, and an injected mid-dispatch crash proving intent-before-side-effect journalling is enough to recover. |
 | 2026-08-02 | Moved runtime state into beads, where the design always said it belonged. Phase status, iteration, session and version now live in bead metadata, transitions write `senawa:<state>` labels, and approvals are real `human` gates. Two bugs surfaced immediately: `bd list` hides closed issues, so finished tasks vanished from the frontier and `plan revise` would have recreated them, and reopening a phase without resolving its outstanding gate left the phase bead permanently blocked. |
 | 2026-08-02 | Added `pa-driven.sh` and the skill it tests. A real Copilot session, given only the skill, listed workflows, started a run, reported what the run needed, approved a phase and resumed, without ever calling `bd`. Also established that repository skills are discovered from `.github/skills/`. |
+| 2026-08-04 | Added the offline browser run console. Proved graph observation, durable per-phase stdout/stderr replay followed by live SSE, cursor reconnect without gaps, responsive desktop/mobile layout, browser approval and steering, and rejection of arbitrary or cross-origin commands. Left real Senawa command-handler integration and live Copilot event normalization explicitly unproven. |

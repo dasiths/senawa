@@ -143,4 +143,7 @@ jq -e 'keys == ["epic","fingerprint","input","phaseBeads","workflow"]' "$RUN/wor
   || fail "work.json holds more than run identity: $(jq -r 'keys|join(",")' "$RUN/work.json")"
 echo "   identity: workflow, epic, fingerprint, input, phase bead ids"
 
+step "browser run console"
+node "$HERE/web-console-test.mjs" || fail "browser run console probe failed"
+
 step "workflow engine passed"

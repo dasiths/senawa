@@ -43,6 +43,31 @@ Copy this section for each idea and update it in place as the idea matures.
 
 ## Decisions
 
+### 2026-08-04: Browser run console
+
+* Status: `probing`
+* Owner: `docs/design/03-agents-and-interaction.md`
+* Question: Can a local HTTP application reconstruct and stream an active run,
+    show per-agent output history, and dispatch authority-checked human commands
+    without becoming a second orchestration control path?
+* Context: Browser interaction would make workflow observation, approvals,
+    rejection, and steering available without attaching to the driver's terminal.
+* Options: Server-Sent Events plus command POSTs, WebSockets, or periodic polling
+* Evidence obtained: The offline probe rendered five graph nodes, replayed and
+    tailed isolated stdout/stderr streams, resumed from sequence 3 without gaps,
+    accepted browser approval and steering, and refused arbitrary and
+    cross-origin commands. Desktop and mobile browser layouts were exercised.
+* Evidence needed: Route HTTP through real Senawa command handlers, normalize one
+    live subprocess and one SDK session, then test restart and output load.
+* POC: `poc/orchestration/README.md#the-browser-run-console-offline`
+* Outcome: HTTP is feasible. Use SSE for run and output streams plus structured
+    command POSTs for the first implementation; no current requirement needs a
+    WebSocket. Because the driver exits when human input is due, a separate
+    loopback `senawa web <work>` supervisor must survive that exit and resume the
+    detached driver after decisions. Keep the decision probing until this
+    supervisor is mounted over the real single control path.
+* Promotion: `pending`
+
 ### 2026-08-04: Worker autopilot completion
 
 * Status: `proposed`

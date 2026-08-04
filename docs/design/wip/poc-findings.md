@@ -80,6 +80,7 @@ about the SDK should be re-checked when the mirror catches up.
 | 38 | A repository skill is discovered without configuration | **Confirmed.** `.github/skills/<name>/SKILL.md` was listed by `copilot skill list` with no setup |
 | 39 | A Copilot session given only the skill can drive the harness | **Confirmed with a live model.** It listed workflows, started a run, read `needs`, approved a phase and resumed |
 | 40 | The skill's boundary holds in practice | **Observed once.** No direct `bd` calls across three turns, but this is instruction-only and one clean run is weak evidence |
+| 41 | A browser can observe and control an active run over HTTP | **Confirmed offline at the transport and UI layers.** Five graph nodes updated live, per-phase stdout/stderr replay reconnected without gaps, and structured approval and steering worked. Real Senawa command-handler integration remains unvalidated |
 
 ## Hook latency
 
@@ -732,6 +733,46 @@ elsewhere in this document: a worker ignored its brief in one end-to-end run.
 One clean observation is weak evidence that the boundary holds under pressure,
 which is exactly why the authority-carrying commands do not rest on it.
 
+## Browser run console
+
+`poc/orchestration/web-console-test.mjs` tests a loopback HTTP application over
+the five-phase workflow with deterministic child processes, so it spends no AI
+credits. Every process record is appended to a phase-specific JSONL file before
+it is offered to an SSE subscriber.
+
+The graph projection exposed five nodes and four dependency edges. Define emitted
+six output records across stdout and stderr. The client disconnected after
+sequence 2 and resumed at sequence 3 with no gap or duplicate, then retrieved the
+same six records through the history endpoint. Approving define started research,
+and research output did not appear in the define stream. Steering a running phase
+produced a control record. An arbitrary command and a cross-origin command were
+both refused.
+
+The browser itself was exercised at 1440 by 900 and 390 by 844. The desktop panes
+did not overlap. The mobile page had no horizontal overflow; the workflow graph
+alone scrolled. Clicking Approve moved define to accepted and research to running,
+then clicking research showed its live output.
+
+The transport conclusion is narrow and useful. Server-Sent Events plus structured
+command POSTs cover the first implementation: output and run changes are
+server-to-client streams, while approvals, rejection, and steering are discrete
+requests. SSE reconnect semantics align with the durable sequence. No measured
+requirement needs a WebSocket yet.
+
+This does not establish the control boundary. The probe's command handler owns a
+fake in-memory run. Production must route HTTP commands through the same
+authority-checked core operations used by the CLI and driver, not implement a
+second transition function. It also does not test live Copilot output. The
+subprocess path can normalize `--output-format json` events and stderr. The SDK
+path can normalize typed events and streaming deltas, but its cursor-based event
+log API is experimental, so Senawa should persist its own stable output records.
+
+The blocking driver cannot be the only owner of the HTTP listener. It exits when
+approval is due, which would remove the UI at the moment it is needed. A separate
+loopback `senawa web <work>` process should survive driver exits, serve durable
+state and output, and start or resume the detached driver through the same core
+operations after a browser decision.
+
 ## Design changes from the probes
 
 1. Split the binary. `senawa-hook` (minimal, ~33 ms) for hooks; `senawa` (full)
@@ -818,6 +859,9 @@ which is exactly why the authority-carrying commands do not rest on it.
 | Does a resumed session still help after several phase iterations? | The probe's fake sessions never compact | Iterate one real phase five times and compare cost and quality against a fresh brief |
 | Can one task-frontier safely run several workers and integrate them? | The orchestration probe uses concurrency 1 | Add worktrees, parallel claims, and a merge-slot integration probe |
 | Are the inline TTY controls usable while output is streaming? | The probe issues commands separately rather than from the driver's stdin | Build the readline loop and steer a live run from the same terminal |
+| Does the browser adapter preserve the single Senawa control path? | The HTTP probe uses a fake in-memory command handler | Mount the adapter over the real core command handlers and assert identical journal and graph effects for CLI and HTTP calls |
+| Can live Copilot output be normalized and replayed through the browser? | The browser probe uses deterministic child output | Feed one `copilot -p --output-format json` worker and one streaming SDK session into the same output store |
+| Does web output remain bounded under load and restart? | The probe has one viewer, small logs, and no server restart | Stress multiple viewers and large output, restart the server, then resume from persisted cursors |
 
 ## Reproducing
 
@@ -826,6 +870,7 @@ bash poc/hook-latency/run.sh          # offline
 bash poc/beads-graph/run.sh           # offline, slow (bd init)
 bash poc/sensors/run.sh               # offline
 bash poc/orchestration/run.sh         # offline, slow (real beads database)
+node poc/orchestration/web-console-test.mjs # offline
 
 bash poc/hook-enforcement/run.sh      # spends AI credits
 bash poc/worker-sessions/run.sh       # spends AI credits
