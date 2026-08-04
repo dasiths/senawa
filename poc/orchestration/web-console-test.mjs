@@ -96,6 +96,18 @@ const api = async (path, options = {}) => fetch(`${info.base}${path}`, {
 });
 
 try {
+  const contender = spawn(process.execPath, [join(HERE, "web-console.mjs")], {
+    cwd: HERE,
+    env: { ...process.env, SENAWA_WEB_STATE: stateDir },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let contenderError = "";
+  contender.stderr.setEncoding("utf8");
+  contender.stderr.on("data", (chunk) => { contenderError += chunk; });
+  const contenderCode = await new Promise((resolveExit) => contender.once("exit", resolveExit));
+  check(contenderCode === 73, `second supervisor exited ${contenderCode}, expected 73`);
+  check(contenderError.includes("active web supervisor"), "second supervisor did not identify the conflict");
+
   const unauthorized = await fetch(`${info.base}/api/snapshot`);
   check(unauthorized.status === 401, "unauthenticated read was accepted");
 
@@ -170,11 +182,30 @@ try {
   check(events.every((event, index) => index === 0 || event.seq > events[index - 1].seq),
     "run event stream was not monotonic");
 
+  response = await api("/api/commands", {
+    method: "POST",
+    headers: { Origin: origin, "Content-Type": "application/json" },
+    body: JSON.stringify({ command: "end", reason: "operator ended the stuck run" }),
+  });
+  check(response.status === 202, "browser graceful end was refused");
+  snapshot = await response.json().then((body) => body.snapshot);
+  check(snapshot.status === "ended" && snapshot.needs === null, "browser end did not reach terminal state");
+  check(snapshot.phases.every((phase) => ["accepted", "ended"].includes(phase.status)),
+    "browser end left a non-terminal phase");
+
+  response = await api("/api/commands", {
+    method: "POST",
+    headers: { Origin: origin, "Content-Type": "application/json" },
+    body: JSON.stringify({ command: "steer", phase: "research", instruction: "too late" }),
+  });
+  check(response.status === 409, "ended run accepted a new phase command");
+
   console.log("web console feasibility probe passed");
   console.log(`  graph: ${snapshot.phases.length} phases, ${snapshot.edges.length} edges`);
   console.log(`  define output: ${defineHistory.length} durable records with stdout and stderr`);
   console.log(`  reconnect: resumed at output sequence ${cursor + 1} without gaps`);
-  console.log("  commands: approve and steer accepted; arbitrary and cross-origin commands refused");
+  console.log("  singleton: second supervisor for the run refused with exit 73");
+  console.log("  commands: approve, steer, and graceful end accepted; invalid commands refused");
 } finally {
   server.kill("SIGTERM");
   await new Promise((resolveExit) => server.once("exit", resolveExit));

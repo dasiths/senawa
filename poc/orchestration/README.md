@@ -130,6 +130,10 @@ The automated probe established:
   only while research was running and was recorded in that phase's stream.
 * An arbitrary `shell` command was rejected, as was a command carrying a foreign
   Origin.
+* A second web supervisor for the same run was refused with a dedicated conflict
+  exit instead of binding another listener.
+* Browser graceful end moved the run and every unfinished phase to terminal
+  state, retained output history, and refused later steering.
 * The interface rendered without pane overlap at 1440 pixels and without
   page-level horizontal overflow at 390 pixels. The workflow graph alone scrolls
   horizontally on the narrow layout.
@@ -192,6 +196,41 @@ TLS are separate decisions rather than flags the local POC should imply are safe
   the probe binds to loopback and uses one capability token
 * That the HTTP command adapter calls real Senawa command handlers instead of a
   parallel state transition implementation
+* Forced takeover of a live or stale driver lease after the shutdown grace period
+
+### Single active run and graceful end, offline
+
+Version 1 deliberately permits one unfinished run per repository and one active
+worker turn within it. The probe now exercises both boundaries.
+
+`work start` creates a repository-level active-run pointer before graph or
+session work begins. A second start while define is awaiting approval is refused
+and names the existing run. The pointer survives driver exit 2 because the run
+is still active. The driver itself still has a separate per-run lease in the
+production design; the two guards prevent different races.
+
+Startup is fail-safe around the singleton. An injected failure immediately after
+acquisition, before `work.json` became durable, released the pointer. Once run
+identity exists, startup failure must be recovered or ended rather than silently
+releasing ownership around a partially created graph.
+
+The task journal is scanned after the full workflow. Its peak unmatched
+`task.dispatching` count is exactly one, proving the current dispatcher never has
+two worker turns in flight. Retained phase sessions do not count as active; they
+are parked context resumed by the singleton dispatcher.
+
+`work end --reason "..."` resolves open human gates, marks unfinished phases and
+tasks terminal, defers the epic, appends `work.ended`, writes a terminal
+projection with no pending action, and releases the active-run pointer last. The
+next `work start` archives the ended work directory and starts successfully in
+the same beads repository. This test found and fixed a real bug: `bd init` was
+being run for every work item, so a replacement run failed even after the
+singleton had been released. Beads initialization is now repository-once.
+
+The production emergency path, `work end --force`, remains unproven until the
+real driver lease exists. It must request graceful shutdown, wait a bounded
+period, and take over only after the lease is stale or the process is confirmed
+gone. Deleting the active pointer directly is not a supported recovery.
 
 ## Layout
 
@@ -233,3 +272,4 @@ bash poc/orchestration/end-to-end.sh   # spends AI credits
 | 2026-08-02 | Moved runtime state into beads, where the design always said it belonged. Phase status, iteration, session and version now live in bead metadata, transitions write `senawa:<state>` labels, and approvals are real `human` gates. Two bugs surfaced immediately: `bd list` hides closed issues, so finished tasks vanished from the frontier and `plan revise` would have recreated them, and reopening a phase without resolving its outstanding gate left the phase bead permanently blocked. |
 | 2026-08-02 | Added `pa-driven.sh` and the skill it tests. A real Copilot session, given only the skill, listed workflows, started a run, reported what the run needed, approved a phase and resumed, without ever calling `bd`. Also established that repository skills are discovered from `.github/skills/`. |
 | 2026-08-04 | Added the offline browser run console. Proved graph observation, durable per-phase stdout/stderr replay followed by live SSE, cursor reconnect without gaps, responsive desktop/mobile layout, browser approval and steering, and rejection of arbitrary or cross-origin commands. Left real Senawa command-handler integration and live Copilot event normalization explicitly unproven. |
+| 2026-08-04 | Restricted version 1 to one unfinished run per repository and one active worker turn. Added the active-run pointer, singleton web-supervisor lease, graceful `work end`, terminal `ended` projection, archival before replacement, and browser end control. Proved a competing run and supervisor are refused and that an ended run no longer blocks a replacement. The replacement test found that `bd init` must run once per repository rather than once per work item. |

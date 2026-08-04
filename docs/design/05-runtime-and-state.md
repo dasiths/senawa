@@ -119,6 +119,34 @@ identity, host, and heartbeat.
 The first interrupt stops new dispatches and lets in-flight work finish. A second
 interrupt aborts the current turn. Both leave resumable state.
 
+## Version 1 singleton
+
+Version 1 supports one unfinished Senawa run per repository and one active
+Senawa-created worker turn within that run. These are separate invariants:
+
+| Guard | Scope | Lifetime |
+|-------|-------|----------|
+| Repository active-run pointer | Prevents a second `work start` for a different work item | From successful start until `finished` or `ended` is durable |
+| Driver lease | Prevents two drivers advancing the active run | While one driver process is alive or until its lease is stale |
+| Web-supervisor lease | Prevents two HTTP supervisors serving the same run | While `senawa web` owns that run |
+| Dispatch limit | Prevents a second worker turn starting | Until the current turn records an outcome |
+
+Retained phase sessions do not count as active workers. They are parked context
+that only one dispatcher may resume. Browser viewers and the human's principal
+agent session also do not count.
+
+`work start` refuses while the repository pointer names an unfinished run and
+returns that run's status and the valid next actions: show, resume, open the web
+console, or end. The pointer is released only after terminal graph state, the
+journal event, and the projection are durable.
+
+If normal shutdown fails, `work end --force --reason "..."` first asks the live
+driver to stop, waits a bounded grace period, then takes over only when its lease
+is stale or the process is confirmed gone. It reconciles in-flight intent,
+records the affected worker as aborted or dispatch-failed, marks the run ended,
+and releases the pointer last. A raw lock-file deletion is not a supported
+recovery path.
+
 ## Beads adapter contract
 
 `@senawa/graph` is the only component that invokes `bd` and follows these rules:
@@ -173,9 +201,14 @@ minute-scale model turns, but it makes graph access unsuitable for per-tool hook
 The projection is capped at roughly 1,500 tokens. Larger content is represented
 by a path.
 
-## Parallel execution
+## Future parallel execution
 
-Parallel implementors require isolation at three boundaries:
+Worktrees, multiple active runs, and parallel worker turns are explicitly
+deferred. They require run selection in every command and browser route,
+filesystem isolation, integration policy, per-run leases, resource scheduling,
+and evidence that output and graph updates remain correctly attributed.
+
+The eventual design will require isolation at three boundaries:
 
 | Boundary | Mechanism |
 |----------|-----------|

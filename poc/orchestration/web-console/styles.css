@@ -150,6 +150,7 @@ button.primary, button.danger { min-height: 36px; padding: 8px 12px; border: 0; 
 button.primary { background: var(--green); }
 button.danger { background: var(--red); }
 #steer { width: 100%; margin-top: 10px; }
+.full-width { width: 100%; margin-top: 10px; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 .audit p { color: var(--muted); font-family: "Cascadia Code", "Menlo", monospace; font-size: 11px; line-height: 1.5; }
 

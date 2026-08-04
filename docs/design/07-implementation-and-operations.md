@@ -64,7 +64,7 @@ The command surface is grouped by responsibility:
 
 | Group | Representative commands | Primary caller |
 |-------|-------------------------|----------------|
-| Run lifecycle | `work start`, `resume`, `show`, `log`, `wait`, `pause`, `finish` | Human or principal agent |
+| Run lifecycle | `work start`, `resume`, `show`, `log`, `wait`, `pause`, `end`, `finish` | Human or principal agent |
 | Human decisions | `approve`, `reject`, `answer`, `steer`, `task abort`, `work budget` | Human, sometimes relayed |
 | Phase inspection | `phase show`, `phase brief` | Human, principal agent, driver |
 | Worker contract | `task done`, `ask`, `discover`, `note` | Worker wrapper |
@@ -111,12 +111,15 @@ because exact commands and transcripts are easy to inspect.
 
 Move workers to SDK-hosted independent sessions. Add the lease, intent-outcome
 reconciliation, human question relay, steering inbox, and inline terminal
-controls.
+controls. Enforce one active run and one active worker turn. Add graceful end
+before any background execution so a stranded run can never permanently block
+the repository.
 
 ### Slice 6: conversational surface and scale
 
-Expand the Senawa skill, add worktrees, parallel groups, merge slots, additive
-planning, cost dashboards, and reusable workflow formulas.
+Expand the Senawa skill, additive planning, cost dashboards, and reusable
+workflow formulas. Keep worktrees, parallel workers, and multiple active runs
+deferred until separate probes establish isolation and integration policy.
 
 ### Slice 7: control quality
 

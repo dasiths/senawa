@@ -77,7 +77,7 @@ spec:
         role: implementor
         selector:
           phase: implement
-        concurrency: auto
+        concurrency: 1
         reentrant: true
       loop:
         until: all-selected-tasks-closed
@@ -276,6 +276,30 @@ human gate. A crash between those conditions does not lose either result.
 `senawa work resume` is the only recovery command. It clears a deliberate pause
 when present, reconciles incomplete intent records, and resumes driving. The
 caller does not need to know why the process stopped.
+
+## Ending a run
+
+`senawa work end --reason "..."` deliberately abandons an unfinished run. It is
+not an error reset and does not erase evidence.
+
+The operation stops dispatch, lets or aborts the current worker according to the
+normal shutdown grace period, resolves open human gates, marks unfinished phases
+and tasks terminal, writes `work.ended`, updates the status projection, and
+releases the repository active-run pointer last. The next run archives the ended
+work directory before creating its own.
+
+The terminal states have distinct meanings:
+
+| State | Meaning | May resume |
+|-------|---------|------------|
+| `paused` | Deliberately stopped before completion | Yes |
+| `ended` | Deliberately abandoned with a recorded reason | No |
+| `finished` | Workflow completion condition accepted | Not needed |
+
+`work end --force` is an emergency takeover for a driver that does not stop
+within the grace period or whose lease is stale. It must still write terminal
+state and preserve the work directory before releasing the singleton. It never
+means deleting a lock file without reconciling the run.
 
 ## Next reading
 

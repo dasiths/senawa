@@ -43,6 +43,30 @@ Copy this section for each idea and update it in place as the idea matures.
 
 ## Decisions
 
+### 2026-08-04: Single active run and worker
+
+* Status: `accepted`
+* Owner: `docs/design/05-runtime-and-state.md`
+* Question: Can v1 enforce one unfinished run per repository and one active
+    Senawa-created worker turn within that run?
+* Context: Multiple runs and workers require worktree isolation, integration
+    policy, cross-run selection, and more complex browser supervision that v1
+    does not need.
+* Options: Repository singleton, per-run singleton only, or unrestricted runs
+* Evidence obtained: A competing work start and second web supervisor were
+    refused, peak in-flight worker turns was one, graceful end reached durable
+    terminal state and released the pointer, and a replacement run started in
+    the same beads repository.
+* Evidence still needed: Forced takeover of an unresponsive driver requires the
+    production driver lease and remains a separate edge to probe.
+* POC: `poc/orchestration/README.md#single-active-run-and-graceful-end-offline`
+* Outcome: Version 1 supports one unfinished run per repository, one driver and
+    web supervisor for that run, and one active worker turn. Retained sessions
+    are inactive context. Normal end is durable and auditable; raw lock deletion
+    is unsupported.
+* Promotion: `docs/design/05-runtime-and-state.md#version-1-singleton` and
+    `docs/design/02-workflows-and-lifecycle.md#ending-a-run`
+
 ### 2026-08-04: Browser run console
 
 * Status: `probing`

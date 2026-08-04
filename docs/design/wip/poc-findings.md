@@ -81,6 +81,7 @@ about the SDK should be re-checked when the mirror catches up.
 | 39 | A Copilot session given only the skill can drive the harness | **Confirmed with a live model.** It listed workflows, started a run, read `needs`, approved a phase and resumed |
 | 40 | The skill's boundary holds in practice | **Observed once.** No direct `bd` calls across three turns, but this is instruction-only and one clean run is weak evidence |
 | 41 | A browser can observe and control an active run over HTTP | **Confirmed offline at the transport and UI layers.** Five graph nodes updated live, per-phase stdout/stderr replay reconnected without gaps, and structured approval and steering worked. Real Senawa command-handler integration remains unvalidated |
+| 42 | Version 1 can enforce one active run and worker without trapping the repository | **Confirmed offline.** Competing starts and web supervisors were refused, peak in-flight worker turns was one, graceful end recorded terminal state and released the singleton, and a replacement run started in the same repository |
 
 ## Hook latency
 
@@ -773,6 +774,29 @@ loopback `senawa web <work>` process should survive driver exits, serve durable
 state and output, and start or resume the detached driver through the same core
 operations after a browser decision.
 
+## Single active run and graceful end
+
+The orchestration probe now holds a repository active-run pointer from start
+until either `work.finished` or `work.ended` is durable. A competing `work start`
+was refused while the first run waited for approval. A second HTTP supervisor
+against the same run state exited 73. Across the completed workflow, the peak
+number of unmatched dispatch intents was one.
+
+Graceful `work end --reason` resolved the waiting human gate, terminalized
+unfinished phases and tasks, deferred the epic, recorded `work.ended`, cleared
+the pending human action, and released the repository pointer last. The next
+start archived the ended work directory and reached define approval normally.
+An injected startup failure after singleton acquisition but before durable run
+identity also released the pointer, so an initialization error cannot strand the
+repository.
+The replacement attempt initially exposed a defect: calling `bd init` for every
+work item makes a valid second run fail because the database already exists. The
+engine now initializes beads once per repository.
+
+This establishes normal abandonment, not emergency takeover. The production
+`--force` path still needs the real driver lease, bounded shutdown, stale-process
+confirmation, and reconciliation before it may release the singleton.
+
 ## Design changes from the probes
 
 1. Split the binary. `senawa-hook` (minimal, ~33 ms) for hooks; `senawa` (full)
@@ -862,6 +886,7 @@ operations after a browser decision.
 | Does the browser adapter preserve the single Senawa control path? | The HTTP probe uses a fake in-memory command handler | Mount the adapter over the real core command handlers and assert identical journal and graph effects for CLI and HTTP calls |
 | Can live Copilot output be normalized and replayed through the browser? | The browser probe uses deterministic child output | Feed one `copilot -p --output-format json` worker and one streaming SDK session into the same output store |
 | Does web output remain bounded under load and restart? | The probe has one viewer, small logs, and no server restart | Stress multiple viewers and large output, restart the server, then resume from persisted cursors |
+| Can forced end safely recover from an unresponsive driver? | The POC has no production driver lease or concurrent SDK turn to take over | Implement bounded shutdown, stale-lease takeover, intent reconciliation, and terminal journalling, then kill the driver during a live turn |
 
 ## Reproducing
 

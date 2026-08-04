@@ -51,7 +51,7 @@ is pinned to their own task, so a completion request cannot target another task.
 | Command group | Driver | Human | Worker | Principal agent |
 |---------------|--------|-------|--------|-----------------|
 | `task next`, `dispatch`, `gate check`, `plan import` | Yes | Debug only | No | No |
-| `work start`, `resume`, `pause` | In-process operation | Yes | No | Relay on request |
+| `work start`, `resume`, `pause`, `end` | In-process operation | Yes | No | Relay on request |
 | `work budget` | No | Yes | No | No |
 | `approve`, `reject`, `plan revise` | No | Yes | No | Relay explicit decision |
 | `steer`, `task abort` | No | Yes | No | Draft and relay |
@@ -62,6 +62,10 @@ The principal agent is the least contained caller because it runs in the human's
 session with the human's machine authority. The skill states intended behavior;
 it is not a security boundary. Commands carrying judgment therefore require
 explicit human intent, and approval records its channel.
+
+Ending a run is one of those judgments. The principal agent may relay
+`work end --reason "..."` only after the human explicitly chooses abandonment
+and provides or confirms the reason.
 
 ## Interaction modes
 

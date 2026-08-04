@@ -3,13 +3,17 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
+  unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
@@ -23,7 +27,47 @@ const PORT = Number(process.env.SENAWA_WEB_PORT ?? 0);
 const workflow = parseYaml(readFileSync(join(HERE, "workflows", "standard-delivery.yaml"), "utf8"));
 const runLog = join(STATE, "run-events.jsonl");
 const outputDir = join(STATE, "output");
+const supervisorLease = join(STATE, "web-supervisor.json");
 mkdirSync(outputDir, { recursive: true });
+
+let ownsSupervisorLease = false;
+function processExists(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error.code === "EPERM"; }
+}
+
+function acquireSupervisorLease() {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const descriptor = openSync(supervisorLease, "wx", 0o600);
+      writeFileSync(descriptor, `${JSON.stringify({ pid: process.pid, host: hostname(), at: new Date().toISOString() })}\n`);
+      closeSync(descriptor);
+      ownsSupervisorLease = true;
+      return;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      let owner = null;
+      try { owner = JSON.parse(readFileSync(supervisorLease, "utf8")); } catch { /* incomplete stale lease */ }
+      if (owner?.host === hostname() && Number.isInteger(owner.pid) && processExists(owner.pid)) {
+        console.error(`active web supervisor already exists (pid ${owner.pid})`);
+        process.exit(73);
+      }
+      unlinkSync(supervisorLease);
+    }
+  }
+  throw new Error("could not acquire web supervisor lease");
+}
+
+function releaseSupervisorLease() {
+  if (!ownsSupervisorLease) return;
+  try {
+    const owner = JSON.parse(readFileSync(supervisorLease, "utf8"));
+    if (owner.pid === process.pid) unlinkSync(supervisorLease);
+  } catch { /* lease already gone */ }
+  ownsSupervisorLease = false;
+}
+
+acquireSupervisorLease();
 
 const phases = workflow.spec.phases.map((phase) => ({
   id: phase.id,
@@ -156,6 +200,19 @@ function startNextPhase() {
   }
 }
 
+function endRun(reason) {
+  for (const child of children.values()) child.kill("SIGTERM");
+  children.clear();
+  for (const phase of phases) {
+    if (!["accepted", "ended"].includes(phase.status)) {
+      phase.status = "ended";
+      phase.pid = null;
+    }
+  }
+  runStatus = "ended";
+  emitRun("work.ended", { reason, via: "browser" });
+}
+
 function snapshot() {
   const needs = phases.find((phase) => phase.status === "awaiting_approval");
   return {
@@ -285,8 +342,21 @@ const server = createServer(async (request, response) => {
     }
     try {
       const body = await readBody(request);
-      if (!new Set(["approve", "reject", "steer"]).has(body.command)) {
+      if (!new Set(["approve", "reject", "steer", "end"]).has(body.command)) {
         json(response, 400, { error: "command is not exposed to the browser" });
+        return;
+      }
+      if (body.command === "end") {
+        if (runStatus === "ended" || runStatus === "finished") {
+          json(response, 409, { error: `run is already ${runStatus}` });
+          return;
+        }
+        if (typeof body.reason !== "string" || !body.reason.trim()) {
+          json(response, 409, { error: "ending a run requires a reason" });
+          return;
+        }
+        endRun(body.reason.trim());
+        json(response, 202, { accepted: true, snapshot: snapshot() });
         return;
       }
       const phase = phaseById(body.phase);
@@ -337,7 +407,11 @@ server.listen(PORT, HOST, () => {
 
 function shutdown() {
   for (const child of children.values()) child.kill("SIGTERM");
-  server.close(() => process.exit(0));
+  server.close(() => {
+    releaseSupervisorLease();
+    process.exit(0);
+  });
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+process.on("exit", releaseSupervisorLease);

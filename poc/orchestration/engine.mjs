@@ -14,8 +14,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync,
-  readdirSync, rmSync, symlinkSync, writeFileSync,
+  appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync,
+  readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
@@ -23,7 +23,9 @@ import { parse as parseYaml } from "yaml";
 
 const ROOT = resolve(process.env.SENAWA_ROOT ?? process.cwd());
 const DEFS = resolve(process.env.SENAWA_DEFINITIONS ?? process.cwd());
-const WORK = join(ROOT, ".agents", ".copilot-tracking", "run");
+const TRACKING = join(ROOT, ".agents", ".copilot-tracking");
+const WORK = join(TRACKING, "run");
+const ACTIVE_RUN = join(TRACKING, "active-run.json");
 const IDENTITY = join(WORK, "work.json");
 const CACHE = join(WORK, "cache.json");
 const JOURNAL = join(WORK, "journal.jsonl");
@@ -200,6 +202,33 @@ const journal = () => (existsSync(JOURNAL)
 
 const identity = () => JSON.parse(readFileSync(IDENTITY, "utf8"));
 const say = (s) => console.log(s);
+
+function acquireActiveRun() {
+  mkdirSync(TRACKING, { recursive: true });
+  try {
+    const descriptor = openSync(ACTIVE_RUN, "wx", 0o600);
+    writeFileSync(descriptor, `${JSON.stringify({ work: "run", at: new Date().toISOString() })}\n`);
+    closeSync(descriptor);
+  } catch (error) {
+    if (error.code === "EEXIST") {
+      const active = JSON.parse(readFileSync(ACTIVE_RUN, "utf8"));
+      throw new Error(`active run already exists: ${active.work}; resume or finish it before starting another`);
+    }
+    throw error;
+  }
+}
+
+function releaseActiveRun() {
+  rmSync(ACTIVE_RUN, { force: true });
+}
+
+function archivePreviousWork() {
+  if (!existsSync(WORK)) return;
+  const archive = join(TRACKING, "archive");
+  mkdirSync(archive, { recursive: true });
+  const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
+  renameSync(WORK, join(archive, `run-${stamp}`));
+}
 
 // --- phase state, held in bead metadata --------------------------------------
 const PHASE_DEFAULTS = {
@@ -504,6 +533,28 @@ function reconcile(idty) {
   return open.length;
 }
 
+function endWork(idty, defs, reason) {
+  for (const phase of defs.workflow.spec.phases) {
+    const st = phaseState(idty, phase.id);
+    if (st.gateId) resolveGate(idty, phase.id, "run ended by operator");
+    if (st.status === "accepted" || st.status === "ended") continue;
+    setPhase(idty, phase.id, { status: "ended", gateId: null }, reason);
+    write(["update", idty.phaseBeads[phase.id], "--status", "deferred", "--json"]);
+    emit("phase.ended", { phase: phase.id, reason });
+  }
+  for (const task of tasks(idty)) {
+    if (task.status === "closed" || task.status === "aborted") continue;
+    setTask(idty, task, { status: "aborted", pendingGate: false });
+    write(["update", task.issueId, "--status", "deferred", "--json"]);
+    emit("task.aborted", { task: task.key, reason });
+  }
+  write(["update", idty.epic, "--status", "deferred", "--json"]);
+  emit("work.ended", { workflow: idty.workflow, reason, actor: { kind: "human", via: "cli" } });
+  writeFileSync(CACHE, `${JSON.stringify(projection(idty, defs), null, 2)}\n`);
+  // Release last: a replacement run must not start before terminal state is durable.
+  releaseActiveRun();
+}
+
 function projection(idty, defs) {
   const phases = {};
   let accepted = 0;
@@ -517,12 +568,13 @@ function projection(idty, defs) {
     }
   }
   const all = tasks(idty);
+  const ended = journal().some((event) => event.event === "work.ended");
   const target = (defs.workflow.spec.completesWhen ?? "").replace(/-accepted$/, "");
   const finished = target ? phases[target]?.status === "accepted" : accepted === Object.keys(phases).length;
   return {
     workflow: idty.workflow,
-    status: finished ? "finished" : needs ? "awaiting_approval" : "running",
-    needs,
+    status: ended ? "ended" : finished ? "finished" : needs ? "awaiting_approval" : "running",
+    needs: ended ? null : needs,
     progress: {
       phases: `${accepted}/${Object.keys(phases).length} accepted`,
       tasks: `${all.filter((t) => t.status === "closed").length}/${all.length} closed`,
@@ -551,6 +603,7 @@ function drive(idty, defs) {
       closeIssue(idty.epic, "workflow accepted");
       emit("work.finished", { workflow: idty.workflow });
       writeFileSync(CACHE, `${JSON.stringify(projection(idty, defs), null, 2)}\n`);
+      releaseActiveRun();
       say("\n== work accepted");
       process.exit(0);
     }
@@ -616,26 +669,37 @@ else if (cmd === "work" && sub === "start") {
   const okInput = ajv.compile(JSON.parse(readFileSync(resolve(dirname(wfPath(name)), r.workflow.spec.inputSchema), "utf8")));
   if (!okInput(input)) throw new Error(`invalid workflow input: ${errs(okInput.errors)}`);
 
-  execFileSync("bd", ["init", "--quiet", "--stealth", "--non-interactive", "--role", "maintainer"],
-    { cwd: ROOT, env: BD_ENV, stdio: ["ignore", "ignore", "pipe"] });
-  for (const d of [SNAPSHOT, join(SNAPSHOT, "workflows"), join(SNAPSHOT, "schemas"), ARTIFACTS, HOME]) mkdirSync(d, { recursive: true });
-  for (const p of sourceFiles(name)) {
-    copyFileSync(p, p.endsWith("sensors.yaml") ? join(SNAPSHOT, "sensors.yaml")
-      : p.endsWith(".schema.json") ? join(SNAPSHOT, "schemas", basename(p))
-        : join(SNAPSHOT, "workflows", basename(p)));
-  }
-  const epic = one(bd(["create", goal, "-t", "epic", "--json"]));
+  acquireActiveRun();
+  let epic;
   const phaseBeads = {};
-  for (const p of r.workflow.spec.phases) {
-    phaseBeads[p.id] = one(bd(["create", `Phase: ${p.id}`, "-t", "task", "--parent", epic.id, "--json"])).id;
+  try {
+    archivePreviousWork();
+    if (process.env.SENAWA_FAIL_START_AT === "after-acquire") throw new Error("injected startup failure");
+    if (!existsSync(join(ROOT, ".beads"))) {
+      execFileSync("bd", ["init", "--quiet", "--stealth", "--non-interactive", "--role", "maintainer"],
+        { cwd: ROOT, env: BD_ENV, stdio: ["ignore", "ignore", "pipe"] });
+    }
+    for (const d of [SNAPSHOT, join(SNAPSHOT, "workflows"), join(SNAPSHOT, "schemas"), ARTIFACTS, HOME]) mkdirSync(d, { recursive: true });
+    for (const p of sourceFiles(name)) {
+      copyFileSync(p, p.endsWith("sensors.yaml") ? join(SNAPSHOT, "sensors.yaml")
+        : p.endsWith(".schema.json") ? join(SNAPSHOT, "schemas", basename(p))
+          : join(SNAPSHOT, "workflows", basename(p)));
+    }
+    epic = one(bd(["create", goal, "-t", "epic", "--json"]));
+    for (const p of r.workflow.spec.phases) {
+      phaseBeads[p.id] = one(bd(["create", `Phase: ${p.id}`, "-t", "task", "--parent", epic.id, "--json"])).id;
+    }
+    for (const p of r.workflow.spec.phases) {
+      for (const d of p.dependsOn ?? []) bd(["dep", "add", phaseBeads[p.id], phaseBeads[d]], { json: false });
+    }
+    // work.json is identity, written once and never mutated.
+    writeFileSync(IDENTITY, `${JSON.stringify({
+      workflow: name, fingerprint: hashFiles(sourceFiles(name)), input, epic: epic.id, phaseBeads,
+    }, null, 2)}\n`);
+  } catch (error) {
+    if (!existsSync(IDENTITY)) releaseActiveRun();
+    throw error;
   }
-  for (const p of r.workflow.spec.phases) {
-    for (const d of p.dependsOn ?? []) bd(["dep", "add", phaseBeads[p.id], phaseBeads[d]], { json: false });
-  }
-  // work.json is identity, written once and never mutated.
-  writeFileSync(IDENTITY, `${JSON.stringify({
-    workflow: name, fingerprint: hashFiles(sourceFiles(name)), input, epic: epic.id, phaseBeads,
-  }, null, 2)}\n`);
   emit("work.started", { workflow: name, goal });
   emit("workflow.instantiated", { workflow: name, phases: Object.keys(phaseBeads) });
   say(`== ${name} started, epic ${epic.id}`);
@@ -648,6 +712,24 @@ else if (cmd === "work" && sub === "resume") {
   emit("work.resumed", { reconciled: n });
   say(`== resumed${n ? `, reconciled ${n} in-flight dispatch(es)` : ""}`);
   drive(idty, defsFrom(idty));
+}
+
+else if (cmd === "work" && sub === "end") {
+  if (!existsSync(IDENTITY)) throw new Error("no run exists");
+  const idty = identity();
+  const defs = defsFrom(idty);
+  const reason = flag("--reason");
+  if (!reason?.trim()) throw new Error("work end requires --reason");
+  if (!existsSync(ACTIVE_RUN)) {
+    const status = projection(idty, defs).status;
+    if (["ended", "finished"].includes(status)) {
+      say(`work already ${status}`);
+      process.exit(0);
+    }
+    throw new Error("active-run pointer is missing; repair is required before ending");
+  }
+  endWork(idty, defs, reason.trim());
+  say(`work ended: ${reason.trim()}`);
 }
 
 else if (cmd === "approve") {
@@ -715,6 +797,6 @@ else if (cmd === "work" && sub === "show") {
 }
 
 else {
-  console.error("usage: engine.mjs doctor | workflow list|info | work start|resume|show | approve | reject | plan revise");
+  console.error("usage: engine.mjs doctor | workflow list|info | work start|resume|show|end | approve | reject | plan revise");
   process.exit(2);
 }

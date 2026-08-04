@@ -34,6 +34,11 @@ inside it cannot redefine.
 
 `senawa work start` drives the run and stops when it needs you, so the loop advances without anyone watching it. Cancel it and `senawa work resume` picks up where it stopped. When a principal agent starts it on your behalf it runs detached, which is what lets you keep asking questions and steering while the work continues.
 
+Version 1 allows one unfinished Senawa run per repository and one active worker
+turn. If a run cannot be completed or resumed, `senawa work end --reason "..."`
+records its abandonment and frees the repository for a replacement. It does not
+delete the ended run or its evidence.
+
 ## What a run looks like
 
 A workflow is a sequence of phases you declare in the repository. Each one can

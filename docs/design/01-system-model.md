@@ -146,6 +146,11 @@ Every repeated operation has a finite limit:
 A driver can operate unattended inside those boundaries. It cannot invent a new
 boundary or spend without an owner.
 
+Version 1 also bounds concurrency at the product level: one unfinished Senawa
+run per repository and one active Senawa-created worker turn within that run.
+`work end --reason "..."` abandons a stuck run without erasing it, then releases
+the repository for a replacement only after terminal state is durable.
+
 ## Next reading
 
 Continue with [Workflows and Lifecycle](02-workflows-and-lifecycle.md) to see how

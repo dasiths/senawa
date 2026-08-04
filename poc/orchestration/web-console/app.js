@@ -52,6 +52,7 @@ function renderControls() {
     : "Choose a graph node to inspect its session.";
   $("#approval-controls").hidden = phase?.status !== "awaiting_approval";
   $("#steer-controls").hidden = phase?.status !== "running";
+  $("#end-controls").hidden = ["ended", "finished"].includes(snapshot.status);
 }
 
 function renderSnapshot() {
@@ -129,7 +130,7 @@ async function refreshSnapshot() {
 }
 
 async function sendCommand(command, extra = {}) {
-  const buttonIds = ["#approve", "#reject", "#steer"];
+  const buttonIds = ["#approve", "#reject", "#steer", "#end-run"];
   buttonIds.forEach((id) => { $(id).disabled = true; });
   try {
     await api("/api/commands", {
@@ -139,6 +140,7 @@ async function sendCommand(command, extra = {}) {
     $("#last-command").textContent = `${command} ${selectedPhase} accepted by server`;
     $("#reject-reason").value = "";
     $("#steer-instruction").value = "";
+    $("#end-reason").value = "";
     await refreshSnapshot();
   } catch (error) {
     $("#last-command").textContent = `refused: ${error.message}`;
@@ -150,6 +152,7 @@ async function sendCommand(command, extra = {}) {
 $("#approve").addEventListener("click", () => sendCommand("approve"));
 $("#reject").addEventListener("click", () => sendCommand("reject", { reason: $("#reject-reason").value }));
 $("#steer").addEventListener("click", () => sendCommand("steer", { instruction: $("#steer-instruction").value }));
+$("#end-run").addEventListener("click", () => sendCommand("end", { reason: $("#end-reason").value }));
 
 async function start() {
   await refreshSnapshot();
