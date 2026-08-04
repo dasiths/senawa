@@ -12,7 +12,7 @@ implementations.
 ## Sensor extension contract
 
 A sensor extension is a versioned implementation type. A sensor entry in
-`sensors.yaml` is one configured instance.
+`.senawa/sensors.yaml` is one configured instance.
 
 ```ts
 interface ISensor<TInput, TOutput extends SensorAssessment> {
@@ -56,6 +56,14 @@ Senawa validates four boundaries:
 
 An execution error is not a failing assessment. Required sensor errors block
 progress while remaining distinguishable from valid negative evidence.
+
+The production vertical slice implements this boundary in `@senawa/sensors`.
+It supports the explicitly declared `@senawa/sensor-artifact` and
+`@senawa/sensor-command` built-ins. Artifact checks inspect the candidate phase
+artifact. Command checks use snapshotted configuration, run in the repository
+root with a bounded timeout, and receive the run ID, owner ID, and attempt in
+their environment. Arbitrary extension loading, inferential sensors, and reading
+caching remain pending.
 
 ## Explicit discovery
 
@@ -179,6 +187,11 @@ session with that evidence. Accepted readings close the task through Senawa.
 The driver also evaluates the gate after a worker turn. Correctness does not
 depend on the worker remembering to call the completion tool.
 
+Worker hosts return only a session ID, an optional artifact, and output records.
+They cannot return a gate verdict. `RunCommandService` invokes the injected
+`GateEvaluator` after every phase or task turn, journals sensor and gate evidence,
+and uses only that evaluation to accept, close, rework, or pause work.
+
 ## Evaluation order
 
 Sensors run in this order:
@@ -241,7 +254,7 @@ boundary, not presentation polish.
 
 | Gate | Represents | Storage |
 |------|------------|---------|
-| Senawa gate | A decision over sensor readings | `sensors.yaml` and cached readings |
+| Senawa gate | A decision over sensor readings | `.senawa/sensors.yaml` and cached readings |
 | Beads gate | An external condition such as human approval, CI, or a timer | Runtime graph |
 
 A phase with both a quality gate and `approval: human` waits for both. The quality
@@ -253,18 +266,22 @@ Workers cannot edit the references used to judge them:
 
 ```yaml
 frozen:
-  - sensors.yaml
+  - .senawa/sensors.yaml
+  - .senawa/agents/**
   - .senawa/workflows/**
   - .senawa/schemas/**
-  - .github/agents/**
   - .agents/rubrics/**
   - test/**
   - tests/**
-  - .github/hooks/**
 ```
 
 The run snapshot prevents the current run from following configuration edits.
 The frozen set prevents a worker from weakening the next run.
+Repository-owned worker profiles are part of the mandatory frozen-definition
+floor. Repository policy may add paths but cannot remove profiles, workflows,
+schemas, or `.senawa/sensors.yaml` from that floor. Hook and permission policy remains an
+embedded Senawa runtime asset. Worker sessions do not depend on
+`.github/agents` or `.github/hooks`.
 
 ## Enforcement layers
 

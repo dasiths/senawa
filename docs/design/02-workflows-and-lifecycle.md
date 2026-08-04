@@ -7,6 +7,29 @@ It defines phases, dependencies, roles, artifacts, gates, approval points, and
 finite loop policies. The workflow never becomes a second mutable source of
 runtime state.
 
+## Repository configuration
+
+Consumer repositories own the definitions that describe their work under one
+namespace:
+
+```text
+.senawa/sensors.yaml
+.senawa/agents/<role>.senawa.md
+.senawa/workflows/<workflow>.yaml
+.senawa/schemas/<artifact>.schema.json
+```
+
+`.senawa/sensors.yaml` declares sensor instances, gates, and the frozen set.
+Workflows select roles and reference schemas relative to their own file.
+Repositories may also keep explicitly declared local sensor implementations
+under `.senawa/extensions/`; their paths are entries in the policy, not an
+additional discovery mechanism.
+
+The user-facing skill remains at `.agents/skills/senawa/SKILL.md` because
+Copilot discovers skills there. That exception is an interaction asset, not a
+worker profile or a source of runtime authority. Senawa owns definition schemas,
+loading, validation, snapshots, capability ceilings, hooks, gates, and audit.
+
 ## Workflow contract
 
 ```yaml
@@ -15,7 +38,7 @@ kind: Workflow
 metadata:
   name: standard-delivery
 spec:
-  inputSchema: ./schemas/work-request.schema.json
+  inputSchema: ../schemas/work-request.schema.json
   completesWhen: verify-accepted
   phases:
     - id: define
@@ -25,7 +48,7 @@ spec:
         resumeAcrossIterations: true
         output:
           path: artifacts/definition.json
-          schema: ./schemas/definition.schema.json
+          schema: ../schemas/definition.schema.json
       exit:
         gate: definition-accepted
         approval: human
@@ -43,7 +66,7 @@ spec:
           definition: phases.define.output
         output:
           path: artifacts/research.json
-          schema: ./schemas/research.schema.json
+          schema: ../schemas/research.schema.json
       exit:
         gate: research-accepted
         approval: human
@@ -59,7 +82,7 @@ spec:
         resumeAcrossIterations: true
         output:
           path: artifacts/plan.json
-          schema: ./schemas/plan.schema.json
+          schema: ../schemas/plan.schema.json
       actions:
         - kind: import-plan
           source: phases.plan.output
@@ -101,7 +124,7 @@ spec:
         resumeAcrossIterations: true
         output:
           path: artifacts/verification.json
-          schema: ./schemas/verification.schema.json
+          schema: ../schemas/verification.schema.json
       exit:
         gate: work-done
         approval: human
@@ -247,9 +270,55 @@ Under the SDK topology, guidelines extend the system message and the turn become
 the user prompt. Under the subprocess topology, both are concatenated on the
 first turn and only the turn is sent on resume.
 
-Repository-specific persona and emphasis belong in
-`.github/agents/<role>.agent.md`. Harness scaffolding stays in Senawa code so it
-cannot drift away from the submission tool and schema Senawa generates.
+## Worker profiles
+
+Repositories define every workflow and task role in
+`.senawa/agents/<role>.senawa.md`. The file combines strict YAML frontmatter
+with a non-empty Markdown prompt:
+
+```markdown
+---
+apiVersion: senawa.dev/worker-profile/v1
+kind: WorkerProfile
+metadata:
+  name: implementor
+spec:
+  model:
+    id: claude-sonnet-4.6
+    effort: high
+  tools:
+    - repository.read
+    - repository.edit
+    - process.run
+    - senawa.task.done
+    - senawa.ask
+    - senawa.discover
+---
+
+# Implementor
+
+Implement only the claimed task and stay within its declared paths.
+```
+
+The filename stem must equal `metadata.name`. Unknown frontmatter fields and
+capabilities are invalid. Version 1 recognizes `repository.read`,
+`repository.edit`, `process.run`, `senawa.task.done`, `senawa.phase.submit`,
+`senawa.ask`, and `senawa.discover`. Model effort, when present, is `low`,
+`medium`, `high`, or `xhigh`.
+
+Startup validates every static workflow role. Plan import validates each dynamic
+task role before creating tasks. Missing roles fail closed. Task execution model
+and effort hints override profile defaults for that dispatch, but cannot alter
+capabilities.
+
+Snapshot version 2 stores the parsed profile and exact source file. Its source
+digest contributes to the repository fingerprint, and each turn receives the
+snapshotted profile and digest. A resumed run never rereads the live profile,
+and Senawa never rewrites an earlier snapshot version in place.
+
+Profiles request capabilities; they do not grant authority. The host intersects
+each request with owner scope, supported host operations, and Senawa's mandatory
+security ceiling before mapping it to provider-specific controls.
 
 ## Approval semantics
 

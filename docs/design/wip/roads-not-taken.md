@@ -159,9 +159,9 @@ is a real benefit.
 It went because it executes code merely because it is present, which is a supply
 chain problem dressed as convenience, and because it makes two identical
 checkouts resolve different sensor sets depending on what else happens to be
-installed. Extensions are declared in `sensors.yaml`. The cost is one line per
-extension; the benefit is that the sensor set is a property of the repository
-rather than of the machine.
+installed. Extensions are declared in `.senawa/sensors.yaml`. The cost is one
+line per extension; the benefit is that the sensor set is a property of the
+repository rather than of the machine.
 
 ### Gates as three lists
 
@@ -226,6 +226,10 @@ validate while providing nothing the role profile could not already carry.
 Scaffolding lives in senawa's code. Persona and model configuration live in
 `.github/agents/<role>.agent.md`. `senawa phase brief` composes the two with the
 situational parts at dispatch.
+
+That profile location was superseded. Current repository worker profiles live
+under `.senawa/agents/<role>.senawa.md`; the rejected extra prompt layer remains
+rejected.
 
 *Revisit if* the same workflow needs to run with materially different phase
 framing in different repositories. The current answer is that this is what role

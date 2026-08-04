@@ -108,12 +108,27 @@ Instructions have two owners:
 
 | Layer | Owner | Contents |
 |-------|-------|----------|
-| Role profile | Repository | Model, tool surface, durable persona, repository-specific emphasis |
+| Worker profile | Repository | Model and effort defaults, requested semantic capabilities, and durable role instructions |
 | Brief scaffolding | Senawa | Scope, input references, output contract, rules, iteration context |
+| Enforcement | Senawa | Host capability ceiling, typed tools, permission callbacks, isolation, hooks, gates, and audit |
 
 `senawa task brief` and `senawa phase brief` compose those layers with current
 artifact paths and graph state. They pass paths rather than copying large
 artifacts into a prompt.
+
+The [worker profile contract](02-workflows-and-lifecycle.md#worker-profiles)
+defines what a repository may request. Effective authority is always the
+intersection:
+
+```text
+profile request ∩ task scope ∩ host support ∩ Senawa security ceiling
+```
+
+Each term can remove authority; none can add authority excluded by another.
+Task paths constrain repository writes, host support removes unavailable
+operations, and Senawa's ceiling keeps graph mutation, policy mutation, nested
+agents, and unmediated completion unavailable even when a profile requests a
+broader semantic capability.
 
 Instructions do not enforce policy. Capability removal, typed tools, hooks, and
 the gate own enforcement. A worker ending its turn without calling
@@ -128,10 +143,17 @@ The preferred topology hosts sessions through `@github/copilot-sdk`. It provides
 per-session model and reasoning effort, typed tools, permission callbacks,
 programmatic resume, and user-input interception. The driver implements the
 rework loop explicitly because the SDK has no `agentStop` or `subagentStop` hook.
+Senawa applies the snapshotted repository profile and its embedded session policy
+when it creates each hosted session. Profile instructions use system-message
+append mode so SDK guardrails remain active. SDK sessions do not discover or
+depend on repository Copilot agent or hook files.
 
 A subprocess topology using `copilot -p` remains the fallback for debugging and
-CI. It exposes the same session identity and per-task controls, but policy hooks
-run as processes and command hook timeouts fail open.
+CI. Senawa passes the resolved profile instructions and model directly to the
+subprocess, then maps the effective semantic capabilities through a
+Senawa-owned allowlist. Profile strings never become command options directly.
+The subprocess exposes the same session identity and per-task controls without
+repository Copilot agent or hook files.
 
 In-process `task`-tool subagents are reserved for cheap read-only exploration.
 They do not provide the independent model, effort, permissions, lifetime, or

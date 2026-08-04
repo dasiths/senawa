@@ -45,8 +45,19 @@ does not ask agents to summarize their own compliance.
 Beads holds graph state and pointers. The work directory holds files, evidence,
 and isolated session state. Neither is a writable mirror of the other.
 
-The snapshot contains the resolved workflow, schemas, sensor and gate definitions,
-rubrics, and complete role profiles. A content fingerprint binds them to the run.
+Snapshot inputs name their repository sources explicitly:
+`.senawa/workflows/<name>.yaml`, `.senawa/schemas/*.schema.json`,
+`.senawa/sensors.yaml`, `.senawa/agents/*.senawa.md`, and the user-facing
+`.agents/skills/senawa/SKILL.md` discovery asset. The snapshot stores normalized
+workflow and policy representations, each schema under its repository path, the
+parsed profiles, and exact profile and skill sources. A content fingerprint
+binds the snapshotted representations to the run. Every turn records the
+selected profile name and source digest.
+
+Session hook policy, host capability mapping, and the enforcement ceiling are
+versioned with the Senawa runtime rather than accepted as repository grants.
+Runtime upgrades may tighten enforcement, but they cannot replace snapshotted
+profile instructions or requested capabilities during a resumed run.
 
 ## Journal contract
 

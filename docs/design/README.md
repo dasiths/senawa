@@ -64,12 +64,12 @@ it.
 | Concept | Primary guide |
 |---------|---------------|
 | Nested control loops and authority | [System Model](01-system-model.md) |
-| Workflow schema, phase iteration, and artifacts | [Workflows and Lifecycle](02-workflows-and-lifecycle.md) |
+| Consumer `.senawa` layout, workflow schema, worker profiles, phase iteration, and artifacts | [Workflows and Lifecycle](02-workflows-and-lifecycle.md) |
 | Principal agent, workers, sessions, and human interaction | [Agents and Interaction](03-agents-and-interaction.md) |
-| Sensors, gate language, backpressure, and enforcement | [Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md) |
+| Sensor policy location, gate language, backpressure, and enforcement | [Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md) |
 | Beads mapping, state machine, driver, resume, and concurrency | [Runtime and State](05-runtime-and-state.md) |
-| Journal, report, traces, and cost attribution | [Provenance and Observability](06-provenance-and-observability.md) |
-| Package boundaries, CLI grouping, build plan, and open questions | [Implementation and Operations](07-implementation-and-operations.md) |
+| Snapshot inputs, journal, report, traces, and cost attribution | [Provenance and Observability](06-provenance-and-observability.md) |
+| Package boundaries, initialization, CLI grouping, build plan, and open questions | [Implementation and Operations](07-implementation-and-operations.md) |
 | Proposed decisions and promotion status | [WIP Decision Log](wip/decision-log.md) |
 | Measurements and invalidated assumptions | [WIP POC Findings](wip/poc-findings.md) |
 | Discarded approaches and revival conditions | [WIP Roads Not Taken](wip/roads-not-taken.md) |

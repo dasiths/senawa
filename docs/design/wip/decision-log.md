@@ -43,6 +43,49 @@ Copy this section for each idea and update it in place as the idea matures.
 
 ## Decisions
 
+### 2026-08-04: Sensor policy location
+
+* Status: `accepted`
+* Owner: `docs/design/04-sensors-gates-and-enforcement.md`
+* Question: Should repository-specific sensor and gate policy live at the
+    repository root or inside the `.senawa` configuration namespace?
+* Context: Workflows, schemas, and worker profiles already live under
+    `.senawa`; root `sensors.yaml` was the only Senawa configuration exception.
+* Evidence obtained: Definition loading, frozen-path enforcement, bundle checks,
+    all 31 tests, and the complete offline browser demo pass after moving the
+    production file to `.senawa/sensors.yaml`.
+* Outcome: Repository sensor extensions, instances, gates, and frozen paths live
+    in `.senawa/sensors.yaml`. POC-local sensor manifests remain local fixtures.
+* Promotion: [Sensors, Gates, and Enforcement](../04-sensors-gates-and-enforcement.md#sensor-configuration)
+
+### 2026-08-04: Worker profile ownership
+
+* Status: `accepted`
+* Owner: `docs/design/02-workflows-and-lifecycle.md`
+* Question: Are worker roles embedded Senawa behavior or repository-owned
+    workflow configuration?
+* Context: Workflows name roles, but the first implementation embedded their
+    prompts, model, and tools in the orchestrator after rejecting `.github`
+    repository conventions.
+* Options: Embedded Senawa roles, prompt-only files, or repository-owned strict
+    worker profiles under `.senawa/agents`
+* Evidence obtained: The implementation already snapshots workflows and schemas;
+    excluding role content allowed runtime upgrades to change a resumed run's
+    instructions without changing its fingerprint. A strict profile can request
+    capabilities without granting them. Focused production tests now prove
+    strict parsing, exact-source fingerprint drift, snapshot-based dispatch,
+    missing-role rejection, host ceiling intersection, frozen profile writes,
+    and independence from repository Copilot hook files.
+* Outcome: Repositories define `.senawa/agents/<role>.senawa.md` profiles that
+    combine model hints, requested capabilities, and prompt content. Senawa owns
+    profile schemas, brief scaffolding, typed worker tools, capability mapping,
+    permission ceilings, isolation, hooks, gates, and audit. Effective authority
+    is profile request intersected with task scope, host support, and Senawa's
+    security ceiling. Hooks remain embedded Senawa enforcement.
+* Promotion: `docs/design/02-workflows-and-lifecycle.md#worker-profiles`, with
+    enforcement, provenance, and operations reflected in guides 03, 04, 06,
+    and 07
+
 ### 2026-08-04: Single active run and worker
 
 * Status: `accepted`
@@ -81,15 +124,19 @@ Copy this section for each idea and update it in place as the idea matures.
     tailed isolated stdout/stderr streams, resumed from sequence 3 without gaps,
     accepted browser approval and steering, and refused arbitrary and
     cross-origin commands. Desktop and mobile browser layouts were exercised.
-* Evidence needed: Route HTTP through real Senawa command handlers, normalize one
-    live subprocess and one SDK session, then test restart and output load.
+    The production vertical slice routes strict HTTP commands through the same
+    command service as the CLI, enforces a supervisor lease and one-time
+    bootstrap, and integration-tests replay, rejection, approval, and finish.
+* Evidence needed: Test supervisor restart and sustained output load, then
+    normalize one live subprocess and one SDK session.
 * POC: `poc/orchestration/README.md#the-browser-run-console-offline`
 * Outcome: HTTP is feasible. Use SSE for run and output streams plus structured
     command POSTs for the first implementation; no current requirement needs a
     WebSocket. Because the driver exits when human input is due, a separate
-    loopback `senawa web <work>` supervisor must survive that exit and resume the
-    detached driver after decisions. Keep the decision probing until this
-    supervisor is mounted over the real single control path.
+    loopback `senawa work web <run>` supervisor must survive that exit and resume
+    the detached driver after decisions. The production supervisor now uses the
+    shared control path; keep the decision probing until restart, load, and live
+    worker evidence close the remaining questions.
 * Promotion: `pending`
 
 ### 2026-08-04: Worker autopilot completion

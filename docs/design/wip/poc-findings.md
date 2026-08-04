@@ -110,6 +110,10 @@ validation beyond three field checks.
 minimal binary wired into `.github/hooks/*.json`; `senawa` is the full CLI that
 workers call for `task done`, where 66 ms is irrelevant next to sensor runtime.
 
+That path records the Copilot hook probe. Current Senawa production does not
+consume repository `.github/hooks`; hook and permission enforcement is embedded
+and versioned with the Senawa runtime.
+
 **Build gotcha.** esbuild's ESM output cannot `require` CommonJS dependencies,
 and both `commander` and `yaml` are CJS. Every bundle needs:
 
@@ -705,6 +709,10 @@ agent is contained by instructions rather than enforcement.
 also scans `.agents/skills/` and `.claude/skills/`, so the design's earlier claim
 about `.agents/skills/` was right, just incomplete.
 
+Senawa uses `.agents/skills/senawa/SKILL.md` as this Copilot-facing discovery
+exception. Runtime worker profiles are repository definitions under
+`.senawa/agents/`.
+
 **The skill was enough to drive the harness.** Across three turns of one resumed
 session the agent listed the available workflows, started a run with the right
 workflow, and reported what the run needed:
@@ -798,6 +806,9 @@ This establishes normal abandonment, not emergency takeover. The production
 confirmation, and reconciliation before it may release the singleton.
 
 ## Design changes from the probes
+
+The list preserves names used by the probes. Current production sensor policy
+lives at `.senawa/sensors.yaml`; POC-local manifests keep their measured names.
 
 1. Split the binary. `senawa-hook` (minimal, ~33 ms) for hooks; `senawa` (full)
    for everything else. Update the latency section's numbers to 66 ms and 183 ms.

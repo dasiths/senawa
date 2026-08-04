@@ -6,7 +6,10 @@ Senawa (සේනාව) is an orchestration harness for [GitHub Copilot CLI](ht
 
 Three ideas hold the design together.
 
-Durable workflow state lives outside the model, as a dependency graph in [beads](https://github.com/gastownhall/beads). Agents ask the graph what is workable rather than remembering a plan.
+Durable workflow state lives outside the model, behind a runtime graph-store
+boundary. The current vertical slice uses a file-backed store; the target
+adapter uses [beads](https://github.com/gastownhall/beads). Agents ask runtime
+state what is workable rather than remembering a plan.
 
 Every agent-facing operation crosses the Senawa boundary. The principal agent
 uses the CLI. Hosted workers use typed Senawa tools, and subprocess workers use a
@@ -86,29 +89,86 @@ This is the shape [Addy Osmani calls loop engineering](https://addyosmani.com/bl
 
 ## Status
 
-Production implementation has not started, but the risky assumptions have been
-tested rather than assumed. Eight probes in [poc/](poc/README.md) exercise the
-real Copilot CLI, Copilot SDK, beads, and the proposed extension and workflow
-contracts. The principal-agent surface and per-task rework loop use live models.
-The full five-phase workflow, including approval, rejection, crash recovery, and
-additive revision, uses deterministic worker hosts.
+The first production vertical slice is implemented in `packages/`. It includes
+strict repository contracts, a deterministic driver, versioned artifacts,
+singleton and lease enforcement, append-only events and output, a shared CLI and
+HTTP command path, the loopback browser supervisor, and report rendering.
+Repository worker profiles under `.senawa/agents` now provide strict model,
+capability-request, and prompt configuration. Their exact sources are frozen,
+snapshotted, and fingerprinted; hosts apply a separate Senawa-owned capability
+ceiling. Workflows, schemas, profiles, and sensor policy are repository-owned at
+`.senawa/workflows/`, `.senawa/schemas/`, `.senawa/agents/`, and
+`.senawa/sensors.yaml`. Runtime hooks, isolation, capability ceilings, gate
+evaluation, and audit remain Senawa-owned.
+
+The `@senawa/sensors` package now runs the built-in artifact and command sensors
+from snapshotted policy. `RunCommandService` evaluates their readings and owns
+every gate transition; worker hosts return no acceptance verdict. Sensor starts,
+completions, execution errors, and gate evidence are recorded in the journal.
+
+Runtime state currently uses a file-backed store behind `@senawa/graph`. The
+beads adapter described by the target architecture is pending. The deterministic
+offline demo is ready and covered by integration tests. The opt-in Copilot
+subprocess host is implemented, but this production live-worker path has not
+been validated in this slice. Existing live-model claims remain limited to the
+probes that recorded them.
 
 Start with the [design index and reading order](docs/design/README.md). It moves
 from the system model and workflow lifecycle into agents, quality enforcement,
 runtime state, provenance, and implementation. Probe evidence and abandoned
 directions remain available in the non-authoritative design working record.
 
+## Production demo
+
+Install dependencies, then run the no-credit demo:
+
+```bash
+pnpm install
+pnpm demo
+```
+
+The command builds Senawa, creates an isolated temporary repository, runs
+`senawa doctor`, starts the deterministic workflow and production web
+supervisor, exercises HTTP rejection and approvals, verifies SSE replay and live
+task output, and runs real command gates. It copies the repository's `.senawa`
+definitions and Copilot-facing Senawa skill into the temporary repository. The
+fixture typecheck passes; its tests fail on the first task attempt and pass on
+the second, proving rework before the run finishes and renders its report. The
+command then terminates the server. It does not invoke Copilot.
+
+Keep the completed browser console running only for explicit inspection:
+
+```bash
+pnpm demo -- --keep-server
+```
+
+The command prints the browser URL, supervisor PID, and retained temporary
+repository. Run `kill <PID>` when inspection is complete.
+
+The live-worker launcher is separate and guarded:
+
+```bash
+pnpm demo:live -- --confirm-cost --goal "Implement the requested change"
+```
+
+It prints an AI-credit warning before starting and selects
+`--worker-host copilot`. Deterministic workers prepare phase artifacts; Copilot
+is reserved for implementation tasks. This path is opt-in and unvalidated in
+the production slice. Exit code `2` means the run reached a human decision, not
+that the start failed. Every later resume intended to use live implementation
+workers must also include `--worker-host copilot`.
+
 ## How it fits together
 
 ```mermaid
 flowchart LR
     H[You] <--> PA[Copilot with the senawa skill]
-    PA -->|relay start, show, approve, reject, steer| S[senawa]
+    PA -->|relay start, show, approve, reject, steer| S[Senawa runtime]
     H -->|direct commands| S
-    S --> D{Run driver}
+    S --> D{Deterministic run driver}
     D --> W[Researcher, planner, implementors, verifiers]
     W -->|typed Senawa tools or restricted CLI| S
-    S --> G[(beads graph)]
+    S --> G[(Runtime graph store<br/>file-backed now, beads target)]
     S --> SEN[sensors and gates]
     S --> J[(journal)]
     W --> T[(telemetry)]
@@ -135,18 +195,27 @@ headless with no principal agent at all.
 | Principal agent | The Copilot session you talk to, carrying the senawa skill. Relays your intent as `senawa` commands and explains what came back. It never decides what runs next, and the harness runs without it |
 | Worker session | A role-scoped worker with its own context window, model, reasoning effort, and tool permissions. A separate session, not an in-process helper |
 | Artifact | A phase's schema-validated output, versioned rather than overwritten. A plan's tasks become the implementation frontier |
-| Graph state | The dependency graph of phases, tasks, and gates, plus their orchestration metadata, held in beads |
+| Graph state | The dependency graph of phases, tasks, and gates plus orchestration metadata, held by the current file-backed store behind the pending beads adapter |
 | Sensor | A tool that measures a property of the work and returns an assessment plus evidence. Builds, tests, linters, and reviewer agents |
 | Gate | A rule that consumes sensor readings and resists progress when they are red |
 | Anchor | A deterministic reading that cannot be argued with. Every blocking gate needs at least one, or the harness is only agreeing with itself |
-| Frozen set | Files no worker may write, such as the tests and the sensor definitions. Enforced, not requested |
+| Frozen set | Files no worker may write, such as tests, sensor definitions, workflows, schemas, and worker profiles. Enforced, not requested |
 | Journal | An append-only log of every orchestration event, written by the harness rather than by any agent |
 | Run report | A rendered account of how the work was done, regenerated from the journal, the graph, and telemetry |
 | Work directory | Durable per-run files under `.agents/.copilot-tracking/`, including frozen definitions, versioned artifacts, transcripts, evidence, and the journal |
 
 ## Prerequisites
 
-You will need GitHub Copilot CLI with an active Copilot subscription, Node.js 22 or later, and the `bd` binary from beads. Git is assumed.
+The offline vertical slice requires Node.js 22 or later, pnpm 10 or later, and
+Git. The opt-in live-worker path also requires GitHub Copilot CLI with an active
+Copilot subscription. The current file-backed runtime does not require `bd`;
+that binary becomes required when the pending beads adapter lands.
+
+A repository running Senawa must provide `.senawa/sensors.yaml`, workflows,
+schemas, and worker profiles under `.senawa/`. It must also provide
+`.agents/skills/senawa/SKILL.md` when a Copilot session will act as the
+conversational principal agent. The latter path is a Copilot discovery
+exception, not runtime worker configuration.
 
 ### Package registry
 
@@ -164,22 +233,28 @@ Build arguments and image environment variables are not secret storage. Keep cre
 
 ## Repository layout
 
-The tree below is the planned shape. Only `docs/` and `poc/` exist today.
+The tree below shows the repository definition and runtime ownership boundaries.
 
 ```text
 docs/design/                 numbered current-state guides and their reading index
 docs/design/wip/             proposed decisions, evidence, rejected ideas, and the historical monolith
 poc/                         throwaway probes that validated the design against reality
 packages/                    core, graph, sensors, report, orchestrator, cli
+packages/orchestrator/       worker/session hosts and capability mapping
+packages/hook/               embedded hook and future SDK session policy
+.senawa/agents/              strict worker profiles with model, capability requests, and prompts
 .senawa/workflows/           phase definitions: gates, approvals, iteration budgets
 .senawa/schemas/             artifact contracts for each phase
+.senawa/sensors.yaml         sensor extensions, configured sensors, gates, and frozen paths
 .senawa/extensions/          locally declared sensor extensions
 .agents/skills/senawa/       the skill that lets a Copilot session drive the harness
 .agents/rubrics/             rubrics for inferential sensors
-.github/agents/              role definitions for researcher, planner, implementor, verifier
-.github/hooks/               gate enforcement for sessions senawa does not host
-sensors.yaml                 sensor extensions, configured sensors, and gates
 ```
+
+The `.senawa` entries are consumer-authored Senawa configuration. The skill path
+is separate only because Copilot discovers it there. Repository
+`.github/agents` and `.github/hooks` files are not Senawa configuration;
+enforcement is implemented in Senawa packages.
 
 ## Further reading
 
