@@ -1,0 +1,18 @@
+{
+  "name": "senawa",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "senawa": "./dist/senawa.mjs"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@senawa/core": "workspace:*",
+    "@senawa/orchestrator": "workspace:*",
+    "@senawa/web": "workspace:*",
+    "commander": "14.0.2"
+  }
+}

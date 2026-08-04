@@ -1,0 +1,16 @@
+{
+  "name": "@senawa/orchestrator",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@senawa/core": "workspace:*",
+    "@senawa/graph": "workspace:*",
+    "@senawa/report": "workspace:*",
+    "@senawa/sensors": "workspace:*",
+    "yaml": "2.8.1"
+  }
+}

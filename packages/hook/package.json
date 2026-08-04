@@ -1,0 +1,12 @@
+{
+  "name": "senawa-hook",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "senawa-hook": "./dist/senawa-hook.mjs"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

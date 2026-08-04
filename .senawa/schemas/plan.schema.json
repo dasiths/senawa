@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senawa.dev/schemas/plan/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "tasks"],
+  "properties": {
+    "summary": { "type": "string", "minLength": 1 },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "title", "paths", "acceptance", "role"],
+        "properties": {
+          "key": { "$ref": "#/$defs/identifier" },
+          "title": { "type": "string", "minLength": 1 },
+          "dependsOn": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/identifier" }
+          },
+          "paths": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "acceptance": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "role": { "$ref": "#/$defs/identifier" },
+          "execution": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "model": { "type": "string", "minLength": 1 },
+              "effort": { "enum": ["low", "medium", "high", "xhigh"] },
+              "group": { "$ref": "#/$defs/identifier" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+    }
+  }
+}

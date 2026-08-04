@@ -1,0 +1,120 @@
+import { resolve } from "node:path";
+import { loadRepositoryDefinitions, type RepositoryDefinitions } from "@senawa/core";
+import {
+  FileRuntimeStore,
+  type RuntimeLease,
+  type RuntimeState,
+  type RuntimeStore,
+} from "@senawa/graph";
+import { RunReportService } from "@senawa/report";
+import { CommandGateEvaluator, type GateEvaluator } from "@senawa/sensors";
+import { RunCommandService, RunQueryService } from "./run-services.js";
+import { DeterministicWorkerHost, type WorkerHost } from "./worker-host.js";
+
+export type RunChangeListener = (runId: string) => void;
+
+export class RunChangeNotifier {
+  private readonly listeners = new Set<RunChangeListener>();
+
+  subscribe(listener: RunChangeListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  publish(runId: string): void {
+    for (const listener of this.listeners) listener(runId);
+  }
+}
+
+class ObservableRuntimeStore implements RuntimeStore {
+  constructor(
+    private readonly store: RuntimeStore,
+    private readonly notifier: RunChangeNotifier,
+  ) {}
+
+  async createRun(state: RuntimeState): Promise<void> {
+    await this.store.createRun(state);
+    this.notifier.publish(state.identity.runId);
+  }
+
+  getActiveRunId(): Promise<string | null> {
+    return this.store.getActiveRunId();
+  }
+
+  readRun(runId: string): Promise<RuntimeState> {
+    return this.store.readRun(runId);
+  }
+
+  async updateRun(runId: string, update: (draft: RuntimeState) => void): Promise<RuntimeState> {
+    const state = await this.store.updateRun(runId, update);
+    this.notifier.publish(runId);
+    return state;
+  }
+
+  async acquireLease(
+    runId: string,
+    kind: "driver" | "web",
+    owner: string,
+    ttlMs: number,
+  ): Promise<RuntimeLease> {
+    const lease = await this.store.acquireLease(runId, kind, owner, ttlMs);
+    this.notifier.publish(runId);
+    return lease;
+  }
+
+  async releaseLease(runId: string, kind: "driver" | "web", owner: string): Promise<void> {
+    await this.store.releaseLease(runId, kind, owner);
+    this.notifier.publish(runId);
+  }
+
+  getWorkDirectory(runId: string): string {
+    return this.store.getWorkDirectory(runId);
+  }
+}
+
+export interface SenawaServices {
+  readonly repositoryRoot: string;
+  readonly commands: RunCommandService;
+  readonly queries: RunQueryService;
+  readonly notifier: RunChangeNotifier;
+  loadDefinitions(workflowName?: string): Promise<RepositoryDefinitions>;
+  acquireWebLease(runId: string, owner: string, ttlMs: number): Promise<RuntimeLease>;
+  releaseWebLease(runId: string, owner: string): Promise<void>;
+}
+
+export interface SenawaServiceOptions {
+  readonly workerHost?: WorkerHost;
+  readonly gateEvaluator?: GateEvaluator;
+  readonly now?: () => Date;
+  readonly store?: RuntimeStore;
+}
+
+export function createSenawaServices(
+  repositoryRoot: string,
+  options: SenawaServiceOptions = {},
+): SenawaServices {
+  const root = resolve(repositoryRoot);
+  const notifier = new RunChangeNotifier();
+  const store = new ObservableRuntimeStore(
+    options.store ?? new FileRuntimeStore(root, options.now),
+    notifier,
+  );
+  const reports = new RunReportService(store);
+  const commands = new RunCommandService(
+    store,
+    options.workerHost ?? new DeterministicWorkerHost(),
+    options.gateEvaluator ?? new CommandGateEvaluator(root),
+    options.now,
+  );
+  const queries = new RunQueryService(store, root, reports);
+
+  return {
+    repositoryRoot: root,
+    commands,
+    queries,
+    notifier,
+    loadDefinitions: (workflowName) => loadRepositoryDefinitions(root, workflowName),
+    acquireWebLease: (runId, owner, ttlMs) => store.acquireLease(runId, "web", owner, ttlMs),
+    releaseWebLease: (runId, owner) => store.releaseLease(runId, "web", owner),
+  };
+}

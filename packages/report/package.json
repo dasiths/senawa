@@ -1,0 +1,13 @@
+{
+  "name": "@senawa/report",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@senawa/core": "workspace:*",
+    "@senawa/graph": "workspace:*"
+  }
+}

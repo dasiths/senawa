@@ -1,0 +1,24 @@
+{
+  "name": "@senawa/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./contracts/artifacts": "./src/contracts/artifacts.ts",
+    "./contracts/commands": "./src/contracts/commands.ts",
+    "./contracts/events": "./src/contracts/events.ts",
+    "./contracts/output": "./src/contracts/output.ts",
+    "./contracts/run-snapshot": "./src/contracts/run-snapshot.ts",
+    "./contracts/sensors": "./src/contracts/sensors.ts",
+    "./contracts/worker-profile": "./src/contracts/worker-profile.ts",
+    "./contracts/workflow": "./src/contracts/workflow.ts",
+    "./definitions": "./src/definitions.ts"
+  },
+  "dependencies": {
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1",
+    "yaml": "2.8.1",
+    "zod": "4.4.3"
+  }
+}
