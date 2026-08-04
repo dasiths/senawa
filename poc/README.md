@@ -8,7 +8,7 @@ reproduce, and every folder carries a README stating its goal, what it proved,
 what it did not prove, and a dated change log.
 
 Findings are consolidated in
-[the archived POC findings](../docs/design/wip/poc-findings.md). That document
+[the POC findings](../docs/design/wip/poc-findings.md). That document
 is the cross-cutting evidence record; these folders are the machinery that
 produced it. Current architecture lives in the numbered design guides.
 

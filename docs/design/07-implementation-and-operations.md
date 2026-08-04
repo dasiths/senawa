@@ -8,7 +8,7 @@ including hook behavior, session resume, beads contracts, sensor extensions,
 workflow iteration, crash recovery, state authority, and the principal agent
 surface.
 
-The archived [POC findings](wip/poc-findings.md) distinguish live-model evidence,
+The [POC findings](wip/poc-findings.md) distinguish live-model evidence,
 offline deterministic simulation, and documentation-only claims.
 
 ## Technology choice
@@ -154,25 +154,17 @@ Each implementation slice should preserve these executable properties:
 
 ## Open decisions
 
-The following decisions need production evidence rather than more abstract
-design:
+Questions that still need evidence are tracked in the working
+[Decision Log](wip/decision-log.md). This guide changes only after a decision is
+accepted and promoted.
 
-1. Whether worker autopilot can trigger the gate without trusting
-   `task_complete` as proof of completion
-2. Whether verification is best represented as a sensor, a phase node, or both
-3. Whether any plan revision should retract work rather than append or abort
-4. Whether run-wide spend should supplement per-task and per-phase limits
-5. Whether the tracking directory belongs on the main branch or an archive branch
-6. Whether long journals require segmentation while preserving append-only order
-7. Which review cadence prevents comprehension debt on large frontiers
-8. Which counter-metrics remain cheap, stable, and independent of primary gates
-
-Decisions removed from the current architecture remain in the archived
+Decisions removed from the current architecture remain in
 [Roads Not Taken](wip/roads-not-taken.md). They should return to current guidance
 only when new evidence changes their constraints.
 
 ## Evidence and history
 
-The [WIP archive](wip/README.md) preserves the original monolithic design, probe
-findings, and discarded approaches. Use it to audit why a decision exists. Use
-the numbered guides for the design currently intended for implementation.
+The [design working record](wip/README.md) holds proposed decisions, probe
+findings, discarded approaches, and the historical monolith. Use it to mature or
+audit a decision. Use the numbered guides for the design currently intended for
+implementation.

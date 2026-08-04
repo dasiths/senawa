@@ -1,11 +1,11 @@
 # Senawa Design
 
 The design is split by reader question. Numbered guides describe the current
-architecture. The [WIP archive](wip/README.md) preserves the monolith, probe
-findings, and abandoned approaches that led to it.
+architecture. The [design working record](wip/README.md) holds proposed
+decisions, probe findings, abandoned approaches, and the historical monolith.
 
-Current guidance wins when the archive disagrees with it. Probe findings remain
-the authority for what was measured.
+Current guidance wins when the working record disagrees with it. Probe findings
+remain the authority for what was measured.
 
 ## Recommended reading order
 
@@ -46,9 +46,15 @@ Read [Runtime and State](05-runtime-and-state.md), followed by
 
 ### Decision archaeology
 
-Start with the archived [POC Findings](wip/poc-findings.md), then use
+Start with the [POC Findings](wip/poc-findings.md), then use
 [Roads Not Taken](wip/roads-not-taken.md) and the
 [original monolith](wip/multi-agent-orchestration.md) for rationale and context.
+
+### Maturing a new idea
+
+Start an entry in the [Decision Log](wip/decision-log.md), identify the owning
+guide and evidence needed, then use the smallest coherent POC to resolve it. The
+[working record guide](wip/README.md) defines the full promotion path.
 
 ## Concept ownership
 
@@ -64,6 +70,7 @@ it.
 | Beads mapping, state machine, driver, resume, and concurrency | [Runtime and State](05-runtime-and-state.md) |
 | Journal, report, traces, and cost attribution | [Provenance and Observability](06-provenance-and-observability.md) |
 | Package boundaries, CLI grouping, build plan, and open questions | [Implementation and Operations](07-implementation-and-operations.md) |
+| Proposed decisions and promotion status | [WIP Decision Log](wip/decision-log.md) |
 | Measurements and invalidated assumptions | [WIP POC Findings](wip/poc-findings.md) |
 | Discarded approaches and revival conditions | [WIP Roads Not Taken](wip/roads-not-taken.md) |
 
@@ -71,7 +78,8 @@ it.
 
 * Current-state behavior belongs in exactly one numbered guide.
 * Cross-cutting summaries link to the owning guide instead of copying contracts.
-* Measurements belong in the probe README and archived findings record.
+* New ideas begin in the decision log, not in a current-state guide.
+* Measurements belong in the probe README and findings record.
 * Displaced rationale belongs in Roads Not Taken.
 * The WIP monolith is preserved and does not receive new current-state design.
 * A behavior described as measured links to the evidence that established it.
@@ -82,7 +90,8 @@ Each folder under [poc/](../../poc/README.md) owns one subject and includes its
 goal, limits, reproduction command, and dated changes. When evidence changes the
 architecture:
 
-1. Update the owning probe.
-2. Record the result in the archived findings document.
-3. Update the numbered guide that owns the concept.
-4. Move superseded rationale to Roads Not Taken.
+1. Create or update the decision-log entry.
+2. Update the owning probe.
+3. Record the result in the findings document and decision entry.
+4. Update the numbered guide that owns an accepted concept.
+5. Move rejected or superseded rationale to Roads Not Taken.

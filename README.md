@@ -91,7 +91,7 @@ additive revision, uses deterministic worker hosts.
 Start with the [design index and reading order](docs/design/README.md). It moves
 from the system model and workflow lifecycle into agents, quality enforcement,
 runtime state, provenance, and implementation. Probe evidence and abandoned
-directions remain available in the clearly labeled WIP archive.
+directions remain available in the non-authoritative design working record.
 
 ## How it fits together
 
@@ -163,7 +163,7 @@ The tree below is the planned shape. Only `docs/` and `poc/` exist today.
 
 ```text
 docs/design/                 numbered current-state guides and their reading index
-docs/design/wip/             archived monolith, proof-of-concept findings, and roads not taken
+docs/design/wip/             proposed decisions, evidence, rejected ideas, and the historical monolith
 poc/                         throwaway probes that validated the design against reality
 packages/                    core, graph, sensors, report, orchestrator, cli
 .senawa/workflows/           phase definitions: gates, approvals, iteration budgets
@@ -182,7 +182,7 @@ sensors.yaml                 sensor extensions, configured sensors, and gates
 * [System model](docs/design/01-system-model.md)
 * [Workflows and lifecycle](docs/design/02-workflows-and-lifecycle.md)
 * [Agents and interaction](docs/design/03-agents-and-interaction.md)
-* [WIP archive](docs/design/wip/README.md)
+* [Design working record](docs/design/wip/README.md)
 * [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/)
 * [Refining Inferential Sensors in Coding Agent Harnesses](https://dasith.me/2026/06/20/refining-inferential-sensors/)
 * [Structured workflows for coding with AI agents using the Breadcrumb Protocol](https://dasith.me/2025/04/02/vibe-coding-breadcrumbs/)

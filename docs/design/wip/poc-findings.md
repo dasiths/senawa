@@ -1,7 +1,7 @@
 # Senawa Proof-of-Concept Findings
 
 > [!NOTE]
-> This evidence record is preserved in the WIP archive. Use the
+> This evidence record is maintained in the design working record. Use the
 > [numbered design guides](../README.md) for current architecture. Claims here
 > remain authoritative for what the corresponding probes measured.
 
