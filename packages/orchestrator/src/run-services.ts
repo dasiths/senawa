@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { posix } from "node:path";
 import type { GateEvaluation, SensorReading } from "@senawa/core";
 import {
   type CommandActor,
@@ -13,6 +14,8 @@ import {
 } from "@senawa/core";
 import type {
   RuntimeArtifact,
+  RuntimeDispatch,
+  RuntimeLease,
   RuntimePhase,
   RuntimeState,
   RuntimeStore,
@@ -20,6 +23,8 @@ import type {
 } from "@senawa/graph";
 import type { RunReportService } from "@senawa/report";
 import type { GateEvaluator } from "@senawa/sensors";
+import Ajv2020 from "ajv/dist/2020.js";
+import addFormats from "ajv-formats";
 import type { WorkerHost, WorkerResult, WorkerTurn } from "./worker-host.js";
 import { listRepositoryWorkflows, readRepositoryWorkflow } from "./workflow-catalog.js";
 
@@ -48,6 +53,10 @@ export interface TransitionResult {
   readonly phaseId?: string;
   readonly taskId?: string;
 }
+
+type ReconciledWorkerExecution =
+  | { readonly kind: "result"; readonly result: WorkerResult }
+  | { readonly kind: "deferred"; readonly transition: TransitionResult };
 
 export interface RunStatusProjection {
   readonly runId: string;
@@ -78,7 +87,19 @@ export interface RunStatusProjection {
     readonly dependsOn: readonly string[];
     readonly status: RuntimeTask["status"];
     readonly attempt: number;
+    readonly dispatchFailures: number;
   }>;
+  readonly unsettledDispatch: null | {
+    readonly dispatchId: string;
+    readonly operationId: string;
+    readonly turnId: string;
+    readonly sessionId: string;
+    readonly ownerKind: "phase" | "task";
+    readonly ownerId: string;
+    readonly status: RuntimeDispatch["status"];
+    readonly detail: string | null;
+    readonly operatorAction: string;
+  };
   readonly frontier: ReadonlyArray<{
     readonly key: string;
     readonly title: string;
@@ -95,6 +116,7 @@ export class RunCommandService {
     private readonly workerHost: WorkerHost,
     private readonly gateEvaluator: GateEvaluator,
     private readonly now: () => Date = () => new Date(),
+    private readonly driverLeaseTtlMs = 30_000,
   ) {}
 
   async start(input: StartRunInput): Promise<TransitionResult> {
@@ -125,7 +147,9 @@ export class RunCommandService {
       journal: [],
       outputs: {},
       activeTurn: null,
+      dispatches: [],
       leases: { driver: null, web: null },
+      leaseFences: { driver: 0, web: 0 },
     };
     emit(state, "work.started", input.actor, this.now(), {
       workflow: state.identity.workflow,
@@ -231,6 +255,12 @@ export class RunCommandService {
       for (const task of state.tasks) {
         if (task.status !== "closed") task.status = "ended";
       }
+      if (state.activeTurn !== null) {
+        const dispatch = requireDispatch(state, state.activeTurn.dispatchId);
+        dispatch.status = "cancelled";
+        dispatch.updatedAt = this.now().toISOString();
+        dispatch.detail = reason;
+      }
       state.activeTurn = null;
       state.status = "ended";
       state.endReason = reason;
@@ -274,7 +304,9 @@ export class RunCommandService {
 
   async advance(runId: string, actor: CommandActor): Promise<TransitionResult> {
     const leaseOwner = `driver-${process.pid}-${randomUUID()}`;
-    await this.store.acquireLease(runId, "driver", leaseOwner, 30_000);
+    const lease = await this.store.acquireLease(runId, "driver", leaseOwner, this.driverLeaseTtlMs);
+    const heartbeat = new LeaseHeartbeat(this.store, runId, "driver", lease, this.driverLeaseTtlMs);
+    heartbeat.start();
     try {
       const state = await this.store.readRun(runId);
       assertMutable(state);
@@ -291,18 +323,21 @@ export class RunCommandService {
       if (phase === undefined) return this.finish(runId, actor);
       const definition = workflowPhase(state, phase.id);
       if (definition.executor.kind === "agent") {
-        return await this.advanceAgentPhase(state, phase, actor);
+        return await this.advanceAgentPhase(state, phase, actor, heartbeat);
       }
       if (definition.executor.kind === "task-frontier") {
-        return await this.advanceTaskFrontier(state, phase, actor);
+        return await this.advanceTaskFrontier(state, phase, actor, heartbeat);
       }
       throw new Error(
         `Executor ${definition.executor.kind} is not supported by the standard driver`,
       );
     } finally {
+      await heartbeat.stop();
       const latest = await this.store.readRun(runId);
       if (latest.status !== "finished" && latest.status !== "ended") {
-        await this.store.releaseLease(runId, "driver", leaseOwner);
+        await this.store.releaseLease(runId, "driver", heartbeat.currentLease).catch((error) => {
+          if (heartbeat.failure === null) throw error;
+        });
       }
     }
   }
@@ -311,35 +346,93 @@ export class RunCommandService {
     state: RuntimeState,
     phase: RuntimePhase,
     actor: CommandActor,
+    heartbeat: LeaseHeartbeat,
   ): Promise<TransitionResult> {
     const definition = workflowPhase(state, phase.id);
     if (definition.executor.kind !== "agent") throw new Error("Expected an agent phase");
     const role = definition.executor.role;
-    const iteration = phase.iteration + 1;
+    const active = state.activeTurn;
+    const iteration =
+      active?.ownerKind === "phase" && active.ownerId === phase.id
+        ? active.attempt
+        : phase.iteration + 1;
     if (iteration > definition.iteration.max) {
       await this.store.updateRun(state.identity.runId, (draft) => {
         draft.status = "paused";
       });
       return { runId: state.identity.runId, kind: "idle", phaseId: phase.id };
     }
-    const sessionId = phase.sessionId ?? randomUUID();
-    await this.store.updateRun(state.identity.runId, (draft) => {
-      const current = requirePhase(draft, phase.id);
-      current.status = "running";
-      current.iteration = iteration;
-      current.sessionId = sessionId;
-      draft.activeTurn = {
-        ownerKind: "phase",
-        ownerId: phase.id,
-        sessionId,
-        attempt: iteration,
-      };
-      emit(draft, "phase.started", actor, this.now(), { phaseId: phase.id, iteration });
-    });
+    const priorFailure =
+      active?.ownerKind === "phase"
+        ? undefined
+        : [...state.dispatches]
+            .reverse()
+            .find(
+              (dispatch) =>
+                dispatch.ownerKind === "phase" &&
+                dispatch.ownerId === phase.id &&
+                dispatch.workAttempt === iteration &&
+                dispatch.status === "failed",
+            );
+    const operation =
+      active?.ownerKind === "phase"
+        ? active.operation
+        : (priorFailure?.operation ?? (phase.sessionId === null ? "create" : "resume"));
+    const sessionId =
+      active?.ownerKind === "phase"
+        ? active.sessionId
+        : (priorFailure?.sessionId ?? phase.sessionId ?? randomUUID());
+    const turnId =
+      active?.ownerKind === "phase" ? active.turnId : (priorFailure?.turnId ?? randomUUID());
+    const operationId =
+      active?.ownerKind === "phase"
+        ? active.operationId
+        : (priorFailure?.operationId ?? randomUUID());
+    const dispatchId = active?.ownerKind === "phase" ? active.dispatchId : randomUUID();
+    if (active?.ownerKind !== "phase") {
+      await this.store.updateRun(state.identity.runId, (draft) => {
+        const current = requirePhase(draft, phase.id);
+        current.status = "running";
+        current.iteration = iteration;
+        current.sessionId = sessionId;
+        draft.activeTurn = {
+          ownerKind: "phase",
+          ownerId: phase.id,
+          sessionId,
+          attempt: iteration,
+          turnId,
+          dispatchId,
+          operationId,
+          operation,
+        };
+        draft.dispatches.push(
+          createDispatch(
+            draft,
+            {
+              ownerKind: "phase",
+              ownerId: phase.id,
+              sessionId,
+              workAttempt: iteration,
+              turnId,
+              dispatchId,
+              operationId,
+              operation,
+              dispatchFailure: 0,
+            },
+            this.now(),
+          ),
+        );
+        emit(draft, "phase.started", actor, this.now(), { phaseId: phase.id, iteration });
+      });
+    }
 
     const turn: WorkerTurn = {
       runId: state.identity.runId,
       owner: { kind: "phase", id: phase.id },
+      operation,
+      turnId,
+      dispatchId,
+      operationId,
       role,
       ...resolveTurnProfile(state, role),
       attempt: iteration,
@@ -348,8 +441,44 @@ export class RunCommandService {
       rejectionReason: phase.rejectionReason,
       steering: [],
       prompt: phasePrompt(state, phase, iteration),
+      authorization: { taskPaths: [], frozenPaths: state.snapshot.policy.frozen },
     };
-    const result = await this.executeWorkerSafely(turn);
+    const phaseExecution =
+      active?.ownerKind === "phase"
+        ? await this.reconcilePhaseDispatch(turn)
+        : { kind: "result" as const, result: await this.executeWorkerSafely(turn) };
+    if (phaseExecution.kind === "deferred") return phaseExecution.transition;
+    const result = phaseExecution.result;
+    assertWorkerSession(turn, result);
+    if (result.artifact !== undefined) {
+      try {
+        assertPhaseArtifactMatchesSchema(
+          state,
+          phase.id,
+          definition.executor.output.schema,
+          result.artifact,
+        );
+      } catch (error) {
+        await this.store.updateRun(state.identity.runId, (draft) => {
+          appendWorkerResult(draft, turn, result, this.now());
+          const current = requirePhase(draft, phase.id);
+          current.status = "pending";
+          current.sessionId = result.sessionId;
+          draft.activeTurn = null;
+          completeDispatch(draft, turn.dispatchId, this.now());
+          draft.status = "paused";
+          appendOutput(
+            draft,
+            turn.owner.kind,
+            turn.owner.id,
+            "stderr",
+            errorMessage(error),
+            this.now(),
+          );
+        });
+        throw error;
+      }
+    }
     const gate = await this.gateEvaluator.evaluate({
       runId: state.identity.runId,
       owner: turn.owner,
@@ -358,6 +487,7 @@ export class RunCommandService {
       policy: state.snapshot.policy,
       ...(result.artifact === undefined ? {} : { artifact: result.artifact }),
     });
+    await heartbeat.assertActive();
     let transition: TransitionResult = {
       runId: state.identity.runId,
       kind: "phase-submitted",
@@ -369,6 +499,7 @@ export class RunCommandService {
       const current = requirePhase(draft, phase.id);
       current.sessionId = result.sessionId;
       draft.activeTurn = null;
+      completeDispatch(draft, turn.dispatchId, this.now());
       appendGateEvaluation(draft, gate, turn, this.now());
       if (!gate.accepted || result.artifact === undefined) {
         current.status = "pending";
@@ -400,6 +531,7 @@ export class RunCommandService {
     state: RuntimeState,
     phase: RuntimePhase,
     actor: CommandActor,
+    heartbeat: LeaseHeartbeat,
   ): Promise<TransitionResult> {
     const definition = workflowPhase(state, phase.id);
     if (definition.executor.kind !== "task-frontier" || definition.loop === undefined) {
@@ -419,6 +551,28 @@ export class RunCommandService {
       return { runId: state.identity.runId, kind: "phase-accepted", phaseId: phase.id };
     }
 
+    if (state.activeTurn?.ownerKind === "task") {
+      const task = requireTask(state, state.activeTurn.ownerId);
+      const turn = taskTurnFromActive(state, task);
+      const reconciliation = await this.reconcileTaskDispatch(
+        state,
+        phase,
+        task,
+        loop.each.dispatch.maxFailures,
+        turn,
+      );
+      if (reconciliation.kind === "deferred") return reconciliation.transition;
+      return this.completeTaskTurn(
+        state,
+        task,
+        loop.each.gate,
+        loop.each.rework.maxAttempts,
+        turn,
+        reconciliation.result,
+        heartbeat,
+      );
+    }
+
     const task = state.tasks.find(
       (candidate) =>
         (candidate.status === "pending" || candidate.status === "rework") &&
@@ -429,7 +583,20 @@ export class RunCommandService {
     );
     if (task === undefined) return { runId: state.identity.runId, kind: "idle", phaseId: phase.id };
     const attempt = task.attempt + 1;
-    const sessionId = task.sessionId ?? randomUUID();
+    const priorFailure = [...state.dispatches]
+      .reverse()
+      .find(
+        (dispatch) =>
+          dispatch.ownerKind === "task" &&
+          dispatch.ownerId === task.key &&
+          dispatch.workAttempt === attempt &&
+          dispatch.status === "failed",
+      );
+    const operation = priorFailure?.operation ?? (task.sessionId === null ? "create" : "resume");
+    const sessionId = priorFailure?.sessionId ?? task.sessionId ?? randomUUID();
+    const turnId = priorFailure?.turnId ?? randomUUID();
+    const operationId = priorFailure?.operationId ?? randomUUID();
+    const dispatchId = randomUUID();
     await this.store.updateRun(state.identity.runId, (draft) => {
       const currentPhase = requirePhase(draft, phase.id);
       if (currentPhase.status === "pending") {
@@ -442,24 +609,51 @@ export class RunCommandService {
       }
       const current = requireTask(draft, task.key);
       current.status = "in_progress";
-      current.attempt = attempt;
       current.sessionId = sessionId;
       draft.activeTurn = {
         ownerKind: "task",
         ownerId: task.key,
         sessionId,
         attempt,
+        turnId,
+        dispatchId,
+        operationId,
+        operation,
       };
+      draft.dispatches.push(
+        createDispatch(
+          draft,
+          {
+            ownerKind: "task",
+            ownerId: task.key,
+            sessionId,
+            workAttempt: attempt,
+            turnId,
+            dispatchId,
+            operationId,
+            operation,
+            dispatchFailure: current.dispatchFailures,
+          },
+          this.now(),
+        ),
+      );
       emit(draft, "task.dispatching", { channel: "driver" }, this.now(), {
         taskId: task.key,
         attempt,
         sessionId,
+        turnId,
+        dispatchId,
+        operationId,
       });
     });
 
     const turn: WorkerTurn = {
       runId: state.identity.runId,
       owner: { kind: "task", id: task.key },
+      operation,
+      turnId,
+      dispatchId,
+      operationId,
       role: task.role,
       ...resolveTurnProfile(state, task.role, task.execution),
       attempt,
@@ -468,15 +662,38 @@ export class RunCommandService {
       rejectionReason: null,
       steering: [...task.steering],
       prompt: taskPrompt(state, task, attempt),
+      authorization: { taskPaths: task.paths, frozenPaths: state.snapshot.policy.frozen },
     };
     const result = await this.executeWorkerSafely(turn);
+    return this.completeTaskTurn(
+      state,
+      task,
+      loop.each.gate,
+      loop.each.rework.maxAttempts,
+      turn,
+      result,
+      heartbeat,
+    );
+  }
+
+  private async completeTaskTurn(
+    state: RuntimeState,
+    task: RuntimeTask,
+    gateId: string,
+    maxReworkAttempts: number,
+    turn: WorkerTurn,
+    result: WorkerResult,
+    heartbeat: LeaseHeartbeat,
+  ): Promise<TransitionResult> {
+    const attempt = turn.attempt;
     const gate = await this.gateEvaluator.evaluate({
       runId: state.identity.runId,
       owner: turn.owner,
       attempt,
-      gateId: loop.each.gate,
+      gateId,
       policy: state.snapshot.policy,
     });
+    await heartbeat.assertActive();
     let transition: TransitionResult = {
       runId: state.identity.runId,
       kind: "task-closed",
@@ -486,8 +703,11 @@ export class RunCommandService {
       appendWorkerResult(draft, turn, result, this.now());
       if (draft.status === "ended") return;
       const current = requireTask(draft, task.key);
+      assertWorkerSession(turn, result);
+      current.attempt = attempt;
       current.sessionId = result.sessionId;
       draft.activeTurn = null;
+      completeDispatch(draft, turn.dispatchId, this.now());
       emit(draft, "task.dispatched", { channel: "driver" }, this.now(), {
         taskId: task.key,
         attempt,
@@ -500,13 +720,34 @@ export class RunCommandService {
       appendGateEvaluation(draft, gate, turn, this.now());
       if (gate.accepted) {
         current.status = "closed";
+        current.reworkFindings = [];
+        delete current.reworkFeedback;
         emit(draft, "task.closed", { channel: "driver" }, this.now(), {
           taskId: task.key,
           attempt,
         });
         return;
       }
-      if (attempt >= loop.each.rework.maxAttempts) {
+      current.reworkFindings = gate.findings
+        .slice(0, 20)
+        .map((finding) => truncate(finding.message, 500));
+      current.reworkFeedback = {
+        gateId: gate.gateId,
+        attempt,
+        maximumAttempts: maxReworkAttempts,
+        remainingAttempts: Math.max(0, maxReworkAttempts - attempt),
+        failedReadings: gate.readings
+          .filter((reading) => !reading.matched && !reading.advisory)
+          .slice(0, 20)
+          .map((reading) => ({
+            sensorId: reading.sensorId,
+            summary: truncate(reading.result.summary, 500),
+          })),
+        findings: current.reworkFindings,
+        evidencePaths: [],
+        nextPrompt: "Address every failed reading and finding, then request completion again.",
+      };
+      if (attempt >= maxReworkAttempts) {
         current.status = "escalated";
         draft.status = "paused";
         emit(draft, "task.escalated", { channel: "driver" }, this.now(), {
@@ -527,12 +768,141 @@ export class RunCommandService {
     return transition;
   }
 
+  private async reconcileTaskDispatch(
+    state: RuntimeState,
+    phase: RuntimePhase,
+    task: RuntimeTask,
+    maxDispatchFailures: number,
+    turn: WorkerTurn,
+  ): Promise<ReconciledWorkerExecution> {
+    const observation = await this.inspectWorkerTurn(turn);
+    if (observation.state === "completed") {
+      assertWorkerSession(turn, observation.result);
+      return { kind: "result", result: observation.result };
+    }
+    if (observation.state === "idle" && turn.operation === "resume") {
+      return { kind: "result", result: await this.executeWorkerSafely(turn) };
+    }
+    let transition: TransitionResult = {
+      runId: state.identity.runId,
+      kind: "idle",
+      phaseId: phase.id,
+      taskId: task.key,
+    };
+    await this.store.updateRun(state.identity.runId, (draft) => {
+      const dispatch = requireDispatch(draft, turn.dispatchId);
+      dispatch.updatedAt = this.now().toISOString();
+      if (observation.state === "missing") {
+        dispatch.status = "failed";
+        dispatch.detail = "Worker session or turn is missing";
+        const current = requireTask(draft, task.key);
+        current.dispatchFailures += 1;
+        current.status = current.attempt === 0 ? "pending" : "rework";
+        draft.activeTurn = null;
+        emit(draft, "dispatch.failed", { channel: "driver" }, this.now(), {
+          taskId: task.key,
+          attempt: turn.attempt,
+          dispatchFailures: current.dispatchFailures,
+          dispatchId: turn.dispatchId,
+          operationId: turn.operationId,
+          turnId: turn.turnId,
+        });
+        if (current.dispatchFailures >= maxDispatchFailures) {
+          current.status = "escalated";
+          draft.status = "paused";
+          emit(draft, "task.escalated", { channel: "driver" }, this.now(), {
+            taskId: task.key,
+            attempt: current.attempt,
+            reason: "dispatch-failures-exhausted",
+          });
+          transition = { runId: draft.identity.runId, kind: "task-escalated", taskId: task.key };
+        }
+        return;
+      }
+      if (observation.state === "cancelled") {
+        dispatch.status = "cancelled";
+        dispatch.detail = observation.detail ?? "Worker turn was cancelled";
+        const current = requireTask(draft, task.key);
+        current.status = current.attempt === 0 ? "pending" : "rework";
+        draft.activeTurn = null;
+        draft.status = "paused";
+        return;
+      }
+      dispatch.status = observation.state === "active" ? "active" : "unknown";
+      dispatch.detail =
+        observation.state === "unknown"
+          ? observation.detail
+          : observation.state === "idle"
+            ? "Create operation has an idle session but no provable turn outcome"
+            : "Worker turn remains active";
+      draft.status = "paused";
+    });
+    return { kind: "deferred", transition };
+  }
+
+  private async reconcilePhaseDispatch(turn: WorkerTurn): Promise<ReconciledWorkerExecution> {
+    const observation = await this.inspectWorkerTurn(turn);
+    if (observation.state === "completed") {
+      assertWorkerSession(turn, observation.result);
+      return { kind: "result", result: observation.result };
+    }
+    if (observation.state === "idle" && turn.operation === "resume") {
+      return { kind: "result", result: await this.executeWorkerSafely(turn) };
+    }
+    await this.store.updateRun(turn.runId, (draft) => {
+      const dispatch = requireDispatch(draft, turn.dispatchId);
+      dispatch.updatedAt = this.now().toISOString();
+      if (observation.state === "missing" || observation.state === "cancelled") {
+        dispatch.status = observation.state === "missing" ? "failed" : "cancelled";
+        dispatch.detail =
+          observation.state === "missing"
+            ? "Worker session or turn is missing"
+            : (observation.detail ?? "Worker turn was cancelled");
+        const phase = requirePhase(draft, turn.owner.id);
+        phase.status = "pending";
+        phase.iteration = Math.max(0, turn.attempt - 1);
+        draft.activeTurn = null;
+        if (observation.state === "missing") {
+          emit(draft, "dispatch.failed", { channel: "driver" }, this.now(), {
+            phaseId: turn.owner.id,
+            attempt: turn.attempt,
+            dispatchId: turn.dispatchId,
+            operationId: turn.operationId,
+            turnId: turn.turnId,
+          });
+        }
+      } else {
+        dispatch.status = observation.state === "active" ? "active" : "unknown";
+        dispatch.detail =
+          observation.state === "unknown"
+            ? observation.detail
+            : observation.state === "idle"
+              ? "Create operation has an idle session but no provable turn outcome"
+              : "Worker turn remains active";
+      }
+      draft.status = "paused";
+    });
+    return {
+      kind: "deferred",
+      transition: { runId: turn.runId, kind: "idle", phaseId: turn.owner.id },
+    };
+  }
+
+  private inspectWorkerTurn(turn: WorkerTurn) {
+    return (
+      this.workerHost.inspect?.(turn) ??
+      Promise.resolve({
+        state: "unknown" as const,
+        detail: "Worker host does not support inspection",
+      })
+    );
+  }
+
   private async executeWorkerSafely(turn: WorkerTurn): Promise<WorkerResult> {
     try {
       return await this.workerHost.execute(turn);
     } catch (error) {
       await this.store.updateRun(turn.runId, (state) => {
-        state.activeTurn = null;
         state.status = "paused";
         appendOutput(
           state,
@@ -545,6 +915,57 @@ export class RunCommandService {
       });
       throw error;
     }
+  }
+}
+
+class LeaseHeartbeat {
+  private timer: NodeJS.Timeout | null = null;
+  private pending: Promise<void> = Promise.resolve();
+  private leaseFailure: unknown = null;
+
+  constructor(
+    private readonly store: RuntimeStore,
+    private readonly runId: string,
+    private readonly kind: "driver" | "web",
+    private lease: RuntimeLease,
+    private readonly ttlMs: number,
+  ) {}
+
+  get currentLease(): RuntimeLease {
+    return this.lease;
+  }
+
+  get failure(): unknown {
+    return this.leaseFailure;
+  }
+
+  start(): void {
+    const intervalMs = Math.max(10, Math.floor(this.ttlMs / 3));
+    this.timer = setInterval(() => this.queueRenewal(), intervalMs);
+    this.timer.unref();
+  }
+
+  async assertActive(): Promise<void> {
+    this.queueRenewal();
+    await this.pending;
+    if (this.leaseFailure !== null) throw this.leaseFailure;
+  }
+
+  async stop(): Promise<void> {
+    if (this.timer !== null) clearInterval(this.timer);
+    this.timer = null;
+    await this.pending;
+  }
+
+  private queueRenewal(): void {
+    if (this.leaseFailure !== null) return;
+    this.pending = this.pending
+      .then(async () => {
+        this.lease = await this.store.renewLease(this.runId, this.kind, this.lease, this.ttlMs);
+      })
+      .catch((error: unknown) => {
+        this.leaseFailure = error;
+      });
   }
 }
 
@@ -566,6 +987,10 @@ export class RunQueryService {
     const awaiting = state.phases.find((phase) => phase.status === "awaiting_approval");
     const acceptedPhases = state.phases.filter((phase) => phase.status === "accepted").length;
     const closedTasks = state.tasks.filter((task) => task.status === "closed").length;
+    const unsettledDispatch =
+      state.activeTurn === null
+        ? undefined
+        : state.dispatches.find((dispatch) => dispatch.dispatchId === state.activeTurn?.dispatchId);
     const frontier = state.tasks
       .filter(
         (task) =>
@@ -618,7 +1043,22 @@ export class RunQueryService {
         dependsOn: task.dependsOn,
         status: task.status,
         attempt: task.attempt,
+        dispatchFailures: task.dispatchFailures,
       })),
+      unsettledDispatch:
+        unsettledDispatch === undefined
+          ? null
+          : {
+              dispatchId: unsettledDispatch.dispatchId,
+              operationId: unsettledDispatch.operationId,
+              turnId: unsettledDispatch.turnId,
+              sessionId: unsettledDispatch.sessionId,
+              ownerKind: unsettledDispatch.ownerKind,
+              ownerId: unsettledDispatch.ownerId,
+              status: unsettledDispatch.status,
+              detail: unsettledDispatch.detail ?? null,
+              operatorAction: dispatchOperatorAction(unsettledDispatch),
+            },
       frontier,
       cursor: state.journal.at(-1)?.seq ?? 0,
       outputCursor: Object.values(state.outputs).reduce(
@@ -793,6 +1233,70 @@ function requireTask(state: RuntimeState, taskId: string): RuntimeTask {
   return task;
 }
 
+function requireDispatch(state: RuntimeState, dispatchId: string): RuntimeDispatch {
+  const dispatch = state.dispatches.find((candidate) => candidate.dispatchId === dispatchId);
+  if (dispatch === undefined) throw new Error(`Unknown dispatch ${dispatchId}`);
+  return dispatch;
+}
+
+function dispatchOperatorAction(dispatch: RuntimeDispatch): string {
+  if (dispatch.status === "active") {
+    return "Wait for the worker turn to finish or cancel it in the worker host before resuming";
+  }
+  if (dispatch.status === "unknown") {
+    return "Inspect or cancel the worker turn in the worker host before resuming";
+  }
+  return "Resume the run to reconcile the recorded worker operation";
+}
+
+function createDispatch(
+  _state: RuntimeState,
+  input: Omit<RuntimeDispatch, "status" | "createdAt" | "updatedAt">,
+  now: Date,
+): RuntimeDispatch {
+  const timestamp = now.toISOString();
+  return { ...input, status: "intent", createdAt: timestamp, updatedAt: timestamp };
+}
+
+function completeDispatch(state: RuntimeState, dispatchId: string, now: Date): void {
+  const dispatch = requireDispatch(state, dispatchId);
+  dispatch.status = "completed";
+  dispatch.updatedAt = now.toISOString();
+  delete dispatch.detail;
+}
+
+function taskTurnFromActive(state: RuntimeState, task: RuntimeTask): WorkerTurn {
+  const active = state.activeTurn;
+  if (active === null || active.ownerKind !== "task" || active.ownerId !== task.key) {
+    throw new Error(`Task ${task.key} has no active dispatch`);
+  }
+  return {
+    runId: state.identity.runId,
+    owner: { kind: "task", id: task.key },
+    operation: active.operation,
+    turnId: active.turnId,
+    dispatchId: active.dispatchId,
+    operationId: active.operationId,
+    role: task.role,
+    ...resolveTurnProfile(state, task.role, task.execution),
+    attempt: active.attempt,
+    sessionId: active.sessionId,
+    goal: state.identity.request.goal,
+    rejectionReason: null,
+    steering: [...task.steering],
+    prompt: taskPrompt(state, task, active.attempt),
+    authorization: { taskPaths: task.paths, frozenPaths: state.snapshot.policy.frozen },
+  };
+}
+
+function assertWorkerSession(turn: WorkerTurn, result: WorkerResult): void {
+  if (result.sessionId !== turn.sessionId) {
+    throw new Error(
+      `Worker result session ${result.sessionId} does not match dispatch session ${turn.sessionId}`,
+    );
+  }
+}
+
 function importPlan(
   state: RuntimeState,
   phase: RuntimePhase,
@@ -817,8 +1321,10 @@ function importPlan(
       ...task,
       status: "pending",
       attempt: 0,
+      dispatchFailures: 0,
       sessionId: null,
       steering: [],
+      reworkFindings: [],
     });
     existing.add(task.key);
     added.push(task.key);
@@ -850,6 +1356,27 @@ function appendArtifact(
   phase.artifactVersion = version;
   phase.rejectionReason = null;
   return artifact;
+}
+
+function assertPhaseArtifactMatchesSchema(
+  state: RuntimeState,
+  phaseId: string,
+  schemaReference: string,
+  artifact: JsonObject,
+): void {
+  const schemaPath = posix.normalize(posix.join(".senawa/workflows", schemaReference));
+  const schemaFile = state.snapshot.files.find((file) => file.path === schemaPath);
+  if (schemaFile === undefined) {
+    throw new Error(`Phase ${phaseId} frozen output schema is missing: ${schemaPath}`);
+  }
+  const ajv = new Ajv2020.default({ allErrors: true, strict: true });
+  addFormats.default(ajv);
+  const validate = ajv.compile(JSON.parse(schemaFile.content));
+  if (validate(artifact)) return;
+  const details = ajv.errorsText(validate.errors, { separator: "; " });
+  throw new Error(
+    `Phase ${phaseId} artifact does not match its frozen output schema: ${truncate(details, 1_000)}`,
+  );
 }
 
 function appendWorkerResult(
@@ -1007,6 +1534,14 @@ function taskPrompt(state: RuntimeState, task: RuntimeTask, attempt: number): st
     paths: task.paths,
     acceptance: task.acceptance,
     steering: task.steering,
+    gateFeedback:
+      task.reworkFeedback ??
+      (task.reworkFindings === undefined || task.reworkFindings.length === 0
+        ? null
+        : {
+            findings: task.reworkFindings,
+            nextPrompt: "Address every finding, then request completion again.",
+          }),
   });
 }
 

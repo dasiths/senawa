@@ -56,6 +56,45 @@ describe("FileRuntimeStore", () => {
     expect(await store.getActiveRunId()).toBe("run-two");
     expect((await store.readRun("run-one")).status).toBe("ended");
   });
+
+  it("fences an expired lease owner after takeover", async () => {
+    let now = new Date("2026-08-04T10:00:00.000Z");
+    const root = await mkdtemp(join(tmpdir(), "senawa-graph-"));
+    const store = new FileRuntimeStore(root, () => now);
+    await store.createRun(runtime("run-fenced"));
+    const first = await store.acquireLease("run-fenced", "driver", "driver-a", 100);
+
+    now = new Date("2026-08-04T10:00:00.101Z");
+    const second = await store.acquireLease("run-fenced", "driver", "driver-b", 100);
+    expect(second.fence).toBeGreaterThan(first.fence);
+    await expect(store.renewLease("run-fenced", "driver", first, 100)).rejects.toThrow();
+    await expect(store.releaseLease("run-fenced", "driver", first)).rejects.toThrow();
+    await store.releaseLease("run-fenced", "driver", second);
+  });
+
+  it("normalizes legacy leases before renewal", async () => {
+    const root = await mkdtemp(join(tmpdir(), "senawa-graph-"));
+    const store = new FileRuntimeStore(root);
+    const state = runtime("run-legacy-lease");
+    state.leases.driver = {
+      owner: "legacy-driver",
+      acquiredAt: "2026-08-04T10:00:00.000Z",
+      heartbeatAt: "2026-08-04T10:00:00.000Z",
+      expiresAt: "2099-08-04T10:00:00.000Z",
+    } as (typeof state.leases)["driver"];
+    await store.createRun(state);
+
+    const reopened = await store.readRun("run-legacy-lease");
+    expect(reopened.leases.driver?.fence).toBe(1);
+    expect(reopened.leaseFences?.driver).toBe(1);
+    const renewed = await store.renewLease(
+      "run-legacy-lease",
+      "driver",
+      reopened.leases.driver as NonNullable<typeof reopened.leases.driver>,
+      100,
+    );
+    expect(renewed.fence).toBe(1);
+  });
 });
 
 function event(state: RuntimeState, message: string): JournalEvent {
@@ -176,6 +215,7 @@ function runtime(runId: string): RuntimeState {
     journal: [],
     outputs: {},
     activeTurn: null,
+    dispatches: [],
     leases: { driver: null, web: null },
   };
 }

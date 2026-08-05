@@ -22,6 +22,7 @@ export const JournalEventNameSchema = z.enum([
   "plan.revised",
   "task.dispatching",
   "task.dispatched",
+  "dispatch.failed",
   "task.completion-requested",
   "task.rework",
   "task.closed",

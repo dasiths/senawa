@@ -219,10 +219,17 @@ async function pair(
 }
 
 function normalizeJournal(events: Awaited<ReturnType<SenawaServices["queries"]["journal"]>>) {
+  const nondeterministicFields = new Set([
+    "dispatchId",
+    "durationMs",
+    "operationId",
+    "sessionId",
+    "turnId",
+  ]);
   return events.map(({ actor: _actor, ...event }) => ({
     ...event,
     data: Object.fromEntries(
-      Object.entries(event.data).filter(([key]) => key !== "sessionId" && key !== "durationMs"),
+      Object.entries(event.data).filter(([key]) => !nondeterministicFields.has(key)),
     ),
   }));
 }

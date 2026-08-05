@@ -62,8 +62,19 @@ class ObservableRuntimeStore implements RuntimeStore {
     return lease;
   }
 
-  async releaseLease(runId: string, kind: "driver" | "web", owner: string): Promise<void> {
-    await this.store.releaseLease(runId, kind, owner);
+  async renewLease(
+    runId: string,
+    kind: "driver" | "web",
+    lease: RuntimeLease,
+    ttlMs: number,
+  ): Promise<RuntimeLease> {
+    const renewed = await this.store.renewLease(runId, kind, lease, ttlMs);
+    this.notifier.publish(runId);
+    return renewed;
+  }
+
+  async releaseLease(runId: string, kind: "driver" | "web", lease: RuntimeLease): Promise<void> {
+    await this.store.releaseLease(runId, kind, lease);
     this.notifier.publish(runId);
   }
 
@@ -79,7 +90,8 @@ export interface SenawaServices {
   readonly notifier: RunChangeNotifier;
   loadDefinitions(workflowName?: string): Promise<RepositoryDefinitions>;
   acquireWebLease(runId: string, owner: string, ttlMs: number): Promise<RuntimeLease>;
-  releaseWebLease(runId: string, owner: string): Promise<void>;
+  renewWebLease(runId: string, lease: RuntimeLease, ttlMs: number): Promise<RuntimeLease>;
+  releaseWebLease(runId: string, lease: RuntimeLease): Promise<void>;
 }
 
 export interface SenawaServiceOptions {
@@ -115,6 +127,7 @@ export function createSenawaServices(
     notifier,
     loadDefinitions: (workflowName) => loadRepositoryDefinitions(root, workflowName),
     acquireWebLease: (runId, owner, ttlMs) => store.acquireLease(runId, "web", owner, ttlMs),
-    releaseWebLease: (runId, owner) => store.releaseLease(runId, "web", owner),
+    renewWebLease: (runId, lease, ttlMs) => store.renewLease(runId, "web", lease, ttlMs),
+    releaseWebLease: (runId, lease) => store.releaseLease(runId, "web", lease),
   };
 }

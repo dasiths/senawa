@@ -34,9 +34,26 @@ export interface RuntimePhase {
 export type RuntimeTask = PlanArtifact["tasks"][number] & {
   status: TaskStatus;
   attempt: number;
+  dispatchFailures: number;
   sessionId: string | null;
   steering: string[];
+  reworkFindings?: string[];
+  reworkFeedback?: RuntimeGateFeedback;
 };
+
+export interface RuntimeGateFeedback {
+  readonly gateId: string;
+  readonly attempt: number;
+  readonly maximumAttempts: number;
+  readonly remainingAttempts: number;
+  readonly failedReadings: ReadonlyArray<{
+    readonly sensorId: string;
+    readonly summary: string;
+  }>;
+  readonly findings: readonly string[];
+  readonly evidencePaths: readonly string[];
+  readonly nextPrompt: string;
+}
 
 export interface RuntimeArtifact {
   readonly phaseId: string;
@@ -49,6 +66,7 @@ export interface RuntimeArtifact {
 
 export interface RuntimeLease {
   readonly owner: string;
+  readonly fence: number;
   readonly acquiredAt: string;
   readonly heartbeatAt: string;
   readonly expiresAt: string;
@@ -59,6 +77,34 @@ export interface ActiveWorkerTurn {
   readonly ownerId: string;
   readonly sessionId: string;
   readonly attempt: number;
+  readonly turnId: string;
+  readonly dispatchId: string;
+  readonly operationId: string;
+  readonly operation: "create" | "resume";
+}
+
+export type RuntimeDispatchStatus =
+  | "intent"
+  | "active"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "unknown";
+
+export interface RuntimeDispatch {
+  readonly dispatchId: string;
+  readonly operationId: string;
+  readonly turnId: string;
+  readonly sessionId: string;
+  readonly ownerKind: "phase" | "task";
+  readonly ownerId: string;
+  readonly operation: "create" | "resume";
+  readonly workAttempt: number;
+  readonly dispatchFailure: number;
+  readonly createdAt: string;
+  status: RuntimeDispatchStatus;
+  updatedAt: string;
+  detail?: string;
 }
 
 export interface RuntimeState {
@@ -73,7 +119,9 @@ export interface RuntimeState {
   journal: JournalEvent[];
   outputs: Record<string, OutputRecord[]>;
   activeTurn: ActiveWorkerTurn | null;
+  dispatches: RuntimeDispatch[];
   leases: { driver: RuntimeLease | null; web: RuntimeLease | null };
+  leaseFences?: { driver: number; web: number };
 }
 
 export interface RuntimeStore {
@@ -87,7 +135,13 @@ export interface RuntimeStore {
     owner: string,
     ttlMs: number,
   ): Promise<RuntimeLease>;
-  releaseLease(runId: string, kind: "driver" | "web", owner: string): Promise<void>;
+  renewLease(
+    runId: string,
+    kind: "driver" | "web",
+    lease: RuntimeLease,
+    ttlMs: number,
+  ): Promise<RuntimeLease>;
+  releaseLease(runId: string, kind: "driver" | "web", lease: RuntimeLease): Promise<void>;
   getWorkDirectory(runId: string): string;
 }
 
@@ -162,7 +216,9 @@ export class FileRuntimeStore implements RuntimeStore {
   async readRun(runId: string): Promise<RuntimeState> {
     const currentPath = this.runtimePath(runId);
     const archivedPath = join(this.archiveDirectory, runId, "runtime.json");
-    return readJson<RuntimeState>((await exists(currentPath)) ? currentPath : archivedPath);
+    return normalizeRuntimeState(
+      await readJson<RuntimeState>((await exists(currentPath)) ? currentPath : archivedPath),
+    );
   }
 
   async updateRun(runId: string, update: (draft: RuntimeState) => void): Promise<RuntimeState> {
@@ -205,8 +261,13 @@ export class FileRuntimeStore implements RuntimeStore {
       ) {
         throw new LeaseConflictError(kind, current.owner);
       }
+      const fences = draft.leaseFences ?? { driver: 0, web: 0 };
+      const fence = current?.owner === owner ? current.fence : fences[kind] + 1;
+      fences[kind] = Math.max(fences[kind], fence);
+      draft.leaseFences = fences;
       acquired = {
         owner,
+        fence,
         acquiredAt: current?.owner === owner ? current.acquiredAt : now.toISOString(),
         heartbeatAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
@@ -217,12 +278,38 @@ export class FileRuntimeStore implements RuntimeStore {
     return acquired;
   }
 
-  async releaseLease(runId: string, kind: "driver" | "web", owner: string): Promise<void> {
+  async renewLease(
+    runId: string,
+    kind: "driver" | "web",
+    lease: RuntimeLease,
+    ttlMs: number,
+  ): Promise<RuntimeLease> {
+    if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
+      throw new Error("Lease TTL must be a positive integer");
+    }
+    let renewed: RuntimeLease | null = null;
     await this.updateRun(runId, (draft) => {
       const current = draft.leases[kind];
-      if (current !== null && current.owner !== owner) {
+      assertCurrentLease(kind, current, lease);
+      const now = this.now();
+      if (Date.parse(current.expiresAt) <= now.getTime()) {
         throw new LeaseConflictError(kind, current.owner);
       }
+      renewed = {
+        ...current,
+        heartbeatAt: now.toISOString(),
+        expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
+      };
+      draft.leases[kind] = renewed;
+    });
+    if (renewed === null) throw new Error("Lease renewal failed");
+    return renewed;
+  }
+
+  async releaseLease(runId: string, kind: "driver" | "web", lease: RuntimeLease): Promise<void> {
+    await this.updateRun(runId, (draft) => {
+      const current = draft.leases[kind];
+      assertCurrentLease(kind, current, lease);
       draft.leases[kind] = null;
     });
   }
@@ -286,6 +373,31 @@ export class FileRuntimeStore implements RuntimeStore {
   }
 }
 
+function assertCurrentLease(
+  kind: "driver" | "web",
+  current: RuntimeLease | null,
+  expected: RuntimeLease,
+): asserts current is RuntimeLease {
+  if (current === null || current.owner !== expected.owner || current.fence !== expected.fence) {
+    throw new LeaseConflictError(kind, current?.owner ?? "no active owner");
+  }
+}
+
+function normalizeRuntimeState(state: RuntimeState): RuntimeState {
+  state.dispatches ??= [];
+  for (const task of state.tasks) task.dispatchFailures ??= 0;
+  const fences = state.leaseFences ?? { driver: 0, web: 0 };
+  for (const kind of ["driver", "web"] as const) {
+    const lease = state.leases[kind];
+    if (lease !== null && !Number.isSafeInteger(lease.fence)) {
+      state.leases[kind] = { ...lease, fence: Math.max(1, fences[kind]) };
+    }
+    fences[kind] = Math.max(fences[kind], state.leases[kind]?.fence ?? 0);
+  }
+  state.leaseFences = fences;
+  return state;
+}
+
 function assertRuntimeInvariants(previous: RuntimeState, next: RuntimeState): void {
   if (JSON.stringify(previous.identity) !== JSON.stringify(next.identity)) {
     throw new Error("Run identity is immutable");
@@ -298,12 +410,32 @@ function assertRuntimeInvariants(previous: RuntimeState, next: RuntimeState): vo
   for (const [owner, records] of Object.entries(previous.outputs)) {
     assertAppendOnly(`output stream ${owner}`, records, next.outputs[owner] ?? []);
   }
+  if (next.dispatches.length < previous.dispatches.length) {
+    throw new Error("Dispatch records cannot be removed");
+  }
+  const dispatchIds = new Set<string>();
+  for (const [index, dispatch] of next.dispatches.entries()) {
+    if (dispatchIds.has(dispatch.dispatchId)) throw new Error("Dispatch IDs must be unique");
+    dispatchIds.add(dispatch.dispatchId);
+    const prior = previous.dispatches[index];
+    if (
+      prior !== undefined &&
+      JSON.stringify(dispatchIdentity(prior)) !== JSON.stringify(dispatchIdentity(dispatch))
+    ) {
+      throw new Error("Dispatch identity is immutable");
+    }
+  }
   if (
     next.activeTurn !== null &&
     next.tasks.filter((task) => task.status === "in_progress").length > 1
   ) {
     throw new Error("Only one worker turn may be active");
   }
+}
+
+function dispatchIdentity(dispatch: RuntimeDispatch): object {
+  const { status: _status, updatedAt: _updatedAt, detail: _detail, ...identity } = dispatch;
+  return identity;
 }
 
 function assertAppendOnly(name: string, previous: unknown[], next: unknown[]): void {

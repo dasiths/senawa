@@ -40,7 +40,7 @@ export async function startWebSupervisor(
 
   const owner = `web-${randomUUID()}`;
   const leaseTtlMs = options.leaseTtlMs ?? 30_000;
-  await services.acquireWebLease(runId, owner, leaseTtlMs);
+  let webLease = await services.acquireWebLease(runId, owner, leaseTtlMs);
   const bootstrapToken = randomBytes(32).toString("base64url");
   const sessionToken = randomBytes(32).toString("base64url");
   let expectedHost = "";
@@ -92,7 +92,7 @@ export async function startWebSupervisor(
       });
     });
   } catch (error) {
-    await services.releaseWebLease(runId, owner).catch(() => undefined);
+    await services.releaseWebLease(runId, webLease).catch(() => undefined);
     throw error;
   }
 
@@ -102,7 +102,12 @@ export async function startWebSupervisor(
   expectedOrigin = `http://${expectedHost}`;
   const heartbeat = setInterval(
     () => {
-      void services.acquireWebLease(runId, owner, leaseTtlMs).catch(() => void close());
+      void services
+        .renewWebLease(runId, webLease, leaseTtlMs)
+        .then((renewed) => {
+          webLease = renewed;
+        })
+        .catch(() => void close());
     },
     Math.max(1_000, Math.floor(leaseTtlMs / 3)),
   );
@@ -113,7 +118,7 @@ export async function startWebSupervisor(
     closing = (async () => {
       clearInterval(heartbeat);
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
-      await services.releaseWebLease(runId, owner).catch(() => undefined);
+      await services.releaseWebLease(runId, webLease).catch(() => undefined);
       resolveClosed();
     })();
     return closing;

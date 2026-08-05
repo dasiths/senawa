@@ -33,6 +33,7 @@ describe("renderRunReport", () => {
           role: "implementor",
           status: "closed",
           attempt: 2,
+          dispatchFailures: 0,
           sessionId: "task-session",
           steering: [],
         },
