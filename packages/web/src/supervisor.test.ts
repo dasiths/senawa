@@ -1,10 +1,11 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { LeaseConflictError } from "@senawa/application";
 import { loadRepositoryDefinitions } from "@senawa/configuration";
 import type { CommandActor } from "@senawa/domain";
-import { FileRuntimeStore, LeaseConflictError } from "@senawa/graph";
 import { createSenawaServices } from "@senawa/orchestrator";
+import { createFileTestComposition } from "@senawa/testing";
 import { beforeAll, describe, expect, it } from "vitest";
 import { appJs } from "./static-assets.js";
 import { startWebSupervisor, type WebSupervisor } from "./supervisor.js";
@@ -85,13 +86,47 @@ describe("loopback web supervisor", () => {
       const next = sseReader(response);
       expect((await next()).seq).toBe(2);
 
-      await services.commands.reject("replay-run", "define", "Produce another version", actor);
-      await services.commands.resume("replay-run", actor);
+      const independent = servicesForRoot(services.repositoryRoot);
+      await independent.commands.reject("replay-run", "define", "Produce another version", actor);
+      await independent.commands.resume("replay-run", actor);
       expect((await next()).seq).toBe(3);
       expect((await next()).seq).toBe(4);
     } finally {
       controller.abort();
       await supervisor.close();
+    }
+  });
+
+  it("replays writes made while the supervisor is stopped", async () => {
+    const services = await createRun("restart-replay-run");
+    const first = await startWebSupervisor(services);
+    await first.close();
+
+    const independent = servicesForRoot(services.repositoryRoot);
+    await independent.commands.reject(
+      "restart-replay-run",
+      "define",
+      "Write while browser is stopped",
+      actor,
+    );
+    await independent.commands.resume("restart-replay-run", actor);
+
+    const restarted = await startWebSupervisor(services);
+    const bootstrap = await fetch(restarted.bootstrapUrl, { redirect: "manual" });
+    const cookie = bootstrap.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
+    const origin = new URL(restarted.url).origin;
+    const controller = new AbortController();
+    try {
+      const response = await fetch(
+        `${origin}/api/v1/runs/restart-replay-run/streams/${encodeURIComponent("phase:define")}/events?after=2`,
+        { headers: { Cookie: cookie }, signal: controller.signal },
+      );
+      const next = sseReader(response);
+      expect((await next()).seq).toBe(3);
+      expect((await next()).seq).toBe(4);
+    } finally {
+      controller.abort();
+      await restarted.close();
     }
   });
 
@@ -144,14 +179,7 @@ describe("loopback web supervisor", () => {
 
 async function createRun(runId: string) {
   const root = await mkdtemp(join(tmpdir(), "senawa-web-"));
-  const services = createSenawaServices(root, {
-    store: new FileRuntimeStore(root),
-    gateEvaluator: {
-      async evaluate(input) {
-        return { gateId: input.gateId, accepted: true, readings: [], findings: [] };
-      },
-    },
-  });
+  const services = servicesForRoot(root);
   await services.commands.start({
     actor,
     definitions,
@@ -160,6 +188,18 @@ async function createRun(runId: string) {
   });
   await services.commands.drive(runId, actor);
   return services;
+}
+
+function servicesForRoot(root: string) {
+  const composition = createFileTestComposition(root);
+  return createSenawaServices(root, {
+    ...composition,
+    gateEvaluator: {
+      async evaluate(input) {
+        return { gateId: input.gateId, accepted: true, readings: [], findings: [] };
+      },
+    },
+  });
 }
 
 function sseReader(response: Response): () => Promise<{ seq: number }> {

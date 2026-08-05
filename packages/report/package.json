@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@senawa/core": "workspace:*",
-    "@senawa/graph": "workspace:*"
+    "@senawa/application": "workspace:*",
+    "@senawa/domain": "workspace:*"
   }
 }

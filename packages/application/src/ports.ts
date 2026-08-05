@@ -3,6 +3,7 @@ import type {
   JournalEvent,
   JsonObject,
   OutputRecord,
+  RunIdentity,
   RunSnapshot,
   RuntimeArtifact,
   RuntimeLease,
@@ -16,6 +17,16 @@ export interface VersionedRunState {
   readonly revision: string;
 }
 
+export type StoredRuntimeState = Omit<
+  RuntimeState,
+  "identity" | "snapshot" | "artifacts" | "journal" | "outputs" | "leases" | "leaseFences"
+>;
+
+export interface VersionedStoredRuntimeState {
+  readonly state: StoredRuntimeState;
+  readonly revision: string;
+}
+
 export class RuntimeRevisionConflictError extends Error {
   constructor(
     readonly runId: string,
@@ -23,6 +34,23 @@ export class RuntimeRevisionConflictError extends Error {
   ) {
     super(`Run ${runId} changed before operation ${operationId}`);
     this.name = "RuntimeRevisionConflictError";
+  }
+}
+
+export class ActiveRunError extends Error {
+  constructor(readonly runId: string) {
+    super(`An active run already exists: ${runId}`);
+    this.name = "ActiveRunError";
+  }
+}
+
+export class LeaseConflictError extends Error {
+  constructor(
+    readonly kind: "driver" | "web",
+    readonly owner: string,
+  ) {
+    super(`The ${kind} lease is held by ${owner}`);
+    this.name = "LeaseConflictError";
   }
 }
 
@@ -37,8 +65,32 @@ export interface RuntimeStatePort {
   }): Promise<VersionedRunState>;
 }
 
+export interface RuntimeStateStoragePort {
+  createRuntimeState(
+    runId: string,
+    state: StoredRuntimeState,
+    operationId: string,
+  ): Promise<VersionedStoredRuntimeState>;
+  readRuntimeState(runId: string): Promise<VersionedStoredRuntimeState>;
+  commitRuntimeState(input: {
+    readonly runId: string;
+    readonly expectedRevision: string;
+    readonly operationId: string;
+    readonly state: StoredRuntimeState;
+  }): Promise<VersionedStoredRuntimeState>;
+}
+
 export interface ActiveRunRegistry {
   getActiveRunId(): Promise<string | null>;
+}
+
+export interface ActiveRunStoragePort extends ActiveRunRegistry {
+  reserveActiveRun(input: {
+    readonly runId: string;
+    readonly operationId: string;
+    readonly createdAt: string;
+  }): Promise<void>;
+  releaseActiveRun(input: { readonly runId: string; readonly operationId: string }): Promise<void>;
 }
 
 export interface RunDocumentStore {
@@ -46,8 +98,25 @@ export interface RunDocumentStore {
   readArtifact(runId: string, phaseId: string, version?: number): Promise<RuntimeArtifact | null>;
 }
 
+export interface RunDocumentStoragePort extends RunDocumentStore {
+  publishIdentity(identity: RunIdentity, operationId: string): Promise<void>;
+  publishArtifact(artifact: RuntimeArtifact, runId: string, operationId: string): Promise<void>;
+  readIdentity(runId: string): Promise<RunIdentity>;
+  readSnapshot(runId: string): Promise<RunSnapshot>;
+  listArtifacts(runId: string): Promise<readonly RuntimeArtifact[]>;
+}
+
 export interface JournalPort {
   readJournal(runId: string, after: number, limit: number): Promise<readonly JournalEvent[]>;
+}
+
+export interface JournalStoragePort extends JournalPort {
+  appendJournal(input: {
+    readonly runId: string;
+    readonly entryId: string;
+    readonly event: JournalEvent;
+  }): Promise<JournalEvent>;
+  journalHead(runId: string): Promise<number>;
 }
 
 export interface OutputLogPort {
@@ -58,6 +127,20 @@ export interface OutputLogPort {
     after: number,
     limit: number,
   ): Promise<readonly OutputRecord[]>;
+}
+
+export interface OutputLogStoragePort extends OutputLogPort {
+  appendOutput(input: {
+    readonly runId: string;
+    readonly ownerKind: "run" | "phase" | "task";
+    readonly ownerId: string;
+    readonly entryId: string;
+    readonly record: OutputRecord;
+  }): Promise<OutputRecord>;
+  outputHead(runId: string, ownerKind: "run" | "phase" | "task", ownerId: string): Promise<number>;
+  listOutputOwners(
+    runId: string,
+  ): Promise<readonly { readonly kind: "run" | "phase" | "task"; readonly id: string }[]>;
 }
 
 export interface LeasePort {
@@ -74,6 +157,11 @@ export interface LeasePort {
     ttlMs: number,
   ): Promise<RuntimeLease>;
   releaseLease(runId: string, kind: "driver" | "web", lease: RuntimeLease): Promise<void>;
+}
+
+export interface LeaseStoragePort extends LeasePort {
+  inspectLease(runId: string, kind: "driver" | "web"): Promise<RuntimeLease | null>;
+  readLeaseFence(runId: string, kind: "driver" | "web"): Promise<number>;
 }
 
 export interface WorkerTurn {
@@ -166,6 +254,10 @@ export interface IdentifierPort {
 
 export interface NotificationPort {
   publishRunChanged(runId: string): void | Promise<void>;
+}
+
+export interface RunChangeNotificationPort extends NotificationPort {
+  subscribe(listener: (runId: string) => void): () => void;
 }
 
 export interface TelemetryPort {

@@ -7,9 +7,10 @@ Senawa (සේනාව) is an orchestration harness for [GitHub Copilot CLI](ht
 Three ideas hold the design together.
 
 Durable workflow state lives outside the model, behind a runtime graph-store
-boundary. The current vertical slice uses a file-backed store; the target
-adapter uses [beads](https://github.com/gastownhall/beads). Agents ask runtime
-state what is workable rather than remembering a plan.
+boundary. The current vertical slice explicitly composes split file-backed
+development and test adapters; the target production adapter uses
+[beads](https://github.com/gastownhall/beads). Agents ask runtime state what is
+workable rather than remembering a plan.
 
 Every agent-facing operation crosses the Senawa boundary. The principal agent
 uses the CLI. Hosted workers use typed Senawa tools, and subprocess workers use a
@@ -96,7 +97,7 @@ HTTP command path, the loopback browser supervisor, and report rendering.
 `@senawa/application` owns commands, queries, driver transitions, prompts,
 status projections, and the ports consumed by both adapters. Its production
 code imports only `@senawa/domain`; `@senawa/orchestrator` is now a temporary
-compatibility and composition facade.
+compatibility facade that requires injected persistence and notification ports.
 Repository worker profiles under `.senawa/agents` now provide strict model,
 capability-request, and prompt configuration. Their exact sources are frozen,
 snapshotted, and fingerprinted; hosts apply a separate Senawa-owned capability
@@ -110,12 +111,23 @@ from snapshotted policy. `RunCommandService` evaluates their readings and owns
 every gate transition; worker hosts return no acceptance verdict. Sensor starts,
 completions, execution errors, and gate evidence are recorded in the journal.
 
-Runtime state currently uses a file-backed store behind `@senawa/graph`. The
-beads adapter described by the target architecture is pending. The deterministic
-offline demo is ready and covered by integration tests. The opt-in Copilot
-subprocess host is implemented, but this production live-worker path has not
-been validated in this slice. Existing live-model claims remain limited to the
-probes that recorded them.
+The `senawa` app explicitly composes `@senawa/runtime-file`,
+`@senawa/artifact-store`, and `@senawa/observability`. Mutable runtime state,
+active-run ownership, fenced leases, immutable documents, journal JSONL, and
+session/turn output streams each have one file authority. Owner output replay is
+derived across those streams. A write-ahead transaction
+replays interrupted cross-store commits on reopen. Shared contracts cover
+restart, revisions, document conflicts, journal and output idempotency, lease
+fencing, mid-commit crash recovery, dispatch reconstruction, and projections. Browser SSE polls durable
+cursors as its correctness path, so independent process writes and supervisor
+restart do not depend on process-local notifications. `@senawa/graph` is only a
+compatibility re-export facade.
+
+The Beads adapter described by the target architecture is pending. The
+deterministic offline demo is ready and covered by integration tests. The opt-in
+Copilot subprocess host is implemented, but this production live-worker path has
+not been validated in this slice. Existing live-model claims remain limited to
+the probes that recorded them.
 
 Start with the [design index and reading order](docs/design/README.md). It moves
 from the system model and workflow lifecycle into agents, quality enforcement,
@@ -271,7 +283,13 @@ examples/demos/              supported deterministic and guarded live demonstrat
 experiments/probes/          bounded experiments that measured substrate behavior
 packages/                    reusable runtime, sensor, browser, and reporting components
 packages/application/        commands, queries, driver, prompts, projections, and ports
-packages/orchestrator/       temporary compatibility facade and concrete adapter composition
+packages/runtime-file/       explicit development and test runtime, active-run, lease, and recovery adapter
+packages/artifact-store/     immutable run identity, snapshot, and artifact documents
+packages/observability/      append-only journal, output streams, and notification hints
+packages/testing/            shared adapter contracts and deterministic fixtures
+packages/graph/              thin compatibility re-export facade
+packages/orchestrator/       temporary application and worker-host compatibility facade
+tests/contract/              shared storage, recovery, fencing, dispatch, and projection suites
 apps/senawa-hook/            embedded hook and future SDK session policy
 .senawa/agents/              strict worker profiles with model, capability requests, and prompts
 .senawa/workflows/           phase definitions: gates, approvals, iteration budgets

@@ -66,10 +66,13 @@ Copy this section for each idea and update it in place as the idea matures.
     `experiments/probes/browser-replay/`
 * Outcome: Phase 4 established `@senawa/application`, domain-only production
     imports, application fakes, revision-checked operation commits, and shared
-    CLI/browser commands and projections. The existing graph callback is now
-    confined to a transitional adapter. Persistence splitting, durable
-    cross-process notifications, Beads authority, and live SDK evidence remain
-    pending.
+    CLI/browser commands and projections. Phase 5 split explicit file runtime,
+    immutable documents, journal and output, leases, active-run ownership, and
+    notification hints behind application ports. Shared contracts prove reopen,
+    idempotency, fencing, mid-commit crash recovery, dispatch projection,
+    independent-process SSE writes, and supervisor restart replay. The graph package is now a thin facade, and
+    executable file composition is explicit in the app. Beads authority and
+    live SDK evidence remain pending.
 * Promotion: `pending`
 
 ### 2026-08-04: Sensor policy location

@@ -1276,7 +1276,10 @@ function appendWorkerResult(
   now: Date,
 ): void {
   for (const output of result.output) {
-    appendOutput(state, turn.owner.kind, turn.owner.id, output.stream, output.text, now);
+    appendOutput(state, turn.owner.kind, turn.owner.id, output.stream, output.text, now, {
+      sessionId: turn.sessionId,
+      turnId: turn.turnId,
+    });
   }
 }
 
@@ -1342,6 +1345,7 @@ function appendOutput(
   stream: "stdout" | "stderr" | "system",
   text: string,
   now: Date,
+  worker?: { readonly sessionId: string; readonly turnId: string },
 ): void {
   const key = ownerKey(ownerKind, ownerId);
   let records = state.outputs[key];
@@ -1355,6 +1359,7 @@ function appendOutput(
     ts: now.toISOString(),
     runId: state.identity.runId,
     owner: { kind: ownerKind, id: ownerId },
+    ...worker,
     stream,
     text: sanitizeOutput(text),
   });

@@ -10,14 +10,19 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@senawa/artifact-store": "workspace:*",
     "@senawa/configuration": "workspace:*",
     "@senawa/domain": "workspace:*",
-    "@senawa/graph": "workspace:*",
+    "@senawa/observability": "workspace:*",
     "@senawa/orchestrator": "workspace:*",
+    "@senawa/runtime-file": "workspace:*",
     "@senawa/web": "workspace:*",
     "commander": "14.0.2",
     "cytoscape": "3.33.1",
     "cytoscape-dagre": "2.5.0",
     "dagre": "0.8.5"
+  },
+  "devDependencies": {
+    "@senawa/testing": "workspace:*"
   }
 }

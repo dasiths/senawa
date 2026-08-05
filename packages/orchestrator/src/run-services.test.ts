@@ -1,10 +1,11 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ActiveRunError } from "@senawa/application";
 import { loadRepositoryDefinitions } from "@senawa/configuration";
 import type { WorkerProfile } from "@senawa/domain";
-import { ActiveRunError, FileRuntimeStore } from "@senawa/graph";
 import type { GateEvaluator } from "@senawa/sensors";
+import { createFileTestComposition } from "@senawa/testing";
 import { beforeAll, describe, expect, it } from "vitest";
 import { RunCommandService, RunQueryService } from "./run-services.js";
 import {
@@ -38,6 +39,10 @@ const deterministicEvaluator: GateEvaluator = {
   },
 };
 
+function filePersistence(root: string) {
+  return createFileTestComposition(root).persistence;
+}
+
 beforeAll(async () => {
   definitions = await loadRepositoryDefinitions(process.cwd());
 });
@@ -45,7 +50,7 @@ beforeAll(async () => {
 describe("standard-delivery runtime", () => {
   it("runs rejection, plan import, gate rework, steering, and explicit finish", async () => {
     const root = await mkdtemp(join(tmpdir(), "senawa-runtime-"));
-    const store = new FileRuntimeStore(root);
+    const store = filePersistence(root);
     const workerTurns: WorkerTurn[] = [];
     const deterministicHost = new DeterministicWorkerHost();
     const commands = new RunCommandService(
@@ -66,7 +71,7 @@ describe("standard-delivery runtime", () => {
       request: { goal: "Implement the production runtime", constraints: [] },
       runId: "run-lifecycle",
     });
-    const snapshotPaths = (await store.readRun("run-lifecycle")).snapshot.files.map(
+    const snapshotPaths = (await store.readRun("run-lifecycle")).state.snapshot.files.map(
       (file) => file.path,
     );
     expect(snapshotPaths).toContain(".agents/skills/senawa/SKILL.md");
@@ -77,18 +82,18 @@ describe("standard-delivery runtime", () => {
     expect((await queries.status("run-lifecycle"))?.needs?.phaseId).toBe("define");
     expect((await queries.artifact("run-lifecycle", "define"))?.version).toBe(1);
 
-    const firstSession = (await store.readRun("run-lifecycle")).phases[0]?.sessionId;
+    const firstSession = (await store.readRun("run-lifecycle")).state.phases[0]?.sessionId;
     await commands.reject("run-lifecycle", "define", "Clarify the runtime boundary", actor);
     expect((await commands.resume("run-lifecycle", actor)).kind).toBe("awaiting-approval");
     expect((await queries.artifact("run-lifecycle", "define"))?.version).toBe(2);
-    expect((await store.readRun("run-lifecycle")).phases[0]?.sessionId).toBe(firstSession);
+    expect((await store.readRun("run-lifecycle")).state.phases[0]?.sessionId).toBe(firstSession);
 
     await commands.approve("run-lifecycle", "define", actor);
     expect((await commands.resume("run-lifecycle", actor)).phaseId).toBe("research");
     await commands.approve("run-lifecycle", "research", actor);
     expect((await commands.resume("run-lifecycle", actor)).phaseId).toBe("plan");
     await commands.approve("run-lifecycle", "plan", actor);
-    expect((await store.readRun("run-lifecycle")).tasks.map((task) => task.key)).toEqual([
+    expect((await store.readRun("run-lifecycle")).state.tasks.map((task) => task.key)).toEqual([
       "implement-change",
       "validate-change",
     ]);
@@ -106,7 +111,7 @@ describe("standard-delivery runtime", () => {
     ]);
 
     expect((await commands.advance("run-lifecycle", actor)).kind).toBe("task-rework");
-    const firstTaskAfterRefusal = (await store.readRun("run-lifecycle")).tasks[0];
+    const firstTaskAfterRefusal = (await store.readRun("run-lifecycle")).state.tasks[0];
     expect(firstTaskAfterRefusal?.status).toBe("rework");
     await commands.steer(
       "run-lifecycle",
@@ -115,7 +120,7 @@ describe("standard-delivery runtime", () => {
       actor,
     );
     expect((await commands.advance("run-lifecycle", actor)).kind).toBe("task-closed");
-    const firstTaskAfterClose = (await store.readRun("run-lifecycle")).tasks[0];
+    const firstTaskAfterClose = (await store.readRun("run-lifecycle")).state.tasks[0];
     expect(firstTaskAfterClose?.sessionId).toBe(firstTaskAfterRefusal?.sessionId);
     expect(firstTaskAfterClose?.attempt).toBe(2);
     const firstTaskTurns = workerTurns.filter(
@@ -153,7 +158,7 @@ describe("standard-delivery runtime", () => {
 
   it("refuses a competing run and releases the pointer only after graceful end", async () => {
     const root = await mkdtemp(join(tmpdir(), "senawa-runtime-"));
-    const store = new FileRuntimeStore(root);
+    const store = filePersistence(root);
     const commands = new RunCommandService(
       store,
       new DeterministicWorkerHost(),
@@ -174,7 +179,7 @@ describe("standard-delivery runtime", () => {
     expect(await store.getActiveRunId()).toBeNull();
     await commands.start({ ...input, runId: "run-replacement" });
     expect(await store.getActiveRunId()).toBe("run-replacement");
-    expect((await store.readRun("run-first")).endReason).toBe("Operator ended the run");
+    expect((await store.readRun("run-first")).state.endReason).toBe("Operator ended the run");
   });
 
   it("fingerprints exact profile sources and dispatches the frozen snapshot", async () => {
@@ -202,7 +207,7 @@ describe("standard-delivery runtime", () => {
         return deterministicHost.execute(turn);
       },
     };
-    const firstStore = new FileRuntimeStore(firstRoot);
+    const firstStore = filePersistence(firstRoot);
     const firstCommands = new RunCommandService(firstStore, recordingHost, deterministicEvaluator);
     await firstCommands.start({
       actor,
@@ -229,7 +234,7 @@ describe("standard-delivery runtime", () => {
         [profilePath]: `${definitions.workerProfileSources[profilePath]} `,
       },
     };
-    const secondStore = new FileRuntimeStore(secondRoot);
+    const secondStore = filePersistence(secondRoot);
     await new RunCommandService(
       secondStore,
       new DeterministicWorkerHost(),
@@ -241,8 +246,8 @@ describe("standard-delivery runtime", () => {
       runId: "run-profile-changed",
     });
 
-    const firstSnapshot = (await firstStore.readRun("run-profile-original")).snapshot;
-    const secondSnapshot = (await secondStore.readRun("run-profile-changed")).snapshot;
+    const firstSnapshot = (await firstStore.readRun("run-profile-original")).state.snapshot;
+    const secondSnapshot = (await secondStore.readRun("run-profile-changed")).state.snapshot;
     expect(firstSnapshot.fingerprint).not.toBe(secondSnapshot.fingerprint);
     expect(firstSnapshot.files.find((file) => file.path === profilePath)?.content).toBe(
       definitions.workerProfileSources[profilePath],
@@ -264,7 +269,7 @@ describe("standard-delivery runtime", () => {
 
   it("rejects a dynamic plan task with an unknown role before import", async () => {
     const root = await mkdtemp(join(tmpdir(), "senawa-runtime-"));
-    const store = new FileRuntimeStore(root);
+    const store = filePersistence(root);
     const deterministicHost = new DeterministicWorkerHost();
     const host: WorkerHost = {
       async execute(turn): Promise<WorkerResult> {
@@ -308,7 +313,7 @@ describe("standard-delivery runtime", () => {
 
   it("does not let worker output close a gate rejected by Senawa", async () => {
     const root = await mkdtemp(join(tmpdir(), "senawa-runtime-"));
-    const store = new FileRuntimeStore(root);
+    const store = filePersistence(root);
     const deterministicHost = new DeterministicWorkerHost();
     const claimingHost: WorkerHost = {
       async execute(turn) {
@@ -361,7 +366,7 @@ describe("standard-delivery runtime", () => {
     await commands.approve("run-worker-claim", "plan", actor);
 
     expect((await commands.advance("run-worker-claim", actor)).kind).toBe("task-rework");
-    const state = await store.readRun("run-worker-claim");
+    const state = (await store.readRun("run-worker-claim")).state;
     expect(state.tasks[0]?.status).toBe("rework");
     expect(state.journal.some((event) => event.event === "sensor.started")).toBe(true);
     expect(state.journal.some((event) => event.event === "sensor.completed")).toBe(true);
@@ -375,7 +380,7 @@ describe("standard-delivery runtime", () => {
 
   it("rejects a phase artifact that violates its frozen output schema", async () => {
     const root = await mkdtemp(join(tmpdir(), "senawa-runtime-"));
-    const store = new FileRuntimeStore(root);
+    const store = filePersistence(root);
     const host: WorkerHost = {
       async execute(turn) {
         return {
@@ -396,7 +401,7 @@ describe("standard-delivery runtime", () => {
     await expect(commands.advance("run-invalid-artifact", actor)).rejects.toThrow(
       "does not match its frozen output schema",
     );
-    const state = await store.readRun("run-invalid-artifact");
+    const state = (await store.readRun("run-invalid-artifact")).state;
     expect(state.status).toBe("paused");
     expect(state.activeTurn).toBeNull();
     expect(state.artifacts).toEqual([]);
@@ -405,7 +410,7 @@ describe("standard-delivery runtime", () => {
 
   it("adopts a completed unsettled phase turn without rerunning the worker", async () => {
     const root = await mkdtemp(join(tmpdir(), "senawa-runtime-"));
-    const store = new FileRuntimeStore(root);
+    const store = filePersistence(root);
     const deterministicHost = new DeterministicWorkerHost();
     let completed: WorkerResult | undefined;
     let phaseExecutions = 0;
@@ -439,7 +444,7 @@ describe("standard-delivery runtime", () => {
       "driver crashed after phase completion",
     );
     expect((await commands.resume("run-phase-recovery", actor)).kind).toBe("awaiting-approval");
-    const state = await store.readRun("run-phase-recovery");
+    const state = (await store.readRun("run-phase-recovery")).state;
     expect(phaseExecutions).toBe(1);
     expect(state.activeTurn).toBeNull();
     expect(state.phases[0]).toEqual(
@@ -450,7 +455,7 @@ describe("standard-delivery runtime", () => {
 
   it("adopts a completed unsettled dispatch after restart without duplicate work", async () => {
     const root = await mkdtemp(join(tmpdir(), "senawa-runtime-"));
-    const store = new FileRuntimeStore(root);
+    const store = filePersistence(root);
     const deterministicHost = new DeterministicWorkerHost();
     let completed: WorkerResult | undefined;
     let taskExecutions = 0;
@@ -484,18 +489,18 @@ describe("standard-delivery runtime", () => {
     await expect(commands.advance("run-adopt-completed", actor)).rejects.toThrow(
       "driver crashed after the host completed the turn",
     );
-    const unsettled = await store.readRun("run-adopt-completed");
+    const unsettled = (await store.readRun("run-adopt-completed")).state;
     expect(unsettled.activeTurn).not.toBeNull();
     expect(unsettled.dispatches.at(-1)).toEqual(
       expect.objectContaining({ status: "intent", ownerId: "implement-change", workAttempt: 1 }),
     );
 
-    const restartedStore = new FileRuntimeStore(root);
+    const restartedStore = filePersistence(root);
     const restartedCommands = new RunCommandService(restartedStore, host, deterministicEvaluator);
     expect((await restartedCommands.resume("run-adopt-completed", actor)).kind).toBe(
       "awaiting-approval",
     );
-    const reconciled = await restartedStore.readRun("run-adopt-completed");
+    const reconciled = (await restartedStore.readRun("run-adopt-completed")).state;
     expect(inspections).toBe(1);
     expect(executedOperationIds.filter((id) => id === crashedOperationId)).toHaveLength(1);
     expect(reconciled.activeTurn).toBeNull();
@@ -511,7 +516,7 @@ describe("standard-delivery runtime", () => {
     "does not duplicate an %s unsettled dispatch",
     async (observationState) => {
       const root = await mkdtemp(join(tmpdir(), "senawa-runtime-"));
-      const store = new FileRuntimeStore(root);
+      const store = filePersistence(root);
       const deterministicHost = new DeterministicWorkerHost();
       let taskExecutions = 0;
       const host: WorkerHost = {
@@ -534,7 +539,7 @@ describe("standard-delivery runtime", () => {
       await expect(commands.advance(runId, actor)).rejects.toThrow("inspection required");
 
       expect((await commands.resume(runId, actor)).kind).toBe("idle");
-      const state = await store.readRun(runId);
+      const state = (await store.readRun(runId)).state;
       const status = await new RunQueryService(store).status(runId);
       expect(taskExecutions).toBe(1);
       expect(state.status).toBe("paused");
@@ -552,7 +557,7 @@ describe("standard-delivery runtime", () => {
 
   it("records a cancelled unsettled dispatch without retrying it", async () => {
     const root = await mkdtemp(join(tmpdir(), "senawa-runtime-"));
-    const store = new FileRuntimeStore(root);
+    const store = filePersistence(root);
     const deterministicHost = new DeterministicWorkerHost();
     let taskExecutions = 0;
     const host: WorkerHost = {
@@ -574,7 +579,7 @@ describe("standard-delivery runtime", () => {
     );
 
     expect((await commands.resume("run-cancelled-dispatch", actor)).kind).toBe("idle");
-    const state = await store.readRun("run-cancelled-dispatch");
+    const state = (await store.readRun("run-cancelled-dispatch")).state;
     expect(taskExecutions).toBe(1);
     expect(state.status).toBe("paused");
     expect(state.activeTurn).toBeNull();
@@ -586,7 +591,7 @@ describe("standard-delivery runtime", () => {
 
   it("reissues only a recorded resume operation when inspection proves the session idle", async () => {
     const root = await mkdtemp(join(tmpdir(), "senawa-runtime-"));
-    const store = new FileRuntimeStore(root);
+    const store = filePersistence(root);
     const deterministicHost = new DeterministicWorkerHost();
     const operationCalls = new Map<string, number>();
     let interruptedOperationId: string | undefined;
@@ -618,7 +623,7 @@ describe("standard-delivery runtime", () => {
     expect((await commands.resume("run-idle-resume", actor)).kind).toBe("awaiting-approval");
     expect(interruptedOperationId).toBeDefined();
     expect(operationCalls.get(interruptedOperationId as string)).toBe(2);
-    const state = await store.readRun("run-idle-resume");
+    const state = (await store.readRun("run-idle-resume")).state;
     const dispatch = state.dispatches.find(
       (candidate) => candidate.operationId === interruptedOperationId,
     );
@@ -627,7 +632,7 @@ describe("standard-delivery runtime", () => {
 
   it("uses a dispatch failure budget without consuming the work rework attempt", async () => {
     const root = await mkdtemp(join(tmpdir(), "senawa-runtime-"));
-    const store = new FileRuntimeStore(root);
+    const store = filePersistence(root);
     const deterministicHost = new DeterministicWorkerHost();
     const taskTurns: WorkerTurn[] = [];
     const host: WorkerHost = {
@@ -654,7 +659,7 @@ describe("standard-delivery runtime", () => {
     );
     expect((await commands.resume("run-dispatch-budget", actor)).kind).toBe("task-escalated");
 
-    const state = await store.readRun("run-dispatch-budget");
+    const state = (await store.readRun("run-dispatch-budget")).state;
     expect(state.tasks[0]).toEqual(
       expect.objectContaining({ attempt: 0, dispatchFailures: 2, status: "escalated" }),
     );
@@ -667,7 +672,7 @@ describe("standard-delivery runtime", () => {
 
   it("renews the driver lease throughout a long worker turn", async () => {
     const root = await mkdtemp(join(tmpdir(), "senawa-runtime-"));
-    const store = new FileRuntimeStore(root);
+    const store = filePersistence(root);
     const deterministicHost = new DeterministicWorkerHost();
     const host: WorkerHost = {
       async execute(turn) {
@@ -685,9 +690,11 @@ describe("standard-delivery runtime", () => {
 
     const advancing = commands.advance("run-heartbeat", actor);
     await new Promise((resolve) => setTimeout(resolve, 10));
-    const initialHeartbeat = (await store.readRun("run-heartbeat")).leases.driver?.heartbeatAt;
+    const initialHeartbeat = (await store.readRun("run-heartbeat")).state.leases.driver
+      ?.heartbeatAt;
     await new Promise((resolve) => setTimeout(resolve, 80));
-    const renewedHeartbeat = (await store.readRun("run-heartbeat")).leases.driver?.heartbeatAt;
+    const renewedHeartbeat = (await store.readRun("run-heartbeat")).state.leases.driver
+      ?.heartbeatAt;
     expect(renewedHeartbeat).not.toBe(initialHeartbeat);
     await expect(
       store.acquireLease("run-heartbeat", "driver", "driver-contender", 60),

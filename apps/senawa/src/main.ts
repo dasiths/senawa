@@ -1,17 +1,34 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { FileRuntimeStore } from "@senawa/graph";
+import { FileRunDocumentStore } from "@senawa/artifact-store";
+import { FileJournalStore, FileOutputLogStore, RunChangeNotifier } from "@senawa/observability";
 import {
   CopilotSubprocessHost,
   createSenawaServices,
   DeterministicWorkerHost,
 } from "@senawa/orchestrator";
+import {
+  FileActiveRunRegistry,
+  FileLeaseStore,
+  FileRunPersistence,
+  FileRuntimeStateStore,
+} from "@senawa/runtime-file";
 import { runCli } from "./program.js";
 
 const arguments_ = process.argv.slice(2);
 const repositoryRoot = process.cwd();
 const workerHost = optionValue(arguments_, "--worker-host") ?? "deterministic";
 const deterministicHost = new DeterministicWorkerHost();
+const notifier = new RunChangeNotifier();
+const persistence = new FileRunPersistence(repositoryRoot, {
+  runtime: new FileRuntimeStateStore(repositoryRoot),
+  activeRuns: new FileActiveRunRegistry(repositoryRoot),
+  documents: new FileRunDocumentStore(repositoryRoot),
+  journal: new FileJournalStore(repositoryRoot, notifier),
+  output: new FileOutputLogStore(repositoryRoot, notifier),
+  leases: new FileLeaseStore(repositoryRoot),
+  notifications: notifier,
+});
 const copilotHost = new CopilotSubprocessHost({
   enabled: true,
   repositoryRoot,
@@ -20,7 +37,8 @@ const copilotHost = new CopilotSubprocessHost({
 
 process.exitCode = await runCli(arguments_, {
   services: createSenawaServices(repositoryRoot, {
-    store: new FileRuntimeStore(repositoryRoot),
+    persistence,
+    notifier,
     ...(workerHost === "copilot"
       ? {
           workerHost: {

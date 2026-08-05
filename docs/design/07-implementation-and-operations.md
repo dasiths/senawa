@@ -3,11 +3,12 @@
 ## Current status
 
 Senawa now has a production vertical slice across the domain, configuration,
-application, graph, report, orchestrator, CLI, web, and hook packages. The executable path
-validates repository definitions, runs the standard workflow with deterministic
-workers, persists versioned artifacts and append-only evidence, accepts CLI and
-browser decisions through the same application commands and queries, streams
-output over SSE, and renders a run report.
+application, file runtime, artifact, observability, report, orchestrator, CLI,
+web, and hook packages. The executable path validates repository definitions,
+runs the standard workflow with deterministic workers, persists versioned
+artifacts and append-only evidence, accepts CLI and browser decisions through
+the same application commands and queries, streams output over SSE, and renders
+a run report.
 
 The production `@senawa/sensors` package evaluates artifact and command sensors
 from `.senawa/sensors.yaml`. Configuration loads workflows from
@@ -28,10 +29,16 @@ phase or task ceiling.
 The user-facing skill stays under `.agents/skills/senawa/` only because Copilot
 discovers it there; it is not runtime worker configuration.
 
-The graph package currently provides a file-backed runtime store. It enforces
-the singleton, leases, immutable identity and snapshot, serialized writes, and
-terminal-run archival required by the vertical slice. It is not the intended
-beads adapter, which remains pending. The production Copilot subprocess host is
+The `senawa` app explicitly composes the file adapters. `@senawa/runtime-file`
+owns mutable runtime state, repository singleton ownership, fenced leases, and
+write-ahead recovery. `@senawa/artifact-store` owns create-only identity,
+snapshot, and versioned artifact documents with digest conflict checks.
+`@senawa/observability` owns idempotent journal JSONL and session/turn output
+streams with stable owner projections, storage-assigned cursors, and
+process-local notification hints. Interrupted aggregate
+application commits converge from one pending transaction on reopen, while each
+fact has one durable authority after convergence. This is not the intended
+Beads adapter, which remains pending. The production Copilot subprocess host is
 opt-in and has not been exercised during this implementation phase.
 
 The application package owns commands, queries, driver transitions, prompt
@@ -39,8 +46,13 @@ construction, status projections, and ports for runtime state, active-run
 ownership, immutable documents, journal and output reads, leases, worker
 sessions, gates, reporting, clocks, scheduling, notifications, and telemetry.
 Runtime mutations use operation IDs and compare-and-swap revisions. The graph
-adapter still translates those commits to the aggregate file runtime callback;
-splitting file persistence and evidence stores remains Phase 5 work.
+package is now a thin compatibility re-export facade with no adapter factory or
+runtime selection. Shared contracts under `@senawa/testing` and
+`tests/contract/` cover runtime restart, immutable documents, journal and output
+idempotency, lease fencing, mid-commit crash recovery, dispatch reconstruction,
+and status projections.
+Browser SSE rereads durable cursors on bounded polling; notifications only wake
+same-process readers sooner.
 
 The [POC findings](wip/probe-findings.md) distinguish live-model evidence,
 offline deterministic simulation, and documentation-only claims.
@@ -65,10 +77,14 @@ the documented `bd --json` contract with `BD_JSON_ENVELOPE=1`.
 | `@senawa/configuration` | Repository discovery, YAML and JSON loading, schema compilation, profiles, workflow catalog, doctor preflight, snapshots, and fingerprints |
 | `@senawa/core` | Temporary source-level compatibility facade over domain and configuration exports |
 | `@senawa/application` | Commands, queries, driver, prompts, projections, and application-owned ports; imports domain only |
-| `@senawa/graph` | Current aggregate file-backed runtime adapter behind application ports; persistence split and beads adapter pending |
+| `@senawa/runtime-file` | Explicit development and test runtime state, active-run registry, fenced leases, and split-store recovery |
+| `@senawa/artifact-store` | Immutable run identity, snapshot, and versioned artifact documents |
+| `@senawa/observability` | Append-only journal and output JSONL, stable cursors, notification hints, and future telemetry seams |
+| `@senawa/testing` | Shared adapter contracts and deterministic fixtures; production packages do not import it |
+| `@senawa/graph` | Thin compatibility re-export facade with no adapter selection |
 | `@senawa/sensors` | Gate evaluation and built-in artifact or command execution, normalization, and evidence hygiene; generic extension loading and caching pending |
-| `@senawa/report` | Journal writer, report renderer, graph diagrams, and output escaping |
-| `@senawa/orchestrator` | Temporary compatibility facade plus graph, configuration, validation, worker-host, and report composition adapters |
+| `@senawa/report` | Report renderer, graph diagrams, and output escaping over application readers |
+| `@senawa/orchestrator` | Temporary compatibility facade for configuration, validation, application services, worker hosts, and reporting |
 | `senawa` | Full command-line interface |
 | `senawa-hook` | Minimal hook entry point with no graph or heavy dependencies |
 

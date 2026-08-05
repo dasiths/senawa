@@ -1,4 +1,5 @@
-import type { RuntimeState, RuntimeStore } from "@senawa/graph";
+import type { RunPersistencePort } from "@senawa/application";
+import type { RuntimeState } from "@senawa/domain";
 
 export type ReportRun = Pick<
   RuntimeState,
@@ -6,10 +7,10 @@ export type ReportRun = Pick<
 >;
 
 export class RunReportService {
-  constructor(private readonly store: RuntimeStore) {}
+  constructor(private readonly store: RunPersistencePort) {}
 
   async render(runId: string): Promise<string> {
-    return renderRunReport(await this.store.readRun(runId));
+    return renderRunReport((await this.store.readRun(runId)).state);
   }
 }
 

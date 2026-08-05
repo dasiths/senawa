@@ -1,0 +1,12 @@
+{
+  "name": "@senawa/contract-tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@senawa/artifact-store": "workspace:*",
+    "@senawa/observability": "workspace:*",
+    "@senawa/runtime-file": "workspace:*",
+    "@senawa/testing": "workspace:*"
+  }
+}

@@ -2,17 +2,16 @@ import { randomUUID } from "node:crypto";
 import {
   RunCommandService as ApplicationRunCommandService,
   RunQueryService as ApplicationRunQueryService,
+  type RunPersistencePort,
   type RunStatusProjection,
   type TransitionResult,
 } from "@senawa/application";
 import { createRunSnapshot, type RepositoryDefinitions } from "@senawa/configuration";
 import type { CommandActor, WorkRequest } from "@senawa/domain";
-import type { RuntimeStore } from "@senawa/graph";
 import type { RunReportService } from "@senawa/report";
 import type { GateEvaluator } from "@senawa/sensors";
 import {
   AjvArtifactValidationAdapter,
-  GraphRunPersistenceAdapter,
   RepositoryWorkflowCatalogAdapter,
 } from "./application-adapters.js";
 import type { WorkerHost } from "./worker-host.js";
@@ -31,7 +30,7 @@ export class RunCommandService {
   private readonly now: () => Date;
 
   constructor(
-    store: RuntimeStore,
+    store: RunPersistencePort,
     workerHost: WorkerHost,
     gateEvaluator: GateEvaluator,
     now: () => Date = () => new Date(),
@@ -39,7 +38,7 @@ export class RunCommandService {
   ) {
     this.now = now;
     this.application = new ApplicationRunCommandService(
-      new GraphRunPersistenceAdapter(store),
+      store,
       workerHost,
       gateEvaluator,
       new AjvArtifactValidationAdapter(),
@@ -102,9 +101,9 @@ export class RunCommandService {
 export class RunQueryService {
   private readonly application: ApplicationRunQueryService;
 
-  constructor(store: RuntimeStore, repositoryRoot?: string, reports?: RunReportService) {
+  constructor(store: RunPersistencePort, repositoryRoot?: string, reports?: RunReportService) {
     this.application = new ApplicationRunQueryService(
-      new GraphRunPersistenceAdapter(store),
+      store,
       repositoryRoot === undefined
         ? undefined
         : new RepositoryWorkflowCatalogAdapter(repositoryRoot),

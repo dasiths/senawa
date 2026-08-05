@@ -10,10 +10,12 @@
     "@senawa/application": "workspace:*",
     "@senawa/configuration": "workspace:*",
     "@senawa/domain": "workspace:*",
-    "@senawa/graph": "workspace:*",
     "@senawa/report": "workspace:*",
     "@senawa/sensors": "workspace:*",
     "ajv": "8.17.1",
     "ajv-formats": "3.0.1"
+  },
+  "devDependencies": {
+    "@senawa/testing": "workspace:*"
   }
 }

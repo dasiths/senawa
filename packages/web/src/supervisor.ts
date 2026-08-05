@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { LeaseConflictError } from "@senawa/application";
 import { BrowserRunCommandSchema, type CommandActor } from "@senawa/domain";
-import { LeaseConflictError } from "@senawa/graph";
 import type { SenawaServices } from "@senawa/orchestrator";
 import {
   appJs,
@@ -306,9 +306,12 @@ function beginSse<T extends { seq: number }>(
     if (changedRunId === runId) void flush();
   });
   void flush();
+  const durablePoll = setInterval(() => void flush(), 250);
+  durablePoll.unref();
   const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 15_000);
   heartbeat.unref();
   request.once("close", () => {
+    clearInterval(durablePoll);
     clearInterval(heartbeat);
     unsubscribe();
   });
