@@ -1,11 +1,6 @@
 import { resolve } from "node:path";
 import { loadRepositoryDefinitions, type RepositoryDefinitions } from "@senawa/configuration";
-import {
-  FileRuntimeStore,
-  type RuntimeLease,
-  type RuntimeState,
-  type RuntimeStore,
-} from "@senawa/graph";
+import type { RuntimeLease, RuntimeState, RuntimeStore } from "@senawa/graph";
 import { RunReportService } from "@senawa/report";
 import { CommandGateEvaluator, type GateEvaluator } from "@senawa/sensors";
 import { RunCommandService, RunQueryService } from "./run-services.js";
@@ -95,22 +90,19 @@ export interface SenawaServices {
 }
 
 export interface SenawaServiceOptions {
+  readonly store: RuntimeStore;
   readonly workerHost?: WorkerHost;
   readonly gateEvaluator?: GateEvaluator;
   readonly now?: () => Date;
-  readonly store?: RuntimeStore;
 }
 
 export function createSenawaServices(
   repositoryRoot: string,
-  options: SenawaServiceOptions = {},
+  options: SenawaServiceOptions,
 ): SenawaServices {
   const root = resolve(repositoryRoot);
   const notifier = new RunChangeNotifier();
-  const store = new ObservableRuntimeStore(
-    options.store ?? new FileRuntimeStore(root, options.now),
-    notifier,
-  );
+  const store = new ObservableRuntimeStore(options.store, notifier);
   const reports = new RunReportService(store);
   const commands = new RunCommandService(
     store,

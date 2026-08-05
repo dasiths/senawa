@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadRepositoryDefinitions } from "@senawa/configuration";
 import type { CommandActor } from "@senawa/domain";
-import { LeaseConflictError } from "@senawa/graph";
+import { FileRuntimeStore, LeaseConflictError } from "@senawa/graph";
 import { createSenawaServices } from "@senawa/orchestrator";
 import { beforeAll, describe, expect, it } from "vitest";
 import { appJs } from "./static-assets.js";
@@ -145,6 +145,7 @@ describe("loopback web supervisor", () => {
 async function createRun(runId: string) {
   const root = await mkdtemp(join(tmpdir(), "senawa-web-"));
   const services = createSenawaServices(root, {
+    store: new FileRuntimeStore(root),
     gateEvaluator: {
       async evaluate(input) {
         return { gateId: input.gateId, accepted: true, readings: [], findings: [] };

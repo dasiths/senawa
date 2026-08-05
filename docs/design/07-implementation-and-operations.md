@@ -3,20 +3,21 @@
 ## Current status
 
 Senawa now has a production vertical slice across the domain, configuration,
-graph, report, orchestrator, CLI, web, and hook packages. The executable path
+application, graph, report, orchestrator, CLI, web, and hook packages. The executable path
 validates repository definitions, runs the standard workflow with deterministic
 workers, persists versioned artifacts and append-only evidence, accepts CLI and
-browser decisions through one command service, streams output over SSE, and
-renders a run report.
+browser decisions through the same application commands and queries, streams
+output over SSE, and renders a run report.
 
 The production `@senawa/sensors` package evaluates artifact and command sensors
 from `.senawa/sensors.yaml`. Configuration loads workflows from
 `.senawa/workflows/`, artifact contracts from `.senawa/schemas/`, and worker
 profiles from `.senawa/agents/`. Command evidence is normalized and capped,
 execution errors remain distinct and blocking, and advisory assessment failures
-do not block. Worker hosts have no gate-verdict field; the orchestrator invokes
-the evaluator and journals `sensor.started`, `sensor.completed`, `sensor.error`,
-and `gate.evaluated` evidence before changing phase or task state.
+do not block. Worker hosts have no gate-verdict field; the application driver
+invokes the evaluator and journals `sensor.started`, `sensor.completed`,
+`sensor.error`, and `gate.evaluated` evidence before changing phase or task
+state.
 
 Worker roles are strict repository profiles under `.senawa/agents`.
 Configuration loads and validates their frontmatter and prompts, snapshots exact
@@ -32,6 +33,14 @@ the singleton, leases, immutable identity and snapshot, serialized writes, and
 terminal-run archival required by the vertical slice. It is not the intended
 beads adapter, which remains pending. The production Copilot subprocess host is
 opt-in and has not been exercised during this implementation phase.
+
+The application package owns commands, queries, driver transitions, prompt
+construction, status projections, and ports for runtime state, active-run
+ownership, immutable documents, journal and output reads, leases, worker
+sessions, gates, reporting, clocks, scheduling, notifications, and telemetry.
+Runtime mutations use operation IDs and compare-and-swap revisions. The graph
+adapter still translates those commits to the aggregate file runtime callback;
+splitting file persistence and evidence stores remains Phase 5 work.
 
 The [POC findings](wip/probe-findings.md) distinguish live-model evidence,
 offline deterministic simulation, and documentation-only claims.
@@ -55,10 +64,11 @@ the documented `bd --json` contract with `BD_JSON_ENVELOPE=1`.
 | `@senawa/domain` | Pure schemas, identifiers, snapshots, state contracts, events, and transition invariants |
 | `@senawa/configuration` | Repository discovery, YAML and JSON loading, schema compilation, profiles, workflow catalog, doctor preflight, snapshots, and fingerprints |
 | `@senawa/core` | Temporary source-level compatibility facade over domain and configuration exports |
-| `@senawa/graph` | Runtime store boundary and current file-backed adapter; beads adapter pending |
+| `@senawa/application` | Commands, queries, driver, prompts, projections, and application-owned ports; imports domain only |
+| `@senawa/graph` | Current aggregate file-backed runtime adapter behind application ports; persistence split and beads adapter pending |
 | `@senawa/sensors` | Gate evaluation and built-in artifact or command execution, normalization, and evidence hygiene; generic extension loading and caching pending |
 | `@senawa/report` | Journal writer, report renderer, graph diagrams, and output escaping |
-| `@senawa/orchestrator` | Driver loop, session hosting, reconciliation, lease, steering, and TTY controls |
+| `@senawa/orchestrator` | Temporary compatibility facade plus graph, configuration, validation, worker-host, and report composition adapters |
 | `senawa` | Full command-line interface |
 | `senawa-hook` | Minimal hook entry point with no graph or heavy dependencies |
 

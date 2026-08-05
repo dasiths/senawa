@@ -93,6 +93,10 @@ The first production vertical slice is implemented in `packages/`. It includes
 strict repository contracts, a deterministic driver, versioned artifacts,
 singleton and lease enforcement, append-only events and output, a shared CLI and
 HTTP command path, the loopback browser supervisor, and report rendering.
+`@senawa/application` owns commands, queries, driver transitions, prompts,
+status projections, and the ports consumed by both adapters. Its production
+code imports only `@senawa/domain`; `@senawa/orchestrator` is now a temporary
+compatibility and composition facade.
 Repository worker profiles under `.senawa/agents` now provide strict model,
 capability-request, and prompt configuration. Their exact sources are frozen,
 snapshotted, and fingerprinted; hosts apply a separate Senawa-owned capability
@@ -266,7 +270,8 @@ apps/                        deployable Senawa CLI and hook composition roots
 examples/demos/              supported deterministic and guarded live demonstrations
 experiments/probes/          bounded experiments that measured substrate behavior
 packages/                    reusable runtime, sensor, browser, and reporting components
-packages/orchestrator/       worker/session hosts and capability mapping
+packages/application/        commands, queries, driver, prompts, projections, and ports
+packages/orchestrator/       temporary compatibility facade and concrete adapter composition
 apps/senawa-hook/            embedded hook and future SDK session policy
 .senawa/agents/              strict worker profiles with model, capability requests, and prompts
 .senawa/workflows/           phase definitions: gates, approvals, iteration budgets

@@ -32,6 +32,9 @@ importers:
       '@senawa/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@senawa/graph':
+        specifier: workspace:*
+        version: link:../../packages/graph
       '@senawa/orchestrator':
         specifier: workspace:*
         version: link:../../packages/orchestrator
@@ -52,6 +55,16 @@ importers:
         version: 0.8.5
 
   apps/senawa-hook: {}
+
+  packages/application:
+    dependencies:
+      '@senawa/domain':
+        specifier: workspace:*
+        version: link:../domain
+    devDependencies:
+      '@senawa/configuration':
+        specifier: workspace:*
+        version: link:../configuration
 
   packages/configuration:
     dependencies:
@@ -94,6 +107,9 @@ importers:
 
   packages/orchestrator:
     dependencies:
+      '@senawa/application':
+        specifier: workspace:*
+        version: link:../application
       '@senawa/configuration':
         specifier: workspace:*
         version: link:../configuration

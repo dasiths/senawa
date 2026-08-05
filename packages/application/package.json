@@ -1,0 +1,17 @@
+{
+  "name": "@senawa/application",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./ports": "./src/ports.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "dependencies": {
+    "@senawa/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@senawa/configuration": "workspace:*"
+  }
+}

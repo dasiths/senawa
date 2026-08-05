@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadRepositoryDefinitions } from "@senawa/configuration";
 import type { BrowserRunCommand, CommandActor } from "@senawa/domain";
+import { FileRuntimeStore } from "@senawa/graph";
 import { createSenawaServices, type SenawaServices } from "@senawa/orchestrator";
 import { startWebSupervisor, type WebSupervisor } from "@senawa/web";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -18,7 +19,9 @@ beforeAll(async () => {
 
 describe("Commander CLI", () => {
   it("supports repository diagnostics and workflow inspection", async () => {
-    const services = createSenawaServices(process.cwd());
+    const services = createSenawaServices(process.cwd(), {
+      store: new FileRuntimeStore(process.cwd()),
+    });
     const output: string[] = [];
     const io = { stdout: (value: string) => output.push(value), stderr: () => undefined };
 
@@ -46,7 +49,7 @@ describe("Commander CLI", () => {
     const root = await copyRepositoryConfiguration();
     const policyPath = resolve(root, ".senawa/sensors.yaml");
     await writeFile(policyPath, mutate(await readFile(policyPath, "utf8")));
-    const services = createSenawaServices(root);
+    const services = createSenawaServices(root, { store: new FileRuntimeStore(root) });
     const errors: string[] = [];
     const io = { stdout: () => undefined, stderr: (value: string) => errors.push(value) };
 
@@ -215,7 +218,10 @@ describe("Commander CLI", () => {
 
 async function createRun(runId: string): Promise<SenawaServices> {
   const root = await mkdtemp(join(tmpdir(), "senawa-parity-"));
-  const services = createSenawaServices(root, { now: fixedNow });
+  const services = createSenawaServices(root, {
+    store: new FileRuntimeStore(root, fixedNow),
+    now: fixedNow,
+  });
   await services.commands.start({
     actor: driverActor,
     definitions,

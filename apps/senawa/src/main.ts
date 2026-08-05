@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { FileRuntimeStore } from "@senawa/graph";
 import {
   CopilotSubprocessHost,
   createSenawaServices,
@@ -19,6 +20,7 @@ const copilotHost = new CopilotSubprocessHost({
 
 process.exitCode = await runCli(arguments_, {
   services: createSenawaServices(repositoryRoot, {
+    store: new FileRuntimeStore(repositoryRoot),
     ...(workerHost === "copilot"
       ? {
           workerHost: {

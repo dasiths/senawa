@@ -1,5 +1,12 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import type {
+  WorkerOutput,
+  WorkerResult,
+  WorkerSessionPort,
+  WorkerTurn,
+  WorkerTurnObservation,
+} from "@senawa/application";
 import {
   DefinitionArtifactSchema,
   type JsonObject,
@@ -11,54 +18,15 @@ import {
   type WorkerProfile,
 } from "@senawa/domain";
 
-export interface WorkerTurn {
-  readonly runId: string;
-  readonly owner: { readonly kind: "phase" | "task"; readonly id: string };
-  readonly operation: "create" | "resume";
-  readonly turnId: string;
-  readonly dispatchId: string;
-  readonly operationId: string;
-  readonly role: string;
-  readonly profile: WorkerProfile;
-  readonly profileDigest: string;
-  readonly resolvedModel: WorkerProfile["spec"]["model"];
-  readonly attempt: number;
-  readonly sessionId: string;
-  readonly goal: string;
-  readonly rejectionReason: string | null;
-  readonly steering: readonly string[];
-  readonly prompt: string;
-  readonly authorization: {
-    readonly taskPaths: readonly string[];
-    readonly frozenPaths: readonly string[];
-  };
-}
+export type {
+  WorkerOutput,
+  WorkerResult,
+  WorkerSessionPort as WorkerHost,
+  WorkerTurn,
+  WorkerTurnObservation,
+} from "@senawa/application";
 
-export interface WorkerOutput {
-  readonly stream: "stdout" | "stderr" | "system";
-  readonly text: string;
-}
-
-export interface WorkerResult {
-  readonly sessionId: string;
-  readonly artifact?: JsonObject;
-  readonly output: readonly WorkerOutput[];
-}
-
-export type WorkerTurnObservation =
-  | { readonly state: "missing" }
-  | { readonly state: "active" }
-  | { readonly state: "completed"; readonly result: WorkerResult }
-  | { readonly state: "idle" }
-  | { readonly state: "cancelled"; readonly detail?: string }
-  | { readonly state: "unknown"; readonly detail: string };
-
-export interface WorkerHost {
-  execute(turn: WorkerTurn): Promise<WorkerResult>;
-  inspect?(turn: WorkerTurn): Promise<WorkerTurnObservation>;
-}
-
-export class DeterministicWorkerHost implements WorkerHost {
+export class DeterministicWorkerHost implements WorkerSessionPort {
   private readonly completed = new Map<string, WorkerResult>();
 
   async execute(turn: WorkerTurn): Promise<WorkerResult> {
@@ -104,7 +72,7 @@ export interface CopilotSubprocessHostOptions {
   readonly timeoutMs?: number;
 }
 
-export class CopilotSubprocessHost implements WorkerHost {
+export class CopilotSubprocessHost implements WorkerSessionPort {
   constructor(private readonly options: CopilotSubprocessHostOptions) {}
 
   async execute(turn: WorkerTurn): Promise<WorkerResult> {

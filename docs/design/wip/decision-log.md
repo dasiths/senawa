@@ -64,7 +64,12 @@ Copy this section for each idea and update it in place as the idea matures.
 * Probe: Planned under `experiments/probes/runtime-ports/`,
     `experiments/probes/worker-sessions/`, and
     `experiments/probes/browser-replay/`
-* Outcome: `pending`
+* Outcome: Phase 4 established `@senawa/application`, domain-only production
+    imports, application fakes, revision-checked operation commits, and shared
+    CLI/browser commands and projections. The existing graph callback is now
+    confined to a transitional adapter. Persistence splitting, durable
+    cross-process notifications, Beads authority, and live SDK evidence remain
+    pending.
 * Promotion: `pending`
 
 ### 2026-08-04: Sensor policy location

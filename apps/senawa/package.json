@@ -12,6 +12,7 @@
   "dependencies": {
     "@senawa/configuration": "workspace:*",
     "@senawa/domain": "workspace:*",
+    "@senawa/graph": "workspace:*",
     "@senawa/orchestrator": "workspace:*",
     "@senawa/web": "workspace:*",
     "commander": "14.0.2",
