@@ -17,6 +17,8 @@ import {
   type StoredRuntimeState,
   type VersionedRunState,
   type VersionedStoredRuntimeState,
+  type WorkerEventRecord,
+  type WorkerEventStoragePort,
 } from "@senawa/application";
 import type {
   JournalEvent,
@@ -73,6 +75,7 @@ export interface FileRunPersistenceStores {
   readonly documents: RunDocumentStoragePort;
   readonly journal: JournalStoragePort;
   readonly output: OutputLogStoragePort;
+  readonly workerEvents: WorkerEventStoragePort;
   readonly leases: LeaseStoragePort;
   readonly notifications?: NotificationPort;
 }
@@ -427,6 +430,18 @@ export class FileRunPersistence implements RunPersistencePort {
     return this.stores.output.readOutput(runId, ownerKind, ownerId, after, limit);
   }
 
+  appendWorkerEvent(input: {
+    readonly runId: string;
+    readonly entryId: string;
+    readonly record: WorkerEventRecord;
+  }) {
+    return this.stores.workerEvents.appendWorkerEvent(input);
+  }
+
+  readWorkerEvents(runId: string) {
+    return this.stores.workerEvents.readWorkerEvents(runId);
+  }
+
   acquireLease(runId: string, kind: "driver" | "web", owner: string, ttlMs: number) {
     return this.stores.leases.acquireLease(runId, kind, owner, ttlMs);
   }
@@ -437,6 +452,14 @@ export class FileRunPersistence implements RunPersistencePort {
 
   releaseLease(runId: string, kind: "driver" | "web", lease: RuntimeLease) {
     return this.stores.leases.releaseLease(runId, kind, lease);
+  }
+
+  inspectLease(runId: string, kind: "driver" | "web") {
+    return this.stores.leases.inspectLease(runId, kind);
+  }
+
+  readLeaseFence(runId: string, kind: "driver" | "web") {
+    return this.stores.leases.readLeaseFence(runId, kind);
   }
 
   private async serialized<T>(operation: () => Promise<T>): Promise<T> {

@@ -62,6 +62,10 @@ describe("Commander CLI", () => {
       }),
     ).toBe(0);
     expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({ id: "artifact-present" });
+    expect(await runCli(["task", "--help"], { services, io })).toBe(0);
+    const taskHelp = output.pop() ?? "";
+    expect(taskHelp).not.toContain("done");
+    expect(taskHelp).not.toContain("abort");
     expect(await runCli(["phase", "show", "define"], { services, io })).toBe(0);
     expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({ id: "define" });
     expect(
@@ -73,6 +77,11 @@ describe("Commander CLI", () => {
     expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({
       gateId: "definition-accepted",
       accepted: true,
+    });
+    expect(await runCli(["sensor", "audit", "operations-run"], { services, io })).toBe(0);
+    expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({
+      runId: "operations-run",
+      hookLatency: { samples: 0, status: "unreported" },
     });
 
     expect(await runCli(["ask", "Which boundary is authoritative?"], { services, io })).toBe(0);

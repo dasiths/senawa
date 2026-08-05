@@ -33,7 +33,7 @@ export type {
   WorkerTurnObservation,
 } from "./workers.js";
 
-import type { WorkerTurn } from "./workers.js";
+import type { WorkerSessionEvent, WorkerTurn } from "./workers.js";
 
 export interface VersionedRunState {
   readonly state: RuntimeState;
@@ -186,6 +186,28 @@ export interface OutputLogStoragePort extends OutputLogPort {
   ): Promise<readonly { readonly kind: "run" | "phase" | "task"; readonly id: string }[]>;
 }
 
+export interface WorkerEventRecord {
+  readonly runId: string;
+  readonly owner: WorkerTurn["owner"];
+  readonly dispatchId: string;
+  readonly operationId: string;
+  readonly role: string;
+  readonly attempt: number;
+  readonly event: WorkerSessionEvent;
+}
+
+export interface WorkerEventLogPort {
+  readWorkerEvents(runId: string): Promise<readonly WorkerEventRecord[]>;
+}
+
+export interface WorkerEventStoragePort extends WorkerEventLogPort {
+  appendWorkerEvent(input: {
+    readonly runId: string;
+    readonly entryId: string;
+    readonly record: WorkerEventRecord;
+  }): Promise<WorkerEventRecord>;
+}
+
 export interface LeasePort {
   acquireLease(
     runId: string,
@@ -270,4 +292,5 @@ export interface RunPersistencePort
     RunDocumentStore,
     JournalPort,
     OutputLogPort,
-    LeasePort {}
+    WorkerEventStoragePort,
+    LeaseStoragePort {}

@@ -64,7 +64,10 @@ explicit human intent, and approval records its channel.
 
 Ending a run is one of those judgments. The principal agent may relay
 `work end --reason "..."` only after the human explicitly chooses abandonment
-and provides or confirms the reason.
+and provides or confirms the reason. When a worker is active, the human must
+also choose `--force`. The forced path performs cancellation, bounded grace,
+fenced takeover, dispatch reconciliation, and terminal persistence rather than
+deleting a lock.
 
 ## Interaction modes
 
@@ -125,6 +128,12 @@ the gate own enforcement. A worker ending its turn without submitting the typed
 completion request cannot bypass the driver, because the driver evaluates the
 gate after the turn and remains authoritative. A public `task done` CLI command
 remains deferred until it can authenticate and bind the worker turn.
+
+The deterministic binding registry proves owner-bound task completion offline,
+but the subprocess adapter has no authenticated command bridge. Public
+`task done` therefore remains omitted. Public `task abort` also remains omitted
+because cancelling one task must coordinate with the live driver without
+terminalizing the run; forced whole-run end does not establish that contract.
 
 ## Session topology
 

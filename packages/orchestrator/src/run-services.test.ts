@@ -343,6 +343,7 @@ describe("standard-delivery runtime", () => {
               matched: false,
               advisory: false,
               durationMs: 4,
+              evidencePaths: [],
             },
           ],
           findings: accepted

@@ -154,6 +154,7 @@ export class CommandGateEvaluator implements GateEvaluator, GateEvaluationPort {
         matched,
         advisory,
         durationMs,
+        evidencePaths: sensorEvidencePaths(result),
       } satisfies SensorReading;
       readings.push(reading);
 
@@ -399,6 +400,25 @@ function readPointer(value: JsonValue, pointer: string): JsonValue | typeof miss
     }
   }
   return current ?? (current === null ? null : missing);
+}
+
+function sensorEvidencePaths(result: SensorResult): string[] {
+  if (
+    "error" in result ||
+    result.data === undefined ||
+    typeof result.data !== "object" ||
+    result.data === null ||
+    Array.isArray(result.data)
+  ) {
+    return [];
+  }
+  return Object.entries(result.data)
+    .filter(
+      ([key, value]) =>
+        key.endsWith("EvidencePath") && typeof value === "string" && value.trim() !== "",
+    )
+    .map(([, value]) => value as string)
+    .slice(0, 20);
 }
 
 function executionError(summary: string): SensorExecutionError {

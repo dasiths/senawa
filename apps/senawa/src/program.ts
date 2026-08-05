@@ -94,6 +94,17 @@ export async function runCli(
       if (found === undefined) throw new Error(`Unknown sensor ${id}`);
       writeJson(io, found);
     });
+  sensor
+    .command("audit")
+    .argument("[runId]")
+    .action(async (runId?: string) => {
+      writeJson(
+        io,
+        await options.services.queries.sensorAudit(
+          runId ?? (await requireActiveRun(options.services)),
+        ),
+      );
+    });
 
   const gate = program.command("gate");
   gate
@@ -170,13 +181,20 @@ export async function runCli(
   work
     .command("end")
     .requiredOption("--reason <reason>")
-    .action(async (commandOptions: { reason: string }) => {
+    .option("--force", "cancel and reconcile an active worker before ending")
+    .option("--grace-ms <milliseconds>", "bounded cancellation grace period", "1000")
+    .action(async (commandOptions: { reason: string; force?: boolean; graceMs: string }) => {
+      const graceMs = Number(commandOptions.graceMs);
+      if (!Number.isSafeInteger(graceMs) || graceMs < 0 || graceMs > 60_000) {
+        throw new Error("--grace-ms must be an integer from 0 through 60000");
+      }
       writeJson(
         io,
         await options.services.commands.end(
           await requireActiveRun(options.services),
           commandOptions.reason,
           actor,
+          { force: commandOptions.force === true, graceMs },
         ),
       );
     });

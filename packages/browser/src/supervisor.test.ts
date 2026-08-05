@@ -169,7 +169,7 @@ describe("loopback web supervisor", () => {
 
       expect((await services.queries.status("production-demo-run"))?.status).toBe("finished");
       expect(await services.queries.report("production-demo-run")).toContain(
-        "Status: **finished**",
+        "Outcome: **finished**",
       );
     } finally {
       await supervisor.close();

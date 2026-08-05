@@ -20,6 +20,7 @@ does not ask agents to summarize their own compliance.
   driver.log
   journal.jsonl
   report.md
+  workers/sessions/<session>/<turn>.jsonl
   snapshot/
   .copilot-home/
   artifacts/
@@ -89,6 +90,13 @@ rewrites:
 The event vocabulary is small and versioned. It covers work, phase, plan, task,
 dispatch, sensor, gate, question, steering, approval, and lifecycle transitions.
 
+Normalized worker events carry stable event, operation, dispatch, session,
+turn, owner, attempt, and trace joins. Replayed event IDs are idempotent and a
+conflicting replay fails. The event stream is fully durable before final worker
+output enters the aggregate commit that wakes browser readers. Task text events
+materialize a capped, neutralized transcript; every task also receives either a
+reported patch or explicit no-diff evidence.
+
 ### Journal rules
 
 * Every event names its actor and channel.
@@ -122,6 +130,11 @@ The report renders eight sections:
 6. Human questions, answers, and approvals
 7. Work discovered during execution
 8. Cost by role and model
+
+The Phase 9 renderer implements these sections from the full graph, journal,
+output, and normalized worker-event projection. Usage checkpoints are cumulative
+per dispatch, so report aggregation takes the latest checkpoint once rather
+than summing repeated cumulative values.
 
 The decomposition diagram is built from graph nodes and parent-child edges. A
 plain beads dependency tree is insufficient because sibling children with no

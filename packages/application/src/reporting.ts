@@ -1,15 +1,20 @@
 import type { JournalEvent, OutputRecord, RuntimeState } from "@senawa/domain";
-import type { RunPersistencePort } from "./ports.js";
+import type { RunPersistencePort, WorkerEventRecord } from "./ports.js";
 
 export type RunReportProjection = Pick<
   RuntimeState,
   "identity" | "status" | "endReason" | "phases" | "tasks"
 > & {
   readonly artifactCount: number;
-  readonly journalCount: number;
-  readonly outputCount: number;
-  readonly latestEvent: JournalEvent | null;
-  readonly latestOutput: OutputRecord | null;
+  readonly journal: readonly JournalEvent[];
+  readonly outputs: readonly OutputRecord[];
+  readonly workerEvents: readonly WorkerEventRecord[];
+  readonly decomposition: readonly {
+    readonly id: string;
+    readonly title: string;
+    readonly dependsOn: readonly string[];
+    readonly executorKind: string;
+  }[];
 };
 
 export interface ReportEvidenceReaderPort {
@@ -21,10 +26,6 @@ export class RunReportEvidenceReader implements ReportEvidenceReaderPort {
 
   async readReportProjection(runId: string): Promise<RunReportProjection> {
     const state = (await this.persistence.readRun(runId)).state;
-    const latestOutput = Object.values(state.outputs)
-      .flat()
-      .sort((left, right) => left.ts.localeCompare(right.ts))
-      .at(-1);
     return {
       identity: state.identity,
       status: state.status,
@@ -32,13 +33,17 @@ export class RunReportEvidenceReader implements ReportEvidenceReaderPort {
       phases: state.phases,
       tasks: state.tasks,
       artifactCount: state.artifacts.length,
-      journalCount: state.journal.length,
-      outputCount: Object.values(state.outputs).reduce(
-        (total, records) => total + records.length,
-        0,
-      ),
-      latestEvent: state.journal.at(-1) ?? null,
-      latestOutput: latestOutput ?? null,
+      journal: state.journal,
+      outputs: Object.values(state.outputs)
+        .flat()
+        .toSorted((left, right) => left.ts.localeCompare(right.ts)),
+      workerEvents: await this.persistence.readWorkerEvents(runId),
+      decomposition: state.snapshot.workflow.spec.phases.map((phase) => ({
+        id: phase.id,
+        title: phase.id,
+        dependsOn: phase.dependsOn,
+        executorKind: phase.executor.kind,
+      })),
     };
   }
 }

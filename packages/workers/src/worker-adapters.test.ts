@@ -30,6 +30,8 @@ const turn: WorkerTurn = {
   turnId: "turn-one",
   dispatchId: "dispatch-one",
   operationId: "operation-one",
+  traceId: "a".repeat(32),
+  traceparent: `00-${"a".repeat(32)}-${"b".repeat(16)}-01`,
   role: "implementor",
   profile,
   profileDigest: "a".repeat(64),
@@ -65,9 +67,12 @@ describe("worker adapter conformance", () => {
       expect(events.map((event) => event.kind)).toEqual([
         "lifecycle",
         "lifecycle",
+        "model",
         "text",
         "text",
         "text",
+        "diff",
+        "usage",
         "lifecycle",
       ]);
       expect((await adapter.inspect(resumed)).state).toBe("completed");
@@ -135,6 +140,7 @@ describe("worker adapter conformance", () => {
       repositoryRoot: root,
       isolationRoot: root,
       executable,
+      timeoutMs: 1_000,
     });
 
     await (await adapter.create(turn)).result;

@@ -99,6 +99,7 @@ describe("CommandGateEvaluator", () => {
     expect(data.stdout).toContain("[neutralized-tag]");
     expect(data.stdout).not.toContain("<system>");
     expect(data.stdoutEvidencePath).toBe("sensors/cached-stdout.txt");
+    expect(first.readings[0]?.evidencePaths).toEqual(["sensors/cached-stdout.txt"]);
     expect(spills[0]?.content.length).toBeGreaterThan(SENSOR_OUTPUT_LIMIT);
   });
 

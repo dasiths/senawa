@@ -1,5 +1,10 @@
 import { FileRunDocumentStore } from "@senawa/artifact-store";
-import { FileJournalStore, FileOutputLogStore, RunChangeNotifier } from "@senawa/observability";
+import {
+  FileJournalStore,
+  FileOutputLogStore,
+  FileWorkerEventStore,
+  RunChangeNotifier,
+} from "@senawa/observability";
 import {
   FileActiveRunRegistry,
   FileLeaseStore,
@@ -20,6 +25,7 @@ export function createFileTestComposition(
       documents: new FileRunDocumentStore(repositoryRoot),
       journal: new FileJournalStore(repositoryRoot, notifier),
       output: new FileOutputLogStore(repositoryRoot, notifier),
+      workerEvents: new FileWorkerEventStore(repositoryRoot),
       leases: new FileLeaseStore(repositoryRoot, now),
       notifications: notifier,
     }),

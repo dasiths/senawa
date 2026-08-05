@@ -44,7 +44,10 @@ driver lifecycle.
 Version 1 allows one unfinished Senawa run per repository and one active worker
 turn. If a run cannot be completed or resumed, `senawa work end --reason "..."`
 records its abandonment and frees the repository for a replacement. It does not
-delete the ended run or its evidence.
+delete the ended run or its evidence. An active or stranded worker requires
+explicit `--force`; forced end cancels the turn, waits a bounded grace period,
+takes over through the fenced driver lease, reconciles the dispatch, and
+persists terminal state before repository ownership is released.
 
 ## What a run looks like
 
@@ -116,15 +119,20 @@ completions, execution errors, and gate evidence are recorded in the journal.
 Deterministic sensors run from cheap to expensive, later blocking expensive
 checks stop after a deterministic failure, and advisory checks still report.
 Cache identity and evidence-spill ports keep those storage choices outside the
-gate evaluator.
+gate evaluator. `senawa sensor audit [<run>]` derives verdict agreement, drift
+transitions, and latency from recorded readings. Hook latency remains an
+explicit unreported metric until the hook writes measurements.
 
 `@senawa/workers` owns deterministic, recording, and subprocess lifecycle
 adapters, capability negotiation, authorization, normalized events, explicit
 create, resume, inspect, cancel, and release operations. Application-owned
 typed binding contracts cover task completion, phase submission, questions,
-discoveries, and notes. Offline conformance uses deterministic adapters and a
-recording fake executable. It does not establish live Copilot transport or SDK
-behavior.
+discoveries, and notes. Normalized lifecycle, model, trace, text, artifact,
+task-diff, duration, usage, AIU, and cost events are durably deduplicated before
+output can fan out to the browser. Task transcripts and explicit no-diff
+evidence are materialized in the work directory. Offline conformance uses
+deterministic adapters and a bounded recording fake executable for create and
+resume. It does not establish live Copilot transport or SDK behavior.
 
 The `senawa` app composes `@senawa/runtime-beads` by default and selects
 `@senawa/runtime-file` only for explicit `--runtime file` commands. Mutable runtime state,
@@ -141,7 +149,9 @@ compatibility re-export facade.
 The loopback console now lives in `@senawa/browser`, and `@senawa/reporting`
 renders from an application evidence projection rather than a runtime adapter.
 The report renderer neutralizes control characters, instruction-like tags, raw
-HTML, and Markdown syntax in untrusted fields. `@senawa/web` and
+HTML, and Markdown syntax in capped untrusted fields. It renders request and
+outcome, decomposition, worker execution, gate and human history, discoveries,
+notes, and cost by role and model. `@senawa/web` and
 `@senawa/report` remain thin re-export facades while compatibility importers are
 migrated. The `senawa` app wires target adapters directly.
 
@@ -179,8 +189,10 @@ command then terminates the server. It does not invoke Copilot.
 Run the equivalent default-Beads acceptance path with `pnpm demo:beads`. The
 complete generated command grammar is in the [CLI reference](docs/reference/cli.md).
 `senawa init`, individual `sensor run`, `task done`, and `task abort` remain
-deferred because their current scaffold, expectation, completion, or cancellation
-contracts are not sufficient for a safe public command.
+deferred. Initialization lacks versioned scaffold assets; individual sensor
+execution lacks an instance-level expectation contract; task completion lacks
+an authenticated subprocess command bridge; and task abort lacks per-task
+driver coordination despite forced whole-run cancellation being available.
 
 Keep the completed browser console running only for explicit inspection:
 

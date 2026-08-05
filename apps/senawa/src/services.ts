@@ -3,6 +3,7 @@ import { posix, resolve } from "node:path";
 import {
   RunCommandService as ApplicationRunCommandService,
   type ArtifactValidationPort,
+  type EndRunOptions,
   type GateEvaluationPort,
   type RunChangeNotificationPort,
   type RunPersistencePort,
@@ -26,6 +27,7 @@ import type {
   RuntimeLease,
   WorkRequest,
 } from "@senawa/domain";
+import { FileSensorEvidenceStore } from "@senawa/observability";
 import { RunReportService } from "@senawa/reporting";
 import { CommandGateEvaluator } from "@senawa/sensors";
 import { DeterministicWorkerHost } from "@senawa/workers";
@@ -151,8 +153,8 @@ export class RunCommands {
     return this.application.revisePlan(runId, plan, actor);
   }
 
-  end(runId: string, reason: string, actor: CommandActor) {
-    return this.application.end(runId, reason, actor);
+  end(runId: string, reason: string, actor: CommandActor, options?: EndRunOptions) {
+    return this.application.end(runId, reason, actor, options);
   }
 
   finish(runId: string, actor: CommandActor) {
@@ -179,7 +181,8 @@ export function createSenawaServices(
     commands: new RunCommands(
       options.persistence,
       options.workerHost ?? new DeterministicWorkerHost(),
-      options.gateEvaluator ?? new CommandGateEvaluator(root),
+      options.gateEvaluator ??
+        new CommandGateEvaluator(root, { evidenceStore: new FileSensorEvidenceStore(root) }),
       options.now ?? (() => new Date()),
       options.runtimeBackend ?? "file",
     ),

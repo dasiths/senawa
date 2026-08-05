@@ -27,6 +27,8 @@ const baseTurn: WorkerTurn = {
   turnId: "turn-role-test",
   dispatchId: "dispatch-role-test",
   operationId: "operation-role-test",
+  traceId: "a".repeat(32),
+  traceparent: `00-${"a".repeat(32)}-${"b".repeat(16)}-01`,
   role: "definer",
   profile: definerProfile,
   profileDigest: "a".repeat(64),

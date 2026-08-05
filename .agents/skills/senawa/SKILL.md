@@ -23,10 +23,13 @@ next workflow transition.
 | Wait for a bounded interval | `senawa work wait --timeout <seconds>` |
 | Continue a stopped run | `senawa work resume` |
 | Pause an idle driver | `senawa work pause` |
+| Audit recorded sensor stability | `senawa sensor audit [<run>]` |
+| Render the complete run report | `senawa work report [<run>]` |
 | Approve an artifact | `senawa approve <phase>` |
 | Reject an artifact | `senawa reject <phase> --reason "<reason>"` |
 | Steer a worker | `senawa steer <task> "<instruction>"` |
 | End abandoned work | `senawa work end --reason "<reason>"` |
+| Force-end a stranded worker | `senawa work end --force --reason "<reason>"` |
 
 ## Decision rules
 
@@ -41,4 +44,6 @@ a failure and should be relayed without reinterpretation.
 Beads is the default runtime. Use global `--runtime file` only for development,
 tests, or the file-backed demo. Never retry a failed Beads command with the file
 runtime. Start and resume are foreground commands; no detached driver is
-available.
+available. Use forced end only after the human explicitly chooses abandonment;
+it cancels the active worker, waits a bounded grace period, takes a fenced stale
+lease, reconciles the dispatch, and releases repository ownership last.

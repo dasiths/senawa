@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileRunDocumentStore } from "@senawa/artifact-store";
-import { FileJournalStore, FileOutputLogStore } from "@senawa/observability";
+import { FileJournalStore, FileOutputLogStore, FileWorkerEventStore } from "@senawa/observability";
 import {
   FileActiveRunRegistry,
   FileLeaseStore,
@@ -59,6 +59,36 @@ leaseContract(async () => {
 dispatchProjectionContract(async () => {
   const root = await temporaryRoot();
   return { current: persistence(root), reopen: () => persistence(root) };
+});
+
+it("releases the active pointer only after terminal runtime state is durable", async () => {
+  const root = await temporaryRoot();
+  const state = createRuntimeFixture("run-terminal-order");
+  const initial = persistence(root);
+  await initial.createRun(state, "start-terminal-order");
+  const current = await initial.readRun(state.identity.runId);
+  let pointerAtRuntimeStep: string | null = null;
+  let statusAtRuntimeStep: string | null = null;
+  const terminal = persistence(root, {
+    async afterStep(step) {
+      if (step !== "runtime-state") return;
+      pointerAtRuntimeStep = await new FileActiveRunRegistry(root).getActiveRunId();
+      statusAtRuntimeStep = (
+        await new FileRuntimeStateStore(root).readRuntimeState(state.identity.runId)
+      ).state.status;
+    },
+  });
+
+  await terminal.commitRun({
+    runId: state.identity.runId,
+    expectedRevision: current.revision,
+    operationId: "end-terminal-order",
+    state: { ...current.state, status: "ended", endReason: "test complete" },
+  });
+
+  expect(statusAtRuntimeStep).toBe("ended");
+  expect(pointerAtRuntimeStep).toBe(state.identity.runId);
+  expect(await terminal.getActiveRunId()).toBeNull();
 });
 
 it("recovers a split create interrupted after durable evidence", async () => {
@@ -126,6 +156,7 @@ it("rejects reopening a run through a different runtime backend", async () => {
       documents: new FileRunDocumentStore(root),
       journal: new FileJournalStore(root),
       output: new FileOutputLogStore(root),
+      workerEvents: new FileWorkerEventStore(root),
       leases: new FileLeaseStore(root),
     },
     { backend: "beads" },
@@ -148,6 +179,7 @@ function persistence(root: string, options: FileRunPersistenceOptions = {}): Fil
       documents: new FileRunDocumentStore(root),
       journal: new FileJournalStore(root),
       output: new FileOutputLogStore(root),
+      workerEvents: new FileWorkerEventStore(root),
       leases: new FileLeaseStore(root),
     },
     options,

@@ -58,9 +58,11 @@ ownership and fenced leases remain file-backed in both compositions.
 
 `@senawa/artifact-store` owns create-only identity,
 snapshot, and versioned artifact documents with digest conflict checks.
-`@senawa/observability` owns idempotent journal JSONL and session/turn output
-streams with stable owner projections, storage-assigned cursors, and
-process-local notification hints. Interrupted aggregate
+`@senawa/observability` owns idempotent journal JSONL, session/turn output, and
+normalized worker event streams with stable owner projections,
+storage-assigned cursors, stable event deduplication, task transcript and diff
+materialization, sensor evidence files, and process-local notification hints.
+Worker events persist before output fan-out. Interrupted aggregate
 application commits converge from one pending transaction on reopen, while each
 fact has one durable authority after convergence. The production Copilot
 subprocess host is opt-in and was not exercised during Phase 7.
@@ -79,7 +81,9 @@ Browser SSE rereads durable cursors on bounded polling; notifications only wake
 same-process readers sooner. `@senawa/browser` owns authenticated HTTP routes,
 strict command schemas, graph assets, and durable replay. `@senawa/reporting`
 reads an application-owned evidence projection and escapes untrusted Markdown,
-HTML, control characters, and instruction-like tags. `@senawa/web` and
+HTML, control characters, and instruction-like tags with deterministic caps. It
+renders all eight documented process sections and aggregates cumulative AIU and
+cost checkpoints once per dispatch. `@senawa/web` and
 `@senawa/report` are thin re-export facades.
 
 The [probe findings](wip/probe-findings.md) distinguish live-model evidence,
@@ -178,6 +182,16 @@ events, 77 journal events, 27 output records, five immutable artifacts, eight
 Beads graph nodes, and no mutable runtime JSON blob. These are real Beads and
 deterministic-worker measurements, not live Copilot evidence.
 
+On 2026-08-05, the offline Phase 9 suite passed 96 tests across 20 files in
+220.14 seconds. The isolated eight-test real-Beads contract passed in 218.79
+seconds. Boundary checks, typecheck, protected-safe Biome lint, build, bundle
+startup, CLI generation, Markdown links, and diff hygiene passed. The file and
+Beads demos each completed with 77 journal events, 81 normalized worker events,
+27 output records, all eight report sections, zero AIU or cost, and no Copilot
+invocation. The bounded fake-subprocess acceptance proved create and resume
+arguments with a local executable and one-second timeout. Paid live evidence
+remains separately approval-gated and unrun.
+
 If hook startup later becomes material, keep the orchestrator warm behind a Unix
 socket and replace the shell hook with a small compiled client. Do not rewrite
 the orchestration system to solve a measured hot-path problem.
@@ -194,6 +208,7 @@ The command surface is grouped by responsibility:
 | Durable run facts | `ask`, `answer`, `discover`, `note`, `plan revise` | Human or principal agent |
 | Driver diagnostics | `gate check` | Driver or debugging |
 | Sensor management | `sensor list`, `info` | Human, CI, driver |
+| Sensor audit | `sensor audit [<run>]` | Human, CI |
 | Workflow management | `workflow list`, `info`, `validate`, `render` | Human or principal agent |
 | Diagnostics | `doctor`, `prime`, `work report` | All trusted operational callers |
 
@@ -210,6 +225,12 @@ The complete argument grammar is generated from Commander in
 [the CLI reference](../reference/cli.md). `init`, `sensor run`, `task done`, and
 `task abort` remain omitted until versioned scaffold assets, sensor expectation,
 worker completion, and cancellation contracts exist.
+
+`work end --force` is implemented for whole-run abandonment. It cancels an
+active worker, waits bounded grace, requires fenced driver takeover, reconciles
+the dispatch, records terminal state, and releases active-run ownership after
+durability. This does not make per-task `task abort` safe while a driver remains
+responsible for continuing the run.
 
 ## Build order
 

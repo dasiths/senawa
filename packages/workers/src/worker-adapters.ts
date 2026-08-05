@@ -71,9 +71,12 @@ export class DeterministicWorkerAdapter implements WorkerSessionPort, WorkerExec
     return this.start({ ...turn, operation: "resume" });
   }
 
-  async execute(turn: WorkerTurn): Promise<WorkerResult> {
+  async execute(
+    turn: WorkerTurn,
+    onEvent?: (event: WorkerSessionEvent) => Promise<void>,
+  ): Promise<WorkerResult> {
     this.sessions.add(turn.sessionId);
-    return this.start(turn).result;
+    return consumeHandle(this.start(turn), onEvent);
   }
 
   async inspect(turn: WorkerTurn): Promise<WorkerTurnObservation> {
@@ -102,7 +105,7 @@ export class DeterministicWorkerAdapter implements WorkerSessionPort, WorkerExec
       this.completed.set(turn.turnId, value);
       return value;
     });
-    return createHandle(turn, result);
+    return createHandle(turn, result, { usageNanoAiu: 0, costUsdMicros: 0 });
   }
 }
 
@@ -169,9 +172,12 @@ export class SubprocessWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     return this.start({ ...turn, operation: "resume" });
   }
 
-  async execute(turn: WorkerTurn): Promise<WorkerResult> {
+  async execute(
+    turn: WorkerTurn,
+    onEvent?: (event: WorkerSessionEvent) => Promise<void>,
+  ): Promise<WorkerResult> {
     this.sessions.add(turn.sessionId);
-    return this.start(turn).result;
+    return consumeHandle(this.start(turn), onEvent);
   }
 
   async inspect(turn: WorkerTurn): Promise<WorkerTurnObservation> {
@@ -219,6 +225,10 @@ export class SubprocessWorkerAdapter implements WorkerSessionPort, WorkerExecuti
         env: {
           ...process.env,
           COPILOT_HOME: join(this.options.isolationRoot, turn.runId),
+          TRACEPARENT: turn.traceparent,
+          SENAWA_DISPATCH_ID: turn.dispatchId,
+          SENAWA_OPERATION_ID: turn.operationId,
+          SENAWA_TRACE_ID: turn.traceId,
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -344,17 +354,23 @@ function negotiate(
   };
 }
 
-function createHandle(turn: WorkerTurn, result: Promise<WorkerResult>): WorkerTurnHandle {
+function createHandle(
+  turn: WorkerTurn,
+  result: Promise<WorkerResult>,
+  usage?: { readonly usageNanoAiu: number; readonly costUsdMicros: number },
+): WorkerTurnHandle {
   return {
     turn,
     result,
     events: (async function* () {
       let index = 0;
+      const startedAt = Date.now();
       const event = (value: UnsavedWorkerEvent): WorkerSessionEvent =>
         ({
           ...value,
           eventId: `${turn.turnId}:${index++}`,
-          ts: new Date(0).toISOString(),
+          ts: new Date().toISOString(),
+          traceId: turn.traceId,
         }) as WorkerSessionEvent;
       yield event({
         apiVersion: "senawa.dev/worker-event/v1",
@@ -369,6 +385,25 @@ function createHandle(turn: WorkerTurn, result: Promise<WorkerResult>): WorkerTu
         turnId: turn.turnId,
         kind: "lifecycle",
         event: "started",
+      });
+      yield event({
+        apiVersion: "senawa.dev/worker-event/v1",
+        sessionId: turn.sessionId,
+        turnId: turn.turnId,
+        kind: "model",
+        requested: turn.requestedModel?.id ?? turn.resolvedModel.id,
+        resolved: turn.resolvedModel.id,
+        ...(turn.requestedModel?.effort === undefined
+          ? {}
+          : { requestedEffort: turn.requestedModel.effort }),
+        ...(turn.resolvedModel.effort === undefined
+          ? {}
+          : { resolvedEffort: turn.resolvedModel.effort }),
+        reason:
+          (turn.requestedModel?.id ?? turn.resolvedModel.id) === turn.resolvedModel.id &&
+          (turn.requestedModel?.effort ?? turn.resolvedModel.effort) === turn.resolvedModel.effort
+            ? "exact"
+            : "degraded",
       });
       try {
         const outcome = await result;
@@ -391,12 +426,34 @@ function createHandle(turn: WorkerTurn, result: Promise<WorkerResult>): WorkerTu
             artifact: outcome.artifact,
           });
         }
+        if (turn.owner.kind === "task") {
+          yield event({
+            apiVersion: "senawa.dev/worker-event/v1",
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+            kind: "diff",
+            changed: false,
+            patch: "",
+            reason: "Worker adapter reported no task diff",
+          });
+        }
+        if (usage !== undefined) {
+          yield event({
+            apiVersion: "senawa.dev/worker-event/v1",
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+            kind: "usage",
+            cumulativeNanoAiu: usage.usageNanoAiu,
+            cumulativeCostUsdMicros: usage.costUsdMicros,
+          });
+        }
         yield event({
           apiVersion: "senawa.dev/worker-event/v1",
           sessionId: turn.sessionId,
           turnId: turn.turnId,
           kind: "lifecycle",
           event: "completed",
+          durationMs: Math.max(0, Date.now() - startedAt),
         });
       } catch (error) {
         yield event({
@@ -406,10 +463,29 @@ function createHandle(turn: WorkerTurn, result: Promise<WorkerResult>): WorkerTu
           kind: "lifecycle",
           event: "failed",
           detail: error instanceof Error ? error.message : String(error),
+          durationMs: Math.max(0, Date.now() - startedAt),
         });
       }
     })(),
   };
+}
+
+async function consumeHandle(
+  handle: WorkerTurnHandle,
+  onEvent?: (event: WorkerSessionEvent) => Promise<void>,
+): Promise<WorkerResult> {
+  const events = (async () => {
+    if (onEvent === undefined) return;
+    for await (const event of handle.events) await onEvent(event);
+  })();
+  try {
+    const result = await handle.result;
+    await events;
+    return result;
+  } catch (error) {
+    await events;
+    throw error;
+  }
 }
 
 type DistributiveOmit<Event, Key extends PropertyKey> = Event extends unknown

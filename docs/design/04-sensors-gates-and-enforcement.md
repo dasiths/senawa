@@ -311,7 +311,14 @@ stable on structural violations.
 
 `senawa sensor audit` reruns those measurements on a cadence and reports drift.
 The audit reads recorded evidence rather than asking an agent whether the sensor
-is reliable.
+is reliable. The current offline implementation groups recorded outcomes,
+computes agreement and verdict transitions, and reports p95 execution latency.
+Hook latency is exposed as `unreported` until the hook emits durable timing
+samples; no value is inferred from an unrelated process clock.
+
+Individual `sensor run` remains omitted. A configured sensor instance does not
+carry a standalone gate expectation, so running it outside a named gate would
+produce an assessment without an authoritative interpretation.
 
 ## Next reading
 

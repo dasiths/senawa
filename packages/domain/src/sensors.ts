@@ -117,6 +117,7 @@ export const SensorReadingSchema = z
     matched: z.boolean(),
     advisory: z.boolean(),
     durationMs: z.number().int().nonnegative(),
+    evidencePaths: z.array(RelativePathSchema).default([]),
   })
   .strict();
 

@@ -20,9 +20,12 @@ export interface WorkerTurn {
   readonly turnId: string;
   readonly dispatchId: string;
   readonly operationId: string;
+  readonly traceId: string;
+  readonly traceparent: string;
   readonly role: string;
   readonly profile: WorkerProfile;
   readonly profileDigest: string;
+  readonly requestedModel?: WorkerProfile["spec"]["model"];
   readonly resolvedModel: WorkerProfile["spec"]["model"];
   readonly attempt: number;
   readonly sessionId: string;
@@ -101,6 +104,7 @@ export type WorkerSessionEvent = {
       readonly kind: "lifecycle";
       readonly event: "created" | "resumed" | "started" | "completed" | "failed" | "cancelled";
       readonly detail?: string;
+      readonly durationMs?: number;
     }
   | {
       readonly kind: "text";
@@ -114,11 +118,23 @@ export type WorkerSessionEvent = {
       readonly state: "requested" | "denied" | "started" | "completed" | "failed";
       readonly detail?: string;
     }
-  | { readonly kind: "usage"; readonly cumulativeNanoAiu: number }
+  | {
+      readonly kind: "usage";
+      readonly cumulativeNanoAiu: number;
+      readonly cumulativeCostUsdMicros?: number;
+    }
   | {
       readonly kind: "model";
       readonly requested: string;
       readonly resolved: string;
+      readonly requestedEffort?: string;
+      readonly resolvedEffort?: string;
+      readonly reason?: string;
+    }
+  | {
+      readonly kind: "diff";
+      readonly changed: boolean;
+      readonly patch: string;
       readonly reason?: string;
     }
   | { readonly kind: "artifact"; readonly artifact: JsonObject }
@@ -146,8 +162,12 @@ export interface WorkerSessionPort {
 }
 
 export interface WorkerExecutionPort {
-  execute(turn: WorkerTurn): Promise<WorkerResult>;
+  execute(
+    turn: WorkerTurn,
+    onEvent?: (event: WorkerSessionEvent) => Promise<void>,
+  ): Promise<WorkerResult>;
   inspect?(turn: WorkerTurn): Promise<WorkerTurnObservation>;
+  cancel?(turn: WorkerTurn, reason: string): Promise<WorkerCancelResult>;
 }
 
 export type WorkerBindingName =

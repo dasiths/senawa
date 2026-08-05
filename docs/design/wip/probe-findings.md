@@ -82,6 +82,10 @@ about the SDK should be re-checked when the mirror catches up.
 | 40 | The skill's boundary holds in practice | **Observed once.** No direct `bd` calls across three turns, but this is instruction-only and one clean run is weak evidence |
 | 41 | A browser can observe and control an active run over HTTP | **Confirmed offline at the transport and UI layers.** Five graph nodes updated live, per-phase stdout/stderr replay reconnected without gaps, and structured approval and steering worked. Real Senawa command-handler integration remains unvalidated |
 | 42 | Version 1 can enforce one active run and worker without trapping the repository | **Confirmed offline.** Competing starts and web supervisors were refused, peak in-flight worker turns was one, graceful end recorded terminal state and released the singleton, and a replacement run started in the same repository |
+| 43 | Normalized worker events can persist before browser fan-out | **Confirmed offline.** Stable event IDs deduplicated, conflicting replay failed, and dispatch coverage proved event persistence completed before output commit |
+| 44 | A stranded dispatch can be force-ended without deleting ownership state | **Confirmed offline.** Cancellation, bounded grace, fenced takeover, dispatch reconciliation, terminal state, and pointer-last ordering passed deterministic race and persistence tests |
+| 45 | The full report can aggregate hostile provenance and cumulative usage | **Confirmed offline.** All eight sections rendered with deterministic caps and escaping; cumulative AIU and cost were counted once per dispatch |
+| 46 | Sensor drift and latency can be audited from recorded evidence | **Confirmed offline.** Verdict transitions, agreement, and p95 duration were derived from journal facts; absent hook samples remained explicitly unreported |
 
 ## Hook latency
 
@@ -810,9 +814,9 @@ The replacement attempt initially exposed a defect: calling `bd init` for every
 work item makes a valid second run fail because the database already exists. The
 engine now initializes beads once per repository.
 
-This establishes normal abandonment, not emergency takeover. The production
-`--force` path still needs the real driver lease, bounded shutdown, stale-process
-confirmation, and reconciliation before it may release the singleton.
+This established normal abandonment at that point in the implementation, not
+emergency takeover. The later offline Phase 9 section records the added driver
+lease, bounded cancellation, reconciliation, and remaining cross-host limit.
 
 ## Production Beads adapter validation
 
@@ -911,6 +915,51 @@ not yet sufficient for safe production behavior.
 This evidence used real Beads with deterministic workers and no Copilot or AI
 calls. It does not establish live subprocess execution, cross-host leases,
 multiple active drivers, or SDK transport.
+
+## Offline Phase 9 provenance and recovery validation
+
+On 2026-08-05, the offline Phase 9 implementation added an append-only worker
+event authority under each run. Events join by run, operation, dispatch,
+session, turn, owner, attempt, and deterministic W3C trace context. The file
+store uses stable event IDs for idempotency, rejects conflicting replay, and
+materializes bounded task transcripts plus either a reported patch or explicit
+no-diff evidence. Sensor spill paths are first-class reading fields and flow
+into gate and rework records.
+
+The application consumes each normalized event stream before accepting the
+worker result. A focused ordering test recorded the durable worker event before
+the output commit that wakes browser readers. Report tests rendered request and
+outcome, decomposition, worker model and effort, attempts, duration, AIU, gate
+refusals and subsequent changes, human decisions and questions, discoveries and
+notes, and cost by role and model. Hostile Markdown, HTML, control characters,
+instruction-like tags, and oversized fields remained escaped or capped.
+
+Forced whole-run end now refuses an active turn unless `--force` is explicit.
+The forced path cancels the worker, waits bounded grace, acquires a fenced driver
+lease, reconciles completed, cancelled, or missing dispatch state, records the
+terminal event, and releases the repository pointer after terminal runtime state
+is durable. This was tested with a crashed deterministic transport and direct
+pointer-order observation. It does not prove cross-host process death.
+
+`senawa sensor audit` derives agreement, verdict transitions, and p95 duration
+from recorded sensor evidence. Hook latency is returned as `unreported` because
+the current hook does not write timing samples. Individual `sensor run` remains
+omitted because no instance-level expectation contract exists. Public
+`task done` remains omitted because the subprocess adapter has no authenticated
+command bridge, and `task abort` remains omitted because per-task cancellation
+is not coordinated with a continuing driver.
+
+The bounded fake-subprocess acceptance executed local create and resume calls
+with a one-second timeout and verified the distinct session arguments. It did
+not invoke Copilot or spend AI credits. The separately approval-gated paid
+Copilot create-resume smoke and live rework evidence were not run.
+
+The final offline validation passed 96 tests across 20 files in 220.14 seconds;
+the isolated real-Beads contract passed all eight cases in 218.79 seconds. Both
+offline demos finished with 77 journal events, 81 normalized worker events, 27
+output records, five immutable artifacts, and complete reports. Boundary,
+typecheck, protected-safe lint, build, bundle startup, generated CLI reference,
+Markdown links, and diff checks also passed.
 
 ## Design changes from the probes
 

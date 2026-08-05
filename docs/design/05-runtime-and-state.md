@@ -147,6 +147,14 @@ records the affected worker as aborted or dispatch-failed, marks the run ended,
 and releases the pointer last. A raw lock-file deletion is not a supported
 recovery path.
 
+The offline Phase 9 implementation exercises this ordering with deterministic
+worker cancellation and a crashed-dispatch fixture. Ordinary end refuses an
+active turn. Forced end cancels and inspects it, acquires a fenced driver lease,
+records a completed, cancelled, or failed dispatch outcome, persists
+`work.ended`, and relies on the split persistence transaction to release the
+active-run pointer only after terminal runtime state is durable. Cross-host
+process confirmation remains outside this evidence.
+
 ## Beads adapter contract
 
 `@senawa/runtime-beads` is the only production adapter that invokes `bd` and

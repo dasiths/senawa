@@ -27,6 +27,7 @@ import type {
   ReportingPort,
   RunPersistencePort,
   SchedulerPort,
+  WorkerEventRecord,
   WorkerExecutionPort,
   WorkerResult,
   WorkerTurn,
@@ -43,6 +44,11 @@ export interface StartRunInput {
   readonly request: WorkRequest;
   readonly snapshot: RunSnapshot;
   readonly runId?: string;
+}
+
+export interface EndRunOptions {
+  readonly force?: boolean;
+  readonly graceMs?: number;
 }
 
 export interface TransitionResult {
@@ -341,26 +347,90 @@ export class RunCommandService implements RunDriver {
     return { runId, added };
   }
 
-  async end(runId: string, reason: string, actor: CommandActor): Promise<TransitionResult> {
-    await this.store.updateRun(runId, (state) => {
-      assertMutable(state);
-      for (const phase of state.phases) {
-        if (phase.status !== "accepted") phase.status = "ended";
+  async end(
+    runId: string,
+    reason: string,
+    actor: CommandActor,
+    options: EndRunOptions = {},
+  ): Promise<TransitionResult> {
+    const initial = await this.store.readRun(runId);
+    assertMutable(initial);
+    const activeTurn = initial.activeTurn === null ? null : workerTurnFromActive(initial);
+    if (activeTurn !== null && options.force !== true) {
+      throw new Error("Run has an active worker turn; use forced end to cancel and reconcile it");
+    }
+
+    let observation: Awaited<ReturnType<RunCommandService["inspectWorkerTurn"]>> | null = null;
+    if (activeTurn !== null) {
+      if (this.workerHost.cancel === undefined) {
+        throw new Error("Worker host does not support cancellation; forced end is unavailable");
       }
-      for (const task of state.tasks) {
-        if (task.status !== "closed") task.status = "ended";
+      await this.workerHost.cancel(activeTurn, reason);
+      const deadline = Date.now() + Math.max(0, options.graceMs ?? 1_000);
+      observation = await this.inspectWorkerTurn(activeTurn);
+      while (observation.state === "active" && Date.now() < deadline) {
+        await delay(Math.min(25, Math.max(1, deadline - Date.now())));
+        observation = await this.inspectWorkerTurn(activeTurn);
       }
-      if (state.activeTurn !== null) {
-        const dispatch = requireDispatch(state, state.activeTurn.dispatchId);
-        dispatch.status = "cancelled";
-        dispatch.updatedAt = this.now().toISOString();
-        dispatch.detail = reason;
-      }
-      state.activeTurn = null;
-      state.status = "ended";
-      state.endReason = reason;
-      emit(state, "work.ended", actor, this.now(), { reason });
-    });
+    }
+
+    const takeover =
+      options.force === true
+        ? await this.store.acquireLease(
+            runId,
+            "driver",
+            `force-end-${this.identifiers.createId()}`,
+            5_000,
+          )
+        : null;
+    try {
+      await this.store.updateRun(runId, (state) => {
+        assertMutable(state);
+        if (activeTurn !== null && state.activeTurn?.dispatchId === activeTurn.dispatchId) {
+          const dispatch = requireDispatch(state, activeTurn.dispatchId);
+          dispatch.updatedAt = this.now().toISOString();
+          if (observation?.state === "completed") {
+            appendWorkerResult(state, activeTurn, observation.result, this.now());
+            completeDispatch(state, activeTurn.dispatchId, this.now());
+          } else if (observation?.state === "missing") {
+            dispatch.status = "failed";
+            dispatch.detail = "Worker session or turn was missing during forced end";
+            emit(state, "dispatch.failed", { channel: "driver" }, this.now(), {
+              dispatchId: activeTurn.dispatchId,
+              operationId: activeTurn.operationId,
+              ownerKind: activeTurn.owner.kind,
+              ownerId: activeTurn.owner.id,
+              reason: dispatch.detail,
+            });
+          } else {
+            dispatch.status = "cancelled";
+            dispatch.detail =
+              observation?.state === "cancelled"
+                ? (observation.detail ?? reason)
+                : `Forced end after cancellation grace: ${observation?.state ?? "unreported"}`;
+            emit(state, "worker.aborted", { channel: "driver" }, this.now(), {
+              dispatchId: activeTurn.dispatchId,
+              operationId: activeTurn.operationId,
+              ownerKind: activeTurn.owner.kind,
+              ownerId: activeTurn.owner.id,
+              reason: dispatch.detail,
+            });
+          }
+        }
+        for (const phase of state.phases) {
+          if (phase.status !== "accepted") phase.status = "ended";
+        }
+        for (const task of state.tasks) {
+          if (task.status !== "closed") task.status = "ended";
+        }
+        state.activeTurn = null;
+        state.status = "ended";
+        state.endReason = reason;
+        emit(state, "work.ended", actor, this.now(), { reason, forced: options.force === true });
+      });
+    } finally {
+      if (takeover !== null) await this.store.releaseLease(runId, "driver", takeover);
+    }
     return { runId, kind: "ended" };
   }
 
@@ -538,6 +608,7 @@ export class RunCommandService implements RunDriver {
       turnId,
       dispatchId,
       operationId,
+      ...traceContext(state.identity.runId, dispatchId),
       role,
       ...resolveTurnProfile(state, role),
       attempt: iteration,
@@ -752,6 +823,7 @@ export class RunCommandService implements RunDriver {
       turnId,
       dispatchId,
       operationId,
+      ...traceContext(state.identity.runId, dispatchId),
       role: task.role,
       ...resolveTurnProfile(state, task.role, task.execution),
       attempt,
@@ -842,7 +914,7 @@ export class RunCommandService implements RunDriver {
             summary: truncate(reading.result.summary, 500),
           })),
         findings: current.reworkFindings,
-        evidencePaths: [],
+        evidencePaths: gate.readings.flatMap((reading) => reading.evidencePaths).slice(0, 20),
         nextPrompt: "Address every failed reading and finding, then request completion again.",
       };
       if (attempt >= maxReworkAttempts) {
@@ -998,7 +1070,17 @@ export class RunCommandService implements RunDriver {
 
   private async executeWorkerSafely(turn: WorkerTurn): Promise<WorkerResult> {
     try {
-      return await this.workerHost.execute(turn);
+      return await this.workerHost.execute(turn, (event) =>
+        this.store.appendWorkerEvent({
+          runId: turn.runId,
+          owner: turn.owner,
+          dispatchId: turn.dispatchId,
+          operationId: turn.operationId,
+          role: turn.role,
+          attempt: turn.attempt,
+          event,
+        }),
+      );
     } catch (error) {
       await this.store.updateRun(turn.runId, (state) => {
         state.status = "paused";
@@ -1032,6 +1114,14 @@ class RuntimeCoordinator {
 
   createRun(state: RuntimeState, operationId: string): Promise<void> {
     return this.port.createRun(state, operationId);
+  }
+
+  async appendWorkerEvent(record: WorkerEventRecord): Promise<void> {
+    await this.port.appendWorkerEvent({
+      runId: record.runId,
+      entryId: record.event.eventId,
+      record,
+    });
   }
 
   getActiveRunId(): Promise<string | null> {
@@ -1206,6 +1296,59 @@ export class RunQueryService {
     return this.persistence.readArtifact(runId, phaseId, version);
   }
 
+  async sensorAudit(runId: string) {
+    const state = await this.store.readRun(runId);
+    const events = state.journal.filter(
+      (event) => event.event === "sensor.completed" || event.event === "sensor.error",
+    );
+    const sensorIds = new Set(
+      events.flatMap((event) => {
+        const sensorId = Reflect.get(event.data, "sensorId");
+        return typeof sensorId === "string" ? [sensorId] : [];
+      }),
+    );
+    const sensors = [...sensorIds].map((sensorId) => {
+      const samples = events.filter((event) => Reflect.get(event.data, "sensorId") === sensorId);
+      const outcomes = samples.map((event) => {
+        const verdict = Reflect.get(event.data, "verdict");
+        return event.event === "sensor.error"
+          ? "error"
+          : typeof verdict === "string"
+            ? verdict
+            : "unknown";
+      });
+      const counts = new Map<string, number>();
+      for (const outcome of outcomes) counts.set(outcome, (counts.get(outcome) ?? 0) + 1);
+      const agreement = outcomes.length === 0 ? 1 : Math.max(...counts.values()) / outcomes.length;
+      const durations = samples
+        .flatMap((event) => {
+          const durationMs = Reflect.get(event.data, "durationMs");
+          return typeof durationMs === "number" ? [durationMs] : [];
+        })
+        .toSorted((left, right) => left - right);
+      const target = state.snapshot.policy.sensors.find(
+        (sensor) => sensor.id === sensorId,
+      )?.stability;
+      return {
+        sensorId,
+        samples: outcomes.length,
+        agreement,
+        driftTransitions: outcomes.slice(1).filter((value, index) => value !== outcomes[index])
+          .length,
+        p95DurationMs: percentile(durations, 0.95),
+        expectedSamples: target?.samples ?? null,
+        expectedAgreement: target?.agreement ?? null,
+        drifted:
+          target !== undefined && outcomes.length >= target.samples && agreement < target.agreement,
+      };
+    });
+    return {
+      runId,
+      sensors,
+      hookLatency: { samples: 0, p95DurationMs: null, status: "unreported" as const },
+    };
+  }
+
   async workflows() {
     return this.requireCatalog().listWorkflows();
   }
@@ -1247,6 +1390,7 @@ function resolveTurnProfile(
 ): {
   profile: WorkerProfile;
   profileDigest: string;
+  requestedModel: WorkerProfile["spec"]["model"];
   resolvedModel: WorkerProfile["spec"]["model"];
 } {
   const profile = state.snapshot.workerProfiles[role];
@@ -1256,13 +1400,15 @@ function resolveTurnProfile(
   if (source === undefined)
     throw new Error(`Missing snapshotted worker profile source: ${sourcePath}`);
   const effort = execution?.effort ?? profile.spec.model.effort;
+  const requestedModel = {
+    id: execution?.model ?? profile.spec.model.id,
+    ...(effort === undefined ? {} : { effort }),
+  };
   return {
     profile,
     profileDigest: source.sha256,
-    resolvedModel: {
-      id: execution?.model ?? profile.spec.model.id,
-      ...(effort === undefined ? {} : { effort }),
-    },
+    requestedModel,
+    resolvedModel: requestedModel,
   };
 }
 
@@ -1328,6 +1474,7 @@ function taskTurnFromActive(state: RuntimeState, task: RuntimeTask): WorkerTurn 
     turnId: active.turnId,
     dispatchId: active.dispatchId,
     operationId: active.operationId,
+    ...traceContext(state.identity.runId, active.dispatchId),
     role: task.role,
     ...resolveTurnProfile(state, task.role, task.execution),
     attempt: active.attempt,
@@ -1338,6 +1485,70 @@ function taskTurnFromActive(state: RuntimeState, task: RuntimeTask): WorkerTurn 
     prompt: createTaskPrompt(state, task, active.attempt),
     authorization: { taskPaths: task.paths, frozenPaths: state.snapshot.policy.frozen },
   };
+}
+
+function workerTurnFromActive(state: RuntimeState): WorkerTurn {
+  const active = state.activeTurn;
+  if (active === null) throw new Error(`Run ${state.identity.runId} has no active worker turn`);
+  if (active.ownerKind === "task")
+    return taskTurnFromActive(state, requireTask(state, active.ownerId));
+  const phase = requirePhase(state, active.ownerId);
+  const definition = workflowPhase(state, phase.id);
+  if (definition.executor.kind !== "agent") {
+    throw new Error(`Phase ${phase.id} active turn does not use an agent executor`);
+  }
+  return {
+    runId: state.identity.runId,
+    owner: { kind: "phase", id: phase.id },
+    operation: active.operation,
+    turnId: active.turnId,
+    dispatchId: active.dispatchId,
+    operationId: active.operationId,
+    ...traceContext(state.identity.runId, active.dispatchId),
+    role: definition.executor.role,
+    ...resolveTurnProfile(state, definition.executor.role),
+    attempt: active.attempt,
+    sessionId: active.sessionId,
+    goal: state.identity.request.goal,
+    rejectionReason: phase.rejectionReason,
+    steering: [],
+    prompt: createPhasePrompt(state, phase, active.attempt),
+    authorization: { taskPaths: [], frozenPaths: state.snapshot.policy.frozen },
+  };
+}
+
+function traceContext(
+  runId: string,
+  dispatchId: string,
+): {
+  readonly traceId: string;
+  readonly traceparent: string;
+} {
+  const traceId = stableHex(`${runId}:${dispatchId}`, 32);
+  const spanId = stableHex(dispatchId, 16);
+  return { traceId, traceparent: `00-${traceId}-${spanId}-01` };
+}
+
+function stableHex(value: string, length: number): string {
+  let left = 0x811c9dc5;
+  let right = 0x9e3779b9;
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    left = Math.imul(left ^ code, 0x01000193) >>> 0;
+    right = Math.imul(right ^ (code + left), 0x85ebca6b) >>> 0;
+  }
+  let result = "";
+  while (result.length < length) {
+    left = Math.imul(left ^ (right >>> 13), 0xc2b2ae35) >>> 0;
+    right = Math.imul(right ^ (left >>> 16), 0x27d4eb2f) >>> 0;
+    result += left.toString(16).padStart(8, "0");
+    result += right.toString(16).padStart(8, "0");
+  }
+  return result.slice(0, length);
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
 function assertWorkerSession(turn: WorkerTurn, result: WorkerResult): void {
@@ -1477,6 +1688,7 @@ function sensorEvidence(
     matched: reading.matched,
     advisory: reading.advisory,
     summary: reading.result.summary,
+    evidencePaths: reading.evidencePaths,
     ...("error" in reading.result
       ? { retryable: reading.result.retryable }
       : { verdict: reading.result.verdict }),
@@ -1553,6 +1765,11 @@ function completionPhaseId(state: RuntimeState): string {
 
 function ownerKey(ownerKind: "run" | "phase" | "task", ownerId: string): string {
   return `${ownerKind}:${ownerId}`;
+}
+
+function percentile(values: readonly number[], fraction: number): number | null {
+  if (values.length === 0) return null;
+  return values[Math.min(values.length - 1, Math.ceil(values.length * fraction) - 1)] ?? null;
 }
 
 function boundedLimit(value: number): number {

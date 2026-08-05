@@ -27,7 +27,7 @@ describe("renderRunReport", () => {
       tasks: [
         {
           key: "validate",
-          title: "Validate | output",
+          title: "Validate | output<script>",
           dependsOn: [],
           paths: ["packages"],
           acceptance: ["tests pass"],
@@ -40,26 +40,20 @@ describe("renderRunReport", () => {
         },
       ],
       artifactCount: 1,
-      journalCount: 1,
-      outputCount: 1,
-      latestEvent: {
-        apiVersion: "senawa.dev/event/v1",
-        seq: 1,
-        ts: "2026-08-04T10:02:00.000Z",
-        runId: "run-report",
-        event: "work.finished",
-        actor: { channel: "driver" },
-        data: {},
-      },
-      latestOutput: {
-        apiVersion: "senawa.dev/output/v1",
-        seq: 1,
-        ts: "2026-08-04T10:01:30.000Z",
-        runId: "run-report",
-        owner: { kind: "task", id: "validate" },
-        stream: "stdout",
-        text: "<script>alert('unsafe')</script>",
-      },
+      decomposition: [{ id: "verify", title: "Verify", dependsOn: [], executorKind: "agent" }],
+      journal: [
+        {
+          apiVersion: "senawa.dev/event/v1",
+          seq: 1,
+          ts: "2026-08-04T10:02:00.000Z",
+          runId: "run-report",
+          event: "work.finished",
+          actor: { channel: "driver" },
+          data: {},
+        },
+      ],
+      outputs: [],
+      workerEvents: [],
     } satisfies ReportRun;
 
     const report = renderRunReport(run);

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { FileRunDocumentStore } from "@senawa/artifact-store";
 import type { RuntimeState, RuntimeTask } from "@senawa/domain";
-import { FileJournalStore, FileOutputLogStore } from "@senawa/observability";
+import { FileJournalStore, FileOutputLogStore, FileWorkerEventStore } from "@senawa/observability";
 import { BeadsClient, BeadsRuntimeStateStore } from "@senawa/runtime-beads";
 import { FileActiveRunRegistry, FileLeaseStore, FileRunPersistence } from "@senawa/runtime-file";
 import {
@@ -183,6 +183,7 @@ function persistence(
       documents: new FileRunDocumentStore(root),
       journal: new FileJournalStore(root),
       output: new FileOutputLogStore(root),
+      workerEvents: new FileWorkerEventStore(root),
       leases: new FileLeaseStore(root),
     },
     { lockTimeoutMs: 120_000, staleLockMs: 300_000 },

@@ -13,6 +13,7 @@ import {
   type RunPersistencePort,
   RuntimeRevisionConflictError,
   type VersionedRunState,
+  type WorkerEventRecord,
 } from "./ports.js";
 
 export class FakeClock implements ClockPort {
@@ -45,6 +46,7 @@ export class FakeRunPersistence implements RunPersistencePort {
   private readonly revisions = new Map<string, number>();
   private readonly leases = new Map<string, RuntimeLease>();
   private activeRunId: string | null = null;
+  readonly workerEvents: WorkerEventRecord[] = [];
 
   async createRun(state: RuntimeState, operationId: string): Promise<void> {
     if (this.activeRunId !== null)
@@ -156,6 +158,25 @@ export class FakeRunPersistence implements RunPersistencePort {
     );
   }
 
+  appendWorkerEvent(input: {
+    readonly runId: string;
+    readonly entryId: string;
+    readonly record: WorkerEventRecord;
+  }): Promise<WorkerEventRecord> {
+    const existing = this.workerEvents.find(
+      (record) => record.runId === input.runId && record.event.eventId === input.entryId,
+    );
+    if (existing !== undefined) return Promise.resolve(structuredClone(existing));
+    this.workerEvents.push(structuredClone(input.record));
+    return Promise.resolve(structuredClone(input.record));
+  }
+
+  readWorkerEvents(runId: string): Promise<readonly WorkerEventRecord[]> {
+    return Promise.resolve(
+      structuredClone(this.workerEvents.filter((record) => record.runId === runId)),
+    );
+  }
+
   acquireLease(
     runId: string,
     kind: "driver" | "web",
@@ -205,6 +226,14 @@ export class FakeRunPersistence implements RunPersistencePort {
     }
     this.leases.delete(key);
     return Promise.resolve();
+  }
+
+  inspectLease(runId: string, kind: "driver" | "web"): Promise<RuntimeLease | null> {
+    return Promise.resolve(structuredClone(this.leases.get(`${runId}:${kind}`) ?? null));
+  }
+
+  readLeaseFence(runId: string, kind: "driver" | "web"): Promise<number> {
+    return Promise.resolve(this.leases.get(`${runId}:${kind}`)?.fence ?? 0);
   }
 
   private requireRun(runId: string): RuntimeState {

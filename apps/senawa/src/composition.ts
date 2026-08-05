@@ -1,6 +1,11 @@
 import { FileRunDocumentStore } from "@senawa/artifact-store";
 import type { RuntimeBackend } from "@senawa/domain";
-import { FileJournalStore, FileOutputLogStore, RunChangeNotifier } from "@senawa/observability";
+import {
+  FileJournalStore,
+  FileOutputLogStore,
+  FileWorkerEventStore,
+  RunChangeNotifier,
+} from "@senawa/observability";
 import { type BeadsClient, BeadsRuntimeStateStore } from "@senawa/runtime-beads";
 import {
   FileActiveRunRegistry,
@@ -42,6 +47,7 @@ export function createRuntimeComposition(
       documents: new FileRunDocumentStore(repositoryRoot),
       journal: new FileJournalStore(repositoryRoot, notifier),
       output: new FileOutputLogStore(repositoryRoot, notifier),
+      workerEvents: new FileWorkerEventStore(repositoryRoot),
       leases: new FileLeaseStore(repositoryRoot),
       notifications: notifier,
     },

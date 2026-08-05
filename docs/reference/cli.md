@@ -10,7 +10,9 @@ belongs to process composition and is not available through browser HTTP routes.
 The current CLI intentionally omits `init`, `sensor run`, `task done`, and
 `task abort`. Repository initialization does not yet have bundled scaffold
 assets, individual sensor execution has no gate expectation contract, and task
-completion or cancellation remains owned by the driver and worker lifecycle.
+completion has no authenticated subprocess command bridge. Per-task cancellation
+also lacks coordination with a continuing driver; forced whole-run end does not
+establish that narrower contract.
 
 ## Top-level grammar
 
@@ -120,6 +122,7 @@ Options:
 Commands:
   list
   info <id>
+  audit [runId]
   help [command]  display help for command
 ```
 
@@ -136,6 +139,15 @@ Options:
 
 ```text
 Usage: senawa sensor info [options] <id>
+
+Options:
+  -h, --help  display help for command
+```
+
+## senawa sensor audit
+
+```text
+Usage: senawa sensor audit [options] [runId]
 
 Options:
   -h, --help  display help for command
@@ -249,7 +261,9 @@ Usage: senawa work end [options]
 
 Options:
   --reason <reason>
-  -h, --help         display help for command
+  --force                    cancel and reconcile an active worker before ending
+  --grace-ms <milliseconds>  bounded cancellation grace period (default: "1000")
+  -h, --help                 display help for command
 ```
 
 ## senawa work report
