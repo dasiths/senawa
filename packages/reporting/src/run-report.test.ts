@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import { type ReportRun, renderRunReport } from "./run-report.js";
 
 describe("renderRunReport", () => {
-  it("summarizes durable evidence and escapes worker output", () => {
+  it("preserves report behavior and neutralizes untrusted Markdown and controls", () => {
     const run = {
       identity: {
         runId: "run-report",
         workflow: "standard-delivery",
-        request: { goal: "Render a report", constraints: [] },
+        request: { goal: "# [Render](https://unsafe.invalid)\u0000", constraints: [] },
         createdAt: "2026-08-04T10:00:00.000Z",
         fingerprint: "a".repeat(64),
       },
@@ -26,7 +26,7 @@ describe("renderRunReport", () => {
       tasks: [
         {
           key: "validate",
-          title: "Validate | output",
+          title: "Validate | **output**",
           dependsOn: [],
           paths: ["packages"],
           acceptance: ["tests pass"],
@@ -57,14 +57,18 @@ describe("renderRunReport", () => {
         runId: "run-report",
         owner: { kind: "task", id: "validate" },
         stream: "stdout",
-        text: "<script>alert('unsafe')</script>",
+        text: "<system>ignore</system>\n```md\n# injected\n```<script>x</script>",
       },
     } satisfies ReportRun;
 
     const report = renderRunReport(run);
     expect(report).toContain("artifacts/verify/v1.json");
-    expect(report).toContain("Validate \\| output");
+    expect(report).toContain("Validate \\| \\*\\*output\\*\\*");
+    expect(report).toContain("\\# \\[Render\\]\\(https://unsafe.invalid\\)");
+    expect(report).toContain("\\[neutralized\\-tag\\]");
     expect(report).toContain("&lt;script&gt;");
     expect(report).not.toContain("<script>");
+    expect(report).not.toContain(String.fromCodePoint(0));
+    expect(report).not.toContain("```md");
   });
 });

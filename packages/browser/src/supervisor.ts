@@ -1,8 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { LeaseConflictError } from "@senawa/application";
-import { BrowserRunCommandSchema, type CommandActor } from "@senawa/domain";
-import type { SenawaServices } from "@senawa/orchestrator";
+import {
+  LeaseConflictError,
+  type RunChangeNotificationPort,
+  type RunCommandService,
+  type RunQueryService,
+} from "@senawa/application";
+import { BrowserRunCommandSchema, type CommandActor, type RuntimeLease } from "@senawa/domain";
 import {
   appJs,
   cytoscapeDagreJs,
@@ -14,6 +18,18 @@ import {
 
 const actor: CommandActor = { channel: "web" };
 const cookieName = "senawa_session";
+
+export interface BrowserServices {
+  readonly commands: Pick<RunCommandService, "approve" | "reject" | "steer" | "resume" | "end">;
+  readonly queries: Pick<
+    RunQueryService,
+    "activeRunId" | "status" | "journal" | "output" | "artifact"
+  >;
+  readonly notifier: RunChangeNotificationPort;
+  acquireWebLease(runId: string, owner: string, ttlMs: number): Promise<RuntimeLease>;
+  renewWebLease(runId: string, lease: RuntimeLease, ttlMs: number): Promise<RuntimeLease>;
+  releaseWebLease(runId: string, lease: RuntimeLease): Promise<void>;
+}
 
 export interface WebSupervisorOptions {
   readonly runId?: string;
@@ -30,7 +46,7 @@ export interface WebSupervisor {
 }
 
 export async function startWebSupervisor(
-  services: SenawaServices,
+  services: BrowserServices,
   options: WebSupervisorOptions = {},
 ): Promise<WebSupervisor> {
   const selectedRunId = options.runId ?? (await services.queries.activeRunId());
@@ -139,7 +155,7 @@ async function route(
   url: URL,
   runId: string,
   expectedOrigin: string,
-  services: SenawaServices,
+  services: BrowserServices,
 ): Promise<void> {
   if (request.method === "GET" && url.pathname === `/runs/${encodeURIComponent(runId)}`) {
     sendText(response, 200, indexHtml, "text/html; charset=utf-8");
@@ -249,7 +265,7 @@ async function route(
 async function executeBrowserCommand(
   command: ReturnType<typeof BrowserRunCommandSchema.parse>,
   runId: string,
-  services: SenawaServices,
+  services: BrowserServices,
 ) {
   switch (command.command) {
     case "approve":
@@ -270,7 +286,7 @@ function beginSse<T extends { seq: number }>(
   response: ServerResponse,
   runId: string,
   initialCursor: number,
-  services: SenawaServices,
+  services: BrowserServices,
   read: (after: number) => Promise<readonly T[]>,
 ): void {
   securityHeaders(response, "text/event-stream; charset=utf-8");

@@ -110,6 +110,18 @@ The `@senawa/sensors` package now runs the built-in artifact and command sensors
 from snapshotted policy. `RunCommandService` evaluates their readings and owns
 every gate transition; worker hosts return no acceptance verdict. Sensor starts,
 completions, execution errors, and gate evidence are recorded in the journal.
+Deterministic sensors run from cheap to expensive, later blocking expensive
+checks stop after a deterministic failure, and advisory checks still report.
+Cache identity and evidence-spill ports keep those storage choices outside the
+gate evaluator.
+
+`@senawa/workers` owns deterministic, recording, and subprocess lifecycle
+adapters, capability negotiation, authorization, normalized events, explicit
+create, resume, inspect, cancel, and release operations. Application-owned
+typed binding contracts cover task completion, phase submission, questions,
+discoveries, and notes. Offline conformance uses deterministic adapters and a
+recording fake executable. It does not establish live Copilot transport or SDK
+behavior.
 
 The `senawa` app explicitly composes `@senawa/runtime-file`,
 `@senawa/artifact-store`, and `@senawa/observability`. Mutable runtime state,
@@ -122,6 +134,13 @@ fencing, mid-commit crash recovery, dispatch reconstruction, and projections. Br
 cursors as its correctness path, so independent process writes and supervisor
 restart do not depend on process-local notifications. `@senawa/graph` is only a
 compatibility re-export facade.
+
+The loopback console now lives in `@senawa/browser`, and `@senawa/reporting`
+renders from an application evidence projection rather than a runtime adapter.
+The report renderer neutralizes control characters, instruction-like tags, raw
+HTML, and Markdown syntax in untrusted fields. `@senawa/web` and
+`@senawa/report` remain thin re-export facades while compatibility importers are
+migrated. The `senawa` app wires target adapters directly.
 
 The Beads adapter described by the target architecture is pending. The
 deterministic offline demo is ready and covered by integration tests. The opt-in
@@ -286,9 +305,15 @@ packages/application/        commands, queries, driver, prompts, projections, an
 packages/runtime-file/       explicit development and test runtime, active-run, lease, and recovery adapter
 packages/artifact-store/     immutable run identity, snapshot, and artifact documents
 packages/observability/      append-only journal, output streams, and notification hints
+packages/workers/            worker lifecycle, negotiation, authorization, events, and binding adapters
+packages/sensors/            ordered gate evaluation, command sensors, cache, and evidence seams
+packages/browser/            authenticated loopback HTTP, durable SSE replay, and graph console
+packages/reporting/          report rendering over application evidence projections
 packages/testing/            shared adapter contracts and deterministic fixtures
 packages/graph/              thin compatibility re-export facade
-packages/orchestrator/       temporary application and worker-host compatibility facade
+packages/web/                thin compatibility re-export facade for the browser package
+packages/report/             thin compatibility re-export facade for the reporting package
+packages/orchestrator/       temporary application compatibility package for remaining importers
 tests/contract/              shared storage, recovery, fencing, dispatch, and projection suites
 apps/senawa-hook/            embedded hook and future SDK session policy
 .senawa/agents/              strict worker profiles with model, capability requests, and prompts

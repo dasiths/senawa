@@ -2,13 +2,15 @@ import { resolve } from "node:path";
 import type {
   RunChangeNotificationPort,
   RunPersistencePort,
+  WorkerExecutionPort,
 } from "@senawa/application";
+import { RunReportEvidenceReader } from "@senawa/application";
 import { loadRepositoryDefinitions, type RepositoryDefinitions } from "@senawa/configuration";
 import type { RuntimeLease } from "@senawa/domain";
-import { RunReportService } from "@senawa/report";
+import { RunReportService } from "@senawa/reporting";
 import { CommandGateEvaluator, type GateEvaluator } from "@senawa/sensors";
 import { RunCommandService, RunQueryService } from "./run-services.js";
-import { DeterministicWorkerHost, type WorkerHost } from "./worker-host.js";
+import { DeterministicWorkerHost } from "./worker-host.js";
 
 export interface SenawaServices {
   readonly repositoryRoot: string;
@@ -24,7 +26,7 @@ export interface SenawaServices {
 export interface SenawaServiceOptions {
   readonly persistence: RunPersistencePort;
   readonly notifier: RunChangeNotificationPort;
-  readonly workerHost?: WorkerHost;
+  readonly workerHost?: WorkerExecutionPort;
   readonly gateEvaluator?: GateEvaluator;
   readonly now?: () => Date;
 }
@@ -36,7 +38,7 @@ export function createSenawaServices(
   const root = resolve(repositoryRoot);
   const store = options.persistence;
   const notifier = options.notifier;
-  const reports = new RunReportService(store);
+  const reports = new RunReportService(new RunReportEvidenceReader(store));
   const commands = new RunCommandService(
     store,
     options.workerHost ?? new DeterministicWorkerHost(),

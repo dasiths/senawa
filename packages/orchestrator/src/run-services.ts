@@ -8,7 +8,7 @@ import {
 } from "@senawa/application";
 import { createRunSnapshot, type RepositoryDefinitions } from "@senawa/configuration";
 import type { CommandActor, WorkRequest } from "@senawa/domain";
-import type { RunReportService } from "@senawa/report";
+import type { RunReportService } from "@senawa/reporting";
 import type { GateEvaluator } from "@senawa/sensors";
 import {
   AjvArtifactValidationAdapter,

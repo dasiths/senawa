@@ -25,8 +25,8 @@ import type {
   ReportingPort,
   RunPersistencePort,
   SchedulerPort,
+  WorkerExecutionPort,
   WorkerResult,
-  WorkerSessionPort,
   WorkerTurn,
   WorkflowCatalogPort,
 } from "./ports.js";
@@ -71,7 +71,7 @@ export class RunCommandService implements RunDriver {
 
   constructor(
     store: RunPersistencePort,
-    private readonly workerHost: WorkerSessionPort,
+    private readonly workerHost: WorkerExecutionPort,
     private readonly gateEvaluator: GateEvaluationPort,
     private readonly artifactValidator: ArtifactValidationPort,
     private readonly clock: ClockPort,

@@ -7,15 +7,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@senawa/application": "workspace:*",
-    "@senawa/configuration": "workspace:*",
-    "@senawa/domain": "workspace:*",
-    "@senawa/orchestrator": "workspace:*",
-    "cytoscape": "3.33.1",
-    "cytoscape-dagre": "2.5.0",
-    "dagre": "0.8.5"
-  },
-  "devDependencies": {
-    "@senawa/testing": "workspace:*"
+    "@senawa/browser": "workspace:*"
   }
 }

@@ -26,9 +26,15 @@ importers:
 
   apps/senawa:
     dependencies:
+      '@senawa/application':
+        specifier: workspace:*
+        version: link:../../packages/application
       '@senawa/artifact-store':
         specifier: workspace:*
         version: link:../../packages/artifact-store
+      '@senawa/browser':
+        specifier: workspace:*
+        version: link:../../packages/browser
       '@senawa/configuration':
         specifier: workspace:*
         version: link:../../packages/configuration
@@ -38,27 +44,27 @@ importers:
       '@senawa/observability':
         specifier: workspace:*
         version: link:../../packages/observability
-      '@senawa/orchestrator':
+      '@senawa/reporting':
         specifier: workspace:*
-        version: link:../../packages/orchestrator
+        version: link:../../packages/reporting
       '@senawa/runtime-file':
         specifier: workspace:*
         version: link:../../packages/runtime-file
-      '@senawa/web':
+      '@senawa/sensors':
         specifier: workspace:*
-        version: link:../../packages/web
+        version: link:../../packages/sensors
+      '@senawa/workers':
+        specifier: workspace:*
+        version: link:../../packages/workers
+      ajv:
+        specifier: 8.17.1
+        version: 8.17.1
+      ajv-formats:
+        specifier: 3.0.1
+        version: 3.0.1(ajv@8.17.1)
       commander:
         specifier: 14.0.2
         version: 14.0.2
-      cytoscape:
-        specifier: 3.33.1
-        version: 3.33.1
-      cytoscape-dagre:
-        specifier: 2.5.0
-        version: 2.5.0(cytoscape@3.33.1)
-      dagre:
-        specifier: 0.8.5
-        version: 0.8.5
     devDependencies:
       '@senawa/testing':
         specifier: workspace:*
@@ -84,6 +90,34 @@ importers:
       '@senawa/domain':
         specifier: workspace:*
         version: link:../domain
+
+  packages/browser:
+    dependencies:
+      '@senawa/application':
+        specifier: workspace:*
+        version: link:../application
+      '@senawa/domain':
+        specifier: workspace:*
+        version: link:../domain
+      cytoscape:
+        specifier: 3.33.1
+        version: 3.33.1
+      cytoscape-dagre:
+        specifier: 2.5.0
+        version: 2.5.0(cytoscape@3.33.1)
+      dagre:
+        specifier: 0.8.5
+        version: 0.8.5
+    devDependencies:
+      '@senawa/configuration':
+        specifier: workspace:*
+        version: link:../configuration
+      '@senawa/orchestrator':
+        specifier: workspace:*
+        version: link:../orchestrator
+      '@senawa/testing':
+        specifier: workspace:*
+        version: link:../testing
 
   packages/configuration:
     dependencies:
@@ -150,12 +184,15 @@ importers:
       '@senawa/domain':
         specifier: workspace:*
         version: link:../domain
-      '@senawa/report':
+      '@senawa/reporting':
         specifier: workspace:*
-        version: link:../report
+        version: link:../reporting
       '@senawa/sensors':
         specifier: workspace:*
         version: link:../sensors
+      '@senawa/workers':
+        specifier: workspace:*
+        version: link:../workers
       ajv:
         specifier: 8.17.1
         version: 8.17.1
@@ -169,12 +206,15 @@ importers:
 
   packages/report:
     dependencies:
+      '@senawa/reporting':
+        specifier: workspace:*
+        version: link:../reporting
+
+  packages/reporting:
+    dependencies:
       '@senawa/application':
         specifier: workspace:*
         version: link:../application
-      '@senawa/domain':
-        specifier: workspace:*
-        version: link:../domain
 
   packages/runtime-file:
     dependencies:
@@ -187,6 +227,9 @@ importers:
 
   packages/sensors:
     dependencies:
+      '@senawa/application':
+        specifier: workspace:*
+        version: link:../application
       '@senawa/domain':
         specifier: workspace:*
         version: link:../domain
@@ -217,31 +260,18 @@ importers:
 
   packages/web:
     dependencies:
+      '@senawa/browser':
+        specifier: workspace:*
+        version: link:../browser
+
+  packages/workers:
+    dependencies:
       '@senawa/application':
         specifier: workspace:*
         version: link:../application
-      '@senawa/configuration':
-        specifier: workspace:*
-        version: link:../configuration
       '@senawa/domain':
         specifier: workspace:*
         version: link:../domain
-      '@senawa/orchestrator':
-        specifier: workspace:*
-        version: link:../orchestrator
-      cytoscape:
-        specifier: 3.33.1
-        version: 3.33.1
-      cytoscape-dagre:
-        specifier: 2.5.0
-        version: 2.5.0(cytoscape@3.33.1)
-      dagre:
-        specifier: 0.8.5
-        version: 0.8.5
-    devDependencies:
-      '@senawa/testing':
-        specifier: workspace:*
-        version: link:../testing
 
   tests/contract:
     dependencies:
@@ -855,7 +885,7 @@ packages:
     engines: {node: '>=0.10'}
 
   dagre@0.8.5:
-    resolution: {integrity: sha1-ujCwBV2sErbB/MJHgXRCd30Gr+4=, tarball: https://ms-feed-2.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/dagre/-/dagre-0.8.5.tgz}
+    resolution: {integrity: sha1-ujCwBV2sErbB/MJHgXRCd30Gr+4=, tarball: https://ms-feed-12.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/dagre/-/dagre-0.8.5.tgz}
 
   debug@4.4.3:
     resolution: {integrity: sha1-xq5DLZvZZiWC/OCHCbA4xY6ePWo=, tarball: https://ms-feed-2.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/debug/-/debug-4.4.3.tgz}
@@ -894,7 +924,7 @@ packages:
     resolution: {integrity: sha1-On1WtVnWy8PrUSMlJE5hmmXGxSU=, tarball: https://ms-feed-12.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz}
 
   fast-uri@3.1.4:
-    resolution: {integrity: sha1-Oz2vnOaPQflW3wtQUTLAz86ex68=, tarball: https://ms-feed-17.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/fast-uri/-/fast-uri-3.1.4.tgz}
+    resolution: {integrity: sha1-Oz2vnOaPQflW3wtQUTLAz86ex68=, tarball: https://ms-feed-2.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/fast-uri/-/fast-uri-3.1.4.tgz}
 
   fdir@6.5.0:
     resolution: {integrity: sha1-7Sq5Z6MxreYvGNB32uGSaE1Q01A=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/fdir/-/fdir-6.5.0.tgz}
@@ -911,7 +941,7 @@ packages:
     os: [darwin]
 
   graphlib@2.1.8:
-    resolution: {integrity: sha1-V2HUFHN4cAhMkux7XbywWSydNdo=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/graphlib/-/graphlib-2.1.8.tgz}
+    resolution: {integrity: sha1-V2HUFHN4cAhMkux7XbywWSydNdo=, tarball: https://ms-feed-2.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/graphlib/-/graphlib-2.1.8.tgz}
 
   js-tokens@9.0.1:
     resolution: {integrity: sha1-LsQ5ZGWENSlvZ2GzThBnHC2VJ/Q=, tarball: https://ms-feed-2.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/js-tokens/-/js-tokens-9.0.1.tgz}
@@ -955,7 +985,7 @@ packages:
     engines: {node: ^10 || ^12 || >=14}
 
   require-from-string@2.0.2:
-    resolution: {integrity: sha1-iaf92TgmEmcxjq/hT5wy5ZjDaQk=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/require-from-string/-/require-from-string-2.0.2.tgz}
+    resolution: {integrity: sha1-iaf92TgmEmcxjq/hT5wy5ZjDaQk=, tarball: https://ms-feed-17.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/require-from-string/-/require-from-string-2.0.2.tgz}
     engines: {node: '>=0.10.0'}
 
   rollup@4.62.3:

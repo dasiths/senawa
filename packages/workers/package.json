@@ -1,5 +1,5 @@
 {
-  "name": "@senawa/sensors",
+  "name": "@senawa/workers",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,6 @@
   },
   "dependencies": {
     "@senawa/application": "workspace:*",
-    "@senawa/domain": "workspace:*",
-    "zod": "4.4.3"
+    "@senawa/domain": "workspace:*"
   }
 }

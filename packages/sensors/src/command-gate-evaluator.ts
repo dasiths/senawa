@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
+import type { GateEvaluationPort } from "@senawa/application";
 import {
   GateEvaluationSchema,
   type JsonObject,
@@ -10,6 +11,7 @@ import {
   type SensorExecutionError,
   type SensorFinding,
   type SensorReading,
+  type SensorResult,
 } from "@senawa/domain";
 import { z } from "zod";
 
@@ -67,12 +69,38 @@ export interface CommandGateEvaluatorOptions {
   readonly timeoutMs?: number;
   readonly runner?: CommandRunner;
   readonly now?: () => number;
+  readonly cache?: SensorReadingCache;
+  readonly cacheIdentity?: SensorCacheIdentity;
+  readonly evidenceStore?: SensorEvidenceStore;
 }
 
-export class CommandGateEvaluator implements GateEvaluator {
+export interface SensorReadingCache {
+  read(key: string): Promise<SensorResult | null>;
+  write(key: string, result: SensorResult): Promise<void>;
+}
+
+export type SensorCacheIdentity = (
+  sensor: RepositoryPolicy["sensors"][number],
+  input: GateEvaluationInput,
+) => string | null;
+
+export interface SensorEvidenceStore {
+  spill(input: {
+    readonly runId: string;
+    readonly owner: GateEvaluationInput["owner"];
+    readonly sensorId: string;
+    readonly stream: "stdout" | "stderr";
+    readonly content: string;
+  }): Promise<string>;
+}
+
+export class CommandGateEvaluator implements GateEvaluator, GateEvaluationPort {
   private readonly runner: CommandRunner;
   private readonly timeoutMs: number;
   private readonly now: () => number;
+  private readonly cache: SensorReadingCache | undefined;
+  private readonly cacheIdentity: SensorCacheIdentity | undefined;
+  private readonly evidenceStore: SensorEvidenceStore | undefined;
 
   constructor(
     private readonly repositoryRoot: string,
@@ -81,6 +109,9 @@ export class CommandGateEvaluator implements GateEvaluator {
     this.runner = options.runner ?? new SpawnCommandRunner();
     this.timeoutMs = options.timeoutMs ?? DEFAULT_SENSOR_TIMEOUT_MS;
     this.now = options.now ?? Date.now;
+    this.cache = options.cache;
+    this.cacheIdentity = options.cacheIdentity;
+    this.evidenceStore = options.evidenceStore;
   }
 
   async evaluate(input: GateEvaluationInput) {
@@ -95,15 +126,26 @@ export class CommandGateEvaluator implements GateEvaluator {
     const findings: SensorFinding[] = [];
     let accepted = true;
 
-    for (const check of gate.checks) {
-      const sensor = policy.sensors.find((candidate) => candidate.id === check.sensor);
-      if (sensor === undefined) throw new Error(`Unknown sensor: ${check.sensor}`);
+    const checks = gate.checks
+      .map((check, index) => {
+        const sensor = policy.sensors.find((candidate) => candidate.id === check.sensor);
+        if (sensor === undefined) throw new Error(`Unknown sensor: ${check.sensor}`);
+        return { check, sensor, index };
+      })
+      .sort(
+        (left, right) =>
+          sensorOrder(left.sensor) - sensorOrder(right.sensor) || left.index - right.index,
+      );
+    let deterministicBlocked = false;
+
+    for (const { check, sensor } of checks) {
+      const advisory = check.advisory || sensor.trust === "advisory";
+      if (deterministicBlocked && !advisory && sensor.cost !== "cheap") continue;
       const startedAt = this.now();
-      const result = await this.runSensor(sensor, input, declaredExtensions);
+      const result = await this.readOrRunSensor(sensor, input, declaredExtensions);
       const durationMs = Math.max(0, this.now() - startedAt);
       const executionError = "error" in result;
       const matched = !executionError && expectationMatches(result, check.expect);
-      const advisory = check.advisory || sensor.trust === "advisory";
       const reading = {
         sensorId: sensor.id,
         extension: sensor.extension,
@@ -133,9 +175,27 @@ export class CommandGateEvaluator implements GateEvaluator {
         }
         if (!advisory) accepted = false;
       }
+      if (sensor.kind === "deterministic" && !advisory && (executionError || !matched)) {
+        deterministicBlocked = true;
+      }
     }
 
     return GateEvaluationSchema.parse({ gateId: gate.id, accepted, readings, findings });
+  }
+
+  private async readOrRunSensor(
+    sensor: RepositoryPolicy["sensors"][number],
+    input: GateEvaluationInput,
+    declaredExtensions: ReadonlySet<string>,
+  ): Promise<SensorResult> {
+    const cacheKey = this.cacheIdentity?.(sensor, input) ?? null;
+    if (cacheKey !== null && this.cache !== undefined) {
+      const cached = await this.cache.read(cacheKey);
+      if (cached !== null) return cached;
+    }
+    const result = await this.runSensor(sensor, input, declaredExtensions);
+    if (cacheKey !== null && this.cache !== undefined) await this.cache.write(cacheKey, result);
+    return result;
   }
 
   private async runSensor(
@@ -196,8 +256,8 @@ export class CommandGateEvaluator implements GateEvaluator {
           : (execution.error ?? "Command ended without an exit code"),
       );
     }
-    const stdout = sanitizeEvidence(execution.stdout);
-    const stderr = sanitizeEvidence(execution.stderr);
+    const stdout = await this.normalizeEvidence(execution.stdout, input, sensor.id, "stdout");
+    const stderr = await this.normalizeEvidence(execution.stderr, input, sensor.id, "stderr");
     const passed = execution.exitCode === 0;
     return {
       verdict: passed ? "pass" : "fail",
@@ -211,10 +271,39 @@ export class CommandGateEvaluator implements GateEvaluator {
               severity: "error",
               code: "command-failed",
               message: `Command exited with code ${execution.exitCode}`,
-              ...(stderr === "" ? {} : { evidence: stderr }),
+              ...(stderr.summary === "" ? {} : { evidence: stderr.summary }),
             },
           ],
-      data: { exitCode: execution.exitCode, stdout, stderr },
+      data: {
+        exitCode: execution.exitCode,
+        stdout: stdout.summary,
+        stderr: stderr.summary,
+        ...(stdout.path === undefined ? {} : { stdoutEvidencePath: stdout.path }),
+        ...(stderr.path === undefined ? {} : { stderrEvidencePath: stderr.path }),
+      },
+    };
+  }
+
+  private async normalizeEvidence(
+    value: string,
+    input: GateEvaluationInput,
+    sensorId: string,
+    stream: "stdout" | "stderr",
+  ): Promise<{ readonly summary: string; readonly path?: string }> {
+    const sanitized = sanitizeEvidence(value, Number.POSITIVE_INFINITY);
+    const summary = sanitized.slice(0, SENSOR_OUTPUT_LIMIT);
+    if (sanitized.length <= SENSOR_OUTPUT_LIMIT || this.evidenceStore === undefined) {
+      return { summary };
+    }
+    return {
+      summary,
+      path: await this.evidenceStore.spill({
+        runId: input.runId,
+        owner: input.owner,
+        sensorId,
+        stream,
+        content: sanitized,
+      }),
     };
   }
 }
@@ -325,13 +414,29 @@ function appendCapped(current: string, addition: string): string {
   return (current + addition).slice(0, SENSOR_OUTPUT_LIMIT);
 }
 
-function sanitizeEvidence(value: string): string {
-  return [...value.replaceAll("\r\n", "\n").replaceAll(ansiEscapePattern, "")]
+function sanitizeEvidence(value: string, limit = SENSOR_OUTPUT_LIMIT): string {
+  const neutralized = value
+    .replaceAll("\r\n", "\n")
+    .replaceAll(ansiEscapePattern, "")
+    .replace(/<\/?(?:system|assistant|user|tool|instructions?)\b[^>]*>/giu, "[neutralized-tag]");
+  return [...neutralized]
     .filter((character) => {
       const code = character.codePointAt(0) ?? 0;
       return character === "\n" || character === "\t" || (code >= 32 && (code < 127 || code > 159));
     })
     .join("")
     .trim()
-    .slice(0, SENSOR_OUTPUT_LIMIT);
+    .slice(0, limit);
+}
+
+function sensorOrder(sensor: RepositoryPolicy["sensors"][number]): number {
+  if (sensor.kind === "inferential") return 3;
+  switch (sensor.cost) {
+    case "cheap":
+      return 0;
+    case "standard":
+      return 1;
+    case "expensive":
+      return 2;
+  }
 }

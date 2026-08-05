@@ -1,8 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { startWebSupervisor } from "@senawa/browser";
 import type { CommandActor } from "@senawa/domain";
-import type { SenawaServices } from "@senawa/orchestrator";
-import { startWebSupervisor } from "@senawa/web";
 import { Command, CommanderError, Option } from "commander";
+import type { SenawaServices } from "./services.js";
 
 const actor: CommandActor = { channel: "direct-cli" };
 

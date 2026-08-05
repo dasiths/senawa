@@ -11,16 +11,18 @@
   },
   "dependencies": {
     "@senawa/artifact-store": "workspace:*",
+    "@senawa/application": "workspace:*",
+    "@senawa/browser": "workspace:*",
     "@senawa/configuration": "workspace:*",
     "@senawa/domain": "workspace:*",
     "@senawa/observability": "workspace:*",
-    "@senawa/orchestrator": "workspace:*",
+    "@senawa/reporting": "workspace:*",
     "@senawa/runtime-file": "workspace:*",
-    "@senawa/web": "workspace:*",
-    "commander": "14.0.2",
-    "cytoscape": "3.33.1",
-    "cytoscape-dagre": "2.5.0",
-    "dagre": "0.8.5"
+    "@senawa/sensors": "workspace:*",
+    "@senawa/workers": "workspace:*",
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1",
+    "commander": "14.0.2"
   },
   "devDependencies": {
     "@senawa/testing": "workspace:*"

@@ -8,9 +8,31 @@ import type {
   RuntimeArtifact,
   RuntimeLease,
   RuntimeState,
-  WorkerProfile,
   Workflow,
 } from "@senawa/domain";
+
+export type {
+  WorkerAdapterDescriptor,
+  WorkerAuthorization,
+  WorkerBinding,
+  WorkerBindingContext,
+  WorkerBindingName,
+  WorkerBindingPort,
+  WorkerBindingResult,
+  WorkerCancelResult,
+  WorkerExecutionPort,
+  WorkerOutput,
+  WorkerResult,
+  WorkerSessionEvent,
+  WorkerSessionPlan,
+  WorkerSessionPort,
+  WorkerSessionRequirements,
+  WorkerTurn,
+  WorkerTurnHandle,
+  WorkerTurnObservation,
+} from "./workers.js";
+
+import type { WorkerTurn } from "./workers.js";
 
 export interface VersionedRunState {
   readonly state: RuntimeState;
@@ -162,53 +184,6 @@ export interface LeasePort {
 export interface LeaseStoragePort extends LeasePort {
   inspectLease(runId: string, kind: "driver" | "web"): Promise<RuntimeLease | null>;
   readLeaseFence(runId: string, kind: "driver" | "web"): Promise<number>;
-}
-
-export interface WorkerTurn {
-  readonly runId: string;
-  readonly owner: { readonly kind: "phase" | "task"; readonly id: string };
-  readonly operation: "create" | "resume";
-  readonly turnId: string;
-  readonly dispatchId: string;
-  readonly operationId: string;
-  readonly role: string;
-  readonly profile: WorkerProfile;
-  readonly profileDigest: string;
-  readonly resolvedModel: WorkerProfile["spec"]["model"];
-  readonly attempt: number;
-  readonly sessionId: string;
-  readonly goal: string;
-  readonly rejectionReason: string | null;
-  readonly steering: readonly string[];
-  readonly prompt: string;
-  readonly authorization: {
-    readonly taskPaths: readonly string[];
-    readonly frozenPaths: readonly string[];
-  };
-}
-
-export interface WorkerOutput {
-  readonly stream: "stdout" | "stderr" | "system";
-  readonly text: string;
-}
-
-export interface WorkerResult {
-  readonly sessionId: string;
-  readonly artifact?: JsonObject;
-  readonly output: readonly WorkerOutput[];
-}
-
-export type WorkerTurnObservation =
-  | { readonly state: "missing" }
-  | { readonly state: "active" }
-  | { readonly state: "completed"; readonly result: WorkerResult }
-  | { readonly state: "idle" }
-  | { readonly state: "cancelled"; readonly detail?: string }
-  | { readonly state: "unknown"; readonly detail: string };
-
-export interface WorkerSessionPort {
-  execute(turn: WorkerTurn): Promise<WorkerResult>;
-  inspect?(turn: WorkerTurn): Promise<WorkerTurnObservation>;
 }
 
 export interface GateEvaluationPort {

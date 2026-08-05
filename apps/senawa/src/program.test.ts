@@ -1,13 +1,13 @@
 import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { startWebSupervisor, type WebSupervisor } from "@senawa/browser";
 import { loadRepositoryDefinitions } from "@senawa/configuration";
 import type { BrowserRunCommand, CommandActor } from "@senawa/domain";
-import { createSenawaServices, type SenawaServices } from "@senawa/orchestrator";
 import { createFileTestComposition } from "@senawa/testing";
-import { startWebSupervisor, type WebSupervisor } from "@senawa/web";
 import { beforeAll, describe, expect, it } from "vitest";
 import { runCli } from "./program.js";
+import { createSenawaServices, type SenawaServices } from "./services.js";
 
 const driverActor: CommandActor = { channel: "driver" };
 const fixedNow = () => new Date("2026-08-04T12:00:00.000Z");

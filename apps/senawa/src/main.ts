@@ -3,17 +3,14 @@ import { join } from "node:path";
 import { FileRunDocumentStore } from "@senawa/artifact-store";
 import { FileJournalStore, FileOutputLogStore, RunChangeNotifier } from "@senawa/observability";
 import {
-  CopilotSubprocessHost,
-  createSenawaServices,
-  DeterministicWorkerHost,
-} from "@senawa/orchestrator";
-import {
   FileActiveRunRegistry,
   FileLeaseStore,
   FileRunPersistence,
   FileRuntimeStateStore,
 } from "@senawa/runtime-file";
+import { CopilotSubprocessHost, DeterministicWorkerHost } from "@senawa/workers";
 import { runCli } from "./program.js";
+import { createSenawaServices } from "./services.js";
 
 const arguments_ = process.argv.slice(2);
 const repositoryRoot = process.cwd();

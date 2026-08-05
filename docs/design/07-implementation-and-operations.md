@@ -3,8 +3,8 @@
 ## Current status
 
 Senawa now has a production vertical slice across the domain, configuration,
-application, file runtime, artifact, observability, report, orchestrator, CLI,
-web, and hook packages. The executable path validates repository definitions,
+application, file runtime, artifact, observability, workers, sensors, browser,
+reporting, CLI, and hook packages. The executable path validates repository definitions,
 runs the standard workflow with deterministic workers, persists versioned
 artifacts and append-only evidence, accepts CLI and browser decisions through
 the same application commands and queries, streams output over SSE, and renders
@@ -15,7 +15,11 @@ from `.senawa/sensors.yaml`. Configuration loads workflows from
 `.senawa/workflows/`, artifact contracts from `.senawa/schemas/`, and worker
 profiles from `.senawa/agents/`. Command evidence is normalized and capped,
 execution errors remain distinct and blocking, and advisory assessment failures
-do not block. Worker hosts have no gate-verdict field; the application driver
+do not block. Deterministic checks run from cheap to expensive; a deterministic
+failure skips later blocking expensive checks while advisory checks still run.
+The evaluator exposes cache identity and evidence-spill ports and neutralizes
+instruction-like tags before evidence reaches prompts or reports. Worker hosts
+have no gate-verdict field; the application driver
 invokes the evaluator and journals `sensor.started`, `sensor.completed`,
 `sensor.error`, and `gate.evaluated` evidence before changing phase or task
 state.
@@ -29,7 +33,16 @@ phase or task ceiling.
 The user-facing skill stays under `.agents/skills/senawa/` only because Copilot
 discovers it there; it is not runtime worker configuration.
 
-The `senawa` app explicitly composes the file adapters. `@senawa/runtime-file`
+`@senawa/workers` owns deterministic, recording, and subprocess adapters behind
+an application lifecycle port. The port separates create, resume, inspect,
+cancel, release, negotiation, normalized events, and typed binding contracts.
+Offline conformance covers deterministic lifecycle behavior and a recording
+fake subprocess executable. The subprocess adapter reports absent typed-tool
+transport, buffered output, process-local inspection limits, and absent path
+containment honestly. No live Copilot subprocess or SDK transport was exercised.
+
+The `senawa` app explicitly composes the file and presentation adapters.
+`@senawa/runtime-file`
 owns mutable runtime state, repository singleton ownership, fenced leases, and
 write-ahead recovery. `@senawa/artifact-store` owns create-only identity,
 snapshot, and versioned artifact documents with digest conflict checks.
@@ -52,7 +65,11 @@ runtime selection. Shared contracts under `@senawa/testing` and
 idempotency, lease fencing, mid-commit crash recovery, dispatch reconstruction,
 and status projections.
 Browser SSE rereads durable cursors on bounded polling; notifications only wake
-same-process readers sooner.
+same-process readers sooner. `@senawa/browser` owns authenticated HTTP routes,
+strict command schemas, graph assets, and durable replay. `@senawa/reporting`
+reads an application-owned evidence projection and escapes untrusted Markdown,
+HTML, control characters, and instruction-like tags. `@senawa/web` and
+`@senawa/report` are thin re-export facades.
 
 The [POC findings](wip/probe-findings.md) distinguish live-model evidence,
 offline deterministic simulation, and documentation-only claims.
@@ -82,9 +99,13 @@ the documented `bd --json` contract with `BD_JSON_ENVELOPE=1`.
 | `@senawa/observability` | Append-only journal and output JSONL, stable cursors, notification hints, and future telemetry seams |
 | `@senawa/testing` | Shared adapter contracts and deterministic fixtures; production packages do not import it |
 | `@senawa/graph` | Thin compatibility re-export facade with no adapter selection |
-| `@senawa/sensors` | Gate evaluation and built-in artifact or command execution, normalization, and evidence hygiene; generic extension loading and caching pending |
-| `@senawa/report` | Report renderer, graph diagrams, and output escaping over application readers |
-| `@senawa/orchestrator` | Temporary compatibility facade for configuration, validation, application services, worker hosts, and reporting |
+| `@senawa/workers` | Deterministic, recording, and subprocess lifecycle adapters, capability negotiation, authorization, normalized events, and typed binding fixtures |
+| `@senawa/sensors` | Application gate port implementation, ordered built-in artifact or command execution, normalization, cache identity, and evidence spill seams; generic extension loading pending |
+| `@senawa/browser` | Authenticated loopback HTTP routes, strict command schemas, durable SSE replay, static graph assets, and application command/query consumption |
+| `@senawa/reporting` | Report renderer and untrusted Markdown hygiene over application evidence projections |
+| `@senawa/web` | Thin compatibility re-export facade for `@senawa/browser` |
+| `@senawa/report` | Thin compatibility re-export facade for `@senawa/reporting` |
+| `@senawa/orchestrator` | Temporary application compatibility package for remaining non-production importers |
 | `senawa` | Full command-line interface |
 | `senawa-hook` | Minimal hook entry point with no graph or heavy dependencies |
 

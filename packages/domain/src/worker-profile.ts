@@ -9,6 +9,7 @@ export const WorkerCapabilitySchema = z.enum([
   "senawa.phase.submit",
   "senawa.ask",
   "senawa.discover",
+  "senawa.note",
 ]);
 
 export const WorkerProfileSchema = z

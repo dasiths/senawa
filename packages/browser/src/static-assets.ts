@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
+const bundleRequire = createRequire(import.meta.url);
+const require = createRequire(bundleRequire.resolve("@senawa/browser"));
 
 export const dagreJs = readFileSync(require.resolve("dagre/dist/dagre.min.js"), "utf8");
 export const cytoscapeJs = readFileSync(require.resolve("cytoscape/dist/cytoscape.min.js"), "utf8");

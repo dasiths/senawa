@@ -1,5 +1,5 @@
 {
-  "name": "@senawa/orchestrator",
+  "name": "@senawa/browser",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -8,15 +8,14 @@
   },
   "dependencies": {
     "@senawa/application": "workspace:*",
-    "@senawa/configuration": "workspace:*",
     "@senawa/domain": "workspace:*",
-    "@senawa/reporting": "workspace:*",
-    "@senawa/sensors": "workspace:*",
-    "@senawa/workers": "workspace:*",
-    "ajv": "8.17.1",
-    "ajv-formats": "3.0.1"
+    "cytoscape": "3.33.1",
+    "cytoscape-dagre": "2.5.0",
+    "dagre": "0.8.5"
   },
   "devDependencies": {
+    "@senawa/configuration": "workspace:*",
+    "@senawa/orchestrator": "workspace:*",
     "@senawa/testing": "workspace:*"
   }
 }

@@ -71,8 +71,15 @@ Copy this section for each idea and update it in place as the idea matures.
     notification hints behind application ports. Shared contracts prove reopen,
     idempotency, fencing, mid-commit crash recovery, dispatch projection,
     independent-process SSE writes, and supervisor restart replay. The graph package is now a thin facade, and
-    executable file composition is explicit in the app. Beads authority and
-    live SDK evidence remain pending.
+    executable file composition is explicit in the app. Phase 6 moved worker
+    lifecycle, authorization, capability negotiation, normalized events, and
+    typed binding fixtures to `@senawa/workers`; made sensors implement the
+    application gate port with cost ordering, blocking short-circuit, cache,
+    and evidence spill seams; and moved HTTP and report ownership to
+    `@senawa/browser` and `@senawa/reporting`. Offline conformance includes a
+    recording fake subprocess, browser replay across process and restart, and
+    hostile report rendering. Beads authority, live subprocess evidence, and
+    SDK transport remain pending.
 * Promotion: `pending`
 
 ### 2026-08-04: Sensor policy location
