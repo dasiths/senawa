@@ -15,6 +15,7 @@ export interface CliRunOptions {
   readonly services: SenawaServices;
   readonly io?: CliIo;
   readonly holdWeb?: boolean;
+  readonly openBrowser?: (url: string) => Promise<void>;
 }
 
 export async function runCli(
@@ -130,6 +131,51 @@ export async function runCli(
         port: parsePort(commandOptions.port),
       });
       writeJson(io, { runId: supervisor.runId, url: supervisor.bootstrapUrl });
+      if (options.holdWeb !== false) {
+        const close = () => void supervisor.close();
+        process.once("SIGINT", close);
+        process.once("SIGTERM", close);
+        try {
+          await supervisor.closed;
+        } finally {
+          process.off("SIGINT", close);
+          process.off("SIGTERM", close);
+        }
+      } else {
+        await supervisor.close();
+      }
+    });
+
+  program
+    .command("browser")
+    .description("Open the active run in the local Senawa browser console")
+    .argument("[runId]")
+    .option("--port <port>", "loopback port", "0")
+    .option("--no-open", "print a fresh bootstrap URL without opening it")
+    .action(async (runId: string | undefined, commandOptions: { port: string; open: boolean }) => {
+      const supervisor = await startWebSupervisor(options.services, {
+        ...(runId === undefined ? {} : { runId }),
+        port: parsePort(commandOptions.port),
+      });
+      let opened = false;
+      if (commandOptions.open) {
+        if (options.openBrowser === undefined) {
+          await supervisor.close();
+          throw new Error("No browser opener is configured; retry with --no-open");
+        }
+        try {
+          await options.openBrowser(supervisor.bootstrapUrl);
+          opened = true;
+        } catch (error) {
+          await supervisor.close();
+          throw error;
+        }
+      }
+      writeJson(io, {
+        runId: supervisor.runId,
+        url: opened ? supervisor.url : supervisor.bootstrapUrl,
+        opened,
+      });
       if (options.holdWeb !== false) {
         const close = () => void supervisor.close();
         process.once("SIGINT", close);

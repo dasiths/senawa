@@ -18,6 +18,7 @@ next workflow transition.
 | Inspect a workflow | `senawa workflow info <name>` |
 | Start requested work | `senawa work start "<goal>" --workflow <name> --detach` |
 | Read bounded status | `senawa work show` |
+| Open the run console | `senawa browser [<run>]` |
 | Wait for a bounded interval | `senawa work wait --timeout <seconds>` |
 | Continue a stopped run | `senawa work resume` |
 | Approve an artifact | `senawa approve <phase>` |

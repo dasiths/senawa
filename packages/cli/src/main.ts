@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import {
   CopilotSubprocessHost,
@@ -29,7 +30,26 @@ process.exitCode = await runCli(arguments_, {
         }
       : {}),
   }),
+  openBrowser,
 });
+
+async function openBrowser(url: string): Promise<void> {
+  const browserEnvironmentKey = "BROWSER";
+  const configured = process.env[browserEnvironmentKey];
+  const command =
+    configured ??
+    (process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open");
+  const arguments_ =
+    process.platform === "win32" && configured === undefined ? ["/c", "start", "", url] : [url];
+  await new Promise<void>((resolveOpen, rejectOpen) => {
+    const child = spawn(command, arguments_, { detached: true, stdio: "ignore" });
+    child.once("error", rejectOpen);
+    child.once("spawn", () => {
+      child.unref();
+      resolveOpen();
+    });
+  });
+}
 
 function optionValue(arguments_: readonly string[], name: string): string | undefined {
   const index = arguments_.indexOf(name);

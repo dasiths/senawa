@@ -145,6 +145,27 @@ pnpm demo -- --keep-server
 The command prints the browser URL, supervisor PID, and retained temporary
 repository. Run `kill <PID>` when inspection is complete.
 
+Open the active run console directly:
+
+```bash
+senawa browser
+```
+
+Pass a run ID to open an ended or finished run. The command starts the loopback
+supervisor, opens a fresh one-time bootstrap URL through `$BROWSER`, and keeps
+serving until interrupted. After authentication it prints only the safe,
+token-free URL.
+
+For remote forwarding or manual opening, preserve the one-time token instead of
+consuming it locally:
+
+```bash
+senawa browser [<run-id>] --no-open
+```
+
+That form prints the full bootstrap URL. It can be used once; reusing the URL
+after its cookie has been issued correctly returns `Unauthorized`.
+
 The live-worker launcher is separate and guarded:
 
 ```bash

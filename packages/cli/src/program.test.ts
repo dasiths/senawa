@@ -30,6 +30,50 @@ describe("Commander CLI", () => {
     expect(output.pop()).toContain("flowchart LR");
   });
 
+  it("opens a fresh browser bootstrap or prints it for manual use", async () => {
+    const services = await createRun("browser-command-run");
+    const output: string[] = [];
+    const opened: string[] = [];
+    const io = { stdout: (value: string) => output.push(value), stderr: () => undefined };
+
+    expect(
+      await runCli(["browser", "browser-command-run"], {
+        services,
+        io,
+        holdWeb: false,
+        openBrowser: async (url) => {
+          opened.push(url);
+        },
+      }),
+    ).toBe(0);
+    const automatic = JSON.parse(output.pop() ?? "{}") as {
+      url: string;
+      opened: boolean;
+    };
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toContain("?bootstrap=");
+    expect(automatic.opened).toBe(true);
+    expect(automatic.url).not.toContain("bootstrap=");
+
+    expect(
+      await runCli(["browser", "browser-command-run", "--no-open"], {
+        services,
+        io,
+        holdWeb: false,
+        openBrowser: async (url) => {
+          opened.push(url);
+        },
+      }),
+    ).toBe(0);
+    const manual = JSON.parse(output.pop() ?? "{}") as {
+      url: string;
+      opened: boolean;
+    };
+    expect(opened).toHaveLength(1);
+    expect(manual.opened).toBe(false);
+    expect(manual.url).toContain("?bootstrap=");
+  });
+
   it("keeps CLI and HTTP command effects identical apart from actor channel", async () => {
     const cliServices = await createRun("parity-run");
     const webServices = await createRun("parity-run");

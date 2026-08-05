@@ -31,7 +31,7 @@ try {
   const web = await startWeb(runId);
   webProcess = web.process;
   const browser = await openBrowserSession(web.bootstrapUrl, web.url, runId);
-  print(`Browser URL: ${web.url}`);
+  print(`Automated browser endpoint: ${web.url}`);
 
   const defineStream = await openSse(
     `${browser.origin}/api/v1/runs/${runId}/streams/${encodeURIComponent("phase:define")}/events?after=0`,
@@ -104,7 +104,11 @@ try {
   completed = true;
 
   if (keepServer) {
-    print(`Server left running for explicit inspection: ${web.url}`);
+    await stopProcess(webProcess);
+    const inspectionWeb = await startWeb(runId);
+    webProcess = inspectionWeb.process;
+    print(`Browser URL: ${inspectionWeb.bootstrapUrl}`);
+    print(`Server left running for explicit inspection: ${inspectionWeb.url}`);
     print(`Supervisor PID: ${webProcess.pid}`);
     print(`Demo repository retained at: ${demoRoot}`);
     webProcess.stdout?.destroy();

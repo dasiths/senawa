@@ -109,7 +109,7 @@ The command surface is grouped by responsibility:
 
 | Group | Representative commands | Primary caller |
 |-------|-------------------------|----------------|
-| Run lifecycle | `work start`, `resume`, `show`, `log`, `wait`, `pause`, `end`, `finish` | Human or principal agent |
+| Run lifecycle | `work start`, `resume`, `show`, `log`, `wait`, `pause`, `end`, `finish`, `browser` | Human or principal agent |
 | Human decisions | `approve`, `reject`, `answer`, `steer`, `task abort`, `work budget` | Human, sometimes relayed |
 | Phase inspection | `phase show`, `phase brief` | Human, principal agent, driver |
 | Worker contract | `task done`, `ask`, `discover`, `note` | Worker wrapper |
@@ -117,6 +117,12 @@ The command surface is grouped by responsibility:
 | Sensor management | `sensor list`, `info`, `run`, `audit` | Human, CI, driver |
 | Workflow management | `workflow list`, `info`, `validate`, `render` | Human or principal agent |
 | Diagnostics | `doctor`, `prime`, `work report` | All trusted operational callers |
+
+`senawa browser [<run>]` is the user-facing console command. It creates a fresh
+one-time bootstrap URL, opens it through the configured system browser, and
+prints only the token-free URL after opening. `--no-open` prints the bootstrap
+URL for manual or forwarded use. `senawa work web` remains the low-level
+supervisor command for automation.
 
 The complete argument grammar belongs in generated CLI reference once the
 implementation begins. Design documents define authority and behavior, not a
