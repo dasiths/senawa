@@ -3,7 +3,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { BrowserRunCommandSchema, type CommandActor } from "@senawa/core";
 import { LeaseConflictError } from "@senawa/graph";
 import type { SenawaServices } from "@senawa/orchestrator";
-import { appJs, indexHtml, stylesCss } from "./static-assets.js";
+import {
+  appJs,
+  cytoscapeDagreJs,
+  cytoscapeJs,
+  dagreJs,
+  indexHtml,
+  stylesCss,
+} from "./static-assets.js";
 
 const actor: CommandActor = { channel: "web" };
 const cookieName = "senawa_session";
@@ -139,6 +146,18 @@ async function route(
   }
   if (request.method === "GET" && url.pathname === "/app.js") {
     sendText(response, 200, appJs, "text/javascript; charset=utf-8");
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/dagre.js") {
+    sendText(response, 200, dagreJs, "text/javascript; charset=utf-8");
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/cytoscape.js") {
+    sendText(response, 200, cytoscapeJs, "text/javascript; charset=utf-8");
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/cytoscape-dagre.js") {
+    sendText(response, 200, cytoscapeDagreJs, "text/javascript; charset=utf-8");
     return;
   }
   if (request.method === "GET" && url.pathname === "/styles.css") {
@@ -354,7 +373,7 @@ function securityHeaders(response: ServerResponse, contentType: string): void {
   response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   response.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'",
+    "default-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; frame-ancestors 'none'",
   );
 }
 

@@ -82,6 +82,18 @@ describe("standard-delivery runtime", () => {
       "implement-change",
       "validate-change",
     ]);
+    expect((await queries.status("run-lifecycle"))?.tasks).toEqual([
+      expect.objectContaining({
+        key: "implement-change",
+        parentPhaseId: "implement",
+        dependsOn: [],
+      }),
+      expect.objectContaining({
+        key: "validate-change",
+        parentPhaseId: "implement",
+        dependsOn: ["implement-change"],
+      }),
+    ]);
 
     expect((await commands.advance("run-lifecycle", actor)).kind).toBe("task-rework");
     const firstTaskAfterRefusal = (await store.readRun("run-lifecycle")).tasks[0];

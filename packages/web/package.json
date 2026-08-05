@@ -9,6 +9,9 @@
   "dependencies": {
     "@senawa/core": "workspace:*",
     "@senawa/graph": "workspace:*",
-    "@senawa/orchestrator": "workspace:*"
+    "@senawa/orchestrator": "workspace:*",
+    "cytoscape": "3.33.1",
+    "cytoscape-dagre": "2.5.0",
+    "dagre": "0.8.5"
   }
 }

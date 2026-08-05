@@ -24,6 +24,23 @@ describe("loopback web supervisor", () => {
       const bootstrap = await fetch(first.bootstrapUrl, { redirect: "manual" });
       expect(bootstrap.status).toBe(303);
       expect(bootstrap.headers.get("set-cookie")).toContain("HttpOnly; SameSite=Strict");
+      const cookie = bootstrap.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
+      const origin = new URL(first.url).origin;
+      const dagre = await fetch(`${origin}/dagre.js`, { headers: { Cookie: cookie } });
+      const cytoscape = await fetch(`${origin}/cytoscape.js`, { headers: { Cookie: cookie } });
+      const cytoscapeDagre = await fetch(`${origin}/cytoscape-dagre.js`, {
+        headers: { Cookie: cookie },
+      });
+      expect(dagre.status).toBe(200);
+      expect((await dagre.text()).length).toBeGreaterThan(100_000);
+      expect(cytoscape.status).toBe(200);
+      expect((await cytoscape.text()).length).toBeGreaterThan(100_000);
+      expect(cytoscapeDagre.status).toBe(200);
+      expect(await cytoscapeDagre.text()).toContain("cytoscapeDagre");
+      const page = await fetch(first.url, { headers: { Cookie: cookie } });
+      expect(page.headers.get("content-security-policy")).toContain(
+        "style-src 'self' 'unsafe-inline'",
+      );
       expect((await fetch(first.bootstrapUrl, { redirect: "manual" })).status).toBe(401);
       expect(bootstrap.headers.has("access-control-allow-origin")).toBe(false);
     } finally {
@@ -58,9 +75,21 @@ describe("loopback web supervisor", () => {
   });
 
   it("uses DOM text nodes for all dynamic browser values", () => {
+    expect(() => new Function(appJs)).not.toThrow();
     expect(appJs).not.toContain("innerHTML");
     expect(appJs).toContain("textContent");
     expect(appJs).toContain("document.createElement");
+    expect(appJs).toContain("cytoscape({");
+    expect(appJs).toContain("globalThis.__senawaGraph=graph");
+    expect(appJs).toContain('name:"dagre"');
+    expect(appJs).toContain("function calculatePositions(elements)");
+    expect(appJs).toContain('name:"preset"');
+    expect(appJs).toContain('node.position("y")>implementPosition.y');
+    expect(appJs).toContain('parent:"phase:"+task.parentPhaseId');
+    expect(appJs).toContain('source:"task:"+dependency,target:"task:"+task.key');
+    expect(appJs).toContain('id:"boundary:implementation-complete"');
+    expect(appJs).toContain('source:"boundary:implementation-complete",target:"phase:verify"');
+    expect(appJs).toContain('target:"boundary:implementation-complete"');
     expect(appJs).toContain('q("#resume").hidden=["awaiting_approval","ended","finished"]');
   });
 

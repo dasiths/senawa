@@ -74,6 +74,8 @@ export interface RunStatusProjection {
     readonly key: string;
     readonly title: string;
     readonly role: string;
+    readonly parentPhaseId: string;
+    readonly dependsOn: readonly string[];
     readonly status: RuntimeTask["status"];
     readonly attempt: number;
   }>;
@@ -612,6 +614,8 @@ export class RunQueryService {
         key: task.key,
         title: truncate(task.title, 160),
         role: task.role,
+        parentPhaseId: "implement",
+        dependsOn: task.dependsOn,
         status: task.status,
         attempt: task.attempt,
       })),
