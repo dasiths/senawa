@@ -5,6 +5,8 @@
       "**",
       "!experiments/probes",
       "!.copilot-tracking",
+      "!.agents/.copilot-tracking",
+      "!.beads",
       "!.pnpm-store",
       "!**/dist",
       "!pnpm-lock.yaml"

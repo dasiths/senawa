@@ -755,13 +755,36 @@ async function withLock<T>(
     } catch (error) {
       if (!isNodeError(error, "EEXIST")) throw error;
       const lockStat = await stat(path).catch(() => null);
-      if (lockStat !== null && Date.now() - lockStat.mtimeMs > options.staleMs) {
+      if (
+        lockStat !== null &&
+        ((await localLockOwnerIsDead(path)) || Date.now() - lockStat.mtimeMs > options.staleMs)
+      ) {
         await rm(path, { force: true });
         continue;
       }
       if (Date.now() >= deadline) throw new Error(`Timed out waiting for lock ${path}`);
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
     }
+  }
+}
+
+async function localLockOwnerIsDead(path: string): Promise<boolean> {
+  let value: string;
+  try {
+    value = await readFile(path, "utf8");
+  } catch (error) {
+    if (isNodeError(error, "ENOENT")) return false;
+    throw error;
+  }
+  const match = /^(\d+):[0-9a-f-]+\s*$/u.exec(value);
+  if (match?.[1] === undefined) return false;
+  const pid = Number(match[1]);
+  if (!Number.isSafeInteger(pid) || pid < 1) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return isNodeError(error, "ESRCH");
   }
 }
 
