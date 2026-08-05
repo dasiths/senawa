@@ -1,10 +1,9 @@
 # Documentation Consistency Demo
 
-This opt-in demo runs the production `standard-delivery` workflow against a
-fresh, persistent clone of the Senawa repository. It creates a real Git branch,
-uses Beads as the runtime authority, executes every agent through the
-authenticated Copilot SDK adapter, and stops for your explicit decision at each
-human gate.
+This opt-in demo creates a Git branch in the current Senawa checkout and runs
+the production `standard-delivery` workflow there. It uses Beads as the runtime
+authority, executes every agent through the authenticated Copilot SDK adapter,
+and stops for your explicit decision at each human gate.
 
 The launcher never approves, rejects, or ends work on your behalf. After the
 final approval, it checks the run state, task closure, branch identity, changed
@@ -12,13 +11,14 @@ paths, documentation links, lint, types, tests, build, package boundaries,
 bundles, sensor evidence, and the complete provenance report.
 
 > [!WARNING]
-> The full demo spends GitHub Copilot AI credits. The prepared clone is retained
-> after success, failure, or interruption so you can inspect and resume it.
+> The full demo spends GitHub Copilot AI credits and changes the current Git
+> branch. The branch and runtime state remain in the repository after success,
+> failure, or interruption so you can inspect and resume the work.
 
 ## Prerequisites
 
-Run the demo from a clean, committed Senawa checkout with these commands on
-`PATH`:
+Run the demo from the root of a clean, committed Senawa checkout with no active
+Senawa run and these commands on `PATH`:
 
 * Node.js 22 or later
 * pnpm
@@ -26,8 +26,9 @@ Run the demo from a clean, committed Senawa checkout with these commands on
 * Beads (`bd`)
 * An authenticated Copilot CLI (`copilot`)
 
-Uncommitted source changes are intentionally excluded because the launcher
-clones the current committed branch.
+The launcher refuses to stash, discard, or carry uncommitted changes. It also
+refuses an existing branch name or active Senawa run because Git branches do not
+isolate Beads or `.agents/.copilot-tracking` runtime state.
 
 ## Run the workflow
 
@@ -37,43 +38,41 @@ From the repository root:
 pnpm demo:docs -- --confirm-cost
 ```
 
-The launcher prints the clone path and generated
-`demo/documentation-consistency-*` branch. Each phase artifact is printed in
-full before the launcher asks you to approve, reject, or end the run. Rejection
-requires a reason and resumes the same bounded workflow after Senawa records
-your decision.
+The launcher creates and checks out a generated
+`demo/documentation-consistency-*` branch in place. Each phase artifact is
+printed in full before the launcher asks you to approve, reject, or end the
+run. Rejection requires a reason and resumes the same bounded workflow after
+Senawa records your decision.
 
-Use explicit paths and branch names when a stable location is useful:
+Use an explicit branch name when a stable name is useful:
 
 ```bash
-pnpm demo:docs -- --confirm-cost \
-  --workspace ../senawa-docs-demo \
-  --branch demo/documentation-consistency
+pnpm demo:docs -- --confirm-cost --branch demo/documentation-consistency
 ```
 
 ## Prepare without spending credits
 
-Preparation performs the real clone, branch, dependency installation, build,
-repository preflight, and workflow validation. It does not start an SDK
-session:
+Preparation checks the clean worktree and runtime state, installs locked
+dependencies, builds Senawa, validates repository definitions, and creates the
+branch in place. It does not start an SDK session:
 
 ```bash
-pnpm demo:docs -- prepare --workspace ../senawa-docs-demo
+pnpm demo:docs -- prepare --branch demo/documentation-consistency
 ```
 
 Inspect the prepared branch, then start its live workflow:
 
 ```bash
-pnpm demo:docs -- start --confirm-cost --workspace ../senawa-docs-demo
+pnpm demo:docs -- start --confirm-cost
 ```
 
 ## Resume an interruption
 
-Start and resume are foreground operations. If the process is interrupted, use
-the retained workspace reported by the launcher:
+Start and resume are foreground operations. If the process is interrupted,
+remain on the prepared branch and run:
 
 ```bash
-pnpm demo:docs -- resume --confirm-cost --workspace ../senawa-docs-demo
+pnpm demo:docs -- resume --confirm-cost
 ```
 
 The resume path reads the durable active run, shows any pending artifact or
@@ -85,7 +84,7 @@ create another run.
 Verification does not invoke a model or spend AI credits:
 
 ```bash
-pnpm demo:docs -- verify --workspace ../senawa-docs-demo
+pnpm demo:docs -- verify
 ```
 
 It fails unless all of these conditions hold:

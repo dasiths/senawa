@@ -1,16 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { access, readFile, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
-const sourceRoot = process.cwd();
+const repositoryRoot = resolve(process.cwd());
 const arguments_ = process.argv.slice(2);
 const command = arguments_[0]?.startsWith("-") === false ? arguments_.shift() : "run";
 const timestamp = new Date().toISOString().replaceAll(/[-:]/gu, "").replace(/\..+$/u, "Z");
-const workspace = resolve(
-  optionValue(arguments_, "--workspace") ??
-    join(sourceRoot, "..", `senawa-documentation-consistency-${timestamp}`),
-);
 const branch = optionValue(arguments_, "--branch") ?? `demo/documentation-consistency-${timestamp}`;
 const goal =
   optionValue(arguments_, "--goal") ??
@@ -24,72 +20,78 @@ const goal =
 if (arguments_.includes("--help") || command === "help") {
   printHelp();
 } else if (command === "prepare") {
-  await prepareWorkspace();
+  await prepareRepository();
 } else if (command === "run") {
   requireCostConfirmation();
-  await prepareWorkspace();
+  await prepareRepository();
   await startWorkflow();
   await driveWorkflow();
 } else if (command === "start") {
   requireCostConfirmation();
-  await requireDemoWorkspace();
+  await requireDemoRepository();
   assertNoActiveRun();
   await startWorkflow();
   await driveWorkflow();
 } else if (command === "resume") {
   requireCostConfirmation();
-  await requireDemoWorkspace();
+  await requireDemoRepository();
   await driveWorkflow();
 } else if (command === "verify") {
-  await requireDemoWorkspace();
-  await verifyWorkspace();
+  await requireDemoRepository();
+  await verifyRepository();
 } else {
-  throw new Error(`Unknown command ${command}. Use run, prepare, resume, verify, or help.`);
+  throw new Error(`Unknown command ${command}. Use run, prepare, start, resume, verify, or help.`);
 }
 
-async function prepareWorkspace() {
+async function prepareRepository() {
   requireExecutable("git", ["--version"]);
   requireExecutable("pnpm", ["--version"]);
   requireExecutable("bd", ["--version"]);
   requireExecutable("copilot", ["--version"]);
-  run("git", ["rev-parse", "--show-toplevel"], { cwd: sourceRoot });
-  run("git", ["check-ref-format", "--branch", branch], { cwd: sourceRoot });
-  const sourceBranch = output("git", ["branch", "--show-current"], sourceRoot);
-  if (sourceBranch.length === 0) throw new Error("The source repository is in detached HEAD state");
-  const dirty = output("git", ["status", "--porcelain"], sourceRoot);
-  if (dirty.length > 0) {
-    print("Source changes are not copied. The demo clone starts from the committed HEAD.");
-  }
-
-  await assertMissing(workspace, `Demo workspace already exists: ${workspace}`);
-  await mkdir(dirname(workspace), { recursive: true });
-  run(
-    "git",
-    [
-      "clone",
-      "--local",
-      "--no-hardlinks",
-      "--single-branch",
-      "--branch",
-      sourceBranch,
-      sourceRoot,
-      workspace,
-    ],
-    { cwd: sourceRoot },
+  const discoveredRoot = resolve(output("git", ["rev-parse", "--show-toplevel"], repositoryRoot));
+  assert(
+    discoveredRoot === repositoryRoot,
+    `Run this demo from the repository root: ${discoveredRoot}`,
   );
-  run("git", ["switch", "-c", branch], { cwd: workspace });
-  run("pnpm", ["install", "--frozen-lockfile"], { cwd: workspace });
-  run("pnpm", ["build"], { cwd: workspace });
+  run("git", ["check-ref-format", "--branch", branch], { cwd: repositoryRoot });
+  const baseBranch = output("git", ["branch", "--show-current"], repositoryRoot);
+  assert(baseBranch.length > 0, "The repository is in detached HEAD state");
+  const dirty = output("git", ["status", "--porcelain"], repositoryRoot);
+  assert(
+    dirty.length === 0,
+    "The repository must have a clean worktree before the demo creates a branch",
+  );
+  await assertMissing(
+    metadataPath(),
+    "A documentation-consistency demo is already prepared in this repository",
+  );
+  const branchCheck = run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
+    cwd: repositoryRoot,
+    stdio: "pipe",
+    acceptedCodes: [0, 1],
+  });
+  assert(branchCheck.status === 1, `Branch already exists: ${branch}`);
+  const baseCommit = output("git", ["rev-parse", "HEAD"], repositoryRoot);
+
+  run("pnpm", ["install", "--frozen-lockfile"], { cwd: repositoryRoot });
+  run("pnpm", ["build"], { cwd: repositoryRoot });
   runSenawa(["doctor"]);
   runSenawa(["workflow", "validate", "standard-delivery"]);
   assertNoActiveRun();
-  await writeMetadata({ branch, goal, sourceRoot, createdAt: new Date().toISOString() });
-  print(`Prepared real demo workspace: ${workspace}`);
+  run("git", ["switch", "-c", branch], { cwd: repositoryRoot });
+  await writeMetadata({
+    branch,
+    baseBranch,
+    baseCommit,
+    goal,
+    repositoryRoot,
+    createdAt: new Date().toISOString(),
+  });
+  print(`Prepared repository in place: ${repositoryRoot}`);
   print(`Created branch: ${branch}`);
 }
 
 async function startWorkflow() {
-  printCostWarning();
   runSenawa(["work", "start", goal, "--workflow", "standard-delivery"], [0, 2]);
 }
 
@@ -99,7 +101,7 @@ async function driveWorkflow() {
     for (;;) {
       const status = activeStatus();
       if (status.status === "finished") {
-        await verifyWorkspace(status);
+        await verifyRepository(status);
         return;
       }
       if (status.status === "ended") {
@@ -144,12 +146,14 @@ async function driveWorkflow() {
     }
   } finally {
     terminal.close();
-    print(`Demo workspace retained at: ${workspace}`);
-    print(`Resume with: pnpm demo:docs -- resume --confirm-cost --workspace ${workspace}`);
+    print(
+      `Repository retained on branch: ${output("git", ["branch", "--show-current"], repositoryRoot)}`,
+    );
+    print("Resume with: pnpm demo:docs -- resume --confirm-cost");
   }
 }
 
-async function verifyWorkspace(existingStatus) {
+async function verifyRepository(existingStatus) {
   const metadata = await readMetadata();
   const status = existingStatus ?? activeStatus();
   assert(status.backend === "beads", `Expected Beads backend, received ${status.backend}`);
@@ -157,6 +161,8 @@ async function verifyWorkspace(existingStatus) {
   assert(status.status === "finished", `Workflow status is ${status.status}, not finished`);
   assert(status.needs === null, "Finished workflow still requires a human decision");
   assert(status.unsettledDispatch === null, "Finished workflow has an unsettled dispatch");
+  assertCompleteProgress(status.progress.phases, "accepted");
+  assertCompleteProgress(status.progress.tasks, "closed");
   assert(
     status.phases.length > 0 && status.phases.every((phase) => phase.status === "accepted"),
     "Not every workflow phase was accepted",
@@ -165,15 +171,15 @@ async function verifyWorkspace(existingStatus) {
     status.tasks.length > 0 && status.tasks.every((task) => task.status === "closed"),
     "Not every implementation task was closed",
   );
-  const currentBranch = output("git", ["branch", "--show-current"], workspace);
+  const currentBranch = output("git", ["branch", "--show-current"], repositoryRoot);
   assert(
     currentBranch === metadata.branch,
     `Expected branch ${metadata.branch}, found ${currentBranch}`,
   );
 
   const changedPaths = new Set([
-    ...lines(output("git", ["diff", "--name-only", "HEAD"], workspace)),
-    ...lines(output("git", ["ls-files", "--others", "--exclude-standard"], workspace)),
+    ...lines(output("git", ["diff", "--name-only", metadata.baseCommit], repositoryRoot)),
+    ...lines(output("git", ["ls-files", "--others", "--exclude-standard"], repositoryRoot)),
   ]);
   const authoredPaths = [...changedPaths].filter(
     (path) =>
@@ -187,7 +193,7 @@ async function verifyWorkspace(existingStatus) {
     `Documentation workflow changed files outside README.md and docs/: ${authoredPaths.join(", ")}`,
   );
 
-  run("git", ["diff", "--check"], { cwd: workspace });
+  run("git", ["diff", "--check", metadata.baseCommit], { cwd: repositoryRoot });
   for (const script of [
     "docs:links",
     "lint",
@@ -197,7 +203,7 @@ async function verifyWorkspace(existingStatus) {
     "check:boundaries",
     "bundle:check",
   ]) {
-    run("pnpm", [script], { cwd: workspace });
+    run("pnpm", [script], { cwd: repositoryRoot });
   }
   runSenawa(["sensor", "audit", status.runId]);
   runSenawa(["work", "report", status.runId]);
@@ -205,7 +211,9 @@ async function verifyWorkspace(existingStatus) {
     JSON.stringify(
       {
         ok: true,
-        workspace,
+        repository: repositoryRoot,
+        baseBranch: metadata.baseBranch,
+        baseCommit: metadata.baseCommit,
         branch: currentBranch,
         runId: status.runId,
         backend: status.backend,
@@ -219,14 +227,18 @@ async function verifyWorkspace(existingStatus) {
   );
 }
 
-async function requireDemoWorkspace() {
+async function requireDemoRepository() {
   const metadata = await readMetadata();
-  const currentBranch = output("git", ["branch", "--show-current"], workspace);
+  assert(
+    resolve(metadata.repositoryRoot) === repositoryRoot,
+    `Demo metadata belongs to another repository: ${metadata.repositoryRoot}`,
+  );
+  const currentBranch = output("git", ["branch", "--show-current"], repositoryRoot);
   assert(
     currentBranch === metadata.branch,
     `Expected branch ${metadata.branch}, found ${currentBranch}`,
   );
-  run("pnpm", ["build"], { cwd: workspace });
+  run("pnpm", ["build"], { cwd: repositoryRoot });
   runSenawa(["doctor"]);
 }
 
@@ -234,12 +246,12 @@ function runSenawa(arguments_, acceptedCodes = [0]) {
   return run(
     process.execPath,
     [
-      join(workspace, "apps", "senawa", "dist", "senawa.mjs"),
+      join(repositoryRoot, "apps", "senawa", "dist", "senawa.mjs"),
       "--worker-host",
       "sdk",
       ...arguments_,
     ],
-    { cwd: workspace, acceptedCodes },
+    { cwd: repositoryRoot, acceptedCodes },
   );
 }
 
@@ -247,19 +259,19 @@ function senawaJson(arguments_) {
   const result = run(
     process.execPath,
     [
-      join(workspace, "apps", "senawa", "dist", "senawa.mjs"),
+      join(repositoryRoot, "apps", "senawa", "dist", "senawa.mjs"),
       "--worker-host",
       "sdk",
       ...arguments_,
     ],
-    { cwd: workspace, stdio: "pipe" },
+    { cwd: repositoryRoot, stdio: "pipe" },
   );
   return JSON.parse(result.stdout);
 }
 
 function activeStatus() {
   const status = senawaJson(["work", "show"]);
-  assert(status !== null, "No active workflow exists in the prepared demo workspace");
+  assert(status !== null, "No active workflow exists in the prepared demo repository");
   return status;
 }
 
@@ -267,17 +279,17 @@ function assertNoActiveRun() {
   const result = run(
     process.execPath,
     [
-      join(workspace, "apps", "senawa", "dist", "senawa.mjs"),
+      join(repositoryRoot, "apps", "senawa", "dist", "senawa.mjs"),
       "--worker-host",
       "sdk",
       "work",
       "show",
     ],
-    { cwd: workspace, stdio: "pipe" },
+    { cwd: repositoryRoot, stdio: "pipe" },
   );
   assert(
     JSON.parse(result.stdout) === null,
-    `Fresh clone unexpectedly contains an active run: ${result.stdout.trim()}`,
+    `Repository already contains an active run: ${result.stdout.trim()}`,
   );
 }
 
@@ -306,29 +318,29 @@ function output(command_, arguments_, cwd) {
 
 function requireExecutable(command_, arguments_) {
   try {
-    run(command_, arguments_, { cwd: sourceRoot, stdio: "pipe" });
+    run(command_, arguments_, { cwd: repositoryRoot, stdio: "pipe" });
   } catch {
     throw new Error(`Required executable is unavailable: ${command_}`);
   }
 }
 
 async function writeMetadata(metadata) {
-  const gitDirectory = output("git", ["rev-parse", "--absolute-git-dir"], workspace);
-  await writeFile(
-    join(gitDirectory, "senawa-documentation-consistency-demo.json"),
-    JSON.stringify(metadata, null, 2),
-  );
+  await writeFile(metadataPath(), JSON.stringify(metadata, null, 2));
 }
 
 async function readMetadata() {
-  const gitDirectory = output("git", ["rev-parse", "--absolute-git-dir"], workspace);
   try {
-    return JSON.parse(
-      await readFile(join(gitDirectory, "senawa-documentation-consistency-demo.json"), "utf8"),
-    );
+    return JSON.parse(await readFile(metadataPath(), "utf8"));
   } catch (error) {
-    throw new Error(`Workspace is not a prepared documentation-consistency demo: ${error.message}`);
+    throw new Error(
+      `Repository is not a prepared documentation-consistency demo: ${error.message}`,
+    );
   }
+}
+
+function metadataPath() {
+  const gitDirectory = output("git", ["rev-parse", "--absolute-git-dir"], repositoryRoot);
+  return join(gitDirectory, "senawa-documentation-consistency-demo.json");
 }
 
 async function assertMissing(path, message) {
@@ -383,6 +395,14 @@ function lines(value) {
   return value.length === 0 ? [] : value.split("\n").filter(Boolean);
 }
 
+function assertCompleteProgress(value, state) {
+  const match = new RegExp(`^(\\d+)/(\\d+) ${state}$`, "u").exec(value);
+  assert(match !== null, `Unexpected ${state} progress: ${value}`);
+  const complete = Number(match[1]);
+  const total = Number(match[2]);
+  assert(total > 0 && complete === total, `Incomplete ${state} progress: ${value}`);
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -393,16 +413,16 @@ function print(value) {
 
 function printHelp() {
   print(`Usage:
-  pnpm demo:docs -- --confirm-cost [--workspace <path>] [--branch <name>]
-  pnpm demo:docs -- prepare [--workspace <path>] [--branch <name>]
-  pnpm demo:docs -- start --confirm-cost --workspace <path>
-  pnpm demo:docs -- resume --confirm-cost --workspace <path>
-  pnpm demo:docs -- verify --workspace <path>
+  pnpm demo:docs -- --confirm-cost [--branch <name>]
+  pnpm demo:docs -- prepare [--branch <name>]
+  pnpm demo:docs -- start --confirm-cost
+  pnpm demo:docs -- resume --confirm-cost
+  pnpm demo:docs -- verify
 
 Commands:
-  run      Prepare a clone, create a branch, run the live workflow, and verify it
-  prepare  Prepare and validate the real clone without starting an SDK session
-  start    Start the live workflow in an existing prepared clone
+  run      Create a branch in place, run the live workflow, and verify it
+  prepare  Validate the repository and create the branch without starting an SDK session
+  start    Start the live workflow on the prepared branch
   resume   Continue an interrupted workflow with explicit human decisions
   verify   Re-run all completion and repository assertions without using AI credits`);
 }
