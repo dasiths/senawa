@@ -70,6 +70,12 @@ describe("Commander CLI", () => {
     expect(taskHelp).not.toContain("abort");
     expect(await runCli(["phase", "show", "define"], { services, io })).toBe(0);
     expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({ id: "define" });
+    expect(await runCli(["phase", "artifact", "define"], { services, io })).toBe(0);
+    expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({
+      phaseId: "define",
+      version: 1,
+      content: expect.objectContaining({ summary: expect.any(String) }),
+    });
     expect(
       await runCli(["gate", "check", "definition-accepted", "--phase", "define"], {
         services,

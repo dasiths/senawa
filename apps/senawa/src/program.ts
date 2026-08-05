@@ -236,6 +236,23 @@ export async function runCli(
         needs: status.needs?.phaseId === id ? status.needs : null,
       });
     });
+  phase
+    .command("artifact")
+    .argument("<id>")
+    .option("--run <runId>")
+    .option("--version <version>")
+    .action(async (id: string, commandOptions: { run?: string; version?: string }) => {
+      const status = await requireStatus(options.services, commandOptions.run);
+      const found = status.phases.find((candidate) => candidate.id === id);
+      if (found === undefined) throw new Error(`Unknown phase ${id}`);
+      const version =
+        commandOptions.version === undefined
+          ? undefined
+          : parsePositiveInteger(commandOptions.version, "--version");
+      const artifact = await options.services.queries.artifact(status.runId, id, version);
+      if (artifact === null) throw new Error(`Phase ${id} has no matching artifact`);
+      writeJson(io, artifact);
+    });
 
   const task = program.command("task");
   task
@@ -488,6 +505,14 @@ function parsePort(value: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 65_535) {
     throw new Error("Port must be between 0 and 65535");
+  }
+  return parsed;
+}
+
+function parsePositiveInteger(value: string, option: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${option} must be a positive integer`);
   }
   return parsed;
 }

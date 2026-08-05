@@ -291,12 +291,13 @@ Options:
 Usage: senawa phase [options] [command]
 
 Options:
-  -h, --help            display help for command
+  -h, --help               display help for command
 
 Commands:
   show [options] <id>
   brief [options] <id>
-  help [command]        display help for command
+  artifact [options] <id>
+  help [command]           display help for command
 ```
 
 ## senawa phase show
