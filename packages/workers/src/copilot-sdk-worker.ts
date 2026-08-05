@@ -264,8 +264,20 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     const output: WorkerOutput[] = [];
     let artifact: JsonObject | undefined;
     const authorization = workerAuthorization(turn);
-    const tools = this.options.bindings.bindingsFor(turn, authorization).map((binding) =>
-      defineTool(binding.name, {
+    const bindings = this.options.bindings.bindingsFor(turn, authorization);
+    const transportNames = new Map<string, string>();
+    for (const binding of bindings) {
+      const transportName = sdkToolName(binding.name);
+      const existing = transportNames.get(transportName);
+      if (existing !== undefined && existing !== binding.name) {
+        throw new Error(
+          `SDK tool name collision: ${existing} and ${binding.name} both map to ${transportName}`,
+        );
+      }
+      transportNames.set(transportName, binding.name);
+    }
+    const tools = bindings.map((binding) =>
+      defineTool(sdkToolName(binding.name), {
         description: binding.description,
         parameters: binding.inputSchema,
         defer: "never",
@@ -289,7 +301,7 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
       }),
     );
     const eventHandler = (event: SessionEvent) => {
-      for (const normalized of normalizeSdkEvent(turn, event)) {
+      for (const normalized of normalizeSdkEvent(turn, event, transportNames)) {
         queue.push(normalized);
         if (normalized.kind === "text" && !normalized.delta) {
           output.push({ stream: normalized.stream, text: normalized.text });
@@ -307,7 +319,7 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
       if (decision.kind === "reject") {
         queue.push(
           event(turn, `permission:${request.toolCallId ?? queue.size}`, "tool", {
-            name: toolName(request),
+            name: toolName(request, transportNames),
             state: "denied",
             detail: decision.feedback ?? "Senawa denied the request",
           }),
@@ -608,10 +620,10 @@ function sdkAvailableTools(turn: WorkerTurn, tools: readonly Tool[]): string[] {
   ];
 }
 
-function toolName(request: PermissionRequest): string {
+function toolName(request: PermissionRequest, transportNames: ReadonlyMap<string, string>): string {
   switch (request.kind) {
     case "custom-tool":
-      return request.toolName;
+      return transportNames.get(request.toolName) ?? request.toolName;
     case "mcp":
       return `${request.serverName}.${request.toolName}`;
     default:
@@ -619,7 +631,11 @@ function toolName(request: PermissionRequest): string {
   }
 }
 
-function normalizeSdkEvent(turn: WorkerTurn, native: SessionEvent): WorkerSessionEvent[] {
+function normalizeSdkEvent(
+  turn: WorkerTurn,
+  native: SessionEvent,
+  transportNames: ReadonlyMap<string, string>,
+): WorkerSessionEvent[] {
   switch (native.type) {
     case "assistant.message":
       return [
@@ -662,7 +678,10 @@ function normalizeSdkEvent(turn: WorkerTurn, native: SessionEvent): WorkerSessio
           turn,
           native.id,
           "tool",
-          { name: native.data.toolName, state: "started" },
+          {
+            name: transportNames.get(native.data.toolName) ?? native.data.toolName,
+            state: "started",
+          },
           native.timestamp,
         ),
       ];
@@ -673,7 +692,10 @@ function normalizeSdkEvent(turn: WorkerTurn, native: SessionEvent): WorkerSessio
           native.id,
           "tool",
           {
-            name: native.data.toolDescription?.name ?? native.data.toolCallId,
+            name:
+              transportNames.get(native.data.toolDescription?.name ?? "") ??
+              native.data.toolDescription?.name ??
+              native.data.toolCallId,
             state: native.data.success ? "completed" : "failed",
             ...(native.data.error?.message === undefined
               ? {}
@@ -695,6 +717,14 @@ function normalizeSdkEvent(turn: WorkerTurn, native: SessionEvent): WorkerSessio
     default:
       return [];
   }
+}
+
+export function sdkToolName(name: string): string {
+  const value = name.replaceAll(/[^a-zA-Z0-9_-]/gu, "_");
+  if (!/^[a-zA-Z0-9_-]+$/u.test(value)) {
+    throw new Error(`Unable to create an SDK-safe tool name for ${name}`);
+  }
+  return value;
 }
 
 type EventKind = WorkerSessionEvent["kind"];

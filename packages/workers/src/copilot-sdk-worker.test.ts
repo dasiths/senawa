@@ -18,6 +18,7 @@ import {
   CopilotSdkWorkerAdapter,
   createCopilotSdkClientOptions,
   LocalSessionFsProvider,
+  sdkToolName,
 } from "./copilot-sdk-worker.js";
 import { runWorkerSessionConformance } from "./worker-conformance.test-support.js";
 
@@ -187,16 +188,17 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     const { adapter, client } = fixture(calls);
     await (await adapter.create(turn)).result;
     const config = client.createConfigs[0];
-    expect(config?.tools?.map((tool) => tool.name)).toEqual(["senawa.task.done", "senawa.note"]);
+    expect(config?.tools?.map((tool) => tool.name)).toEqual(["senawa_task_done", "senawa_note"]);
+    expect(config?.tools?.every((tool) => /^[a-zA-Z0-9_-]+$/u.test(tool.name))).toBe(true);
     expect(config?.availableTools).not.toContain("builtin:bash");
-    expect(config?.tools?.find((tool) => tool.name === "senawa.note")?.parameters).toMatchObject({
+    expect(config?.tools?.find((tool) => tool.name === "senawa_note")?.parameters).toMatchObject({
       type: "object",
       properties: { note: { type: "string", minLength: 1 } },
       required: ["note"],
       additionalProperties: false,
     });
     await config?.tools
-      ?.find((tool) => tool.name === "senawa.note")
+      ?.find((tool) => tool.name === "senawa_note")
       ?.handler?.({ note: "kept" }, fakeInvocation());
     expect(calls.map((call) => call.name)).toContain("senawa.note");
 
@@ -231,7 +233,7 @@ describe("Copilot SDK worker adapter offline conformance", () => {
         {
           kind: "custom-tool",
           toolCallId: "unbound",
-          toolName: "senawa.unbound",
+          toolName: "senawa_unbound",
           toolDescription: "Unbound Senawa-looking tool",
         },
         { sessionId: turn.sessionId },
@@ -406,7 +408,7 @@ class FakeSdkSession implements CopilotSdkSession {
     }
     if (this.shouldSubmitArtifact()) {
       await this.config.tools
-        ?.find((tool) => tool.name === "senawa.phase.submit")
+        ?.find((tool) => tool.name === "senawa_phase_submit")
         ?.handler?.({ artifact: { verdict: "pass" } }, fakeInvocation());
     }
     for (const native of nativeEvents()) this.config.onEvent?.(native);
@@ -432,12 +434,12 @@ function nativeEvents(): SessionEvent[] {
     }),
     native("tool.execution_start", "tool-start", at, {
       toolCallId: "call",
-      toolName: "senawa.phase.submit",
+      toolName: "senawa_phase_submit",
     }),
     native("tool.execution_complete", "tool-complete", at, {
       toolCallId: "call",
       success: true,
-      toolDescription: { name: "senawa.phase.submit" },
+      toolDescription: { name: "senawa_phase_submit" },
     }),
     native("session.usage_checkpoint", "usage", at, { totalNanoAiu: 42 }),
     native("assistant.message", "message", at, {
@@ -484,7 +486,14 @@ function fakeInvocation() {
   return {
     sessionId: turn.sessionId,
     toolCallId: "tool-call",
-    toolName: "senawa.note",
+    toolName: "senawa_note",
     arguments: {},
   };
 }
+
+describe("SDK tool transport names", () => {
+  it("maps semantic names to provider-safe identifiers", () => {
+    expect(sdkToolName("senawa.phase.submit")).toBe("senawa_phase_submit");
+    expect(sdkToolName("senawa.task.done")).toBe("senawa_task_done");
+  });
+});
