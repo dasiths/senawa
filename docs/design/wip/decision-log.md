@@ -125,8 +125,9 @@ Copy this section for each idea and update it in place as the idea matures.
     accepted browser approval and steering, and refused arbitrary and
     cross-origin commands. Desktop and mobile browser layouts were exercised.
     The production vertical slice routes strict HTTP commands through the same
-    command service as the CLI, enforces a supervisor lease and one-time
-    bootstrap, and integration-tests replay, rejection, approval, and finish.
+    command service as the CLI, enforces a supervisor lease and
+    supervisor-lifetime path bootstrap, and integration-tests replay, rejection,
+    approval, and finish.
 * Evidence needed: Test supervisor restart and sustained output load, then
     normalize one live subprocess and one SDK session.
 * POC: `poc/orchestration/README.md#the-browser-run-console-offline`
@@ -138,6 +139,31 @@ Copy this section for each idea and update it in place as the idea matures.
     shared control path; keep the decision probing until restart, load, and live
     worker evidence close the remaining questions.
 * Promotion: `pending`
+
+### 2026-08-05: Reusable browser bootstrap capability
+
+* Status: `accepted`
+* Owner: `docs/design/07-implementation-and-operations.md`
+* Question: Can the high-entropy browser bootstrap capability remain reusable
+    for the supervisor lifetime without weakening cookie, Host, Origin, or
+    loopback enforcement?
+* Context: A single-use bootstrap fails when a link preview, browser retry, or
+    prior navigation consumes it before the intended browser retains the cookie.
+    VS Code remote-port forwarding also rewrites a query capability delimiter,
+    so the server cannot recognize the printed URL and returns `Unauthorized`.
+* Options: Remove browser authentication, retain a single-use bootstrap, or
+    retain authentication with a supervisor-lifetime bootstrap capability
+* Evidence obtained: Repeated valid bootstrap requests mint the same scoped
+    session, an incorrect capability remains unauthorized, and command POSTs
+    continue to require the expected Origin. A path capability survives VS Code
+    remote-port forwarding without delimiter rewriting. The focused production
+    supervisor and CLI tests pass with this behavior.
+* POC: `poc/orchestration/README.md#the-browser-run-console-offline`
+* Outcome: Retain browser authentication. Make the random bootstrap capability
+    a path segment reusable only while its loopback supervisor lives, and print
+    it after launch so the human can recover from previews, retries, forwarding,
+    and opener failures.
+* Promotion: `docs/design/07-implementation-and-operations.md#cli-groups`
 
 ### 2026-08-04: Worker autopilot completion
 

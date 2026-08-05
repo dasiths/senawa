@@ -152,19 +152,21 @@ senawa browser
 ```
 
 Pass a run ID to open an ended or finished run. The command starts the loopback
-supervisor, opens a fresh one-time bootstrap URL through `$BROWSER`, and keeps
-serving until interrupted. After authentication it prints only the safe,
-token-free URL.
+supervisor, opens a high-entropy bootstrap URL through `$BROWSER`, and keeps
+serving until interrupted. It also prints that URL so a failed browser launch,
+link preview, or later retry can recover the same session.
 
-For remote forwarding or manual opening, preserve the one-time token instead of
-consuming it locally:
+For remote forwarding or manual opening, prevent the local launch:
 
 ```bash
 senawa browser [<run-id>] --no-open
 ```
 
-That form prints the full bootstrap URL. It can be used once; reusing the URL
-after its cookie has been issued correctly returns `Unauthorized`.
+The bootstrap capability remains valid only while that supervisor process is
+running. Keep it private: anyone who can reach the loopback or forwarded port
+and possesses the URL can obtain a browser session. Authentication remains
+necessary because the console can approve, reject, steer, resume, and end runs,
+and its output can contain source, prompts, paths, and process diagnostics.
 
 The live-worker launcher is separate and guarded:
 

@@ -16,7 +16,7 @@ beforeAll(async () => {
 });
 
 describe("loopback web supervisor", () => {
-  it("refuses a second supervisor and invalidates the one-time bootstrap", async () => {
+  it("refuses a second supervisor and keeps the bootstrap capability recoverable", async () => {
     const services = await createRun("singleton-run");
     const first = await startWebSupervisor(services);
     try {
@@ -41,7 +41,27 @@ describe("loopback web supervisor", () => {
       expect(page.headers.get("content-security-policy")).toContain(
         "style-src 'self' 'unsafe-inline'",
       );
-      expect((await fetch(first.bootstrapUrl, { redirect: "manual" })).status).toBe(401);
+      const repeatedBootstrap = await fetch(first.bootstrapUrl, { redirect: "manual" });
+      expect(repeatedBootstrap.status).toBe(303);
+      expect(repeatedBootstrap.headers.get("set-cookie")?.split(";", 1)[0]).toBe(cookie);
+      const invalidBootstrap = first.bootstrapUrl.replace(
+        /\/bootstrap\/[^/]+\//u,
+        "/bootstrap/invalid/",
+      );
+      expect((await fetch(invalidBootstrap, { redirect: "manual" })).status).toBe(401);
+      const crossOriginCommand = await fetch(`${origin}/api/v1/runs/${first.runId}/commands`, {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: "http://example.invalid",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          apiVersion: "senawa.dev/browser-command/v1",
+          command: "resume",
+        }),
+      });
+      expect(crossOriginCommand.status).toBe(403);
       expect(bootstrap.headers.has("access-control-allow-origin")).toBe(false);
     } finally {
       await first.close();

@@ -43,7 +43,6 @@ export async function startWebSupervisor(
   await services.acquireWebLease(runId, owner, leaseTtlMs);
   const bootstrapToken = randomBytes(32).toString("base64url");
   const sessionToken = randomBytes(32).toString("base64url");
-  let bootstrapAvailable = true;
   let expectedHost = "";
   let expectedOrigin = "";
   let closing: Promise<void> | null = null;
@@ -61,11 +60,8 @@ export async function startWebSupervisor(
       const url = new URL(request.url ?? "/", expectedOrigin);
       if (
         request.method === "GET" &&
-        url.pathname === `/runs/${encodeURIComponent(runId)}` &&
-        bootstrapAvailable &&
-        url.searchParams.get("bootstrap") === bootstrapToken
+        url.pathname === `/bootstrap/${bootstrapToken}/runs/${encodeURIComponent(runId)}`
       ) {
-        bootstrapAvailable = false;
         response.setHeader(
           "Set-Cookie",
           `${cookieName}=${sessionToken}; HttpOnly; SameSite=Strict; Path=/`,
@@ -126,7 +122,7 @@ export async function startWebSupervisor(
   return {
     runId,
     url: `${expectedOrigin}/runs/${encodeURIComponent(runId)}`,
-    bootstrapUrl: `${expectedOrigin}/runs/${encodeURIComponent(runId)}?bootstrap=${bootstrapToken}`,
+    bootstrapUrl: `${expectedOrigin}/bootstrap/${bootstrapToken}/runs/${encodeURIComponent(runId)}`,
     closed,
     close,
   };

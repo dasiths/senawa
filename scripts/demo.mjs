@@ -157,11 +157,15 @@ async function startWeb(runId) {
     stderr += chunk;
   });
   const output = await readJsonOutput(child, () => stderr);
-  if (typeof output.url !== "string" || typeof output.runId !== "string") {
+  if (
+    typeof output.url !== "string" ||
+    typeof output.browserUrl !== "string" ||
+    typeof output.runId !== "string"
+  ) {
     throw new Error("Web supervisor did not print its URL");
   }
   const bootstrapUrl = output.url;
-  const url = bootstrapUrl.replace(/\?bootstrap=[^#]+$/u, "");
+  const url = output.browserUrl;
   return { process: child, bootstrapUrl, url };
 }
 

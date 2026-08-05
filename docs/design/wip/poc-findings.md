@@ -762,6 +762,15 @@ did not overlap. The mobile page had no horizontal overflow; the workflow graph
 alone scrolled. Clicking Approve moved define to accepted and research to running,
 then clicking research showed its live output.
 
+On 2026-08-05, the production supervisor bootstrap was exercised repeatedly.
+The valid high-entropy capability returned a redirect and the same HttpOnly,
+SameSite session cookie on each request. An incorrect capability returned 401,
+and a command with a foreign Origin returned 403. This makes the printed URL
+recoverable from link previews and browser retries without removing browser
+authentication or command-origin enforcement. VS Code remote-port forwarding
+rewrote the original query delimiter and caused a measured 401, so the bootstrap
+capability moved to a forwarding-safe path segment.
+
 The transport conclusion is narrow and useful. Server-Sent Events plus structured
 command POSTs cover the first implementation: output and run changes are
 server-to-client streams, while approvals, rejection, and steering are discrete

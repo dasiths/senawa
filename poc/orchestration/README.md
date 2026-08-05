@@ -130,6 +130,9 @@ The automated probe established:
   only while research was running and was recorded in that phase's stream.
 * An arbitrary `shell` command was rejected, as was a command carrying a foreign
   Origin.
+* Reusing the valid production bootstrap capability issued the same scoped
+  session cookie, while an incorrect capability remained unauthorized. Moving
+  the capability from a query to a path survived VS Code remote-port forwarding.
 * A second web supervisor for the same run was refused with a dedicated conflict
   exit instead of binding another listener.
 * Browser graceful end moved the run and every unfinished phase to terminal
@@ -171,7 +174,7 @@ same run.
 | Commands | HTTP schema maps to explicit core operations such as approve, reject, steer, pause, abort, and resume; never accept a shell string |
 | Driver lifecycle | A web supervisor survives exit 2 and starts or resumes the detached driver after a decision |
 | Authority | The same state validation, lease checks, journal events, and approval channel used by CLI calls |
-| Security | Loopback binding, one-time capability bootstrap, SameSite cookie, Origin checks, no CORS, output escaping, and no remote mode by default |
+| Security | Loopback binding, supervisor-lifetime capability bootstrap, SameSite cookie, Origin checks, no CORS, output escaping, and no remote mode by default |
 | Graph rendering | Use a maintained DAG visualization library for dynamic task frontiers; the hand-built linear graph is POC-only |
 | Slow viewers | Never let an HTTP client backpressure worker pipes; cap live queues and make durable replay the recovery path |
 | Retention | Rotate or segment large output logs and preserve them with the run report according to the tracking policy |
@@ -273,3 +276,4 @@ bash poc/orchestration/end-to-end.sh   # spends AI credits
 | 2026-08-02 | Added `pa-driven.sh` and the skill it tests. A real Copilot session, given only the skill, listed workflows, started a run, reported what the run needed, approved a phase and resumed, without ever calling `bd`. Also established that repository skills are discovered from `.github/skills/`. |
 | 2026-08-04 | Added the offline browser run console. Proved graph observation, durable per-phase stdout/stderr replay followed by live SSE, cursor reconnect without gaps, responsive desktop/mobile layout, browser approval and steering, and rejection of arbitrary or cross-origin commands. Left real Senawa command-handler integration and live Copilot event normalization explicitly unproven. |
 | 2026-08-04 | Restricted version 1 to one unfinished run per repository and one active worker turn. Added the active-run pointer, singleton web-supervisor lease, graceful `work end`, terminal `ended` projection, archival before replacement, and browser end control. Proved a competing run and supervisor are refused and that an ended run no longer blocks a replacement. The replacement test found that `bd init` must run once per repository rather than once per work item. |
+| 2026-08-05 | Replaced the single-use production browser bootstrap with a supervisor-lifetime path capability. Repeated valid requests mint the same HttpOnly session, incorrect capabilities remain unauthorized, cross-origin commands remain refused, and VS Code remote-port forwarding preserves the URL. |

@@ -48,12 +48,14 @@ describe("Commander CLI", () => {
     ).toBe(0);
     const automatic = JSON.parse(output.pop() ?? "{}") as {
       url: string;
+      browserUrl: string;
       opened: boolean;
     };
     expect(opened).toHaveLength(1);
-    expect(opened[0]).toContain("?bootstrap=");
+    expect(opened[0]).toContain("/bootstrap/");
     expect(automatic.opened).toBe(true);
-    expect(automatic.url).not.toContain("bootstrap=");
+    expect(automatic.url).toBe(opened[0]);
+    expect(automatic.browserUrl).not.toContain("bootstrap=");
 
     expect(
       await runCli(["browser", "browser-command-run", "--no-open"], {
@@ -71,7 +73,7 @@ describe("Commander CLI", () => {
     };
     expect(opened).toHaveLength(1);
     expect(manual.opened).toBe(false);
-    expect(manual.url).toContain("?bootstrap=");
+    expect(manual.url).toContain("/bootstrap/");
   });
 
   it("keeps CLI and HTTP command effects identical apart from actor channel", async () => {

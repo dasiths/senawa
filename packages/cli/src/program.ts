@@ -130,7 +130,11 @@ export async function runCli(
         ...(runId === undefined ? {} : { runId }),
         port: parsePort(commandOptions.port),
       });
-      writeJson(io, { runId: supervisor.runId, url: supervisor.bootstrapUrl });
+      writeJson(io, {
+        runId: supervisor.runId,
+        url: supervisor.bootstrapUrl,
+        browserUrl: supervisor.url,
+      });
       if (options.holdWeb !== false) {
         const close = () => void supervisor.close();
         process.once("SIGINT", close);
@@ -173,7 +177,8 @@ export async function runCli(
       }
       writeJson(io, {
         runId: supervisor.runId,
-        url: opened ? supervisor.url : supervisor.bootstrapUrl,
+        url: supervisor.bootstrapUrl,
+        browserUrl: supervisor.url,
         opened,
       });
       if (options.holdWeb !== false) {

@@ -119,10 +119,13 @@ The command surface is grouped by responsibility:
 | Diagnostics | `doctor`, `prime`, `work report` | All trusted operational callers |
 
 `senawa browser [<run>]` is the user-facing console command. It creates a fresh
-one-time bootstrap URL, opens it through the configured system browser, and
-prints only the token-free URL after opening. `--no-open` prints the bootstrap
-URL for manual or forwarded use. `senawa work web` remains the low-level
-supervisor command for automation.
+high-entropy bootstrap capability, opens it through the configured system
+browser, and prints it as a recoverable URL. The capability may mint the same
+HttpOnly session cookie repeatedly while that supervisor lives, so link previews
+and browser retries cannot consume the only entry path. It is carried in a path
+segment because VS Code remote-port forwarding rewrites query delimiters.
+`--no-open` suppresses the local launch for manual or forwarded use. `senawa work
+web` remains the low-level supervisor command for automation.
 
 The complete argument grammar belongs in generated CLI reference once the
 implementation begins. Design documents define authority and behavior, not a
