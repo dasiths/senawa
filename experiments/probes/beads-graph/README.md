@@ -76,3 +76,4 @@ bash experiments/probes/beads-graph/run.sh   # offline, slow because bd init is 
 |------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
 | 2026-07-28 | First runs as two probes. Established the envelope requirement, the blocking `bd init` prompt, batch and event-bead limits, and per-command latency. Established atomic claiming and benign write serialization. |
 | 2026-08-02 | Merged `02-beads-contract` and `03-beads-concurrency` into one folder, since both describe the same adapter contract. Scripts kept intact as `contract.sh` and `concurrency.sh`. |
+| 2026-08-05 | Cleared ambient `BD_JSON_ENVELOPE` before legacy-shape controls so the probe remains independent of the caller environment. Kept unsupported batch metadata diagnostics raw because that error is not a JSON envelope. |

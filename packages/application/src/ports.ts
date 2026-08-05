@@ -8,6 +8,7 @@ import type {
   RuntimeArtifact,
   RuntimeLease,
   RuntimeState,
+  RuntimeTask,
   Workflow,
 } from "@senawa/domain";
 
@@ -49,6 +50,15 @@ export interface VersionedStoredRuntimeState {
   readonly revision: string;
 }
 
+export interface RuntimeGraphDefinition {
+  readonly phases: readonly {
+    readonly id: string;
+    readonly title: string;
+    readonly dependsOn: readonly string[];
+    readonly executorKind: "agent" | "task-frontier" | "sensor-only" | "human" | "foreach";
+  }[];
+}
+
 export class RuntimeRevisionConflictError extends Error {
   constructor(
     readonly runId: string,
@@ -85,6 +95,11 @@ export interface RuntimeStatePort {
     readonly operationId: string;
     readonly state: RuntimeState;
   }): Promise<VersionedRunState>;
+  claimReadyTask(input: {
+    readonly runId: string;
+    readonly expectedRevision: string;
+    readonly operationId: string;
+  }): Promise<RuntimeTask | null>;
 }
 
 export interface RuntimeStateStoragePort {
@@ -92,6 +107,7 @@ export interface RuntimeStateStoragePort {
     runId: string,
     state: StoredRuntimeState,
     operationId: string,
+    graph: RuntimeGraphDefinition,
   ): Promise<VersionedStoredRuntimeState>;
   readRuntimeState(runId: string): Promise<VersionedStoredRuntimeState>;
   commitRuntimeState(input: {
@@ -100,6 +116,11 @@ export interface RuntimeStateStoragePort {
     readonly operationId: string;
     readonly state: StoredRuntimeState;
   }): Promise<VersionedStoredRuntimeState>;
+  claimReadyTask(input: {
+    readonly runId: string;
+    readonly expectedRevision: string;
+    readonly operationId: string;
+  }): Promise<RuntimeTask | null>;
 }
 
 export interface ActiveRunRegistry {

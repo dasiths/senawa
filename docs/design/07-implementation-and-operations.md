@@ -3,8 +3,8 @@
 ## Current status
 
 Senawa now has a production vertical slice across the domain, configuration,
-application, file runtime, artifact, observability, workers, sensors, browser,
-reporting, CLI, and hook packages. The executable path validates repository definitions,
+application, file and Beads runtimes, artifact, observability, workers, sensors,
+browser, reporting, CLI, and hook packages. The executable path validates repository definitions,
 runs the standard workflow with deterministic workers, persists versioned
 artifacts and append-only evidence, accepts CLI and browser decisions through
 the same application commands and queries, streams output over SSE, and renders
@@ -41,18 +41,28 @@ fake subprocess executable. The subprocess adapter reports absent typed-tool
 transport, buffered output, process-local inspection limits, and absent path
 containment honestly. No live Copilot subprocess or SDK transport was exercised.
 
-The `senawa` app explicitly composes the file and presentation adapters.
-`@senawa/runtime-file`
-owns mutable runtime state, repository singleton ownership, fenced leases, and
-write-ahead recovery. `@senawa/artifact-store` owns create-only identity,
+The `senawa` app keeps the file runtime as its ordinary Phase 7 composition and
+accepts explicit `--runtime beads` only for internal tests and the offline Beads
+example. It does not catch a Beads failure and substitute file state. The Phase 8
+production-default switch remains pending.
+
+`@senawa/runtime-beads` owns mutable graph state when selected. It validates
+`bd 1.1.x`, sets `BD_JSON_ENVELOPE=1`, closes stdin, initializes
+noninteractively, creates epic, phase, task, and dependency beads, claims with
+`bd ready --claim --json`, manages human gates and state labels, reconstructs
+with `bd list --all`, filters event beads, and converges split writes through
+pending metadata and stable operation receipts. `@senawa/runtime-file` remains
+the explicit development and test semantic adapter. Repository singleton
+ownership and fenced leases remain file-backed in both compositions.
+
+`@senawa/artifact-store` owns create-only identity,
 snapshot, and versioned artifact documents with digest conflict checks.
 `@senawa/observability` owns idempotent journal JSONL and session/turn output
 streams with stable owner projections, storage-assigned cursors, and
 process-local notification hints. Interrupted aggregate
 application commits converge from one pending transaction on reopen, while each
-fact has one durable authority after convergence. This is not the intended
-Beads adapter, which remains pending. The production Copilot subprocess host is
-opt-in and has not been exercised during this implementation phase.
+fact has one durable authority after convergence. The production Copilot
+subprocess host is opt-in and was not exercised during Phase 7.
 
 The application package owns commands, queries, driver transitions, prompt
 construction, status projections, and ports for runtime state, active-run
@@ -71,7 +81,7 @@ reads an application-owned evidence projection and escapes untrusted Markdown,
 HTML, control characters, and instruction-like tags. `@senawa/web` and
 `@senawa/report` are thin re-export facades.
 
-The [POC findings](wip/probe-findings.md) distinguish live-model evidence,
+The [probe findings](wip/probe-findings.md) distinguish live-model evidence,
 offline deterministic simulation, and documentation-only claims.
 
 ## Technology choice
@@ -94,6 +104,7 @@ the documented `bd --json` contract with `BD_JSON_ENVELOPE=1`.
 | `@senawa/configuration` | Repository discovery, YAML and JSON loading, schema compilation, profiles, workflow catalog, doctor preflight, snapshots, and fingerprints |
 | `@senawa/core` | Temporary source-level compatibility facade over domain and configuration exports |
 | `@senawa/application` | Commands, queries, driver, prompts, projections, and application-owned ports; imports domain only |
+| `@senawa/runtime-beads` | Beads 1.1.x runtime graph, atomic claims, gates, revisions, operation receipts, cache invalidation, and split-write reconciliation |
 | `@senawa/runtime-file` | Explicit development and test runtime state, active-run registry, fenced leases, and split-store recovery |
 | `@senawa/artifact-store` | Immutable run identity, snapshot, and versioned artifact documents |
 | `@senawa/observability` | Append-only journal and output JSONL, stable cursors, notification hints, and future telemetry seams |
@@ -142,12 +153,24 @@ ESM bundles that include CommonJS dependencies require the esbuild
 require failures do not escape the build.
 
 The current workspace exposes `pnpm bundle:check` for CLI and hook startup,
-`pnpm demo` for the isolated no-credit browser workflow, and `pnpm demo:live`
-for the guarded Copilot implementation-worker path. The offline demo terminates
+`pnpm demo` for the isolated file-backed no-credit browser workflow,
+`pnpm demo:beads` for the equivalent real-Beads workflow, and `pnpm demo:live`
+for the guarded Copilot implementation-worker path. Each offline demo terminates
 its supervisor by default; `pnpm demo -- --keep-server` is the explicit
 inspection mode. Its temporary repository runs real command sensors: typecheck
 passes, while tests fail on attempt 1 and pass on attempt 2 to prove deterministic
 rework without AI credits.
+
+On 2026-08-05, `bd version` reported `1.1.2`. The final `pnpm test` run passed
+87 tests in 228.67 seconds; the eight-test real-Beads contract file took 227.45
+seconds. Coverage included malformed
+envelopes, a missing binary, closed tasks, gate lifecycle, cache deletion,
+stable claims, terminal behavior, shared dispatch and projection semantics, and
+four split-write fault points. `pnpm demo:beads` then completed the five-phase
+CLI and browser workflow with two dependency-ordered tasks, two deterministic
+rework events, 77 journal events, 27 output records, five immutable artifacts,
+eight Beads graph nodes, and no mutable runtime JSON blob. These are real Beads
+and deterministic-worker measurements, not live Copilot evidence.
 
 If hook startup later becomes material, keep the orchestrator warm behind a Unix
 socket and replace the shell hook with a small compiled client. Do not rewrite

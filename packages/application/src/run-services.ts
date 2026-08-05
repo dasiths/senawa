@@ -551,15 +551,8 @@ export class RunCommandService implements RunDriver {
       );
     }
 
-    const task = state.tasks.find(
-      (candidate) =>
-        (candidate.status === "pending" || candidate.status === "rework") &&
-        candidate.dependsOn.every(
-          (dependency) =>
-            state.tasks.find((other) => other.key === dependency)?.status === "closed",
-        ),
-    );
-    if (task === undefined) return { runId: state.identity.runId, kind: "idle", phaseId: phase.id };
+    const task = await this.store.claimReadyTask(state.identity.runId);
+    if (task === null) return { runId: state.identity.runId, kind: "idle", phaseId: phase.id };
     const attempt = task.attempt + 1;
     const priorFailure = [...state.dispatches]
       .reverse()
@@ -940,6 +933,26 @@ class RuntimeCoordinator {
             state: next,
           })
         ).state;
+      } catch (error) {
+        if (!(error instanceof RuntimeRevisionConflictError)) throw error;
+      }
+    }
+    throw new RuntimeRevisionConflictError(runId, operationId);
+  }
+
+  async claimReadyTask(runId: string): Promise<RuntimeTask | null> {
+    if (this.identifiers === undefined) {
+      throw new Error("Runtime mutation is not configured for this query service");
+    }
+    const operationId = this.identifiers.createId();
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const current = await this.port.readRun(runId);
+      try {
+        return await this.port.claimReadyTask({
+          runId,
+          expectedRevision: current.revision,
+          operationId,
+        });
       } catch (error) {
         if (!(error instanceof RuntimeRevisionConflictError)) throw error;
       }

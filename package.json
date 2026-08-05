@@ -12,6 +12,7 @@
     "bundle:check": "node scripts/check-bundles.mjs",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "demo": "pnpm build && node examples/demos/file-offline/run.mjs",
+    "demo:beads": "pnpm build && node examples/demos/beads-offline/run.mjs",
     "demo:live": "pnpm build && node examples/demos/live-copilot-worker/run.mjs",
     "format": "biome format --write .",
     "lint": "biome check .",

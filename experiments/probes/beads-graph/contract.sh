@@ -28,6 +28,7 @@ export BEADS_DIR="$WORK/.beads"
 # on a closed stdin unless told not to. Any automation calling bd MUST set this.
 export BD_NON_INTERACTIVE=1
 export DO_NOT_TRACK=1
+unset BD_JSON_ENVELOPE
 
 hdr() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 note() { printf '   %s\n' "$*"; }
@@ -120,7 +121,7 @@ hdr "9. bd batch as the serialized-write primitive"
 # and `update` only accepts status, priority, title, assignee - NOT metadata.
 printf 'create task 2 "batched one"\ncreate task 2 "batched two"\n' > batch.txt
 bd batch -f batch.txt --json 2>&1 | head -8 | sed 's/^/   /'
-note "can batch set metadata? $(printf 'update %s metadata={}\n' "$T1" | bd batch --json 2>&1 | jq -r '.error // "yes"' | head -c 90)"
+note "can batch set metadata? $(printf 'update %s metadata={}\n' "$T1" | bd batch --json 2>&1 | head -c 90)"
 
 # ---------------------------------------------------------------------------
 hdr "10. per-command latency (matters: senawa shells out to bd constantly)"

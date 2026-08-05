@@ -1,4 +1,4 @@
-import type { JournalEvent, RunSnapshot, RuntimeState } from "@senawa/domain";
+import type { JournalEvent, RunSnapshot, RuntimeState, RuntimeTask } from "@senawa/domain";
 
 const actor = { channel: "driver" as const };
 
@@ -123,5 +123,58 @@ export function createRuntimeFixture(runId: string): RuntimeState {
     dispatches: [],
     leases: { driver: null, web: null },
     leaseFences: { driver: 0, web: 0 },
+  };
+}
+
+export function createTaskRuntimeFixture(runId: string): RuntimeState {
+  const state = createRuntimeFixture(runId);
+  const task = (key: string, dependsOn: string[] = []): RuntimeTask => ({
+    key,
+    title: key,
+    dependsOn,
+    paths: [`src/${key}.ts`],
+    acceptance: [`${key} passes`],
+    role: "worker",
+    status: "pending",
+    attempt: 0,
+    dispatchFailures: 0,
+    sessionId: null,
+    steering: [],
+    reworkFindings: [],
+  });
+  return {
+    ...state,
+    snapshot: {
+      ...state.snapshot,
+      workflow: {
+        ...state.snapshot.workflow,
+        spec: {
+          ...state.snapshot.workflow.spec,
+          phases: [
+            {
+              id: "phase",
+              dependsOn: [],
+              executor: {
+                kind: "task-frontier",
+                role: "worker",
+                concurrency: 1,
+                reentrant: true,
+              },
+              loop: {
+                until: "all-selected-tasks-closed",
+                each: {
+                  gate: "artifact",
+                  rework: { resumeSession: true, maxAttempts: 2 },
+                  dispatch: { maxFailures: 2 },
+                  onExhausted: "escalate",
+                },
+              },
+              iteration: { max: 2, onUpstreamChange: "flag" },
+            },
+          ],
+        },
+      },
+    },
+    tasks: [task("task-one"), task("task-two", ["task-one"])],
   };
 }

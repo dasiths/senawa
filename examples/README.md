@@ -9,6 +9,9 @@ semantics.
 * [File-backed offline demo](demos/file-offline/README.md) runs the complete
   deterministic CLI and browser workflow without AI credits. The file runtime
   remains a development and test adapter.
+* [Beads-backed offline demo](demos/beads-offline/README.md) runs the same
+  deterministic CLI and browser workflow against real Beads without spending
+  AI credits.
 * [Live Copilot worker demo](demos/live-copilot-worker/README.md) is an opt-in,
   credit-spending worker-host check. It does not yet establish full production
   readiness.

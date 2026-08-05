@@ -11,6 +11,7 @@ import {
   type OutputLogStoragePort,
   type RunDocumentStoragePort,
   type RunPersistencePort,
+  type RuntimeGraphDefinition,
   RuntimeRevisionConflictError,
   type RuntimeStateStoragePort,
   type StoredRuntimeState,
@@ -23,6 +24,7 @@ import type {
   RuntimeArtifact,
   RuntimeLease,
   RuntimeState,
+  RuntimeTask,
 } from "@senawa/domain";
 
 interface RuntimeEnvelope {
@@ -77,6 +79,8 @@ export interface FileRunPersistenceOptions {
   readonly afterStep?: (
     step: "active-run" | "documents" | "evidence" | "runtime-state",
   ) => void | Promise<void>;
+  readonly lockTimeoutMs?: number;
+  readonly staleLockMs?: number;
 }
 
 export class FileRuntimeStateStore implements RuntimeStateStoragePort {
@@ -90,6 +94,7 @@ export class FileRuntimeStateStore implements RuntimeStateStoragePort {
     runId: string,
     state: StoredRuntimeState,
     operationId: string,
+    _graph: RuntimeGraphDefinition,
   ): Promise<VersionedStoredRuntimeState> {
     const path = this.path(runId);
     const existing = await readJsonIfPresent<RuntimeEnvelope>(path);
@@ -129,6 +134,38 @@ export class FileRuntimeStateStore implements RuntimeStateStoragePort {
     } satisfies RuntimeEnvelope;
     await writeJson(path, envelope);
     return versioned(envelope);
+  }
+
+  async claimReadyTask(input: {
+    readonly runId: string;
+    readonly expectedRevision: string;
+    readonly operationId: string;
+  }): Promise<RuntimeTask | null> {
+    const path = this.path(input.runId);
+    const current = await readJson<RuntimeEnvelope>(path);
+    if (current.operationId === input.operationId) {
+      const claimed = current.state.tasks.find((task) => task.status === "in_progress");
+      return claimed === undefined ? null : structuredClone(claimed);
+    }
+    if (String(current.revision) !== input.expectedRevision) {
+      throw new RuntimeRevisionConflictError(input.runId, input.operationId);
+    }
+    const task = current.state.tasks.find(
+      (candidate) =>
+        (candidate.status === "pending" || candidate.status === "rework") &&
+        candidate.dependsOn.every(
+          (dependency) =>
+            current.state.tasks.find((other) => other.key === dependency)?.status === "closed",
+        ),
+    );
+    if (task === undefined) return null;
+    task.status = "in_progress";
+    await writeJson(path, {
+      revision: current.revision + 1,
+      operationId: input.operationId,
+      state: current.state,
+    } satisfies RuntimeEnvelope);
+    return structuredClone(task);
   }
 
   private path(runId: string): string {
@@ -341,6 +378,18 @@ export class FileRunPersistence implements RunPersistencePort {
     });
   }
 
+  claimReadyTask(input: {
+    readonly runId: string;
+    readonly expectedRevision: string;
+    readonly operationId: string;
+  }): Promise<RuntimeTask | null> {
+    return this.serialized(async () => {
+      const task = await this.stores.runtime.claimReadyTask(input);
+      if (task !== null) await this.stores.notifications?.publishRunChanged(input.runId);
+      return task;
+    });
+  }
+
   readArtifact(runId: string, phaseId: string, version?: number) {
     return this.stores.documents.readArtifact(runId, phaseId, version);
   }
@@ -372,10 +421,17 @@ export class FileRunPersistence implements RunPersistencePort {
   }
 
   private async serialized<T>(operation: () => Promise<T>): Promise<T> {
-    return withLock(this.lockPath, async () => {
-      await this.recover();
-      return operation();
-    });
+    return withLock(
+      this.lockPath,
+      async () => {
+        await this.recover();
+        return operation();
+      },
+      {
+        timeoutMs: this.options.lockTimeoutMs ?? 5_000,
+        staleMs: this.options.staleLockMs ?? 30_000,
+      },
+    );
   }
 
   private async recover(): Promise<void> {
@@ -424,6 +480,7 @@ export class FileRunPersistence implements RunPersistencePort {
         transaction.runId,
         transaction.runtime,
         transaction.operationId,
+        graphDefinition(transaction.snapshot),
       );
     } else {
       await this.stores.runtime.commitRuntimeState({
@@ -513,6 +570,17 @@ function transactionForCreate(state: RuntimeState, operationId: string): Persist
     journal: state.journal,
     outputs: outputDeltas({}, state.outputs),
     terminal: state.status === "finished" || state.status === "ended",
+  };
+}
+
+function graphDefinition(snapshot: RuntimeState["snapshot"]): RuntimeGraphDefinition {
+  return {
+    phases: snapshot.workflow.spec.phases.map((phase) => ({
+      id: phase.id,
+      title: phase.id,
+      dependsOn: phase.dependsOn,
+      executorKind: phase.executor.kind,
+    })),
   };
 }
 
@@ -617,9 +685,16 @@ function validateTtl(ttlMs: number): void {
   }
 }
 
-async function withLock<T>(path: string, operation: () => Promise<T>): Promise<T> {
+async function withLock<T>(
+  path: string,
+  operation: () => Promise<T>,
+  options: { readonly timeoutMs: number; readonly staleMs: number } = {
+    timeoutMs: 5_000,
+    staleMs: 30_000,
+  },
+): Promise<T> {
   await mkdir(dirname(path), { recursive: true });
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + options.timeoutMs;
   for (;;) {
     try {
       const handle = await open(path, "wx", 0o600);
@@ -633,7 +708,7 @@ async function withLock<T>(path: string, operation: () => Promise<T>): Promise<T
     } catch (error) {
       if (!isNodeError(error, "EEXIST")) throw error;
       const lockStat = await stat(path).catch(() => null);
-      if (lockStat !== null && Date.now() - lockStat.mtimeMs > 30_000) {
+      if (lockStat !== null && Date.now() - lockStat.mtimeMs > options.staleMs) {
         await rm(path, { force: true });
         continue;
       }

@@ -47,6 +47,9 @@ importers:
       '@senawa/reporting':
         specifier: workspace:*
         version: link:../../packages/reporting
+      '@senawa/runtime-beads':
+        specifier: workspace:*
+        version: link:../../packages/runtime-beads
       '@senawa/runtime-file':
         specifier: workspace:*
         version: link:../../packages/runtime-file
@@ -216,6 +219,15 @@ importers:
         specifier: workspace:*
         version: link:../application
 
+  packages/runtime-beads:
+    dependencies:
+      '@senawa/application':
+        specifier: workspace:*
+        version: link:../application
+      '@senawa/domain':
+        specifier: workspace:*
+        version: link:../domain
+
   packages/runtime-file:
     dependencies:
       '@senawa/application':
@@ -281,6 +293,9 @@ importers:
       '@senawa/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      '@senawa/runtime-beads':
+        specifier: workspace:*
+        version: link:../../packages/runtime-beads
       '@senawa/runtime-file':
         specifier: workspace:*
         version: link:../../packages/runtime-file

@@ -6,6 +6,7 @@
   "dependencies": {
     "@senawa/artifact-store": "workspace:*",
     "@senawa/observability": "workspace:*",
+    "@senawa/runtime-beads": "workspace:*",
     "@senawa/runtime-file": "workspace:*",
     "@senawa/testing": "workspace:*"
   }

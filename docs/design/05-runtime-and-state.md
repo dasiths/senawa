@@ -17,7 +17,7 @@ It holds no model context and no authoritative plan in memory.
 | Journal | `journal.jsonl` | Ordered, high-frequency events do not fit an issue tracker |
 | Driver lease | `driver.lock` | Heartbeat state is local and transient |
 | Steering inbox | `steering.jsonl` | Consumed between transitions |
-| Artifacts, snapshot, sessions, sensor cache | Work directory | These values are files or file-backed evidence |
+| Artifacts, snapshot, sessions, sensor cache | Work directory | These values are immutable documents or file-backed evidence |
 | Run identity | `work.json` | Immutable pointer to workflow, epic, fingerprint, and input |
 | Status cache | `cache.json` | Derived and safe to delete |
 
@@ -149,7 +149,8 @@ recovery path.
 
 ## Beads adapter contract
 
-`@senawa/graph` is the only component that invokes `bd` and follows these rules:
+`@senawa/runtime-beads` is the only production adapter that invokes `bd` and
+follows these rules:
 
 1. Set `BD_JSON_ENVELOPE=1` for every call and validate the envelope version.
 2. Run initialization with non-interactive flags and closed stdin.
@@ -165,6 +166,37 @@ an additive plan revision.
 
 Measured calls take hundreds of milliseconds. That cost is acceptable beside
 minute-scale model turns, but it makes graph access unsuitable for per-tool hooks.
+
+The adapter stores the epic, phases, tasks, dependency edges, coarse status,
+human gates, node metadata, revisions, pending operations, and stable operation
+receipts in Beads. It does not store an arbitrary mutable runtime document in
+issue metadata. Immutable identity, snapshots, and artifacts remain owned by
+`@senawa/artifact-store`; the append-only journal and output remain owned by
+`@senawa/observability`; active-run ownership and fenced leases remain local
+file authorities.
+
+On 2026-08-05, the shared file and Beads contracts passed against `bd 1.1.2`.
+The Beads suite proved restart reconstruction, stale revision rejection, stable
+atomic claim receipts, closed-task retention, event-bead filtering, additive
+task import, human gate resolution before close, cache deletion, terminal
+ownership release, dispatch projection recovery, and convergence after injected
+failure at pending metadata, coarse status, state event, and final metadata.
+The command was:
+
+```bash
+pnpm exec vitest run tests/contract/beads-persistence.test.ts packages/runtime-beads/src/beads-client.test.ts
+```
+
+The deterministic CLI and browser workflow also completed with eight
+authoritative Beads nodes and no `runtime-state.json`:
+
+```bash
+pnpm demo:beads
+```
+
+This evidence covers real Beads with deterministic workers. It does not cover a
+live Copilot worker, multiple active drivers, cross-host leases, or the Phase 8
+production-default composition switch.
 
 ## Status projection
 

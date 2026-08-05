@@ -22,6 +22,7 @@ git config user.email poc@example.com
 git config user.name poc
 git config beads.role maintainer
 export BEADS_DIR="$WORK/.beads" BD_NON_INTERACTIVE=1 DO_NOT_TRACK=1
+unset BD_JSON_ENVELOPE
 
 hdr() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 note() { printf '   %s\n' "$*"; }

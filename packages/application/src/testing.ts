@@ -5,6 +5,7 @@ import type {
   RuntimeArtifact,
   RuntimeLease,
   RuntimeState,
+  RuntimeTask,
 } from "@senawa/domain";
 import {
   type ClockPort,
@@ -82,6 +83,31 @@ export class FakeRunPersistence implements RunPersistencePort {
       if (this.activeRunId === input.runId) this.activeRunId = null;
     }
     return this.readRun(input.runId);
+  }
+
+  async claimReadyTask(input: {
+    readonly runId: string;
+    readonly expectedRevision: string;
+    readonly operationId: string;
+  }): Promise<RuntimeTask | null> {
+    const revision = this.revisions.get(input.runId) ?? 0;
+    if (input.expectedRevision !== String(revision)) {
+      throw new RuntimeRevisionConflictError(input.runId, input.operationId);
+    }
+    const state = this.requireRun(input.runId);
+    const task = state.tasks.find(
+      (candidate) =>
+        (candidate.status === "pending" || candidate.status === "rework") &&
+        candidate.dependsOn.every(
+          (dependency) =>
+            state.tasks.find((other) => other.key === dependency)?.status === "closed",
+        ),
+    );
+    if (task === undefined) return null;
+    task.status = "in_progress";
+    this.operations.push(input.operationId);
+    this.revisions.set(input.runId, revision + 1);
+    return structuredClone(task);
   }
 
   publishSnapshot(snapshot: RunSnapshot, operationId: string): Promise<void> {

@@ -1,0 +1,10 @@
+{
+  "name": "senawa-beads-demo-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "node check.mjs typecheck",
+    "test": "node check.mjs test"
+  }
+}

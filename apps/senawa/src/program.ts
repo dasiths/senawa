@@ -35,6 +35,11 @@ export async function runCli(
         .choices(["deterministic", "copilot"])
         .default("deterministic"),
     )
+    .addOption(
+      new Option("--runtime <runtime>", "runtime backend for internal and offline validation")
+        .choices(["file", "beads"])
+        .default("file"),
+    )
     .showHelpAfterError()
     .exitOverride()
     .configureOutput({ writeOut: io.stdout, writeErr: io.stderr });

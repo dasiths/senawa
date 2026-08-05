@@ -1,18 +1,20 @@
 import { spawn, spawnSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const sourceRoot = process.cwd();
 const cliBundle = resolve(sourceRoot, "apps/senawa/dist/senawa.mjs");
+const runtime = process.env.SENAWA_DEMO_RUNTIME ?? "file";
 const keepServer = process.argv.slice(2).includes("--keep-server");
-const demoRoot = await mkdtemp(join(tmpdir(), "senawa-production-demo-"));
+const demoRoot = await mkdtemp(join(tmpdir(), `senawa-${runtime}-demo-`));
 let webProcess;
 let completed = false;
 
 try {
   await installDefinitions(sourceRoot, demoRoot);
   print(`Demo repository: ${demoRoot}`);
+  print(`Runtime backend: ${runtime}`);
   runCli(["doctor"]);
   const started = runCli(
     [
@@ -78,7 +80,9 @@ try {
   const implementationResult = await resumeImplementation;
   taskStream.close();
   if (implementationResult.snapshot?.needs?.phaseId !== "verify") {
-    throw new Error("Implementation did not advance to verification approval");
+    throw new Error(
+      `Implementation did not advance to verification approval: ${JSON.stringify(implementationResult.snapshot)}`,
+    );
   }
   print(`SSE streamed task output record ${streamedTaskRecord.seq} during implementation.`);
 
@@ -101,6 +105,7 @@ try {
   print(`Command sensors forced ${reworkEvents.length} deterministic task rework events.`);
 
   runCli(["work", "report", runId]);
+  if (runtime === "beads") await verifyBeadsRuntime(runId);
   print("Offline demo completed without invoking Copilot.");
   completed = true;
 
@@ -120,8 +125,8 @@ try {
 }
 
 function runCli(arguments_, acceptedCodes = [0]) {
-  print(`$ senawa ${arguments_.join(" ")}`);
-  const result = spawnSync(process.execPath, [cliBundle, ...arguments_], {
+  print(`$ senawa --runtime ${runtime} ${arguments_.join(" ")}`);
+  const result = spawnSync(process.execPath, [cliBundle, "--runtime", runtime, ...arguments_], {
     cwd: demoRoot,
     encoding: "utf8",
   });
@@ -139,21 +144,25 @@ async function installDefinitions(from, to) {
   await mkdir(dirname(skillTarget), { recursive: true });
   await cp(join(from, ".agents", "skills", "senawa", "SKILL.md"), skillTarget);
   await cp(
-    join(from, "examples", "demos", "file-offline", "fixture", "package.json"),
+    join(from, "examples", "demos", `${runtime}-offline`, "fixture", "package.json"),
     join(to, "package.json"),
   );
   await cp(
-    join(from, "examples", "demos", "file-offline", "fixture", "check.mjs"),
+    join(from, "examples", "demos", `${runtime}-offline`, "fixture", "check.mjs"),
     join(to, "check.mjs"),
   );
 }
 
 async function startWeb(runId) {
-  const child = spawn(process.execPath, [cliBundle, "work", "web", runId, "--port", "0"], {
-    cwd: demoRoot,
-    detached: keepServer,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const child = spawn(
+    process.execPath,
+    [cliBundle, "--runtime", runtime, "work", "web", runId, "--port", "0"],
+    {
+      cwd: demoRoot,
+      detached: keepServer,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
   child.stderr?.setEncoding("utf8");
   let stderr = "";
   child.stderr?.on("data", (chunk) => {
@@ -170,6 +179,44 @@ async function startWeb(runId) {
   const bootstrapUrl = output.url;
   const url = output.browserUrl;
   return { process: child, bootstrapUrl, url };
+}
+
+async function verifyBeadsRuntime(runId) {
+  const result = spawnSync("bd", ["list", "--all", "--limit", "0", "--json"], {
+    cwd: demoRoot,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      BEADS_DIR: join(demoRoot, ".beads"),
+      BD_JSON_ENVELOPE: "1",
+      BD_NON_INTERACTIVE: "1",
+      DO_NOT_TRACK: "1",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) throw new Error(`bd list failed: ${result.stderr.trim()}`);
+  const envelope = parseJson(result.stdout);
+  const issues = envelope.data;
+  if (envelope.schema_version !== 1 || !Array.isArray(issues)) {
+    throw new Error("Beads demo verification received an invalid envelope");
+  }
+  const nodes = issues.filter(
+    (issue) => issue.issue_type !== "event" && issue.metadata?.senawa_run_id === runId,
+  );
+  if (nodes.length < 6) throw new Error(`Beads graph contained only ${nodes.length} run nodes`);
+  const mutableBlob = join(demoRoot, ".agents", ".copilot-tracking", runId, "runtime-state.json");
+  await expectMissing(mutableBlob);
+  print(`Real Beads retained ${nodes.length} authoritative run nodes without a runtime JSON blob.`);
+}
+
+async function expectMissing(path) {
+  try {
+    await access(path);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  throw new Error(`Unexpected mutable runtime blob: ${path}`);
 }
 
 async function readJsonOutput(child, readError) {

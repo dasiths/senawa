@@ -78,8 +78,16 @@ Copy this section for each idea and update it in place as the idea matures.
     and evidence spill seams; and moved HTTP and report ownership to
     `@senawa/browser` and `@senawa/reporting`. Offline conformance includes a
     recording fake subprocess, browser replay across process and restart, and
-    hostile report rendering. Beads authority, live subprocess evidence, and
-    SDK transport remain pending.
+    hostile report rendering. Phase 7 added `@senawa/runtime-beads` over real
+    `bd 1.1.2`, semantic atomic claims, graph and gate reconstruction,
+    pending-operation convergence, stable receipts, and an explicit no-credit
+    Beads CLI/browser composition. On 2026-08-05, the final suite passed 87
+    tests in 228.67 seconds, the real-Beads contract file took 227.45 seconds,
+    all four injected split-write points recovered, and
+    `pnpm demo:beads` completed with eight authoritative graph nodes and no
+    mutable runtime JSON blob. The ordinary CLI still defaults to file until
+    Phase 8; backend identity, the production-default switch, live subprocess
+    evidence, and SDK transport remain pending.
 * Promotion: `pending`
 
 ### 2026-08-04: Sensor policy location

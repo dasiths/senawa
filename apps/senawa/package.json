@@ -17,6 +17,7 @@
     "@senawa/domain": "workspace:*",
     "@senawa/observability": "workspace:*",
     "@senawa/reporting": "workspace:*",
+    "@senawa/runtime-beads": "workspace:*",
     "@senawa/runtime-file": "workspace:*",
     "@senawa/sensors": "workspace:*",
     "@senawa/workers": "workspace:*",

@@ -8,6 +8,7 @@ const adapters = new Set([
   "configuration",
   "observability",
   "reporting",
+  "runtime-beads",
   "runtime-file",
   "sensors",
   "workers",

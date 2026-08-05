@@ -8,7 +8,11 @@ import {
   RuntimeRevisionConflictError,
 } from "@senawa/application";
 import { describe, expect, it } from "vitest";
-import { createJournalEvent, createRuntimeFixture } from "./runtime-fixture.js";
+import {
+  createJournalEvent,
+  createRuntimeFixture,
+  createTaskRuntimeFixture,
+} from "./runtime-fixture.js";
 
 export interface Reopenable<T> {
   readonly current: T;
@@ -49,6 +53,45 @@ export function runtimeStateContract(create: () => Promise<Reopenable<RunPersist
           state,
         }),
       ).rejects.toBeInstanceOf(RuntimeRevisionConflictError);
+    });
+
+    it("claims one dependency-ready task with a stable operation receipt", async () => {
+      const harness = await create();
+      const state = createTaskRuntimeFixture("run-claim");
+      await harness.current.createRun(state, "start");
+      const current = await harness.current.readRun(state.identity.runId);
+      const input = {
+        runId: state.identity.runId,
+        expectedRevision: current.revision,
+        operationId: "claim-one",
+      };
+      await expect(harness.current.claimReadyTask(input)).resolves.toMatchObject({
+        key: "task-one",
+        status: "in_progress",
+      });
+      await expect(harness.reopen().claimReadyTask(input)).resolves.toMatchObject({
+        key: "task-one",
+        status: "in_progress",
+      });
+      const claimed = await harness.reopen().readRun(state.identity.runId);
+      expect(claimed.revision).toBe("2");
+      const rework = structuredClone(claimed.state);
+      const first = rework.tasks.find((task) => task.key === "task-one");
+      if (first === undefined) throw new Error("claim fixture lost task-one");
+      first.status = "rework";
+      const reopened = await harness.reopen().commitRun({
+        runId: state.identity.runId,
+        expectedRevision: claimed.revision,
+        operationId: "rework-one",
+        state: rework,
+      });
+      await expect(
+        harness.reopen().claimReadyTask({
+          runId: state.identity.runId,
+          expectedRevision: reopened.revision,
+          operationId: "claim-rework",
+        }),
+      ).resolves.toMatchObject({ key: "task-one", status: "in_progress" });
     });
   });
 }

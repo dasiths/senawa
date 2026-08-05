@@ -814,6 +814,55 @@ This establishes normal abandonment, not emergency takeover. The production
 `--force` path still needs the real driver lease, bounded shutdown, stale-process
 confirmation, and reconciliation before it may release the singleton.
 
+## Production Beads adapter validation
+
+On 2026-08-05, Phase 7 validation ran against `bd 1.1.2` on Node 22.17.0 in the
+Debian 12 development container. This is implementation evidence over the real
+Beads executable, not a deterministic stand-in for graph storage.
+
+The focused command was:
+
+```bash
+pnpm exec vitest run tests/contract/beads-persistence.test.ts packages/runtime-beads/src/beads-client.test.ts
+```
+
+The final `pnpm test` run passed 87 tests in 228.67 seconds. The eight-test
+real-Beads contract file took 227.45 seconds, and the four focused client tests
+also passed. The client tests proved closed stdin,
+mandatory envelope and noninteractive environment, malformed-envelope
+rejection, supported-version diagnostics, and a clear missing-binary failure.
+The shared file and Beads contracts proved restart and terminal reconstruction,
+stale revision rejection, one dependency-ready atomic claim, stable claim
+receipt replay, lease fencing, and dispatch projection recovery. Beads-specific
+tests retained closed tasks, filtered event beads, imported tasks additively,
+resolved human gates before phase close, reconstructed after cache deletion, and
+converged after injected failure at pending metadata, coarse status, state event,
+and final metadata.
+
+The no-credit acceptance command was:
+
+```bash
+pnpm demo:beads
+```
+
+The built CLI selected Beads explicitly, started the five-phase standard
+workflow, accepted browser rejection, approval, and resume commands, replayed and
+tailed SSE output, ran two dependency-ordered tasks, recorded two deterministic
+rework events, finished, and rendered the report. The final projection contained
+five accepted phases, two closed tasks, 77 journal events, 27 output records,
+and five immutable artifacts. A direct `bd list --all` check found eight
+authoritative non-event run nodes. The demo also confirmed that no mutable
+`runtime-state.json` existed.
+
+The adapter stores mutable graph facts in separate epic, phase, task,
+dependency, gate, status, and metadata records. Immutable documents remain in
+`@senawa/artifact-store`; append-only journal and output evidence remain in
+`@senawa/observability`. The app still defaults to the file runtime in Phase 7.
+Switching ordinary commands to Beads, persisting backend identity, and proving
+the no-fallback production startup path remain Phase 8 work. This validation did
+not call Copilot, establish cross-host leases, or establish multiple active
+drivers or worker turns.
+
 ## Design changes from the probes
 
 The list preserves names used by the probes. Current production sensor policy

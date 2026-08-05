@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { FileRunDocumentStore } from "@senawa/artifact-store";
 import { FileJournalStore, FileOutputLogStore, RunChangeNotifier } from "@senawa/observability";
+import { BeadsRuntimeStateStore } from "@senawa/runtime-beads";
 import {
   FileActiveRunRegistry,
   FileLeaseStore,
@@ -15,17 +16,25 @@ import { createSenawaServices } from "./services.js";
 const arguments_ = process.argv.slice(2);
 const repositoryRoot = process.cwd();
 const workerHost = optionValue(arguments_, "--worker-host") ?? "deterministic";
+const runtime = optionValue(arguments_, "--runtime") ?? "file";
 const deterministicHost = new DeterministicWorkerHost();
 const notifier = new RunChangeNotifier();
-const persistence = new FileRunPersistence(repositoryRoot, {
-  runtime: new FileRuntimeStateStore(repositoryRoot),
-  activeRuns: new FileActiveRunRegistry(repositoryRoot),
-  documents: new FileRunDocumentStore(repositoryRoot),
-  journal: new FileJournalStore(repositoryRoot, notifier),
-  output: new FileOutputLogStore(repositoryRoot, notifier),
-  leases: new FileLeaseStore(repositoryRoot),
-  notifications: notifier,
-});
+const persistence = new FileRunPersistence(
+  repositoryRoot,
+  {
+    runtime:
+      runtime === "beads"
+        ? new BeadsRuntimeStateStore(repositoryRoot)
+        : new FileRuntimeStateStore(repositoryRoot),
+    activeRuns: new FileActiveRunRegistry(repositoryRoot),
+    documents: new FileRunDocumentStore(repositoryRoot),
+    journal: new FileJournalStore(repositoryRoot, notifier),
+    output: new FileOutputLogStore(repositoryRoot, notifier),
+    leases: new FileLeaseStore(repositoryRoot),
+    notifications: notifier,
+  },
+  runtime === "beads" ? { lockTimeoutMs: 120_000, staleLockMs: 300_000 } : {},
+);
 const copilotHost = new CopilotSubprocessHost({
   enabled: true,
   repositoryRoot,
