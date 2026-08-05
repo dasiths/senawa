@@ -8,7 +8,7 @@ import type {
   PlanArtifact,
   RunSnapshot,
   WorkRequest,
-} from "@senawa/core";
+} from "@senawa/domain";
 
 export type RunStatus = "running" | "awaiting_approval" | "paused" | "finished" | "ended";
 export type PhaseStatus = "pending" | "running" | "awaiting_approval" | "accepted" | "ended";

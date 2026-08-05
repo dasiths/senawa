@@ -1,7 +1,8 @@
-import { mkdtemp } from "node:fs/promises";
+import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { type BrowserRunCommand, type CommandActor, loadRepositoryDefinitions } from "@senawa/core";
+import { join, resolve } from "node:path";
+import { loadRepositoryDefinitions } from "@senawa/configuration";
+import type { BrowserRunCommand, CommandActor } from "@senawa/domain";
 import { createSenawaServices, type SenawaServices } from "@senawa/orchestrator";
 import { startWebSupervisor, type WebSupervisor } from "@senawa/web";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -28,6 +29,29 @@ describe("Commander CLI", () => {
     });
     expect(await runCli(["workflow", "render", "standard-delivery"], { services, io })).toBe(0);
     expect(output.pop()).toContain("flowchart LR");
+  });
+
+  it.each([
+    {
+      name: "invalid built-in sensor configuration",
+      mutate: (source: string) => source.replace("parser: raw", "parser: json"),
+      message: "Sensor typecheck has invalid @senawa/sensor-command configuration",
+    },
+    {
+      name: "missing deterministic gate anchor",
+      mutate: (source: string) => source.replace("kind: deterministic", "kind: inferential"),
+      message: "Gate definition-accepted has no deterministic non-advisory sensor anchor",
+    },
+  ])("fails doctor preflight for $name", async ({ mutate, message }) => {
+    const root = await copyRepositoryConfiguration();
+    const policyPath = resolve(root, ".senawa/sensors.yaml");
+    await writeFile(policyPath, mutate(await readFile(policyPath, "utf8")));
+    const services = createSenawaServices(root);
+    const errors: string[] = [];
+    const io = { stdout: () => undefined, stderr: (value: string) => errors.push(value) };
+
+    await expect(runCli(["doctor"], { services, io })).resolves.toBe(1);
+    expect(errors.join("\n")).toContain(message);
   });
 
   it("opens a fresh browser bootstrap or prints it for manual use", async () => {
@@ -200,6 +224,13 @@ async function createRun(runId: string): Promise<SenawaServices> {
   });
   await services.commands.drive(runId, driverActor);
   return services;
+}
+
+async function copyRepositoryConfiguration(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "senawa-doctor-"));
+  await cp(resolve(process.cwd(), ".senawa"), resolve(root, ".senawa"), { recursive: true });
+  await cp(resolve(process.cwd(), ".agents"), resolve(root, ".agents"), { recursive: true });
+  return root;
 }
 
 async function pair(

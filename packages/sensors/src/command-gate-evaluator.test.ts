@@ -1,4 +1,4 @@
-import { type RepositoryPolicy, RepositoryPolicySchema } from "@senawa/core";
+import { type RepositoryPolicy, RepositoryPolicySchema } from "@senawa/domain";
 import { describe, expect, it } from "vitest";
 import {
   type CommandExecution,

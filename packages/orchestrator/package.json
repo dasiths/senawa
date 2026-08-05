@@ -7,12 +7,12 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@senawa/core": "workspace:*",
+    "@senawa/configuration": "workspace:*",
+    "@senawa/domain": "workspace:*",
     "@senawa/graph": "workspace:*",
     "@senawa/report": "workspace:*",
     "@senawa/sensors": "workspace:*",
     "ajv": "8.17.1",
-    "ajv-formats": "3.0.1",
-    "yaml": "2.8.1"
+    "ajv-formats": "3.0.1"
   }
 }

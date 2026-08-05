@@ -10,7 +10,7 @@ import {
   type SensorExecutionError,
   type SensorFinding,
   type SensorReading,
-} from "@senawa/core";
+} from "@senawa/domain";
 import { z } from "zod";
 
 const artifactExtension = "@senawa/sensor-artifact";

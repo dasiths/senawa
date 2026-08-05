@@ -1,17 +1,21 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
-import type { GateEvaluation, SensorReading } from "@senawa/core";
+import {
+  createRunSnapshot,
+  listRepositoryWorkflows,
+  type RepositoryDefinitions,
+  readRepositoryWorkflow,
+} from "@senawa/configuration";
+import type { GateEvaluation, SensorReading } from "@senawa/domain";
 import {
   type CommandActor,
   type JournalEventName,
   type JsonObject,
   JsonObjectSchema,
   PlanArtifactSchema,
-  type RepositoryDefinitions,
-  RunSnapshotSchema,
   type WorkerProfile,
   type WorkRequest,
-} from "@senawa/core";
+} from "@senawa/domain";
 import type {
   RuntimeArtifact,
   RuntimeDispatch,
@@ -26,7 +30,6 @@ import type { GateEvaluator } from "@senawa/sensors";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import type { WorkerHost, WorkerResult, WorkerTurn } from "./worker-host.js";
-import { listRepositoryWorkflows, readRepositoryWorkflow } from "./workflow-catalog.js";
 
 const ansiEscapePattern = new RegExp(`${String.fromCodePoint(27)}\\[[0-?]*[ -/]*[@-~]`, "gu");
 
@@ -121,7 +124,7 @@ export class RunCommandService {
 
   async start(input: StartRunInput): Promise<TransitionResult> {
     const runId = input.runId ?? `run-${randomUUID()}`;
-    const snapshot = createSnapshot(runId, input.definitions, this.now());
+    const snapshot = createRunSnapshot(runId, input.definitions, this.now());
     const state: RuntimeState = {
       apiVersion: "senawa.dev/runtime/v1",
       identity: {
@@ -1128,54 +1131,6 @@ export class RunQueryService {
   }
 }
 
-function createSnapshot(runId: string, definitions: RepositoryDefinitions, now: Date) {
-  const sourceFiles: Array<{
-    path: string;
-    mediaType: "application/json" | "application/yaml" | "text/markdown";
-    content: string;
-  }> = [
-    {
-      path: `.senawa/workflows/${definitions.workflow.metadata.name}.json`,
-      mediaType: "application/json",
-      content: JSON.stringify(definitions.workflow),
-    },
-    {
-      path: "sensors.json",
-      mediaType: "application/json",
-      content: JSON.stringify(definitions.policy),
-    },
-    ...Object.entries(definitions.schemas).map(([path, schema]) => ({
-      path,
-      mediaType: "application/json" as const,
-      content: JSON.stringify(schema),
-    })),
-    {
-      path: ".agents/skills/senawa/SKILL.md",
-      mediaType: "text/markdown",
-      content: definitions.skill,
-    },
-    ...Object.entries(definitions.workerProfileSources).map(([path, content]) => ({
-      path,
-      mediaType: "text/markdown" as const,
-      content,
-    })),
-  ];
-  const files = sourceFiles
-    .sort((left, right) => left.path.localeCompare(right.path))
-    .map((file) => ({ ...file, sha256: sha256(file.content) }));
-  const fingerprint = sha256(files.map((file) => `${file.path}:${file.sha256}`).join("\n"));
-  return RunSnapshotSchema.parse({
-    apiVersion: "senawa.dev/snapshot/v2",
-    runId,
-    createdAt: now.toISOString(),
-    fingerprint,
-    workflow: definitions.workflow,
-    policy: definitions.policy,
-    workerProfiles: definitions.workerProfiles,
-    files,
-  });
-}
-
 function resolveTurnProfile(
   state: RuntimeState,
   role: string,
@@ -1543,10 +1498,6 @@ function taskPrompt(state: RuntimeState, task: RuntimeTask, attempt: number): st
             nextPrompt: "Address every finding, then request completion again.",
           }),
   });
-}
-
-function sha256(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
 }
 
 function boundedLimit(value: number): number {

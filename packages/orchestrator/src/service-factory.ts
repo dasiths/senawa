@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { loadRepositoryDefinitions, type RepositoryDefinitions } from "@senawa/core";
+import { loadRepositoryDefinitions, type RepositoryDefinitions } from "@senawa/configuration";
 import {
   FileRuntimeStore,
   type RuntimeLease,

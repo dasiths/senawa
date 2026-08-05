@@ -1,4 +1,4 @@
-import type { WorkerProfile } from "@senawa/core";
+import type { WorkerProfile } from "@senawa/domain";
 import { describe, expect, it } from "vitest";
 import {
   authorizeWorkerPaths,

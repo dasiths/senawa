@@ -1,0 +1,21 @@
+{
+  "name": "@senawa/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./artifacts": "./src/artifacts.ts",
+    "./commands": "./src/commands.ts",
+    "./common": "./src/common.ts",
+    "./events": "./src/events.ts",
+    "./output": "./src/output.ts",
+    "./run-snapshot": "./src/run-snapshot.ts",
+    "./sensors": "./src/sensors.ts",
+    "./worker-profile": "./src/worker-profile.ts",
+    "./workflow": "./src/workflow.ts"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  }
+}

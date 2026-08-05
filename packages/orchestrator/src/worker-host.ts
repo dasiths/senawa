@@ -9,7 +9,7 @@ import {
   VerificationArtifactSchema,
   type WorkerCapability,
   type WorkerProfile,
-} from "@senawa/core";
+} from "@senawa/domain";
 
 export interface WorkerTurn {
   readonly runId: string;

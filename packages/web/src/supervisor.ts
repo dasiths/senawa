@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { BrowserRunCommandSchema, type CommandActor } from "@senawa/core";
+import { BrowserRunCommandSchema, type CommandActor } from "@senawa/domain";
 import { LeaseConflictError } from "@senawa/graph";
 import type { SenawaServices } from "@senawa/orchestrator";
 import {

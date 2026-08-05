@@ -1,7 +1,8 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type CommandActor, loadRepositoryDefinitions } from "@senawa/core";
+import { loadRepositoryDefinitions } from "@senawa/configuration";
+import type { CommandActor } from "@senawa/domain";
 import { LeaseConflictError } from "@senawa/graph";
 import { createSenawaServices } from "@senawa/orchestrator";
 import { beforeAll, describe, expect, it } from "vitest";

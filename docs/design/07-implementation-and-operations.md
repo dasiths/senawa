@@ -2,15 +2,15 @@
 
 ## Current status
 
-Senawa now has a production vertical slice across the core, graph, report,
-orchestrator, CLI, web, and hook packages. The executable path validates
-repository definitions, runs the standard workflow with deterministic workers,
-persists versioned artifacts and append-only evidence, accepts CLI and browser
-decisions through one command service, streams output over SSE, and renders a
-run report.
+Senawa now has a production vertical slice across the domain, configuration,
+graph, report, orchestrator, CLI, web, and hook packages. The executable path
+validates repository definitions, runs the standard workflow with deterministic
+workers, persists versioned artifacts and append-only evidence, accepts CLI and
+browser decisions through one command service, streams output over SSE, and
+renders a run report.
 
 The production `@senawa/sensors` package evaluates artifact and command sensors
-from `.senawa/sensors.yaml`. Core also loads workflows from
+from `.senawa/sensors.yaml`. Configuration loads workflows from
 `.senawa/workflows/`, artifact contracts from `.senawa/schemas/`, and worker
 profiles from `.senawa/agents/`. Command evidence is normalized and capped,
 execution errors remain distinct and blocking, and advisory assessment failures
@@ -18,11 +18,12 @@ do not block. Worker hosts have no gate-verdict field; the orchestrator invokes
 the evaluator and journals `sensor.started`, `sensor.completed`, `sensor.error`,
 and `gate.evaluated` evidence before changing phase or task state.
 
-Worker roles are strict repository profiles under `.senawa/agents`. Core loads
-and validates their frontmatter and prompts, snapshots exact sources, includes
-them in the run fingerprint, and rejects missing workflow or plan roles. Worker
-hosts consume only the resolved snapshot profile. The subprocess adapter maps
-semantic capability requests through a Senawa-owned phase or task ceiling.
+Worker roles are strict repository profiles under `.senawa/agents`.
+Configuration loads and validates their frontmatter and prompts, snapshots exact
+sources, includes them in the run fingerprint, and rejects missing workflow or
+plan roles. Worker hosts consume only the resolved snapshot profile. The
+subprocess adapter maps semantic capability requests through a Senawa-owned
+phase or task ceiling.
 The user-facing skill stays under `.agents/skills/senawa/` only because Copilot
 discovers it there; it is not runtime worker configuration.
 
@@ -51,7 +52,9 @@ the documented `bd --json` contract with `BD_JSON_ENVELOPE=1`.
 
 | Package | Responsibility |
 |---------|----------------|
-| `@senawa/core` | Pure schemas, fingerprints, state transitions, event contracts, and brief composition |
+| `@senawa/domain` | Pure schemas, identifiers, snapshots, state contracts, events, and transition invariants |
+| `@senawa/configuration` | Repository discovery, YAML and JSON loading, schema compilation, profiles, workflow catalog, doctor preflight, snapshots, and fingerprints |
+| `@senawa/core` | Temporary source-level compatibility facade over domain and configuration exports |
 | `@senawa/graph` | Runtime store boundary and current file-backed adapter; beads adapter pending |
 | `@senawa/sensors` | Gate evaluation and built-in artifact or command execution, normalization, and evidence hygiene; generic extension loading and caching pending |
 | `@senawa/report` | Journal writer, report renderer, graph diagrams, and output escaping |

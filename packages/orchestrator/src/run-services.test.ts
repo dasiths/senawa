@@ -1,7 +1,8 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadRepositoryDefinitions, type WorkerProfile } from "@senawa/core";
+import { loadRepositoryDefinitions } from "@senawa/configuration";
+import type { WorkerProfile } from "@senawa/domain";
 import { ActiveRunError, FileRuntimeStore } from "@senawa/graph";
 import type { GateEvaluator } from "@senawa/sensors";
 import { beforeAll, describe, expect, it } from "vitest";
