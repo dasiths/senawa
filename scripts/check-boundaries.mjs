@@ -13,6 +13,7 @@ const adapters = new Set([
   "sensors",
   "workers",
 ]);
+const removedPackages = new Set(["core", "graph", "orchestrator", "report", "web"]);
 const failures = [];
 
 for (const adapter of adapters) {
@@ -46,23 +47,36 @@ for (const file of await sourceFiles(join(root, "packages", "domain", "src"))) {
 
 for (const directory of [join(root, "apps"), join(root, "packages")]) {
   for (const file of await sourceFiles(directory)) {
-    if (file.endsWith(".test.ts")) continue;
     const source = await readFile(file, "utf8");
-    if (/from\s+["']@senawa\/(?:web|report)["']/u.test(source)) {
-      failures.push(`${pathOf(file)} imports an old production package name`);
+    for (const dependency of packageImports(source)) {
+      if (removedPackages.has(dependency)) {
+        failures.push(`${pathOf(file)} imports removed package @senawa/${dependency}`);
+      }
     }
   }
 }
 
-for (const [facade, target] of [
-  ["web", "browser"],
-  ["report", "reporting"],
-]) {
-  for (const file of await sourceFiles(join(root, "packages", facade, "src"))) {
-    if (file.endsWith(".test.ts")) continue;
-    const source = (await readFile(file, "utf8")).trim();
-    if (!/^export \* from ["'][^"']+["'];$/u.test(source)) {
-      failures.push(`${pathOf(file)} is not a thin re-export facade for @senawa/${target}`);
+for (const manifest of await manifestFiles()) {
+  const value = JSON.parse(await readFile(manifest, "utf8"));
+  if (typeof value.name === "string" && removedPackages.has(value.name.replace("@senawa/", ""))) {
+    failures.push(`${pathOf(manifest)} declares removed package ${value.name}`);
+  }
+  for (const section of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+    const dependencies = value[section] ?? {};
+    for (const dependency of Object.keys(dependencies)) {
+      const packageName = dependency.replace("@senawa/", "");
+      if (removedPackages.has(packageName)) {
+        failures.push(`${pathOf(manifest)} depends on removed package ${dependency}`);
+      }
+      if (
+        value.name === "@senawa/application" &&
+        dependency.startsWith("@senawa/") &&
+        dependency !== "@senawa/domain"
+      ) {
+        failures.push(
+          `${pathOf(manifest)} gives application an outward dependency on ${dependency}`,
+        );
+      }
     }
   }
 }
@@ -79,6 +93,24 @@ async function sourceFiles(directory) {
   return entries
     .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
     .map((entry) => join(entry.parentPath, entry.name));
+}
+
+async function manifestFiles() {
+  const files = [];
+  for (const directory of [join(root, "apps"), join(root, "packages")]) {
+    const entries = await readdir(directory, { recursive: true, withFileTypes: true });
+    files.push(
+      ...entries
+        .filter(
+          (entry) =>
+            entry.isFile() &&
+            entry.name === "package.json" &&
+            !entry.parentPath.includes(`${join("node_modules")}`),
+        )
+        .map((entry) => join(entry.parentPath, entry.name)),
+    );
+  }
+  return files;
 }
 
 function packageImports(source) {

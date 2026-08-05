@@ -206,7 +206,7 @@ they still reach the worker and report.
 
 The measured cost difference supports this ordering: the deterministic probe set
 completed in milliseconds, while one inferential run took tens of seconds. See
-the [POC findings](wip/probe-findings.md#the-sensor-model).
+the [probe findings](wip/probe-findings.md#the-sensor-model).
 
 ## Counter-metrics
 

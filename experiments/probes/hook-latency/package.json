@@ -1,5 +1,5 @@
 {
-  "name": "poc-hook-latency",
+  "name": "probe-hook-latency",
   "private": true,
   "type": "module",
   "dependencies": {

@@ -1,5 +1,5 @@
 {
-  "name": "poc-sensors",
+  "name": "probe-sensors",
   "private": true,
   "type": "module",
   "dependencies": {

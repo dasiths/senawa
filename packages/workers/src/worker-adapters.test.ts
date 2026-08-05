@@ -12,6 +12,7 @@ import {
   RecordingWorkerAdapter,
   SubprocessWorkerAdapter,
 } from "./worker-adapters.js";
+import { runWorkerSessionConformance } from "./worker-conformance.test-support.js";
 
 const profile: WorkerProfile = {
   apiVersion: "senawa.dev/worker-profile/v1",
@@ -47,6 +48,32 @@ const turn: WorkerTurn = {
     frozenPaths: ["packages/workers/frozen/**"],
   },
 };
+
+runWorkerSessionConformance(
+  [
+    { name: "deterministic", createAdapter: () => new DeterministicWorkerAdapter() },
+    {
+      name: "fake subprocess",
+      async createAdapter() {
+        const root = await mkdtemp(join(tmpdir(), "senawa-worker-conformance-"));
+        const executable = join(root, "fake-copilot.mjs");
+        await writeFile(
+          executable,
+          '#!/usr/bin/env node\nprocess.stdout.write("completed fake subprocess");\n',
+        );
+        await chmod(executable, 0o755);
+        return new SubprocessWorkerAdapter({
+          enabled: true,
+          repositoryRoot: root,
+          isolationRoot: root,
+          executable,
+          timeoutMs: 1_000,
+        });
+      },
+    },
+  ],
+  turn,
+);
 
 describe("worker adapter conformance", () => {
   it.each([

@@ -51,6 +51,9 @@ export class DeterministicWorkerAdapter implements WorkerSessionPort, WorkerExec
       commandBridge: true,
       pathEnforcement: "policy",
       usageCheckpoints: true,
+      permissionFeedback: false,
+      modelDiscovery: false,
+      traceInjection: true,
     });
   }
 
@@ -152,6 +155,9 @@ export class SubprocessWorkerAdapter implements WorkerSessionPort, WorkerExecuti
       commandBridge: false,
       pathEnforcement: "none",
       usageCheckpoints: false,
+      permissionFeedback: false,
+      modelDiscovery: false,
+      traceInjection: true,
     });
   }
 

@@ -72,6 +72,9 @@ export interface WorkerAdapterDescriptor {
     readonly commandBridge: boolean;
     readonly pathEnforcement: "policy" | "sandbox" | "none";
     readonly usageCheckpoints: boolean;
+    readonly permissionFeedback: boolean;
+    readonly modelDiscovery: boolean;
+    readonly traceInjection: boolean;
   };
   readonly capabilities: readonly WorkerCapability[];
 }
@@ -183,6 +186,8 @@ export interface WorkerBindingContext {
   readonly sessionId: string;
   readonly turnId: string;
   readonly authorization: WorkerAuthorization;
+  readonly traceparent?: string;
+  readonly tracestate?: string;
 }
 
 export interface WorkerBindingResult {

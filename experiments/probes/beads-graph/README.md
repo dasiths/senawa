@@ -2,7 +2,7 @@
 
 ## Goal
 
-Beads holds durable workflow state, and `@senawa/graph` is the only component
+Beads holds durable workflow state, and `@senawa/runtime-beads` is the production component
 allowed to run `bd`. That adapter needs a contract it can rely on: stable JSON,
 atomic claiming, predictable dependency semantics, and known latency. This probe
 walks the whole surface against a throwaway database.

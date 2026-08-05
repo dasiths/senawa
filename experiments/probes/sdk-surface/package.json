@@ -1,5 +1,5 @@
 {
-  "name": "poc-sdk-surface",
+  "name": "probe-sdk-surface",
   "private": true,
   "type": "module",
   "dependencies": {

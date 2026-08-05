@@ -33,13 +33,21 @@ phase or task ceiling.
 The user-facing skill stays under `.agents/skills/senawa/` only because Copilot
 discovers it there; it is not runtime worker configuration.
 
-`@senawa/workers` owns deterministic, recording, and subprocess adapters behind
-an application lifecycle port. The port separates create, resume, inspect,
-cancel, release, negotiation, normalized events, and typed binding contracts.
-Offline conformance covers deterministic lifecycle behavior and a recording
-fake subprocess executable. The subprocess adapter reports absent typed-tool
-transport, buffered output, process-local inspection limits, and absent path
-containment honestly. No live Copilot subprocess or SDK transport was exercised.
+`@senawa/workers` owns deterministic, recording, subprocess, and Copilot SDK
+adapters behind an application lifecycle port. The port separates create,
+resume, inspect, cancel, release, negotiation, normalized events, and typed
+binding contracts. Offline conformance covers deterministic lifecycle behavior,
+a recording fake subprocess executable, and an injected fake SDK client against
+the pinned 1.0.7 declarations. The SDK adapter registers events before create or
+resume, binds native Senawa tools, applies canonical permission policy without
+returning hook `allow`, discovers model and effort support, injects trace
+context, maps cancellation to `abort()`, and separates retain from irreversible
+delete. It reports session-only inspection and no replay because Senawa durable
+events, not experimental SDK cursors, own replay. No live Copilot subprocess or
+SDK transport was exercised.
+The CLI selects this adapter explicitly with `--worker-host sdk`; constructing
+ordinary deterministic, browser, and diagnostic commands does not resolve or
+start the SDK runtime.
 
 The `senawa` app composes Beads when `--runtime` is omitted. Explicit global
 `--runtime file` selects the development and test adapter. It does not catch a
@@ -71,9 +79,8 @@ The application package owns commands, queries, driver transitions, prompt
 construction, status projections, and ports for runtime state, active-run
 ownership, immutable documents, journal and output reads, leases, worker
 sessions, gates, reporting, clocks, scheduling, notifications, and telemetry.
-Runtime mutations use operation IDs and compare-and-swap revisions. The graph
-package is now a thin compatibility re-export facade with no adapter factory or
-runtime selection. Shared contracts under `@senawa/testing` and
+Runtime mutations use operation IDs and compare-and-swap revisions. Shared
+contracts under `@senawa/testing` and
 `tests/contract/` cover runtime restart, immutable documents, journal and output
 idempotency, lease fencing, mid-commit crash recovery, dispatch reconstruction,
 and status projections.
@@ -83,8 +90,8 @@ strict command schemas, graph assets, and durable replay. `@senawa/reporting`
 reads an application-owned evidence projection and escapes untrusted Markdown,
 HTML, control characters, and instruction-like tags with deterministic caps. It
 renders all eight documented process sections and aggregates cumulative AIU and
-cost checkpoints once per dispatch. `@senawa/web` and
-`@senawa/report` are thin re-export facades.
+cost checkpoints once per dispatch. Internal compatibility packages were
+removed after all imports moved to final owners.
 
 The [probe findings](wip/probe-findings.md) distinguish live-model evidence,
 offline deterministic simulation, and documentation-only claims.
@@ -107,21 +114,16 @@ the documented `bd --json` contract with `BD_JSON_ENVELOPE=1`.
 |---------|----------------|
 | `@senawa/domain` | Pure schemas, identifiers, snapshots, state contracts, events, and transition invariants |
 | `@senawa/configuration` | Repository discovery, YAML and JSON loading, schema compilation, profiles, workflow catalog, doctor preflight, snapshots, and fingerprints |
-| `@senawa/core` | Temporary source-level compatibility facade over domain and configuration exports |
 | `@senawa/application` | Commands, queries, driver, prompts, projections, and application-owned ports; imports domain only |
 | `@senawa/runtime-beads` | Beads 1.1.x runtime graph, atomic claims, gates, revisions, operation receipts, cache invalidation, and split-write reconciliation |
 | `@senawa/runtime-file` | Explicit development and test runtime state, active-run registry, fenced leases, and split-store recovery |
 | `@senawa/artifact-store` | Immutable run identity, snapshot, and versioned artifact documents |
 | `@senawa/observability` | Append-only journal and output JSONL, stable cursors, notification hints, and future telemetry seams |
 | `@senawa/testing` | Shared adapter contracts and deterministic fixtures; production packages do not import it |
-| `@senawa/graph` | Thin compatibility re-export facade with no adapter selection |
-| `@senawa/workers` | Deterministic, recording, and subprocess lifecycle adapters, capability negotiation, authorization, normalized events, and typed binding fixtures |
+| `@senawa/workers` | Deterministic, recording, subprocess, and Copilot SDK lifecycle adapters, capability negotiation, authorization, normalized events, native typed bindings, and fake-client conformance |
 | `@senawa/sensors` | Application gate port implementation, ordered built-in artifact or command execution, normalization, cache identity, and evidence spill seams; generic extension loading pending |
 | `@senawa/browser` | Authenticated loopback HTTP routes, strict command schemas, durable SSE replay, static graph assets, and application command/query consumption |
 | `@senawa/reporting` | Report renderer and untrusted Markdown hygiene over application evidence projections |
-| `@senawa/web` | Thin compatibility re-export facade for `@senawa/browser` |
-| `@senawa/report` | Thin compatibility re-export facade for `@senawa/reporting` |
-| `@senawa/orchestrator` | Temporary application compatibility package for remaining non-production importers |
 | `senawa` | Full command-line interface |
 | `senawa-hook` | Minimal hook entry point with no graph or heavy dependencies |
 

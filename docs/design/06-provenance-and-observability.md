@@ -172,6 +172,12 @@ Senawa injects the current dispatch span context. Typed tool handlers receive th
 worker's trace context, allowing sensor execution and gate evaluation to nest
 under the tool call that requested them.
 
+The SDK adapter normalizes native events into Senawa event records and does not
+expose the SDK event-history cursor. Offline fake-client tests cover native
+assistant text and deltas, tool lifecycle, model resolution, cumulative usage,
+typed phase artifacts, and explicit cancellation. Live trace joining and SDK
+event delivery remain unvalidated.
+
 The subprocess fallback propagates `TRACEPARENT` and work attributes through the
 environment.
 

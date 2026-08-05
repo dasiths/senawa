@@ -94,8 +94,16 @@ Copy this section for each idea and update it in place as the idea matures.
     demo passed, and the default-Beads CLI/browser demo completed with eight
     authoritative graph nodes. No-credit validation covered the implemented
     command grammar; unsafe or unsupported `init`, `sensor run`, `task done`,
-    and `task abort` commands remain omitted. Live subprocess evidence and SDK
-    transport remain pending.
+    and `task abort` commands remain omitted. Phase 9 added durable normalized
+    worker events, transcripts, task diffs, sensor evidence, complete process
+    reports, and fenced forced-end recovery. Phase 10 added the pinned Copilot
+    SDK 1.0.7 adapter, native typed tools, canonical permission callbacks,
+    model negotiation, trace injection, explicit abort, offline conformance,
+    direct `--worker-host sdk` composition, final package-boundary enforcement,
+    and removal of the `core`, `graph`, `orchestrator`, `report`, and `web`
+    compatibility packages. The final offline suite and both file and Beads
+    CLI/browser demos pass. Live subprocess and SDK create-resume evidence is
+    still pending explicit approval, so this decision remains probing.
 * Promotion: `pending`
 
 ### 2026-08-04: Sensor policy location

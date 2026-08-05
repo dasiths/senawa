@@ -15,7 +15,6 @@
   },
   "devDependencies": {
     "@senawa/configuration": "workspace:*",
-    "@senawa/orchestrator": "workspace:*",
     "@senawa/testing": "workspace:*"
   }
 }

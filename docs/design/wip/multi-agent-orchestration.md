@@ -16,7 +16,7 @@ Three ideas carry the design:
 3. Completion is not something an agent asserts. It is something the harness grants, after sensors return readings and gates consume them. This is the backpressure model from [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/).
 
 > [!IMPORTANT]
-> Claims in this document that were checked by execution rather than by reading documentation are marked as measured, and the evidence is in [Proof-of-Concept Findings](probe-findings.md). Six assumptions in earlier drafts did not survive that process. Read the findings before implementing.
+> Claims in this document that were checked by execution rather than by reading documentation are marked as measured, and the evidence is in [Probe Findings](probe-findings.md). Six assumptions in earlier drafts did not survive that process. Read the findings before implementing.
 
 ## How it works
 
@@ -619,7 +619,7 @@ of the truth.
 
 ### The bd integration contract
 
-`@senawa/graph` is the only thing in the system that runs `bd`, and it holds itself to six rules. All six come from [the proof-of-concept findings](probe-findings.md), not from reading the reference.
+`@senawa/graph` is the only thing in the system that runs `bd`, and it holds itself to six rules. All six come from [the probe findings](probe-findings.md), not from reading the reference.
 
 **Set `BD_JSON_ENVELOPE=1` on every invocation.** Without it, `bd ready` returns a bare array and — measured, not assumed — **`bd show` also returns an array with no `schema_version` at all**. Only write commands such as `bd create` carry the field. Envelope mode wraps every response as `{"schema_version": 1, "data": …}`, which is the only shape worth validating against, and it becomes the default in bd 2.0. This is mandatory rather than advisable: without it the version guard silently protects nothing.
 
@@ -2432,7 +2432,7 @@ Slice seven closes the control graph, and it is the difference between a harness
 
 ## References
 
-* [Proof-of-Concept Findings](probe-findings.md), the evidence behind every measured claim in this document
+* [Probe Findings](probe-findings.md), the evidence behind every measured claim in this document
 * [Roads Not Taken](roads-not-taken.md), the approaches this design tried and dropped, and what would bring each one back
 * [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/)
 * [Refining Inferential Sensors in Coding Agent Harnesses](https://dasith.me/2026/06/20/refining-inferential-sensors/)

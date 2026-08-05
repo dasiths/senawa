@@ -33,7 +33,7 @@ export async function runCli(
     .description("Drive bounded Senawa workflows")
     .addOption(
       new Option("--worker-host <host>", "worker execution host")
-        .choices(["deterministic", "copilot"])
+        .choices(["deterministic", "copilot", "sdk"])
         .default("deterministic"),
     )
     .addOption(

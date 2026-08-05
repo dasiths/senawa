@@ -139,14 +139,25 @@ terminalizing the run; forced whole-run end does not establish that contract.
 
 Senawa uses independent sessions for writing work.
 
-The preferred topology hosts sessions through `@github/copilot-sdk`. It provides
-per-session model and reasoning effort, typed tools, permission callbacks,
-programmatic resume, and user-input interception. The driver implements the
-rework loop explicitly because the SDK has no `agentStop` or `subagentStop` hook.
-Senawa applies the snapshotted repository profile and its embedded session policy
-when it creates each hosted session. Profile instructions use system-message
-append mode so SDK guardrails remain active. SDK sessions do not discover or
-depend on repository Copilot agent or hook files.
+The production SDK adapter hosts sessions through `@github/copilot-sdk` 1.0.7.
+Offline fake-client conformance proves caller-chosen create and resume,
+pre-send event subscription, native typed Senawa tools, canonical permission
+callbacks, model and effort negotiation, W3C trace injection, explicit abort,
+and retain or archive-delete release against the shipped declarations. The
+driver implements the rework loop explicitly because the SDK has no `agentStop`
+or `subagentStop` hook. Senawa applies the snapshotted repository profile and
+its embedded session policy when it creates each hosted session. Profile
+instructions use system-message append mode so SDK guardrails remain active.
+SDK sessions disable repository hook discovery and do not depend on repository
+Copilot agent files.
+
+The adapter reports inspection as session-only and replay as unavailable. SDK
+session history cannot prove a Senawa turn outcome after process loss, and the
+experimental SDK cursor never crosses the application port. The application
+persists normalized lifecycle, text, tool, model, usage, and artifact events
+under Senawa-owned durable identifiers before browser fan-out. Live SDK session
+execution, model behavior, and multi-turn retention remain unvalidated and need
+an explicitly approved paid probe.
 
 A subprocess topology using `copilot -p` remains the fallback for debugging and
 CI. Senawa passes the resolved profile instructions and model directly to the

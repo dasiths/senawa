@@ -175,13 +175,13 @@ same run.
 | Driver lifecycle | A web supervisor survives exit 2 and starts or resumes the detached driver after a decision |
 | Authority | The same state validation, lease checks, journal events, and approval channel used by CLI calls |
 | Security | Loopback binding, supervisor-lifetime capability bootstrap, SameSite cookie, Origin checks, no CORS, output escaping, and no remote mode by default |
-| Graph rendering | Use a maintained DAG visualization library for dynamic task frontiers; the hand-built linear graph is POC-only |
+| Graph rendering | Use a maintained DAG visualization library for dynamic task frontiers; the hand-built linear graph is probe-only |
 | Slow viewers | Never let an HTTP client backpressure worker pipes; cap live queues and make durable replay the recovery path |
 | Retention | Rotate or segment large output logs and preserve them with the run report according to the tracking policy |
 
 Raw output is sensitive. It can contain source, prompts, tool arguments, paths,
 and imperfectly redacted process diagnostics. Remote binding, shared access, and
-TLS are separate decisions rather than flags the local POC should imply are safe.
+TLS are separate decisions rather than flags the local probe should imply are safe.
 
 ## What it does not prove
 

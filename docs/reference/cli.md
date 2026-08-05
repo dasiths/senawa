@@ -23,7 +23,7 @@ Drive bounded Senawa workflows
 
 Options:
   --worker-host <host>          worker execution host (choices: "deterministic",
-                                "copilot", default: "deterministic")
+                                "copilot", "sdk", default: "deterministic")
   --runtime <runtime>           runtime backend (file is for development and
                                 tests) (choices: "file", "beads", default:
                                 "beads")

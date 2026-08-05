@@ -19,37 +19,37 @@ const bindingDefinitions: readonly {
   readonly name: WorkerBindingName;
   readonly capability: WorkerCapability;
   readonly description: string;
-  readonly required: readonly string[];
+  readonly properties: Readonly<Record<string, JsonObject>>;
 }[] = [
   {
     name: "senawa.task.done",
     capability: "senawa.task.done",
     description: "Submit task completion",
-    required: ["summary"],
+    properties: { summary: { type: "string", minLength: 1 } },
   },
   {
     name: "senawa.phase.submit",
     capability: "senawa.phase.submit",
     description: "Submit a phase artifact",
-    required: ["artifact"],
+    properties: { artifact: { type: "object" } },
   },
   {
     name: "senawa.ask",
     capability: "senawa.ask",
     description: "Ask a bounded question",
-    required: ["question"],
+    properties: { question: { type: "string", minLength: 1 } },
   },
   {
     name: "senawa.discover",
     capability: "senawa.discover",
     description: "Record discovered work",
-    required: ["title"],
+    properties: { title: { type: "string", minLength: 1 } },
   },
   {
     name: "senawa.note",
     capability: "senawa.note",
     description: "Record a durable note",
-    required: ["note"],
+    properties: { note: { type: "string", minLength: 1 } },
   },
 ];
 
@@ -65,7 +65,8 @@ export class DeterministicWorkerBindingRegistry {
         description: definition.description,
         inputSchema: {
           type: "object",
-          required: [...definition.required],
+          properties: definition.properties,
+          required: Object.keys(definition.properties),
           additionalProperties: false,
         },
         handle: async (input, context) => {
@@ -80,7 +81,7 @@ export class DeterministicWorkerBindingRegistry {
               message: "Binding context is outside the authorized owner",
             };
           }
-          for (const property of definition.required) {
+          for (const property of Object.keys(definition.properties)) {
             if (!(property in input)) {
               return {
                 accepted: false,

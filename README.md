@@ -102,8 +102,8 @@ singleton and lease enforcement, append-only events and output, a shared CLI and
 HTTP command path, the loopback browser supervisor, and report rendering.
 `@senawa/application` owns commands, queries, driver transitions, prompts,
 status projections, and the ports consumed by both adapters. Its production
-code imports only `@senawa/domain`; `@senawa/orchestrator` is now a temporary
-compatibility facade that requires injected persistence and notification ports.
+code imports only `@senawa/domain`; executable composition lives in
+`apps/senawa` and injects the selected adapters directly.
 Repository worker profiles under `.senawa/agents` now provide strict model,
 capability-request, and prompt configuration. Their exact sources are frozen,
 snapshotted, and fingerprinted; hosts apply a separate Senawa-owned capability
@@ -123,16 +123,24 @@ gate evaluator. `senawa sensor audit [<run>]` derives verdict agreement, drift
 transitions, and latency from recorded readings. Hook latency remains an
 explicit unreported metric until the hook writes measurements.
 
-`@senawa/workers` owns deterministic, recording, and subprocess lifecycle
-adapters, capability negotiation, authorization, normalized events, explicit
-create, resume, inspect, cancel, and release operations. Application-owned
+`@senawa/workers` owns deterministic, recording, subprocess, and Copilot SDK
+lifecycle adapters, capability negotiation, authorization, normalized events,
+and explicit create, resume, inspect, cancel, and release operations. The SDK
+adapter is pinned to `@github/copilot-sdk` 1.0.7 and uses caller-chosen session
+identity, pre-send event registration, native typed tools, canonical permission
+callbacks, model and effort discovery, W3C trace injection, explicit abort,
+isolated session storage, and retain or archive-delete release. Application-owned
 typed binding contracts cover task completion, phase submission, questions,
 discoveries, and notes. Normalized lifecycle, model, trace, text, artifact,
 task-diff, duration, usage, AIU, and cost events are durably deduplicated before
 output can fan out to the browser. Task transcripts and explicit no-diff
 evidence are materialized in the work directory. Offline conformance uses
-deterministic adapters and a bounded recording fake executable for create and
-resume. It does not establish live Copilot transport or SDK behavior.
+deterministic adapters, a bounded recording fake executable, and an injected
+fake SDK client. No validation command starts Copilot or spends AI credits.
+Live SDK session execution remains unvalidated.
+Select the SDK adapter explicitly with `--worker-host sdk`; ordinary commands
+remain deterministic unless another host is requested. The SDK launches the
+installed `copilot` runtime over stdio only when selected.
 
 The `senawa` app composes `@senawa/runtime-beads` by default and selects
 `@senawa/runtime-file` only for explicit `--runtime file` commands. Mutable runtime state,
@@ -143,8 +151,7 @@ replays interrupted cross-store commits on reopen. Shared contracts cover
 restart, revisions, document conflicts, journal and output idempotency, lease
 fencing, mid-commit crash recovery, dispatch reconstruction, and projections. Browser SSE polls durable
 cursors as its correctness path, so independent process writes and supervisor
-restart do not depend on process-local notifications. `@senawa/graph` is only a
-compatibility re-export facade.
+restart do not depend on process-local notifications.
 
 The loopback console now lives in `@senawa/browser`, and `@senawa/reporting`
 renders from an application evidence projection rather than a runtime adapter.
@@ -152,8 +159,8 @@ The report renderer neutralizes control characters, instruction-like tags, raw
 HTML, and Markdown syntax in capped untrusted fields. It renders request and
 outcome, decomposition, worker execution, gate and human history, discoveries,
 notes, and cost by role and model. `@senawa/web` and
-`@senawa/report` remain thin re-export facades while compatibility importers are
-migrated. The `senawa` app wires target adapters directly.
+`@senawa/report` have been removed with the other internal compatibility
+packages. The `senawa` app wires target adapters directly.
 
 Run identity and the active-run pointer record the selected backend. Status and
 reports expose it, and reopening through another backend is rejected. Beads
@@ -230,15 +237,16 @@ and its output can contain source, prompts, paths, and process diagnostics.
 The live-worker launcher is separate and guarded:
 
 ```bash
-pnpm demo:live -- --confirm-cost --goal "Implement the requested change"
+pnpm demo:live -- --confirm-cost --host sdk --goal "Implement the requested change"
 ```
 
-It prints an AI-credit warning before starting and selects
-`--worker-host copilot`. Deterministic workers prepare phase artifacts; Copilot
-is reserved for implementation tasks. This path is opt-in and unvalidated in
-the production slice. Exit code `2` means the run reached a human decision, not
-that the start failed. Every later resume intended to use live implementation
-workers must also include `--worker-host copilot`.
+It prints an AI-credit warning before starting and selects `--worker-host sdk`.
+Pass `--host copilot` to use the subprocess adapter. Deterministic workers
+prepare phase artifacts; the selected live transport is reserved for
+implementation tasks. This path is opt-in and unvalidated in the production
+slice. Exit code `2` means the run reached a human decision, not that the start
+failed. Every later resume intended to use live implementation workers must
+retain the selected `--worker-host` value.
 
 ## How it fits together
 
@@ -324,7 +332,10 @@ apps/                        deployable Senawa CLI and hook composition roots
 examples/demos/              supported deterministic and guarded live demonstrations
 experiments/probes/          bounded experiments that measured substrate behavior
 packages/                    reusable runtime, sensor, browser, and reporting components
+packages/domain/             pure contracts, schemas, events, and transition invariants
+packages/configuration/      repository definitions, snapshots, fingerprints, and diagnostics
 packages/application/        commands, queries, driver, prompts, projections, and ports
+packages/runtime-beads/      production Beads runtime graph and split-write reconciliation
 packages/runtime-file/       explicit development and test runtime, active-run, lease, and recovery adapter
 packages/artifact-store/     immutable run identity, snapshot, and artifact documents
 packages/observability/      append-only journal, output streams, and notification hints
@@ -333,12 +344,8 @@ packages/sensors/            ordered gate evaluation, command sensors, cache, an
 packages/browser/            authenticated loopback HTTP, durable SSE replay, and graph console
 packages/reporting/          report rendering over application evidence projections
 packages/testing/            shared adapter contracts and deterministic fixtures
-packages/graph/              thin compatibility re-export facade
-packages/web/                thin compatibility re-export facade for the browser package
-packages/report/             thin compatibility re-export facade for the reporting package
-packages/orchestrator/       temporary application compatibility package for remaining importers
 tests/contract/              shared storage, recovery, fencing, dispatch, and projection suites
-apps/senawa-hook/            embedded hook and future SDK session policy
+apps/senawa-hook/            embedded subprocess hook policy
 .senawa/agents/              strict worker profiles with model, capability requests, and prompts
 .senawa/workflows/           phase definitions: gates, approvals, iteration budgets
 .senawa/schemas/             artifact contracts for each phase

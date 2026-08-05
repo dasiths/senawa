@@ -1,9 +1,14 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { CopilotSubprocessHost, DeterministicWorkerHost } from "@senawa/workers";
+import {
+  CopilotSdkWorkerAdapter,
+  CopilotSubprocessHost,
+  DeterministicWorkerHost,
+} from "@senawa/workers";
 import { createRuntimeComposition, selectRuntime } from "./composition.js";
 import { runCli } from "./program.js";
-import { createSenawaServices } from "./services.js";
+import { createSenawaServices, type SenawaServices } from "./services.js";
+import { createSdkWorkerBindings } from "./worker-bindings.js";
 
 const arguments_ = process.argv.slice(2);
 const repositoryRoot = process.cwd();
@@ -14,26 +19,42 @@ const copilotHost = new CopilotSubprocessHost({
   repositoryRoot,
   isolationRoot: join(repositoryRoot, ".agents", ".copilot-tracking", "copilot-home"),
 });
+let services: SenawaServices | undefined;
+const sdkHost =
+  workerHost === "sdk"
+    ? new CopilotSdkWorkerAdapter({
+        repositoryRoot,
+        isolationRoot: join(repositoryRoot, ".agents", ".copilot-tracking", "copilot-sdk-home"),
+        runtimePath: "copilot",
+        bindings: createSdkWorkerBindings(() => {
+          if (services === undefined) throw new Error("Senawa services are not initialized");
+          return services;
+        }),
+      })
+    : undefined;
 
 try {
   const runtime = selectRuntime(arguments_);
   const { persistence, notifier } = createRuntimeComposition(repositoryRoot, runtime);
-  process.exitCode = await runCli(arguments_, {
-    services: createSenawaServices(repositoryRoot, {
-      persistence,
-      notifier,
-      runtimeBackend: runtime,
-      ...(workerHost === "copilot"
-        ? {
-            workerHost: {
-              execute: (turn) =>
-                turn.owner.kind === "task"
-                  ? copilotHost.execute(turn)
-                  : deterministicHost.execute(turn),
-            },
-          }
+  services = createSenawaServices(repositoryRoot, {
+    persistence,
+    notifier,
+    runtimeBackend: runtime,
+    ...(workerHost === "copilot"
+      ? {
+          workerHost: {
+            execute: (turn) =>
+              turn.owner.kind === "task"
+                ? copilotHost.execute(turn)
+                : deterministicHost.execute(turn),
+          },
+        }
+      : workerHost === "sdk"
+        ? { workerHost: sdkHost as CopilotSdkWorkerAdapter }
         : {}),
-    }),
+  });
+  process.exitCode = await runCli(arguments_, {
+    services,
     openBrowser,
   });
 } catch (error) {

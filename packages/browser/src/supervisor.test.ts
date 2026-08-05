@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { LeaseConflictError } from "@senawa/application";
 import { loadRepositoryDefinitions } from "@senawa/configuration";
 import type { CommandActor } from "@senawa/domain";
-import { createSenawaServices } from "@senawa/orchestrator";
 import { createFileTestComposition } from "@senawa/testing";
 import { beforeAll, describe, expect, it } from "vitest";
+import { createSenawaServices } from "../../../apps/senawa/src/services.js";
 import { appJs } from "./static-assets.js";
 import { startWebSupervisor, type WebSupervisor } from "./supervisor.js";
 

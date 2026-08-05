@@ -86,6 +86,7 @@ about the SDK should be re-checked when the mirror catches up.
 | 44 | A stranded dispatch can be force-ended without deleting ownership state | **Confirmed offline.** Cancellation, bounded grace, fenced takeover, dispatch reconciliation, terminal state, and pointer-last ordering passed deterministic race and persistence tests |
 | 45 | The full report can aggregate hostile provenance and cumulative usage | **Confirmed offline.** All eight sections rendered with deterministic caps and escaping; cumulative AIU and cost were counted once per dispatch |
 | 46 | Sensor drift and latency can be audited from recorded evidence | **Confirmed offline.** Verdict transitions, agreement, and p95 duration were derived from journal facts; absent hook samples remained explicitly unreported |
+| 47 | One production SDK adapter can implement the stable worker port without exposing SDK cursors | **Confirmed offline with an injected fake client.** SDK 1.0.7 declarations and fake events covered create, resume, native tools, permissions, negotiation, trace headers, abort, normalized events, and retention; live execution remains unvalidated |
 
 ## Hook latency
 
@@ -578,7 +579,7 @@ submitted `{verdict: "maybe"}` first. Schema validation rejected it, then
 accepted the second result. This proves the host-extension contract and retry
 semantics without spending credits.
 
-The first run also caught a contract leak in the POC itself. The host appended
+The first run also caught a contract leak in the probe itself. The host appended
 `submissionAttempts` beside the declared assessment, so output validation
 rejected the otherwise successful reading. Moving the diagnostic under the
 extension's declared `data` property fixed it. Production code should normally
@@ -961,6 +962,49 @@ output records, five immutable artifacts, and complete reports. Boundary,
 typecheck, protected-safe lint, build, bundle startup, generated CLI reference,
 Markdown links, and diff checks also passed.
 
+## Offline Phase 10 SDK and package migration validation
+
+On 2026-08-05, `@senawa/workers` added a production Copilot SDK adapter pinned
+to the probed `@github/copilot-sdk` 1.0.7 declarations. An injected fake client
+proved caller-chosen create and resume, event registration in session config
+before send, normalized lifecycle, assistant text and deltas, tool, model,
+cumulative usage, and typed artifact events. The same offline worker test slice
+also covered deterministic and fake-subprocess adapters.
+
+The adapter binds application-owned Senawa tools natively and applies the shared
+authorization evaluator in its permission callback. Its pre-tool hook returns
+an empty object and never `allow`, preserving the stronger callback. Model
+discovery degrades unsupported effort explicitly, trace context reaches create,
+resume, send headers, and tool invocation, and cancellation calls SDK
+`abort()`. Retain disconnects while preserving session data; archive-delete
+also invokes irreversible deletion. Inspection reports exact in-process active,
+completed, and cancelled turns, but returns unknown for an existing session
+whose Senawa turn outcome cannot be proved. SDK event history and experimental
+cursors do not cross the worker port.
+
+The internal compatibility packages `@senawa/core`, `@senawa/graph`,
+`@senawa/orchestrator`, `@senawa/report`, and `@senawa/web` were removed after
+all imports moved to final owners. Workspace installation now resolves 16
+projects, and boundary enforcement rejects reintroduction of removed package
+names in source or production manifests.
+
+This is offline implementation evidence. It does not prove that a live SDK
+session creates, resumes, receives permission feedback, calls a typed binding,
+streams every native event, preserves context across long retention, or emits a
+joinable distributed trace. Those checks require a separately approved bounded
+paid SDK run and were not executed.
+
+Final Phase 10 acceptance on 2026-08-05 passed a frozen install, typecheck,
+repository-wide lint, package-boundary enforcement, build, CLI and hook bundle
+startup, generated CLI reference, Markdown links, and diff hygiene. The 72
+non-Beads tests passed together. All eight real-Beads contracts passed in three
+bounded groups because the combined slow file exceeds the terminal execution
+cap; those groups covered revisions, stale-write rejection, atomic claims,
+lease fencing, restart projection, additive task reconstruction, human gates,
+and all four split-write recovery points. The file and default-Beads CLI/browser
+demos both finished with complete reports, and the guarded SDK launcher exited
+2 before creating a live session when `--confirm-cost` was absent.
+
 ## Design changes from the probes
 
 The list preserves names used by the probes. Current production sensor policy
@@ -1053,7 +1097,7 @@ lives at `.senawa/sensors.yaml`; probe-local manifests keep their measured names
 | Does the browser adapter preserve the single Senawa control path? | The HTTP probe uses a fake in-memory command handler | Mount the adapter over the real core command handlers and assert identical journal and graph effects for CLI and HTTP calls |
 | Can live Copilot output be normalized and replayed through the browser? | The browser probe uses deterministic child output | Feed one `copilot -p --output-format json` worker and one streaming SDK session into the same output store |
 | Does web output remain bounded under load and restart? | The probe has one viewer, small logs, and no server restart | Stress multiple viewers and large output, restart the server, then resume from persisted cursors |
-| Can forced end safely recover from an unresponsive driver? | The POC has no production driver lease or concurrent SDK turn to take over | Implement bounded shutdown, stale-lease takeover, intent reconciliation, and terminal journalling, then kill the driver during a live turn |
+| Can forced end safely recover from an unresponsive live driver? | Offline production tests prove the lease, abort request, reconciliation, and terminal ordering, but no live SDK turn was killed | Kill one bounded live SDK turn, then verify stale-lease takeover and durable reconciliation |
 
 ## Reproducing
 

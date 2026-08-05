@@ -4,11 +4,16 @@ import { resolve } from "node:path";
 const arguments_ = process.argv.slice(2);
 const confirmed = arguments_.includes("--confirm-cost");
 const goal = optionValue(arguments_, "--goal") ?? "Exercise the Senawa live worker path";
+const host = optionValue(arguments_, "--host") ?? "sdk";
+if (!new Set(["sdk", "copilot"]).has(host)) {
+  throw new Error("--host must be sdk or copilot");
+}
 
 process.stderr.write(
   `${[
     "WARNING: demo:live can spend GitHub Copilot AI credits during implementation turns.",
-    "Phase preparation is deterministic, but every resume must retain --worker-host copilot.",
+    `Selected worker transport: ${host}.`,
+    `Every resume must retain --worker-host ${host}.`,
   ].join("\n")}\n`,
 );
 
@@ -23,7 +28,7 @@ if (!confirmed) {
       "--runtime",
       "file",
       "--worker-host",
-      "copilot",
+      host,
       "work",
       "start",
       goal,

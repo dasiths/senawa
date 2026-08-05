@@ -32,6 +32,8 @@ describe("Commander CLI", () => {
       ok: true,
       workflows: ["standard-delivery"],
     });
+    expect(await runCli(["--worker-host", "sdk", "doctor"], { services, io })).toBe(0);
+    expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({ ok: true });
     expect(await runCli(["workflow", "render", "standard-delivery"], { services, io })).toBe(0);
     expect(output.pop()).toContain("flowchart LR");
   });

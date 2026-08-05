@@ -1,5 +1,5 @@
 {
-  "name": "poc-session-isolation",
+  "name": "probe-session-isolation",
   "private": true,
   "type": "module",
   "dependencies": {

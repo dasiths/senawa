@@ -1,5 +1,5 @@
 {
-  "name": "poc-workflow-engine",
+  "name": "probe-workflow-engine",
   "private": true,
   "type": "module",
   "dependencies": {
