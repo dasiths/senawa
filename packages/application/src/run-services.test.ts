@@ -1,7 +1,8 @@
 import { createRunSnapshot, loadRepositoryDefinitions } from "@senawa/configuration";
-import { DefinitionArtifactSchema } from "@senawa/domain";
+import { DefinitionArtifactSchema, type RuntimeState } from "@senawa/domain";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { WorkerTurn } from "./ports.js";
+import { projectRunStatus } from "./projections.js";
 import { RunCommandService, RunQueryService } from "./run-services.js";
 import { FakeClock, FakeRunPersistence, SequenceIdentifiers } from "./testing.js";
 
@@ -13,6 +14,75 @@ beforeAll(async () => {
 });
 
 describe("application run use cases", () => {
+  it("projects task-frontier ownership without conventional phase IDs", () => {
+    const renamed = structuredClone(definitions);
+    const implement = renamed.workflow.spec.phases.find((phase) => phase.id === "implement");
+    const verify = renamed.workflow.spec.phases.find((phase) => phase.id === "verify");
+    if (
+      implement === undefined ||
+      implement.executor.kind !== "task-frontier" ||
+      verify === undefined
+    ) {
+      throw new Error("standard fixture is missing task-frontier phases");
+    }
+    implement.id = "execute-docs";
+    implement.executor.selector = { phase: "execute-docs" };
+    verify.id = "audit-docs";
+    verify.dependsOn = ["execute-docs"];
+    renamed.workflow.spec.completesWhen = "audit-docs-accepted";
+    const snapshot = createRunSnapshot("renamed-frontier", renamed, clock.now());
+    const state: RuntimeState = {
+      apiVersion: "senawa.dev/runtime/v1",
+      identity: {
+        runId: snapshot.runId,
+        backend: "file",
+        workflow: snapshot.workflow.metadata.name,
+        request: { goal: "Project renamed phases", constraints: [] },
+        createdAt: snapshot.createdAt,
+        fingerprint: snapshot.fingerprint,
+      },
+      snapshot,
+      status: "running",
+      endReason: null,
+      phases: snapshot.workflow.spec.phases.map((phase) => ({
+        id: phase.id,
+        status: "pending",
+        iteration: 0,
+        artifactVersion: null,
+        sessionId: null,
+        rejectionReason: null,
+      })),
+      tasks: [
+        {
+          key: "align-docs",
+          title: "Align documentation",
+          dependsOn: [],
+          paths: ["docs"],
+          acceptance: ["Documentation is consistent"],
+          role: "implementor",
+          status: "pending",
+          attempt: 0,
+          dispatchFailures: 0,
+          sessionId: null,
+          steering: [],
+        },
+      ],
+      artifacts: [],
+      journal: [],
+      outputs: {},
+      activeTurn: null,
+      dispatches: [],
+      leases: { driver: null, web: null },
+    };
+
+    const projection = projectRunStatus(state);
+
+    expect(projection.phases.find((phase) => phase.id === "execute-docs")?.executorKind).toBe(
+      "task-frontier",
+    );
+    expect(projection.tasks[0]?.parentPhaseId).toBe("execute-docs");
+  });
+
   it("runs start, status, dispatch, gate, approval, and report through fakes", async () => {
     const persistence = new FakeRunPersistence();
     const turns: WorkerTurn[] = [];

@@ -109,7 +109,7 @@ export function projectRunStatus(state: RuntimeState): RunStatusProjection {
       key: task.key,
       title: truncate(task.title, 160),
       role: task.role,
-      parentPhaseId: "implement",
+      parentPhaseId: taskFrontierPhaseId(state, task),
       dependsOn: task.dependsOn,
       status: task.status,
       attempt: task.attempt,
@@ -143,6 +143,20 @@ function workflowPhase(state: RuntimeState, phaseId: string) {
   const phase = state.snapshot.workflow.spec.phases.find((candidate) => candidate.id === phaseId);
   if (phase === undefined) throw new Error(`Unknown workflow phase ${phaseId}`);
   return phase;
+}
+
+function taskFrontierPhaseId(state: RuntimeState, task: RuntimeTask): string {
+  const frontiers = state.snapshot.workflow.spec.phases.filter(
+    (phase) => phase.executor.kind === "task-frontier",
+  );
+  const matchingRole = frontiers.filter(
+    (phase) => phase.executor.kind === "task-frontier" && phase.executor.role === task.role,
+  );
+  const roleMatch = matchingRole[0];
+  if (matchingRole.length === 1 && roleMatch !== undefined) return roleMatch.id;
+  const onlyFrontier = frontiers[0];
+  if (frontiers.length === 1 && onlyFrontier !== undefined) return onlyFrontier.id;
+  throw new Error(`Task ${task.key} does not map to one task-frontier phase`);
 }
 
 function dispatchOperatorAction(dispatch: RuntimeDispatch): string {

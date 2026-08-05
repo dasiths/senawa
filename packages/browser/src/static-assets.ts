@@ -127,15 +127,15 @@ function displayLabel(label,role,status){
 function graphElements(){
   const elements=[];
   const hasTasks=state.tasks.length>0;
-  const implementation=state.phases.find((phase)=>phase.executorKind==="task-frontier");
-  const hasImplementationLoop=implementation!==undefined;
+  const taskFrontier=state.phases.find((phase)=>phase.executorKind==="task-frontier");
+  const hasTaskFrontier=taskFrontier!==undefined;
   for(const phase of state.phases){
     elements.push({
       data:{id:"phase:"+phase.id,nodeId:phase.id,kind:"phase",label:displayLabel(phase.id,phase.role,phase.status),status:phase.status},
       classes:"phase status-"+phase.status+(phase.id===selected?" selected":""),
     });
     for(const dependency of phase.dependsOn||[]){
-      if(hasImplementationLoop&&(phase.id===implementation.id||(phase.id==="verify"&&dependency===implementation.id)))continue;
+      if(hasTaskFrontier&&(phase.id===taskFrontier.id||dependency===taskFrontier.id))continue;
       elements.push({data:{id:"phase-edge:"+dependency+":"+phase.id,source:"phase:"+dependency,target:"phase:"+phase.id},classes:"phase-edge"});
     }
   }
@@ -149,24 +149,28 @@ function graphElements(){
       elements.push({data:{id:"task-edge:"+dependency+":"+task.key,source:"task:"+dependency,target:"task:"+task.key},classes:"task-edge"});
     }
   }
-  if(hasImplementationLoop){
-    for(const root of state.tasks.filter((task)=>(task.dependsOn||[]).length===0)){
-      for(const dependency of implementation?.dependsOn||[]){
-        elements.push({data:{id:"implementation-entry:"+dependency+":"+root.key,source:"phase:"+dependency,target:"task:"+root.key},classes:"phase-entry"});
+  if(hasTaskFrontier){
+    const placeholderId="placeholder:"+taskFrontier.id+":tasks";
+    const completionId="boundary:"+taskFrontier.id+":complete";
+    for(const root of state.tasks.filter((task)=>task.parentPhaseId===taskFrontier.id&&(task.dependsOn||[]).length===0)){
+      for(const dependency of taskFrontier.dependsOn||[]){
+        elements.push({data:{id:"task-frontier-entry:"+taskFrontier.id+":"+dependency+":"+root.key,source:"phase:"+dependency,target:"task:"+root.key},classes:"phase-entry"});
       }
     }
     if(!hasTasks){
-      elements.push({data:{id:"placeholder:implementation-tasks",nodeId:implementation.id,kind:"placeholder",label:"Tasks from approved plan\\nnot expanded",status:"pending",parent:"phase:"+implementation.id},classes:"implementation-placeholder status-pending"});
-      for(const dependency of implementation.dependsOn||[]){
-        elements.push({data:{id:"implementation-entry:"+dependency+":placeholder",source:"phase:"+dependency,target:"placeholder:implementation-tasks"},classes:"phase-entry"});
+      elements.push({data:{id:placeholderId,nodeId:taskFrontier.id,kind:"placeholder",label:"Tasks from approved plan\\nnot expanded",status:"pending",parent:"phase:"+taskFrontier.id},classes:"implementation-placeholder status-pending"});
+      for(const dependency of taskFrontier.dependsOn||[]){
+        elements.push({data:{id:"task-frontier-entry:"+taskFrontier.id+":"+dependency+":placeholder",source:"phase:"+dependency,target:placeholderId},classes:"phase-entry"});
       }
     }
-    elements.push({data:{id:"boundary:implementation-complete",nodeId:implementation.id,kind:"boundary",label:"Implementation complete",status:implementation.status||"pending",parent:"phase:"+implementation.id},classes:"implementation-complete status-"+(implementation.status||"pending")});
-    const completionSources=hasTasks?state.tasks.filter((task)=>!dependedUpon.has(task.key)).map((task)=>"task:"+task.key):["placeholder:implementation-tasks"];
+    elements.push({data:{id:completionId,nodeId:taskFrontier.id,kind:"boundary",label:"Implementation complete",status:taskFrontier.status||"pending",parent:"phase:"+taskFrontier.id},classes:"implementation-complete status-"+(taskFrontier.status||"pending")});
+    const completionSources=hasTasks?state.tasks.filter((task)=>task.parentPhaseId===taskFrontier.id&&!dependedUpon.has(task.key)).map((task)=>"task:"+task.key):[placeholderId];
     for(const source of completionSources){
-      elements.push({data:{id:"implementation-complete:"+source,source,target:"boundary:implementation-complete"},classes:"task-edge completion-edge"});
+      elements.push({data:{id:"task-frontier-complete:"+taskFrontier.id+":"+source,source,target:completionId},classes:"task-edge completion-edge"});
     }
-    elements.push({data:{id:"verify-entry",source:"boundary:implementation-complete",target:"phase:verify"},classes:"phase-edge verify-entry"});
+    for(const successor of state.phases.filter((phase)=>(phase.dependsOn||[]).includes(taskFrontier.id))){
+      elements.push({data:{id:"task-frontier-exit:"+taskFrontier.id+":"+successor.id,source:completionId,target:"phase:"+successor.id},classes:"phase-edge verify-entry"});
+    }
   }
   return elements;
 }
@@ -203,8 +207,9 @@ function calculatePositions(elements){
     delete data.parent;
     return {...element,data};
   });
-  const implementPosition=positions["phase:implement"];
-  if(taskElements.some((element)=>element.data.kind==="task"||element.data.kind==="placeholder")&&implementPosition){
+  const taskFrontierPhase=state.phases.find((phase)=>phase.executorKind==="task-frontier");
+  const taskFrontierPosition=taskFrontierPhase===undefined?undefined:positions["phase:"+taskFrontierPhase.id];
+  if(taskElements.some((element)=>element.data.kind==="task"||element.data.kind==="placeholder")&&taskFrontierPosition){
     const taskGraph=cytoscape({headless:true,styleEnabled:true,elements:taskElements,style:graphStyle});
     taskGraph.layout({name:"dagre",rankDir:"TB",rankSep:38,nodeSep:30,edgeSep:12,padding:0,animate:false}).run();
     const taskBounds=taskGraph.nodes().boundingBox();
@@ -212,10 +217,10 @@ function calculatePositions(elements){
     const expansion=Math.max(0,taskBounds.h+110-78);
     const taskGroupShift=expansion/2+40;
     taskGraph.nodes().forEach((node)=>{
-      positions[node.id()]={x:implementPosition.x+node.position("x")-taskCenter.x,y:implementPosition.y+node.position("y")-taskCenter.y+taskGroupShift};
+      positions[node.id()]={x:taskFrontierPosition.x+node.position("x")-taskCenter.x,y:taskFrontierPosition.y+node.position("y")-taskCenter.y+taskGroupShift};
     });
     phaseGraph.nodes().forEach((node)=>{
-      if(node.position("y")>implementPosition.y){positions[node.id()].y+=expansion}
+      if(node.position("y")>taskFrontierPosition.y){positions[node.id()].y+=expansion}
     });
     taskGraph.destroy();
   }
