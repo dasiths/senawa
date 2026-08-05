@@ -142,8 +142,9 @@ Keep the completed browser console running only for explicit inspection:
 pnpm demo -- --keep-server
 ```
 
-The command prints the browser URL, supervisor PID, and retained temporary
-repository. Run `kill <PID>` when inspection is complete.
+The command prints the browser URL as soon as the supervisor starts. It prints
+the supervisor PID and retained temporary repository after the automated run
+finishes. Run `kill <PID>` when inspection is complete.
 
 Open the active run console directly:
 

@@ -30,6 +30,7 @@ try {
 
   const web = await startWeb(runId);
   webProcess = web.process;
+  if (keepServer) print(`Browser URL: ${web.bootstrapUrl}`);
   const browser = await openBrowserSession(web.bootstrapUrl, web.url, runId);
   print("Authenticated browser automation started.");
 
@@ -104,10 +105,6 @@ try {
   completed = true;
 
   if (keepServer) {
-    await stopProcess(webProcess);
-    const inspectionWeb = await startWeb(runId);
-    webProcess = inspectionWeb.process;
-    print(`Browser URL: ${inspectionWeb.bootstrapUrl}`);
     print("Supervisor left running for explicit inspection.");
     print(`Supervisor PID: ${webProcess.pid}`);
     print(`Demo repository retained at: ${demoRoot}`);
