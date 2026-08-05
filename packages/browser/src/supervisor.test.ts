@@ -142,6 +142,9 @@ describe("loopback web supervisor", () => {
     expect(appJs).toContain('name:"preset"');
     expect(appJs).toContain('node.position("y")>implementPosition.y');
     expect(appJs).toContain('parent:"phase:"+task.parentPhaseId');
+    expect(appJs).toContain('phase.executorKind==="task-frontier"');
+    expect(appJs).toContain('id:"placeholder:implementation-tasks"');
+    expect(appJs).toContain('label:"Tasks from approved plan\\nnot expanded"');
     expect(appJs).toContain('source:"task:"+dependency,target:"task:"+task.key');
     expect(appJs).toContain('id:"boundary:implementation-complete"');
     expect(appJs).toContain('source:"boundary:implementation-complete",target:"phase:verify"');

@@ -127,13 +127,15 @@ function displayLabel(label,role,status){
 function graphElements(){
   const elements=[];
   const hasTasks=state.tasks.length>0;
+  const implementation=state.phases.find((phase)=>phase.executorKind==="task-frontier");
+  const hasImplementationLoop=implementation!==undefined;
   for(const phase of state.phases){
     elements.push({
       data:{id:"phase:"+phase.id,nodeId:phase.id,kind:"phase",label:displayLabel(phase.id,phase.role,phase.status),status:phase.status},
       classes:"phase status-"+phase.status+(phase.id===selected?" selected":""),
     });
     for(const dependency of phase.dependsOn||[]){
-      if(hasTasks&&(phase.id==="implement"||(phase.id==="verify"&&dependency==="implement")))continue;
+      if(hasImplementationLoop&&(phase.id===implementation.id||(phase.id==="verify"&&dependency===implementation.id)))continue;
       elements.push({data:{id:"phase-edge:"+dependency+":"+phase.id,source:"phase:"+dependency,target:"phase:"+phase.id},classes:"phase-edge"});
     }
   }
@@ -147,16 +149,22 @@ function graphElements(){
       elements.push({data:{id:"task-edge:"+dependency+":"+task.key,source:"task:"+dependency,target:"task:"+task.key},classes:"task-edge"});
     }
   }
-  if(hasTasks){
-    const implementation=state.phases.find((phase)=>phase.id==="implement");
+  if(hasImplementationLoop){
     for(const root of state.tasks.filter((task)=>(task.dependsOn||[]).length===0)){
       for(const dependency of implementation?.dependsOn||[]){
         elements.push({data:{id:"implementation-entry:"+dependency+":"+root.key,source:"phase:"+dependency,target:"task:"+root.key},classes:"phase-entry"});
       }
     }
-    elements.push({data:{id:"boundary:implementation-complete",nodeId:"implement",kind:"boundary",label:"Implementation complete",status:implementation?.status||"pending",parent:"phase:implement"},classes:"implementation-complete status-"+(implementation?.status||"pending")});
-    for(const leaf of state.tasks.filter((task)=>!dependedUpon.has(task.key))){
-      elements.push({data:{id:"implementation-complete:"+leaf.key,source:"task:"+leaf.key,target:"boundary:implementation-complete"},classes:"task-edge completion-edge"});
+    if(!hasTasks){
+      elements.push({data:{id:"placeholder:implementation-tasks",nodeId:implementation.id,kind:"placeholder",label:"Tasks from approved plan\\nnot expanded",status:"pending",parent:"phase:"+implementation.id},classes:"implementation-placeholder status-pending"});
+      for(const dependency of implementation.dependsOn||[]){
+        elements.push({data:{id:"implementation-entry:"+dependency+":placeholder",source:"phase:"+dependency,target:"placeholder:implementation-tasks"},classes:"phase-entry"});
+      }
+    }
+    elements.push({data:{id:"boundary:implementation-complete",nodeId:implementation.id,kind:"boundary",label:"Implementation complete",status:implementation.status||"pending",parent:"phase:"+implementation.id},classes:"implementation-complete status-"+(implementation.status||"pending")});
+    const completionSources=hasTasks?state.tasks.filter((task)=>!dependedUpon.has(task.key)).map((task)=>"task:"+task.key):["placeholder:implementation-tasks"];
+    for(const source of completionSources){
+      elements.push({data:{id:"implementation-complete:"+source,source,target:"boundary:implementation-complete"},classes:"task-edge completion-edge"});
     }
     elements.push({data:{id:"verify-entry",source:"boundary:implementation-complete",target:"phase:verify"},classes:"phase-edge verify-entry"});
   }
@@ -166,6 +174,7 @@ function graphElements(){
 const graphStyle=[
   {selector:"node",style:{label:"data(label)","font-family":"Trebuchet MS, Gill Sans, sans-serif","font-size":12,"font-weight":700,"text-wrap":"wrap","text-max-width":135,"text-valign":"center","text-halign":"center",color:"#18201d","background-color":"#fff","border-width":2,"border-color":"#98a29d",shape:"roundrectangle",width:160,height:78}},
   {selector:"node.task",style:{width:176,height:84,"font-size":11,"background-color":"#f8faf8"}},
+  {selector:"node.implementation-placeholder",style:{width:176,height:72,"font-size":11,"font-style":"italic","background-color":"#f2f4f3","border-style":"dashed"}},
   {selector:"node.implementation-complete",style:{shape:"diamond",width:90,height:90,"font-size":10,"text-max-width":72,"background-color":"#e4eefb","border-color":"#1f5ea8"}},
   {selector:"node:parent",style:{"background-opacity":.08,"background-color":"#1f5ea8","border-width":2,"border-style":"dashed","border-color":"#1f5ea8",padding:40,"text-valign":"top","text-margin-y":-14,"font-size":13}},
   {selector:".status-running, .status-in_progress",style:{"border-color":"#1f5ea8","background-color":"#e4eefb"}},
@@ -188,14 +197,14 @@ function calculatePositions(elements){
   const positions={};
   phaseGraph.nodes().forEach((node)=>{positions[node.id()]={...node.position()}});
 
-  const taskElements=elements.filter((element)=>element.data.kind==="task"||element.data.kind==="boundary"||element.classes?.includes("task-edge")).map((element)=>{
-    if(element.data.kind!=="task"&&element.data.kind!=="boundary")return element;
+  const taskElements=elements.filter((element)=>element.data.kind==="task"||element.data.kind==="boundary"||element.data.kind==="placeholder"||element.classes?.includes("task-edge")).map((element)=>{
+    if(element.data.kind!=="task"&&element.data.kind!=="boundary"&&element.data.kind!=="placeholder")return element;
     const data={...element.data};
     delete data.parent;
     return {...element,data};
   });
   const implementPosition=positions["phase:implement"];
-  if(taskElements.some((element)=>element.data.kind==="task")&&implementPosition){
+  if(taskElements.some((element)=>element.data.kind==="task"||element.data.kind==="placeholder")&&implementPosition){
     const taskGraph=cytoscape({headless:true,styleEnabled:true,elements:taskElements,style:graphStyle});
     taskGraph.layout({name:"dagre",rankDir:"TB",rankSep:38,nodeSep:30,edgeSep:12,padding:0,animate:false}).run();
     const taskBounds=taskGraph.nodes().boundingBox();

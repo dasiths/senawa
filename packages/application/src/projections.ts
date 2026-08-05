@@ -14,6 +14,7 @@ export interface RunStatusProjection {
   readonly phases: ReadonlyArray<{
     readonly id: string;
     readonly role: string;
+    readonly executorKind: "agent" | "task-frontier" | "sensor-only" | "human" | "foreach";
     readonly dependsOn: readonly string[];
     readonly status: RuntimePhase["status"];
     readonly iteration: number;
@@ -97,6 +98,7 @@ export function projectRunStatus(state: RuntimeState): RunStatusProjection {
             : "role" in executor
               ? executor.role
               : executor.kind,
+        executorKind: executor.kind,
         dependsOn: definition.dependsOn,
         status: phase.status,
         iteration: phase.iteration,
