@@ -90,8 +90,8 @@ while one inferential run cost 16 to 30 seconds.
 ## Running
 
 ```bash
-bash poc/sensors/run.sh        # offline
-bash poc/sensors/stability.sh  # spends AI credits
+bash experiments/probes/sensors/run.sh        # offline
+bash experiments/probes/sensors/stability.sh  # spends AI credits
 ```
 
 ## Change log

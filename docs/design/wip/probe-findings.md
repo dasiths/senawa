@@ -1,4 +1,4 @@
-# Senawa Proof-of-Concept Findings
+# Senawa Probe Findings
 
 > [!NOTE]
 > This evidence record is maintained in the design working record. Use the
@@ -12,7 +12,7 @@ GitHub Copilot CLI, `@github/copilot-sdk`, and `bd` actually do. Most of those
 claims came from reading reference documentation. This document records what
 happened when each one was executed instead.
 
-Every result below was produced by a script in [`poc/`](../../../poc/README.md).
+Every result below was produced by a script in [`experiments/probes/`](../../../experiments/probes/README.md).
 The probes are independent: no shared state, no ordering requirement. Re-running
 any of them reproduces the corresponding section. Each probe folder carries its
 own README with the goal, the limits, and a dated change log, so this document
@@ -85,7 +85,7 @@ about the SDK should be re-checked when the mirror catches up.
 
 ## Hook latency
 
-[`poc/hook-latency`](../../../poc/hook-latency/README.md) builds the same
+[`experiments/probes/hook-latency`](../../../experiments/probes/hook-latency/README.md) builds the same
 `preToolUse` decision two ways and times a cold start, best of 20.
 
 | Invocation | Measured |
@@ -127,7 +127,7 @@ runs to find.
 
 ## Hooks really do enforce, and really do fail open
 
-[`poc/hook-enforcement`](../../../poc/hook-enforcement/README.md) runs four real
+[`experiments/probes/hook-enforcement`](../../../experiments/probes/hook-enforcement/README.md) runs four real
 Copilot sessions against a scratch git repository, asking each to run
 `git commit --allow-empty -m HOOK_POC_MARKER`, and then counts commits.
 
@@ -161,7 +161,7 @@ try to work around the wrong obstacle.
 
 ## The SDK: two confirmations and one trap
 
-[`poc/sdk-surface`](../../../poc/sdk-surface/README.md) reads the shipped `.d.ts`
+[`experiments/probes/sdk-surface`](../../../experiments/probes/sdk-surface/README.md) reads the shipped `.d.ts`
 rather than the README, then runs a live session.
 
 ### Hook surface, from the type declarations
@@ -190,7 +190,7 @@ first.
 
 ### The trap: `onPreToolUse` silences `onPermissionRequest`
 
-`poc/sdk-surface/precedence.mjs` runs the same shell request three ways with
+`experiments/probes/sdk-surface/precedence.mjs` runs the same shell request three ways with
 a permission handler that always rejects shell commands.
 
 | `onPreToolUse` returns | `onPreToolUse` calls | `onPermissionRequest` calls | Command ran? |
@@ -215,7 +215,7 @@ currently red", which is the actionable backpressure the design is after.
 
 ## Sessions and the rework loop
 
-[`poc/worker-sessions`](../../../poc/worker-sessions/README.md) is the cleanest
+[`experiments/probes/worker-sessions`](../../../experiments/probes/worker-sessions/README.md) is the cleanest
 result in this document.
 
 - `--session-id <uuid>` creates a session at a caller-chosen identifier.
@@ -237,7 +237,7 @@ significantly cheaper path to the per-task accounting the design wants.
 
 ## Model routing and subagent hooks
 
-[`poc/model-routing`](../../../poc/model-routing/README.md) uses the OTel file
+[`experiments/probes/model-routing`](../../../experiments/probes/model-routing/README.md) uses the OTel file
 exporter as the measuring instrument, because asking a model which model it is
 produces confident fiction.
 
@@ -278,7 +278,7 @@ principal session. This is the highest-value unvalidated claim remaining.
 
 ## The beads contract
 
-[`poc/beads-graph`](../../../poc/beads-graph/README.md) walks the whole
+[`experiments/probes/beads-graph`](../../../experiments/probes/beads-graph/README.md) walks the whole
 `@senawa/graph` surface in `contract.sh`.
 
 ### `bd init` blocks forever on a prompt
@@ -353,7 +353,7 @@ be generated from the graph by `@senawa/report`, not delegated to `bd`.
 
 ## Concurrency
 
-`poc/beads-graph/concurrency.sh` runs six workers against one database.
+`experiments/probes/beads-graph/concurrency.sh` runs six workers against one database.
 
 **`bd ready --claim` is atomic.** Six concurrent claims returned six distinct
 issue ids with no duplicates. The frontier is safe for parallel pull, which is
@@ -392,7 +392,7 @@ around two seconds. Two consequences:
 
 ## The sensor model
 
-[`poc/sensors`](../../../poc/sensors/README.md) is the first probe that tests the
+[`experiments/probes/sensors`](../../../experiments/probes/sensors/README.md) is the first probe that tests the
 design's actual subject matter rather than its plumbing.
 
 ### Normalization holds across four tools
@@ -481,7 +481,7 @@ otherwise-green work.
 
 ## The whole loop, end to end
 
-`poc/orchestration/end-to-end.sh` is a throwaway `senawa` that runs the real
+`experiments/probes/orchestration/end-to-end.sh` is a throwaway `senawa` that runs the real
 thing: a beads graph, a real `copilot -p` worker, real sensors, a real refusal,
 and a rendered report. It is CLI only, with no MCP and no SDK.
 
@@ -535,7 +535,7 @@ burns a task's entire rework allowance and reports it as the worker's fault.
 
 ## Worker session isolation
 
-`poc/worker-sessions/isolation.mjs` created one SDK session under an isolated
+`experiments/probes/worker-sessions/isolation.mjs` created one SDK session under an isolated
 `baseDirectory` and one subprocess session under an isolated `COPILOT_HOME`.
 Neither appeared in the default client's session list. `deleteSession` removed
 the SDK session from the isolated home after its transcript could be archived.
@@ -548,7 +548,7 @@ spans across two sessions. That remains an integration test.
 
 ## Sensor extensions and contracts
 
-`poc/sensors/cli.mjs` replaces the hard-coded branches from the original sensor
+`experiments/probes/sensors/cli.mjs` replaces the hard-coded branches from the original sensor
 runner with two explicitly declared extensions. Each extension exports a
 versioned manifest with a description and JSON Schemas for configuration,
 input, and output. Ajv compiles every schema when the registry loads.
@@ -589,7 +589,7 @@ assembly needs one live probe.
 
 ## Workflow definition, iteration, and the blocking driver
 
-`poc/orchestration/engine.mjs` runs the current design shape against a real beads
+`experiments/probes/orchestration/engine.mjs` runs the current design shape against a real beads
 database with deterministic fake agent and sensor hosts. The workflow has five
 phases: define, research, plan, implement, and verify. Three of them require
 approval, and the run completes when the human accepts verification rather than
@@ -698,7 +698,7 @@ invariant that the local copy had been quietly violating.
 
 ## The principal agent surface
 
-`poc/orchestration/pa-driven.sh` tests the chain the design is for: a human, a
+`experiments/probes/orchestration/pa-driven.sh` tests the chain the design is for: a human, a
 Copilot session carrying the senawa skill, senawa, then the workers. The agent
 gets the skill and a `senawa` on its PATH. Real `bd` is replaced by a shim that
 records any attempt to use it, because the design concedes that the principal
@@ -744,7 +744,7 @@ which is exactly why the authority-carrying commands do not rest on it.
 
 ## Browser run console
 
-`poc/orchestration/web-console-test.mjs` tests a loopback HTTP application over
+`experiments/probes/orchestration/web-console-test.mjs` tests a loopback HTTP application over
 the five-phase workflow with deterministic child processes, so it spends no AI
 credits. Every process record is appended to a phase-specific JSONL file before
 it is offered to an SSE subscriber.
@@ -817,7 +817,7 @@ confirmation, and reconciliation before it may release the singleton.
 ## Design changes from the probes
 
 The list preserves names used by the probes. Current production sensor policy
-lives at `.senawa/sensors.yaml`; POC-local manifests keep their measured names.
+lives at `.senawa/sensors.yaml`; probe-local manifests keep their measured names.
 
 1. Split the binary. `senawa-hook` (minimal, ~33 ms) for hooks; `senawa` (full)
    for everything else. Update the latency section's numbers to 66 ms and 183 ms.
@@ -851,7 +851,7 @@ lives at `.senawa/sensors.yaml`; POC-local manifests keep their measured names.
 15. Adopt the inferential promotion criterion: N runs over representative input,
     promote to blocking only at 100% verdict agreement, and record the sample
     size in `sensors.yaml` next to `trust`.
-16. Keep `poc/sensors/fixture/hostile.mjs` as a regression test for evidence
+16. Keep `experiments/probes/sensors/fixture/hostile.mjs` as a regression test for evidence
     hygiene in `@senawa/sensors`.
 17. Dispatch every worker session under an isolated `baseDirectory` (SDK) or
     `COPILOT_HOME` (subprocess), so the human's session picker stays theirs.
@@ -911,20 +911,20 @@ lives at `.senawa/sensors.yaml`; POC-local manifests keep their measured names.
 ## Reproducing
 
 ```bash
-bash poc/hook-latency/run.sh          # offline
-bash poc/beads-graph/run.sh           # offline, slow (bd init)
-bash poc/sensors/run.sh               # offline
-bash poc/orchestration/run.sh         # offline, slow (real beads database)
-node poc/orchestration/web-console-test.mjs # offline
+bash experiments/probes/hook-latency/run.sh          # offline
+bash experiments/probes/beads-graph/run.sh           # offline, slow (bd init)
+bash experiments/probes/sensors/run.sh               # offline
+bash experiments/probes/orchestration/run.sh         # offline, slow (real beads database)
+node experiments/probes/orchestration/web-console-test.mjs # offline
 
-bash poc/hook-enforcement/run.sh      # spends AI credits
-bash poc/worker-sessions/run.sh       # spends AI credits
-bash poc/model-routing/run.sh         # spends AI credits
-bash poc/sdk-surface/run.sh           # spends AI credits
-node poc/sdk-surface/precedence.mjs   # spends AI credits
-bash poc/sensors/stability.sh         # spends AI credits
-bash poc/orchestration/pa-driven.sh   # spends AI credits
-bash poc/orchestration/end-to-end.sh  # spends AI credits
+bash experiments/probes/hook-enforcement/run-live.sh      # spends AI credits
+bash experiments/probes/worker-sessions/run-live.sh       # spends AI credits
+bash experiments/probes/model-routing/run-live.sh         # spends AI credits
+bash experiments/probes/sdk-surface/run-live.sh           # spends AI credits
+node experiments/probes/sdk-surface/precedence.mjs   # spends AI credits
+bash experiments/probes/sensors/stability.sh         # spends AI credits
+bash experiments/probes/orchestration/pa-driven.sh   # spends AI credits
+bash experiments/probes/orchestration/end-to-end.sh  # spends AI credits
 ```
 
 The end-to-end probe is non-deterministic by nature: the worker sometimes fixes

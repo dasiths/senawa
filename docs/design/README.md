@@ -46,14 +46,14 @@ Read [Runtime and State](05-runtime-and-state.md), followed by
 
 ### Decision archaeology
 
-Start with the [POC Findings](wip/poc-findings.md), then use
+Start with the [Probe Findings](wip/probe-findings.md), then use
 [Roads Not Taken](wip/roads-not-taken.md) and the
 [original monolith](wip/multi-agent-orchestration.md) for rationale and context.
 
 ### Maturing a new idea
 
 Start an entry in the [Decision Log](wip/decision-log.md), identify the owning
-guide and evidence needed, then use the smallest coherent POC to resolve it. The
+guide and evidence needed, then use the smallest coherent probe to resolve it. The
 [working record guide](wip/README.md) defines the full promotion path.
 
 ## Concept ownership
@@ -71,7 +71,7 @@ it.
 | Snapshot inputs, journal, report, traces, and cost attribution | [Provenance and Observability](06-provenance-and-observability.md) |
 | Package boundaries, initialization, CLI grouping, build plan, and open questions | [Implementation and Operations](07-implementation-and-operations.md) |
 | Proposed decisions and promotion status | [WIP Decision Log](wip/decision-log.md) |
-| Measurements and invalidated assumptions | [WIP POC Findings](wip/poc-findings.md) |
+| Measurements and invalidated assumptions | [WIP Probe Findings](wip/probe-findings.md) |
 | Discarded approaches and revival conditions | [WIP Roads Not Taken](wip/roads-not-taken.md) |
 
 ## Documentation rules
@@ -86,7 +86,8 @@ it.
 
 ## Relationship to probes
 
-Each folder under [poc/](../../poc/README.md) owns one subject and includes its
+Each folder under [experiments/probes/](../../experiments/probes/README.md) owns
+one subject and includes its
 goal, limits, reproduction command, and dated changes. When evidence changes the
 architecture:
 

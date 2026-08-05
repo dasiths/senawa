@@ -48,8 +48,8 @@ an SDK-hosted session or a real OTLP collector.
 ## Running
 
 ```bash
-bash poc/model-routing/run.sh        # spends AI credits
-bash poc/model-routing/followup.sh   # spends AI credits
+bash experiments/probes/model-routing/run-live.sh        # spends AI credits
+bash experiments/probes/model-routing/followup.sh   # spends AI credits
 ```
 
 ## Change log

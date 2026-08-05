@@ -56,8 +56,8 @@ is the actionable backpressure the design wants.
 ## Running
 
 ```bash
-bash poc/sdk-surface/run.sh          # spends AI credits
-node poc/sdk-surface/precedence.mjs  # spends AI credits
+bash experiments/probes/sdk-surface/run-live.sh          # spends AI credits
+node experiments/probes/sdk-surface/precedence.mjs  # spends AI credits
 ```
 
 ## Change log

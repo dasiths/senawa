@@ -32,7 +32,7 @@ terminal-run archival required by the vertical slice. It is not the intended
 beads adapter, which remains pending. The production Copilot subprocess host is
 opt-in and has not been exercised during this implementation phase.
 
-The [POC findings](wip/poc-findings.md) distinguish live-model evidence,
+The [POC findings](wip/probe-findings.md) distinguish live-model evidence,
 offline deterministic simulation, and documentation-only claims.
 
 ## Technology choice

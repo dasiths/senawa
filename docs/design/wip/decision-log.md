@@ -3,8 +3,8 @@
 This is the working entry point for new design ideas. Entries are
 non-authoritative until accepted and promoted into a numbered design guide.
 
-Keep entries short. Put executable evidence in `poc/`, measurements in
-[poc-findings.md](poc-findings.md), and durable rejected rationale in
+Keep entries short. Put executable evidence in `experiments/probes/`, measurements in
+[probe-findings.md](probe-findings.md), and durable rejected rationale in
 [roads-not-taken.md](roads-not-taken.md).
 
 ## Status lifecycle
@@ -18,7 +18,7 @@ proposed -> probing -> accepted
 | Status | Meaning |
 |--------|---------|
 | `proposed` | The question and required evidence are defined |
-| `probing` | A POC is gathering evidence |
+| `probing` | A probe is gathering evidence |
 | `accepted` | Evidence supports the decision and the owning guide is updated |
 | `rejected` | Evidence or constraints ruled it out; rationale is in Roads Not Taken |
 | `superseded` | A later decision replaced it |
@@ -36,7 +36,7 @@ Copy this section for each idea and update it in place as the idea matures.
 * Context: Why the decision matters now
 * Options: The credible alternatives
 * Evidence needed: What would distinguish the options
-* POC: `poc/<subject>/README.md`, or `not started`
+* Probe: `experiments/probes/<subject>/README.md`, or `not started`
 * Outcome: `pending`
 * Promotion: Link to the accepted guide section or Roads Not Taken entry
 ```
@@ -61,7 +61,7 @@ Copy this section for each idea and update it in place as the idea matures.
     injection, CLI and HTTP command parity, browser replay across processes and
     restart, deterministic Beads execution, and one bounded live create-resume
     worker run after offline containment checks pass
-* POC: Planned under `experiments/probes/runtime-ports/`,
+* Probe: Planned under `experiments/probes/runtime-ports/`,
     `experiments/probes/worker-sessions/`, and
     `experiments/probes/browser-replay/`
 * Outcome: `pending`
@@ -79,7 +79,7 @@ Copy this section for each idea and update it in place as the idea matures.
     all 31 tests, and the complete offline browser demo pass after moving the
     production file to `.senawa/sensors.yaml`.
 * Outcome: Repository sensor extensions, instances, gates, and frozen paths live
-    in `.senawa/sensors.yaml`. POC-local sensor manifests remain local fixtures.
+    in `.senawa/sensors.yaml`. probe-local sensor manifests remain local fixtures.
 * Promotion: [Sensors, Gates, and Enforcement](../04-sensors-gates-and-enforcement.md#sensor-configuration)
 
 ### 2026-08-04: Worker profile ownership
@@ -126,7 +126,7 @@ Copy this section for each idea and update it in place as the idea matures.
     the same beads repository.
 * Evidence still needed: Forced takeover of an unresponsive driver requires the
     production driver lease and remains a separate edge to probe.
-* POC: `poc/orchestration/README.md#single-active-run-and-graceful-end-offline`
+* Probe: `experiments/probes/orchestration/README.md#single-active-run-and-graceful-end-offline`
 * Outcome: Version 1 supports one unfinished run per repository, one driver and
     web supervisor for that run, and one active worker turn. Retained sessions
     are inactive context. Normal end is durable and auditable; raw lock deletion
@@ -154,7 +154,7 @@ Copy this section for each idea and update it in place as the idea matures.
     approval, and finish.
 * Evidence needed: Test supervisor restart and sustained output load, then
     normalize one live subprocess and one SDK session.
-* POC: `poc/orchestration/README.md#the-browser-run-console-offline`
+* Probe: `experiments/probes/orchestration/README.md#the-browser-run-console-offline`
 * Outcome: HTTP is feasible. Use SSE for run and output streams plus structured
     command POSTs for the first implementation; no current requirement needs a
     WebSocket. Because the driver exits when human input is due, a separate
@@ -182,7 +182,7 @@ Copy this section for each idea and update it in place as the idea matures.
     continue to require the expected Origin. A path capability survives VS Code
     remote-port forwarding without delimiter rewriting. The focused production
     supervisor and CLI tests pass with this behavior.
-* POC: `poc/orchestration/README.md#the-browser-run-console-offline`
+* Probe: `experiments/probes/orchestration/README.md#the-browser-run-console-offline`
 * Outcome: Retain browser authentication. Make the random bootstrap capability
     a path segment reusable only while its loopback supervisor lives, and print
     it after launch so the human can recover from previews, retries, forwarding,
@@ -197,7 +197,7 @@ Copy this section for each idea and update it in place as the idea matures.
     `task_complete` as proof of completion?
 * Evidence needed: A live worker run where the harness remains authoritative
     across success, refusal, and exhausted continuation paths
-* POC: `poc/orchestration/README.md`
+* Probe: `experiments/probes/orchestration/README.md`
 * Outcome: `pending`
 * Promotion: `pending`
 
@@ -208,7 +208,7 @@ Copy this section for each idea and update it in place as the idea matures.
 * Question: Should verification be a sensor, a phase node, or both?
 * Evidence needed: Compare graph clarity, iteration behavior, report provenance,
     and cost for each representation
-* POC: `not started`
+* Probe: `not started`
 * Outcome: `pending`
 * Promotion: `pending`
 
@@ -219,7 +219,7 @@ Copy this section for each idea and update it in place as the idea matures.
 * Question: Should plan revision retract work as well as append it?
 * Evidence needed: A case where task abort plus additive revision cannot express
     the intended correction cleanly
-* POC: `poc/orchestration/README.md`
+* Probe: `experiments/probes/orchestration/README.md`
 * Outcome: `pending`
 * Promotion: `pending`
 
@@ -230,7 +230,7 @@ Copy this section for each idea and update it in place as the idea matures.
 * Question: Should a run-wide AIU ceiling supplement task and phase limits?
 * Evidence needed: Cost traces from representative runs showing whether local
     limits bound total spend predictably
-* POC: `not started`
+* Probe: `not started`
 * Outcome: `pending`
 * Promotion: `pending`
 
@@ -242,7 +242,7 @@ Copy this section for each idea and update it in place as the idea matures.
     archive branch?
 * Evidence needed: Review one real run through both storage models and compare
     discoverability, repository noise, and retention
-* POC: `not started`
+* Probe: `not started`
 * Outcome: `pending`
 * Promotion: `pending`
 
@@ -254,7 +254,7 @@ Copy this section for each idea and update it in place as the idea matures.
     order?
 * Evidence needed: Journal size, render latency, and recovery behavior from a
     multi-day or high-event run
-* POC: `not started`
+* Probe: `not started`
 * Outcome: `pending`
 * Promotion: `pending`
 
@@ -266,7 +266,7 @@ Copy this section for each idea and update it in place as the idea matures.
     frontiers?
 * Evidence needed: Human review experience at task-count, merge-slot, and spend
     thresholds on a representative run
-* POC: `not started`
+* Probe: `not started`
 * Outcome: `pending`
 * Promotion: `pending`
 
@@ -278,6 +278,6 @@ Copy this section for each idea and update it in place as the idea matures.
     primary gates?
 * Evidence needed: Repeated cost, stability, and correlation measurements for
     coverage, public API surface, and candidate structural counts
-* POC: `poc/sensors/README.md`
+* Probe: `experiments/probes/sensors/README.md`
 * Outcome: `pending`
 * Promotion: `pending`

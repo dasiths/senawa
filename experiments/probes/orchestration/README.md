@@ -257,11 +257,11 @@ gone. Deleting the active pointer directly is not a supported recovery.
 ## Running
 
 ```bash
-bash poc/orchestration/run.sh          # offline, slow because it uses a real beads database
-node poc/orchestration/web-console-test.mjs # offline, no AI credits
-node poc/orchestration/web-console.mjs # opens a local run console until interrupted
-bash poc/orchestration/pa-driven.sh    # spends AI credits
-bash poc/orchestration/end-to-end.sh   # spends AI credits
+bash experiments/probes/orchestration/run.sh          # offline, slow because it uses a real beads database
+node experiments/probes/orchestration/web-console-test.mjs # offline, no AI credits
+node experiments/probes/orchestration/web-console.mjs # opens a local run console until interrupted
+bash experiments/probes/orchestration/pa-driven.sh    # spends AI credits
+bash experiments/probes/orchestration/end-to-end.sh   # spends AI credits
 ```
 
 ## Change log

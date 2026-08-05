@@ -2,8 +2,8 @@ import { spawnSync } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
-const cliBundle = resolve("packages/cli/dist/senawa.mjs");
-const hookBundle = resolve("packages/hook/dist/senawa-hook.mjs");
+const cliBundle = resolve("apps/senawa/dist/senawa.mjs");
+const hookBundle = resolve("apps/senawa-hook/dist/senawa-hook.mjs");
 
 for (const bundle of [cliBundle, hookBundle]) {
   const source = await readFile(bundle, "utf8");

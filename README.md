@@ -262,10 +262,12 @@ The tree below shows the repository definition and runtime ownership boundaries.
 ```text
 docs/design/                 numbered current-state guides and their reading index
 docs/design/wip/             proposed decisions, evidence, rejected ideas, and the historical monolith
-poc/                         throwaway probes that validated the design against reality
-packages/                    core, graph, sensors, report, orchestrator, cli
+apps/                        deployable Senawa CLI and hook composition roots
+examples/demos/              supported deterministic and guarded live demonstrations
+experiments/probes/          bounded experiments that measured substrate behavior
+packages/                    reusable runtime, sensor, browser, and reporting components
 packages/orchestrator/       worker/session hosts and capability mapping
-packages/hook/               embedded hook and future SDK session policy
+apps/senawa-hook/            embedded hook and future SDK session policy
 .senawa/agents/              strict worker profiles with model, capability requests, and prompts
 .senawa/workflows/           phase definitions: gates, approvals, iteration budgets
 .senawa/schemas/             artifact contracts for each phase

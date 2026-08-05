@@ -10,8 +10,8 @@ const banner = {
 
 await Promise.all([
   build({
-    entryPoints: ["packages/cli/src/main.ts"],
-    outfile: "packages/cli/dist/senawa.mjs",
+    entryPoints: ["apps/senawa/src/main.ts"],
+    outfile: "apps/senawa/dist/senawa.mjs",
     bundle: true,
     platform: "node",
     format: "esm",
@@ -19,8 +19,8 @@ await Promise.all([
     banner,
   }),
   build({
-    entryPoints: ["packages/hook/src/main.ts"],
-    outfile: "packages/hook/dist/senawa-hook.mjs",
+    entryPoints: ["apps/senawa-hook/src/main.ts"],
+    outfile: "apps/senawa-hook/dist/senawa-hook.mjs",
     bundle: true,
     platform: "node",
     format: "esm",

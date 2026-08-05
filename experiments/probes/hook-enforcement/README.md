@@ -47,7 +47,7 @@ so the model does not work around the wrong obstacle.
 ## Running
 
 ```bash
-bash poc/hook-enforcement/run.sh   # spends AI credits
+bash experiments/probes/hook-enforcement/run-live.sh   # spends AI credits
 ```
 
 ## Change log

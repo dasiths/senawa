@@ -69,7 +69,7 @@ boundary holds: a real Copilot session carrying the skill started a run, read th
 pause back as an approval request, and approved a phase, without ever reaching
 for `bd` even though the run's state lived there. It held once, under one model,
 which is evidence and not proof; see
-[the principal agent surface](poc-findings.md#the-principal-agent-surface).
+[the principal agent surface](probe-findings.md#the-principal-agent-surface).
 
 *Revisit if* the command surface ever grows a decision that genuinely has no
 deterministic answer. So far every candidate has turned out to be a missing
@@ -91,7 +91,7 @@ There is one `senawa work resume`. It clears the pause flag if set, reconciles
 anything that was in flight, and starts driving. Whether a human paused the run,
 the process was cancelled, or the machine died, the command is the same. A killed
 driver recovering through this path is measured in
-[a killed driver is recoverable](poc-findings.md#a-killed-driver-is-recoverable).
+[a killed driver is recoverable](probe-findings.md#a-killed-driver-is-recoverable).
 
 ## Where state lives
 
@@ -112,7 +112,7 @@ perform. That is not a cost of the migration; it is the entire argument for it.
 and input. `cache.json` is a derived projection and is safe to delete at any
 moment, which the probe asserts by deleting it mid-run and resuming. The detail
 is in
-[holding state in the graph](poc-findings.md#holding-state-in-the-graph-and-the-two-bugs-that-found).
+[holding state in the graph](probe-findings.md#holding-state-in-the-graph-and-the-two-bugs-that-found).
 
 *Revisit if* beads becomes a bottleneck at a scale we have not reached. The
 answer then is a read cache with explicit invalidation on write, not a second
@@ -297,5 +297,5 @@ not the author.
 
 * [multi-agent-orchestration.md](multi-agent-orchestration.md) — the design as it
   currently stands
-* [poc-findings.md](poc-findings.md) — the measurements that forced several of
+* [probe-findings.md](probe-findings.md) — the measurements that forced several of
   these changes

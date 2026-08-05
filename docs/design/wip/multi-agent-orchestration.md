@@ -16,7 +16,7 @@ Three ideas carry the design:
 3. Completion is not something an agent asserts. It is something the harness grants, after sensors return readings and gates consume them. This is the backpressure model from [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/).
 
 > [!IMPORTANT]
-> Claims in this document that were checked by execution rather than by reading documentation are marked as measured, and the evidence is in [Proof-of-Concept Findings](poc-findings.md). Six assumptions in earlier drafts did not survive that process. Read the findings before implementing.
+> Claims in this document that were checked by execution rather than by reading documentation are marked as measured, and the evidence is in [Proof-of-Concept Findings](probe-findings.md). Six assumptions in earlier drafts did not survive that process. Read the findings before implementing.
 
 ## How it works
 
@@ -619,7 +619,7 @@ of the truth.
 
 ### The bd integration contract
 
-`@senawa/graph` is the only thing in the system that runs `bd`, and it holds itself to six rules. All six come from [the proof-of-concept findings](poc-findings.md), not from reading the reference.
+`@senawa/graph` is the only thing in the system that runs `bd`, and it holds itself to six rules. All six come from [the proof-of-concept findings](probe-findings.md), not from reading the reference.
 
 **Set `BD_JSON_ENVELOPE=1` on every invocation.** Without it, `bd ready` returns a bare array and — measured, not assumed — **`bd show` also returns an array with no `schema_version` at all**. Only write commands such as `bd create` carry the field. Envelope mode wraps every response as `{"schema_version": 1, "data": …}`, which is the only shape worth validating against, and it becomes the default in bd 2.0. This is mandatory rather than advisable: without it the version guard silently protects nothing.
 
@@ -2020,7 +2020,7 @@ the skill requires quotation rather than paraphrase.
 
 A reduced version of this file exists and has been driven live: mental model,
 command map, exit codes, reading status, and rules, in
-`poc/orchestration/skill/senawa/SKILL.md`. A real Copilot session carrying it
+`experiments/probes/orchestration/skill/senawa/SKILL.md`. A real Copilot session carrying it
 started a run, read the pause back as an approval request, and approved a phase,
 without ever reaching for `bd` even though the run's state lived there.
 
@@ -2397,7 +2397,7 @@ A mixed Go CLI with a TypeScript orchestrator is defensible on paper and expensi
 
 ## Suggested build order
 
-The design is large, but it degrades gracefully. Build it in slices that are each useful alone. Most of the risk in slices zero to three has already been retired by [the probes](poc-findings.md); the code below is now assembly rather than discovery.
+The design is large, but it degrades gracefully. Build it in slices that are each useful alone. Most of the risk in slices zero to three has already been retired by [the probes](probe-findings.md); the code below is now assembly rather than discovery.
 
 Slice zero sets up the workspace: a pnpm monorepo, `@senawa/core` with the sensors.yaml Zod schema, vitest, and two esbuild bundle steps producing `senawa` and `senawa-hook`. Both need the `createRequire` banner. Keep three tests from day one: the hook bundle imports without throwing, the hook bundle starts in under 40 ms, and the hostile-output fixture stays defanged.
 
@@ -2409,11 +2409,11 @@ Slice three adds graph state. Add beads, implement `senawa work start`, `task ne
 
 Slice three-and-a-half adds the journal, and it belongs here rather than at the end. `@senawa/report` starts as an append-only writer that every state-changing command in slice three already calls, plus a `senawa work report` that renders whatever exists. It is a few hundred lines while there are five event kinds, and it is a retrofit across every call site if you leave it until slice six. Backfilling provenance is not possible: the events you did not write are gone.
 
-Slice four adds the roles and the phases. Write `researcher`, `planner`, `implementor`, and `verifier` agent profiles, plus `senawa dispatch` with its model capability table, `senawa plan import`, and `senawa plan validate` over `bd swarm validate`. Add `approve` and `reject` with phase iterations and versioned artifacts here, not later, because a phase that cannot be sent back is not a phase you would actually use. Start with the subprocess path (Topology B1) because it is easy to debug: you can read the exact command and rerun it by hand. Run one full loop end to end on a small refactor, reject something deliberately, then read the generated `report.md` and check that it describes what actually happened. A throwaway version of this slice exists in `poc/orchestration` and is worth reading first.
+Slice four adds the roles and the phases. Write `researcher`, `planner`, `implementor`, and `verifier` agent profiles, plus `senawa dispatch` with its model capability table, `senawa plan import`, and `senawa plan validate` over `bd swarm validate`. Add `approve` and `reject` with phase iterations and versioned artifacts here, not later, because a phase that cannot be sent back is not a phase you would actually use. Start with the subprocess path (Topology B1) because it is easy to debug: you can read the exact command and rerun it by hand. Run one full loop end to end on a small refactor, reject something deliberately, then read the generated `report.md` and check that it describes what actually happened. A throwaway version of this slice exists in `experiments/probes/orchestration` and is worth reading first.
 
 Slice five adds the hosted driver. Introduce `@senawa/orchestrator` on `@github/copilot-sdk`, move dispatch to hosted sessions (Topology B2), and implement the `ask` and `answer` relay on `onUserInputRequest`. Rebuild the rework loop explicitly, since the SDK has no `subagentStop`. Add the driver lease, the intent-and-outcome journalling, and `senawa work resume`, because they are what make a blocking driver safe to cancel. Add the inline TTY controls in the same slice: once the driver blocks, steering it from the same terminal is the difference between usable and irritating.
 
-Slice five-and-a-half is the skill. `.agents/skills/senawa/SKILL.md` teaches an ordinary Copilot session to drive the harness in natural language. It is one file, it works in both VS Code and the CLI, and it removes any need for a bespoke principal agent runtime. A reduced version already exists in `poc/orchestration/skill/senawa/SKILL.md` and has been driven live; expand it once the command surface has stopped moving, because a skill that documents commands that no longer exist is worse than no skill.
+Slice five-and-a-half is the skill. `.agents/skills/senawa/SKILL.md` teaches an ordinary Copilot session to drive the harness in natural language. It is one file, it works in both VS Code and the CLI, and it removes any need for a bespoke principal agent runtime. A reduced version already exists in `experiments/probes/orchestration/skill/senawa/SKILL.md` and has been driven live; expand it once the command surface has stopped moving, because a skill that documents commands that no longer exist is worse than no skill.
 
 Slice six adds scale. Worktrees, parallel groups, merge slots, `senawa plan revise` for additive re-planning, cost dashboards fed from `session.usage_checkpoint` and joined to the journal, and a formula that captures the whole workflow so `senawa work start` pours it in one step. Package the lot as a Copilot CLI plugin.
 
@@ -2432,7 +2432,7 @@ Slice seven closes the control graph, and it is the difference between a harness
 
 ## References
 
-* [Proof-of-Concept Findings](poc-findings.md), the evidence behind every measured claim in this document
+* [Proof-of-Concept Findings](probe-findings.md), the evidence behind every measured claim in this document
 * [Roads Not Taken](roads-not-taken.md), the approaches this design tried and dropped, and what would bring each one back
 * [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/)
 * [Refining Inferential Sensors in Coding Agent Harnesses](https://dasith.me/2026/06/20/refining-inferential-sensors/)

@@ -19,7 +19,7 @@ if (!confirmed) {
   const result = spawnSync(
     process.execPath,
     [
-      resolve("packages/cli/dist/senawa.mjs"),
+      resolve("apps/senawa/dist/senawa.mjs"),
       "--worker-host",
       "copilot",
       "work",

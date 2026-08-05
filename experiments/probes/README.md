@@ -1,14 +1,14 @@
-# Senawa Proof-of-Concept Probes
+# Senawa Probes
 
 ## Overview
 
 Throwaway code with a durable purpose. Each folder answers one question from
-[the design](../docs/design/README.md) with evidence you can
+[the design](../../docs/design/README.md) with evidence you can
 reproduce, and every folder carries a README stating its goal, what it proved,
 what it did not prove, and a dated change log.
 
 Findings are consolidated in
-[the POC findings](../docs/design/wip/poc-findings.md). That document
+[the probe findings](../../docs/design/wip/probe-findings.md). That document
 is the cross-cutting evidence record; these folders are the machinery that
 produced it. Current architecture lives in the numbered design guides.
 
@@ -42,7 +42,7 @@ in a folder is left implying a mechanism we no longer intend to build.
 Every probe is runnable from anywhere in the repository:
 
 ```bash
-bash poc/sensors/run.sh
+bash experiments/probes/sensors/run.sh
 ```
 
 Offline probes need no Copilot subscription. Probes that spend credits say so in

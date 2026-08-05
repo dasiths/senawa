@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const sourceRoot = process.cwd();
-const cliBundle = resolve(sourceRoot, "packages/cli/dist/senawa.mjs");
+const cliBundle = resolve(sourceRoot, "apps/senawa/dist/senawa.mjs");
 const keepServer = process.argv.slice(2).includes("--keep-server");
 const demoRoot = await mkdtemp(join(tmpdir(), "senawa-production-demo-"));
 let webProcess;
@@ -138,8 +138,14 @@ async function installDefinitions(from, to) {
   const skillTarget = join(to, ".agents", "skills", "senawa", "SKILL.md");
   await mkdir(dirname(skillTarget), { recursive: true });
   await cp(join(from, ".agents", "skills", "senawa", "SKILL.md"), skillTarget);
-  await cp(join(from, "scripts", "demo-fixture", "package.json"), join(to, "package.json"));
-  await cp(join(from, "scripts", "demo-fixture", "check.mjs"), join(to, "check.mjs"));
+  await cp(
+    join(from, "examples", "demos", "file-offline", "fixture", "package.json"),
+    join(to, "package.json"),
+  );
+  await cp(
+    join(from, "examples", "demos", "file-offline", "fixture", "check.mjs"),
+    join(to, "check.mjs"),
+  );
 }
 
 async function startWeb(runId) {

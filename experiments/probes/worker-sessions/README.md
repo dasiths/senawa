@@ -47,7 +47,7 @@ path, and `deleteSession` removes the session once its transcript is archived.
 ## Running
 
 ```bash
-bash poc/worker-sessions/run.sh   # spends AI credits
+bash experiments/probes/worker-sessions/run-live.sh   # spends AI credits
 ```
 
 ## Change log

@@ -67,7 +67,7 @@ run report must build its own diagram.
 ## Running
 
 ```bash
-bash poc/beads-graph/run.sh   # offline, slow because bd init is slow
+bash experiments/probes/beads-graph/run.sh   # offline, slow because bd init is slow
 ```
 
 ## Change log

@@ -45,7 +45,7 @@ so without the banner the bundle throws at import time rather than at build time
 ## Running
 
 ```bash
-bash poc/hook-latency/run.sh   # offline
+bash experiments/probes/hook-latency/run.sh   # offline
 ```
 
 ## Change log

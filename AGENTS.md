@@ -29,7 +29,7 @@ These instructions apply to the entire repository.
 * Implement capability ceilings, hook policy, isolation, gate evaluation, and
   audit in Senawa packages. Repository profiles request capabilities but cannot
   grant or weaken runtime authority.
-* Preserve POC-local fixture names and measured historical paths. Do not replace
+* Preserve probe-local fixture names and measured historical paths. Do not replace
   them mechanically when production configuration moves.
 
 ## Mature an idea
@@ -39,7 +39,7 @@ Use this sequence for a new or changed idea:
 1. Add an entry to `docs/design/wip/decision-log.md`. Name the owning design
   guide, current status, decision question, and evidence needed.
 2. Turn the idea into one falsifiable question. Reuse the matching
-  `poc/<subject>/` folder. Create a new subject only when no
+  `experiments/probes/<subject>/` folder. Create a new subject only when no
    existing probe can answer the question without losing cohesion.
 3. Build the smallest probe that can disprove the idea. Mark the decision entry
   as `probing`. Do not update current
@@ -48,7 +48,7 @@ Use this sequence for a new or changed idea:
 4. Run the probe and record the environment, command, observed result, limits,
    and date in the probe README.
 5. Record the cross-cutting result in
-   `docs/design/wip/poc-findings.md`, distinguishing live-model, offline,
+   `docs/design/wip/probe-findings.md`, distinguishing live-model, offline,
   simulated, and documentation-only evidence. Update the decision entry with
   the result.
 6. If accepted, update the numbered design guide that owns the concept, link its
@@ -59,7 +59,7 @@ Use this sequence for a new or changed idea:
 8. Update the root README only when the public mental model, status, prerequisites,
    repository layout, or recommended entry path changed.
 
-## POC conventions
+## Probe conventions
 
 * Keep one folder per subject and amend it as understanding changes. Minimize the
   total probe count.
@@ -86,7 +86,7 @@ Use this sequence for a new or changed idea:
 * Describe contracts once. Use relative links for supporting context.
 * Mark whether a claim is proposed, measured, or still unvalidated.
 * Keep examples consistent with the real command grammar and caller authority.
-* Classify configuration path references as current guidance, POC fixtures,
+* Classify configuration path references as current guidance, probe fixtures,
   measured history, rejected approaches, or generic format names before moving
   them.
 * Validate relative links, heading anchors, YAML examples, Mermaid diagrams, and

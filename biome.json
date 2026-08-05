@@ -1,7 +1,14 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.2.4/schema.json",
   "files": {
-    "includes": ["**", "!poc", "!.copilot-tracking", "!.pnpm-store", "!**/dist", "!pnpm-lock.yaml"]
+    "includes": [
+      "**",
+      "!experiments/probes",
+      "!.copilot-tracking",
+      "!.pnpm-store",
+      "!**/dist",
+      "!pnpm-lock.yaml"
+    ]
   },
   "formatter": {
     "enabled": true,
