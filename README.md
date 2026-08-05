@@ -140,7 +140,9 @@ fake SDK client. No validation command starts Copilot or spends AI credits.
 Live SDK session execution remains unvalidated.
 Select the SDK adapter explicitly with `--worker-host sdk`; ordinary commands
 remain deterministic unless another host is requested. The SDK launches the
-installed `copilot` runtime over stdio only when selected.
+installed `copilot` runtime over stdio only when selected. Senawa resolves the
+runtime to an absolute executable from `PATH`; set `SENAWA_COPILOT_CLI` to an
+absolute path when the CLI is installed outside `PATH`.
 
 The `senawa` app composes `@senawa/runtime-beads` by default and selects
 `@senawa/runtime-file` only for explicit `--runtime file` commands. Mutable runtime state,
