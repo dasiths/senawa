@@ -43,6 +43,30 @@ Copy this section for each idea and update it in place as the idea matures.
 
 ## Decisions
 
+### 2026-08-05: Port-first production architecture migration
+
+* Status: `probing`
+* Owner: `docs/design/07-implementation-and-operations.md`
+* Question: Can Senawa migrate from the vertical-slice package graph to
+    application-owned ports, Beads runtime authority, and explicit worker
+    session lifecycles while the built CLI, browser, and one no-credit workflow
+    remain executable after every migration phase?
+* Context: The deterministic slice proves adapter plumbing, but current packages
+    mix domain rules, configuration loading, application control, persistence,
+    worker hosting, and presentation. The live worker path also has unresolved
+    first-turn, lease, recovery, enforcement, and gate-feedback defects.
+* Options: Mechanically move existing packages, rewrite the repository at once,
+    or migrate one working path at a time through domain and application ports
+* Evidence needed: Shared adapter contract suites, crash and lease fault
+    injection, CLI and HTTP command parity, browser replay across processes and
+    restart, deterministic Beads execution, and one bounded live create-resume
+    worker run after offline containment checks pass
+* POC: Planned under `experiments/probes/runtime-ports/`,
+    `experiments/probes/worker-sessions/`, and
+    `experiments/probes/browser-replay/`
+* Outcome: `pending`
+* Promotion: `pending`
+
 ### 2026-08-04: Sensor policy location
 
 * Status: `accepted`
