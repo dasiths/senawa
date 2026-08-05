@@ -6,8 +6,9 @@ path with deterministic workers. Mutable run, phase, task, dependency, gate,
 and terminal state is stored in a real Beads database. Immutable documents and
 append-only evidence remain in the work directory.
 
-The demo selects the Phase 7 adapter explicitly. The ordinary CLI composition
-still defaults to the file runtime until the Phase 8 production switch.
+The demo omits `--runtime` so every spawned CLI process exercises the default
+Beads composition. It fails rather than substituting file state when Beads is
+missing, incompatible, or returns an error.
 
 Run it from the repository root:
 

@@ -14,6 +14,8 @@
     "demo": "pnpm build && node examples/demos/file-offline/run.mjs",
     "demo:beads": "pnpm build && node examples/demos/beads-offline/run.mjs",
     "demo:live": "pnpm build && node examples/demos/live-copilot-worker/run.mjs",
+    "docs:cli": "pnpm build && node scripts/generate-cli-reference.mjs",
+    "docs:links": "node scripts/check-markdown-links.mjs",
     "format": "biome format --write .",
     "lint": "biome check .",
     "test": "vitest run --passWithNoTests",

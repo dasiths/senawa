@@ -23,7 +23,6 @@ try {
       "Demonstrate the production Senawa vertical slice",
       "--workflow",
       "standard-delivery",
-      "--detach",
     ],
     [2],
   );
@@ -125,8 +124,9 @@ try {
 }
 
 function runCli(arguments_, acceptedCodes = [0]) {
-  print(`$ senawa --runtime ${runtime} ${arguments_.join(" ")}`);
-  const result = spawnSync(process.execPath, [cliBundle, "--runtime", runtime, ...arguments_], {
+  const runtimeArguments = runtime === "file" ? ["--runtime", "file"] : [];
+  print(`$ senawa ${[...runtimeArguments, ...arguments_].join(" ")}`);
+  const result = spawnSync(process.execPath, [cliBundle, ...runtimeArguments, ...arguments_], {
     cwd: demoRoot,
     encoding: "utf8",
   });
@@ -156,7 +156,15 @@ async function installDefinitions(from, to) {
 async function startWeb(runId) {
   const child = spawn(
     process.execPath,
-    [cliBundle, "--runtime", runtime, "work", "web", runId, "--port", "0"],
+    [
+      cliBundle,
+      ...(runtime === "file" ? ["--runtime", "file"] : []),
+      "work",
+      "web",
+      runId,
+      "--port",
+      "0",
+    ],
     {
       cwd: demoRoot,
       detached: keepServer,

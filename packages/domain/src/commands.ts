@@ -16,7 +16,6 @@ const StartCommandSchema = z
     actor: CommandActorSchema,
     workflow: IdentifierSchema,
     request: WorkRequestSchema,
-    detach: z.boolean().default(false),
   })
   .strict();
 

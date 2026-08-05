@@ -114,6 +114,31 @@ it("stores worker output in a session and turn stream", async () => {
   expect(await output.readOutput("run-stream", "task", "task-one", 0, 10)).toHaveLength(1);
 });
 
+it("rejects reopening a run through a different runtime backend", async () => {
+  const root = await temporaryRoot();
+  const state = createRuntimeFixture("run-backend-mismatch");
+  await persistence(root).createRun(state, "start");
+  const mismatched = new FileRunPersistence(
+    root,
+    {
+      runtime: new FileRuntimeStateStore(root),
+      activeRuns: new FileActiveRunRegistry(root, "beads"),
+      documents: new FileRunDocumentStore(root),
+      journal: new FileJournalStore(root),
+      output: new FileOutputLogStore(root),
+      leases: new FileLeaseStore(root),
+    },
+    { backend: "beads" },
+  );
+
+  await expect(mismatched.getActiveRunId()).rejects.toThrow(
+    "uses file runtime, not selected beads runtime",
+  );
+  await expect(mismatched.readRun(state.identity.runId)).rejects.toThrow(
+    "uses file runtime, not selected beads runtime",
+  );
+});
+
 function persistence(root: string, options: FileRunPersistenceOptions = {}): FileRunPersistence {
   return new FileRunPersistence(
     root,

@@ -212,8 +212,9 @@ ones. Stable task keys make revision idempotent. The implementation phase become
 ready again when its selector finds open work, and structural plan validation runs
 against the enlarged graph.
 
-Task retraction is intentionally separate: `senawa task abort <id> --reason` ends
-one task while preserving why it was removed.
+Task retraction is intentionally separate. The public `task abort` command
+remains deferred until worker cancellation and active-dispatch reconciliation
+can preserve why the task was removed without racing the driver.
 
 ## Artifact contracts
 

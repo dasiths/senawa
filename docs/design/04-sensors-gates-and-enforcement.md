@@ -177,8 +177,9 @@ pointer-schema combinations, and blocking gates with no deterministic anchor.
 
 ## Completion backpressure
 
-`senawa task done` is a completion request. It never closes a bead first and
-validates later.
+The typed worker completion operation is a request. It never closes a bead first
+and validates later. A public `task done` CLI command remains deferred until it
+can authenticate and bind the requesting worker turn.
 
 A refusal returns the gate, attempt count, remaining allowance, failed readings,
 sanitized findings, and a rework prompt. The driver resumes the same worker

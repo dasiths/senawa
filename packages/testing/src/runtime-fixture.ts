@@ -97,6 +97,7 @@ export function createRuntimeFixture(runId: string): RuntimeState {
     apiVersion: "senawa.dev/runtime/v1",
     identity: {
       runId,
+      backend: "file",
       workflow: "test",
       request: { goal: "test", constraints: [] },
       createdAt: snapshot.createdAt,

@@ -6,12 +6,16 @@ import { loadRepositoryDefinitions } from "@senawa/configuration";
 import type { BrowserRunCommand, CommandActor } from "@senawa/domain";
 import { createFileTestComposition } from "@senawa/testing";
 import { beforeAll, describe, expect, it } from "vitest";
-import { runCli } from "./program.js";
+import { type CliRunOptions, runCli as runCliWithRuntime } from "./program.js";
 import { createSenawaServices, type SenawaServices } from "./services.js";
 
 const driverActor: CommandActor = { channel: "driver" };
 const fixedNow = () => new Date("2026-08-04T12:00:00.000Z");
 let definitions: Awaited<ReturnType<typeof loadRepositoryDefinitions>>;
+
+function runCli(arguments_: readonly string[], options: CliRunOptions): Promise<number> {
+  return runCliWithRuntime(["--runtime", "file", ...arguments_], options);
+}
 
 beforeAll(async () => {
   definitions = await loadRepositoryDefinitions(process.cwd());
@@ -30,6 +34,86 @@ describe("Commander CLI", () => {
     });
     expect(await runCli(["workflow", "render", "standard-delivery"], { services, io })).toBe(0);
     expect(output.pop()).toContain("flowchart LR");
+  });
+
+  it("supports stable inspection and durable operator commands", async () => {
+    const services = await createRun("operations-run");
+    const repositoryServices = createTestServices(process.cwd());
+    const output: string[] = [];
+    const errors: string[] = [];
+    const io = {
+      stdout: (value: string) => output.push(value),
+      stderr: (value: string) => errors.push(value),
+    };
+
+    expect(
+      await runCli(["workflow", "validate", "standard-delivery"], {
+        services: repositoryServices,
+        io,
+      }),
+    ).toBe(0);
+    expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({ ok: true });
+    expect(await runCli(["sensor", "list"], { services: repositoryServices, io })).toBe(0);
+    expect(JSON.parse(output.pop() ?? "[]").length).toBeGreaterThan(0);
+    expect(
+      await runCli(["sensor", "info", "artifact-present"], {
+        services: repositoryServices,
+        io,
+      }),
+    ).toBe(0);
+    expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({ id: "artifact-present" });
+    expect(await runCli(["phase", "show", "define"], { services, io })).toBe(0);
+    expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({ id: "define" });
+    expect(
+      await runCli(["gate", "check", "definition-accepted", "--phase", "define"], {
+        services,
+        io,
+      }),
+    ).toBe(0);
+    expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({
+      gateId: "definition-accepted",
+      accepted: true,
+    });
+
+    expect(await runCli(["ask", "Which boundary is authoritative?"], { services, io })).toBe(0);
+    const question = JSON.parse(output.pop() ?? "{}") as { questionId?: string };
+    expect(question.questionId).toMatch(/^question-/u);
+    expect(
+      await runCli(["answer", question.questionId ?? "", "The application boundary"], {
+        services,
+        io,
+      }),
+    ).toBe(0);
+    expect(await runCli(["discover", "A follow-up validation"], { services, io })).toBe(0);
+    expect(await runCli(["note", "Keep this decision durable"], { services, io })).toBe(0);
+
+    const planPath = resolve(services.repositoryRoot, "extra-plan.json");
+    await writeFile(
+      planPath,
+      JSON.stringify({
+        summary: "Add one bounded task",
+        tasks: [
+          {
+            key: "follow-up",
+            title: "Run follow-up validation",
+            dependsOn: [],
+            paths: ["packages/application"],
+            acceptance: ["Focused checks pass"],
+            role: "implementor",
+          },
+        ],
+      }),
+    );
+    expect(await runCli(["plan", "revise", "--add", planPath], { services, io })).toBe(0);
+    expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({ added: ["follow-up"] });
+    expect(await runCli(["task", "show", "follow-up"], { services, io })).toBe(0);
+    expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({ key: "follow-up" });
+    expect(await runCli(["work", "pause"], { services, io })).toBe(0);
+    expect(await services.queries.status("operations-run")).toMatchObject({
+      backend: "file",
+      status: "paused",
+    });
+    expect(errors).toEqual([]);
   });
 
   it.each([

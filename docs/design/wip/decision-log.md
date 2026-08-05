@@ -85,9 +85,17 @@ Copy this section for each idea and update it in place as the idea matures.
     tests in 228.67 seconds, the real-Beads contract file took 227.45 seconds,
     all four injected split-write points recovered, and
     `pnpm demo:beads` completed with eight authoritative graph nodes and no
-    mutable runtime JSON blob. The ordinary CLI still defaults to file until
-    Phase 8; backend identity, the production-default switch, live subprocess
-    evidence, and SDK transport remain pending.
+    mutable runtime JSON blob. Phase 8 made Beads the omitted-option production
+    composition, required explicit `--runtime file` for development and tests,
+    persisted backend identity in immutable identity and the active pointer,
+    exposed it in status and reports, and rejected mismatched reopen attempts.
+    Focused tests proved a missing Beads executable never creates file runtime
+    state. The final suite passed 91 tests in 219.98 seconds, the explicit-file
+    demo passed, and the default-Beads CLI/browser demo completed with eight
+    authoritative graph nodes. No-credit validation covered the implemented
+    command grammar; unsafe or unsupported `init`, `sensor run`, `task done`,
+    and `task abort` commands remain omitted. Live subprocess evidence and SDK
+    transport remain pending.
 * Promotion: `pending`
 
 ### 2026-08-04: Sensor policy location

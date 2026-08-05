@@ -1,63 +1,45 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { FileRunDocumentStore } from "@senawa/artifact-store";
-import { FileJournalStore, FileOutputLogStore, RunChangeNotifier } from "@senawa/observability";
-import { BeadsRuntimeStateStore } from "@senawa/runtime-beads";
-import {
-  FileActiveRunRegistry,
-  FileLeaseStore,
-  FileRunPersistence,
-  FileRuntimeStateStore,
-} from "@senawa/runtime-file";
 import { CopilotSubprocessHost, DeterministicWorkerHost } from "@senawa/workers";
+import { createRuntimeComposition, selectRuntime } from "./composition.js";
 import { runCli } from "./program.js";
 import { createSenawaServices } from "./services.js";
 
 const arguments_ = process.argv.slice(2);
 const repositoryRoot = process.cwd();
 const workerHost = optionValue(arguments_, "--worker-host") ?? "deterministic";
-const runtime = optionValue(arguments_, "--runtime") ?? "file";
 const deterministicHost = new DeterministicWorkerHost();
-const notifier = new RunChangeNotifier();
-const persistence = new FileRunPersistence(
-  repositoryRoot,
-  {
-    runtime:
-      runtime === "beads"
-        ? new BeadsRuntimeStateStore(repositoryRoot)
-        : new FileRuntimeStateStore(repositoryRoot),
-    activeRuns: new FileActiveRunRegistry(repositoryRoot),
-    documents: new FileRunDocumentStore(repositoryRoot),
-    journal: new FileJournalStore(repositoryRoot, notifier),
-    output: new FileOutputLogStore(repositoryRoot, notifier),
-    leases: new FileLeaseStore(repositoryRoot),
-    notifications: notifier,
-  },
-  runtime === "beads" ? { lockTimeoutMs: 120_000, staleLockMs: 300_000 } : {},
-);
 const copilotHost = new CopilotSubprocessHost({
   enabled: true,
   repositoryRoot,
   isolationRoot: join(repositoryRoot, ".agents", ".copilot-tracking", "copilot-home"),
 });
 
-process.exitCode = await runCli(arguments_, {
-  services: createSenawaServices(repositoryRoot, {
-    persistence,
-    notifier,
-    ...(workerHost === "copilot"
-      ? {
-          workerHost: {
-            execute: (turn) =>
-              turn.owner.kind === "task"
-                ? copilotHost.execute(turn)
-                : deterministicHost.execute(turn),
-          },
-        }
-      : {}),
-  }),
-  openBrowser,
-});
+try {
+  const runtime = selectRuntime(arguments_);
+  const { persistence, notifier } = createRuntimeComposition(repositoryRoot, runtime);
+  process.exitCode = await runCli(arguments_, {
+    services: createSenawaServices(repositoryRoot, {
+      persistence,
+      notifier,
+      runtimeBackend: runtime,
+      ...(workerHost === "copilot"
+        ? {
+            workerHost: {
+              execute: (turn) =>
+                turn.owner.kind === "task"
+                  ? copilotHost.execute(turn)
+                  : deterministicHost.execute(turn),
+            },
+          }
+        : {}),
+    }),
+    openBrowser,
+  });
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = 1;
+}
 
 async function openBrowser(url: string): Promise<void> {
   const browserEnvironmentKey = "BROWSER";

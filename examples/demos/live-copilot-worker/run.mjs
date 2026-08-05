@@ -20,6 +20,8 @@ if (!confirmed) {
     process.execPath,
     [
       resolve("apps/senawa/dist/senawa.mjs"),
+      "--runtime",
+      "file",
       "--worker-host",
       "copilot",
       "work",
@@ -27,7 +29,6 @@ if (!confirmed) {
       goal,
       "--workflow",
       "standard-delivery",
-      "--detach",
     ],
     { cwd: process.cwd(), stdio: "inherit" },
   );

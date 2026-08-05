@@ -19,7 +19,13 @@ import {
   type RepositoryDefinitions,
   readRepositoryWorkflow,
 } from "@senawa/configuration";
-import type { CommandActor, RunSnapshot, RuntimeLease, WorkRequest } from "@senawa/domain";
+import type {
+  CommandActor,
+  RunSnapshot,
+  RuntimeBackend,
+  RuntimeLease,
+  WorkRequest,
+} from "@senawa/domain";
 import { RunReportService } from "@senawa/reporting";
 import { CommandGateEvaluator } from "@senawa/sensors";
 import { DeterministicWorkerHost } from "@senawa/workers";
@@ -40,6 +46,7 @@ export interface SenawaServices {
 export interface SenawaServiceOptions {
   readonly persistence: RunPersistencePort;
   readonly notifier: RunChangeNotificationPort;
+  readonly runtimeBackend?: RuntimeBackend;
   readonly workerHost?: WorkerExecutionPort;
   readonly gateEvaluator?: GateEvaluationPort;
   readonly now?: () => Date;
@@ -60,6 +67,7 @@ export class RunCommands {
     workerHost: WorkerExecutionPort,
     gateEvaluator: GateEvaluationPort,
     private readonly now: () => Date,
+    backend: RuntimeBackend,
   ) {
     this.application = new ApplicationRunCommandService(
       store,
@@ -75,6 +83,8 @@ export class RunCommands {
           return () => clearInterval(timer);
         },
       },
+      30_000,
+      backend,
     );
   }
 
@@ -104,8 +114,49 @@ export class RunCommands {
     return this.application.resume(runId, actor);
   }
 
+  pause(runId: string, actor: CommandActor) {
+    return this.application.pause(runId, actor);
+  }
+
+  checkGate(
+    runId: string,
+    gateId: string,
+    owner: { readonly kind: "phase" | "task"; readonly id: string },
+    actor: CommandActor,
+  ) {
+    return this.application.checkGate(runId, gateId, owner, actor);
+  }
+
+  ask(runId: string, question: string, actor: CommandActor) {
+    return this.application.ask(runId, question, actor);
+  }
+
+  answer(runId: string, questionId: string, answer: string, actor: CommandActor) {
+    return this.application.answer(runId, questionId, answer, actor);
+  }
+
+  discover(runId: string, title: string, actor: CommandActor) {
+    return this.application.discover(runId, title, actor);
+  }
+
+  note(runId: string, note: string, actor: CommandActor) {
+    return this.application.note(runId, note, actor);
+  }
+
+  revisePlan(
+    runId: string,
+    plan: Parameters<ApplicationRunCommandService["revisePlan"]>[1],
+    actor: CommandActor,
+  ) {
+    return this.application.revisePlan(runId, plan, actor);
+  }
+
   end(runId: string, reason: string, actor: CommandActor) {
     return this.application.end(runId, reason, actor);
+  }
+
+  finish(runId: string, actor: CommandActor) {
+    return this.application.finish(runId, actor);
   }
 
   drive(runId: string, actor: CommandActor, maxTransitions?: number) {
@@ -130,6 +181,7 @@ export function createSenawaServices(
       options.workerHost ?? new DeterministicWorkerHost(),
       options.gateEvaluator ?? new CommandGateEvaluator(root),
       options.now ?? (() => new Date()),
+      options.runtimeBackend ?? "file",
     ),
     queries: new RunQueryService(
       options.persistence,

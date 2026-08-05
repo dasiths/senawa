@@ -863,6 +863,55 @@ the no-fallback production startup path remain Phase 8 work. This validation did
 not call Copilot, establish cross-host leases, or establish multiple active
 drivers or worker turns.
 
+## Production-default composition and CLI validation
+
+On 2026-08-05, Phase 8 changed the built CLI so omitted `--runtime` selects
+Beads and explicit global `--runtime file` selects the development and test
+adapter. The browser continued to receive the already-composed application
+instance; no HTTP runtime selector was added.
+
+Focused tests established three composition properties. An omitted selector
+resolved to Beads, an invalid selector failed, and a missing Beads executable
+failed run creation without writing `runtime-state.json`. The partial durable
+transaction retained `backend: beads` in immutable identity and the active-run
+pointer for safe retry. Separate persistence coverage rejected both active-run
+lookup and aggregate reconstruction when selected Beads attempted to reopen a
+file run.
+
+The final no-credit validation results were:
+
+```text
+pnpm check:boundaries                  passed
+pnpm typecheck                         passed
+pnpm test                              91 tests passed in 219.98s
+pnpm build                             passed
+pnpm bundle:check                      passed
+Biome check excluding two protected
+external tsconfig changes              147 files passed
+pnpm demo                              explicit file CLI/browser passed
+pnpm demo:beads                        default Beads CLI/browser passed
+```
+
+The default-Beads demo omitted runtime flags from CLI and browser supervisor
+processes. It completed five accepted phases and two closed tasks, recorded 77
+journal events and 27 output records, rendered `Runtime: beads`, retained eight
+authoritative non-event Beads nodes, and created no mutable runtime JSON blob.
+The file demo passed `--runtime file` to every spawned CLI process and rendered
+`Runtime: file`.
+
+Commander-backed reference generation covered every implemented leaf command.
+The CLI removed the no-op `--detach` option because no durable background driver
+exists. It added workflow validation, sensor inspection, manual gate checks,
+pause and guarded finish, phase and task inspection, durable question, answer,
+discovery, and note facts, and additive validated plan revision. `init`,
+individual `sensor run`, `task done`, and `task abort` remain omitted because
+their scaffold, expectation, worker-completion, or cancellation contracts are
+not yet sufficient for safe production behavior.
+
+This evidence used real Beads with deterministic workers and no Copilot or AI
+calls. It does not establish live subprocess execution, cross-host leases,
+multiple active drivers, or SDK transport.
+
 ## Design changes from the probes
 
 The list preserves names used by the probes. Current production sensor policy

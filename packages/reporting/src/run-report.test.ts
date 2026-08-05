@@ -6,6 +6,7 @@ describe("renderRunReport", () => {
     const run = {
       identity: {
         runId: "run-report",
+        backend: "file",
         workflow: "standard-delivery",
         request: { goal: "# [Render](https://unsafe.invalid)\u0000", constraints: [] },
         createdAt: "2026-08-04T10:00:00.000Z",

@@ -16,7 +16,7 @@ is not a dedicated runtime component and does not require a
 It performs the conversational work a human would otherwise do manually:
 
 * Convert a goal into a valid workflow request.
-* Invoke `senawa work start --detach` when the human asks to begin.
+* Invoke `senawa work start` when the human asks to begin.
 * Read bounded status and incremental logs.
 * Present artifact paths when a decision is due.
 * Quote the sensor and finding behind a refusal.
@@ -50,12 +50,11 @@ is pinned to their own task, so a completion request cannot target another task.
 
 | Command group | Driver | Human | Worker | Principal agent |
 |---------------|--------|-------|--------|-----------------|
-| `task next`, `dispatch`, `gate check`, `plan import` | Yes | Debug only | No | No |
+| `gate check` | Yes | Debug only | No | No |
 | `work start`, `resume`, `pause`, `end` | In-process operation | Yes | No | Relay on request |
-| `work budget` | No | Yes | No | No |
 | `approve`, `reject`, `plan revise` | No | Yes | No | Relay explicit decision |
-| `steer`, `task abort` | No | Yes | No | Draft and relay |
-| `task done`, `ask`, `discover`, `note` | No | No | Own task only | No |
+| `steer`, `answer` | No | Yes | No | Draft and relay |
+| `ask`, `discover`, `note` | No | Yes | Future binding | Relay on request |
 | `work show`, `work report`, `workflow info`, `doctor` | Yes | Yes | No | Yes |
 
 The principal agent is the least contained caller because it runs in the human's
@@ -75,16 +74,9 @@ A human running `senawa work start` directly gets a blocking process, streamed
 progress, and inline controls. The process stops at approvals and prompts in the
 same terminal.
 
-### Detached
-
-A principal agent uses `--detach`. The driver continues under its lease while the
-agent's turn returns immediately. The agent can then answer new questions or
-relay steering.
-
-| Caller | Log access | Behavior |
-|--------|------------|----------|
-| Human | `senawa work log --follow` | Blocks and streams |
-| Principal agent | `senawa work log --since <seq>` | Returns only unseen events |
+Detached start and resume are not available. A real background driver needs a
+bounded process lifecycle, durable ownership, and shutdown semantics before the
+CLI can return while work continues.
 
 `senawa work wait --timeout <seconds>` provides bounded waiting for requests such
 as "tell me when the plan is ready" without polling or holding an unlimited turn.
@@ -94,13 +86,11 @@ as "tell me when the plan is ready" without polling or holding an unlimited turn
 Workers do not use `ask_user`. A headless worker has no user attached, and a
 direct prompt would create a wait the driver cannot observe.
 
-1. The worker calls `senawa ask <task> "<question>"`.
-2. Senawa creates a threaded beads message and a human gate blocking that task.
-3. The driver surfaces the question while continuing unblocked siblings.
-4. The human or principal agent relays `senawa answer <message> "<answer>"`.
-5. The driver resumes the same worker session with the answer.
-
-The exchange survives restart and appears in the report.
+`senawa ask "<question>"` records a durable question ID in the run journal.
+The human or principal agent relays
+`senawa answer <question-id> "<answer>"`. The current operation records the
+exchange across restart but does not yet create a blocking Beads gate or resume
+a worker session automatically.
 
 ## Role instructions and briefs
 
@@ -131,9 +121,10 @@ agents, and unmediated completion unavailable even when a profile requests a
 broader semantic capability.
 
 Instructions do not enforce policy. Capability removal, typed tools, hooks, and
-the gate own enforcement. A worker ending its turn without calling
-`senawa task done` cannot bypass the driver, because the driver evaluates the
-gate after the turn and remains authoritative.
+the gate own enforcement. A worker ending its turn without submitting the typed
+completion request cannot bypass the driver, because the driver evaluates the
+gate after the turn and remains authoritative. A public `task done` CLI command
+remains deferred until it can authenticate and bind the worker turn.
 
 ## Session topology
 

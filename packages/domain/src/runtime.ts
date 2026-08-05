@@ -7,9 +7,11 @@ import type { RunSnapshot } from "./run-snapshot.js";
 export type RunStatus = "running" | "awaiting_approval" | "paused" | "finished" | "ended";
 export type PhaseStatus = "pending" | "running" | "awaiting_approval" | "accepted" | "ended";
 export type TaskStatus = "pending" | "in_progress" | "rework" | "closed" | "escalated" | "ended";
+export type RuntimeBackend = "file" | "beads";
 
 export interface RunIdentity {
   readonly runId: string;
+  readonly backend: RuntimeBackend;
   readonly workflow: string;
   readonly request: WorkRequest;
   readonly createdAt: string;

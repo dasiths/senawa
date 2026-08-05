@@ -41,10 +41,11 @@ fake subprocess executable. The subprocess adapter reports absent typed-tool
 transport, buffered output, process-local inspection limits, and absent path
 containment honestly. No live Copilot subprocess or SDK transport was exercised.
 
-The `senawa` app keeps the file runtime as its ordinary Phase 7 composition and
-accepts explicit `--runtime beads` only for internal tests and the offline Beads
-example. It does not catch a Beads failure and substitute file state. The Phase 8
-production-default switch remains pending.
+The `senawa` app composes Beads when `--runtime` is omitted. Explicit global
+`--runtime file` selects the development and test adapter. It does not catch a
+missing, incompatible, or failed Beads operation and substitute file state.
+Immutable run identity and the active-run pointer record the backend; status and
+reports expose it, and a mismatched reopen is rejected.
 
 `@senawa/runtime-beads` owns mutable graph state when selected. It validates
 `bd 1.1.x`, sets `BD_JSON_ENVELOPE=1`, closes stdin, initializes
@@ -133,7 +134,9 @@ referenced schemas under `.senawa/schemas/`, every referenced worker role under
 `.senawa/agents/`, and the Copilot-facing skill at
 `.agents/skills/senawa/SKILL.md` before running `senawa doctor`.
 
-Initialization will scaffold those repository inputs. It will not emit
+Initialization remains deferred because the bundle does not yet carry a
+versioned consumer scaffold. A future implementation will scaffold those
+repository inputs. It will not emit
 `.github/agents` or `.github/hooks`: worker authority, hook policy, isolation,
 gate evaluation, and audit remain implemented and versioned in Senawa packages.
 
@@ -161,16 +164,19 @@ inspection mode. Its temporary repository runs real command sensors: typecheck
 passes, while tests fail on attempt 1 and pass on attempt 2 to prove deterministic
 rework without AI credits.
 
-On 2026-08-05, `bd version` reported `1.1.2`. The final `pnpm test` run passed
-87 tests in 228.67 seconds; the eight-test real-Beads contract file took 227.45
-seconds. Coverage included malformed
+On 2026-08-05, `bd version` reported `1.1.2`. After the Phase 8 production
+switch, `pnpm test` passed 91 tests in 219.98 seconds; the eight-test real-Beads
+contract file completed within that run. Coverage included malformed
 envelopes, a missing binary, closed tasks, gate lifecycle, cache deletion,
 stable claims, terminal behavior, shared dispatch and projection semantics, and
-four split-write fault points. `pnpm demo:beads` then completed the five-phase
-CLI and browser workflow with two dependency-ordered tasks, two deterministic
-rework events, 77 journal events, 27 output records, five immutable artifacts,
-eight Beads graph nodes, and no mutable runtime JSON blob. These are real Beads
-and deterministic-worker measurements, not live Copilot evidence.
+four split-write fault points. Focused composition and persistence tests proved
+omitted-option Beads selection, missing-binary no fallback, and backend mismatch
+rejection. `pnpm demo` completed with explicit `--runtime file` throughout.
+`pnpm demo:beads` omitted runtime selection and completed the five-phase CLI and
+browser workflow with two dependency-ordered tasks, two deterministic rework
+events, 77 journal events, 27 output records, five immutable artifacts, eight
+Beads graph nodes, and no mutable runtime JSON blob. These are real Beads and
+deterministic-worker measurements, not live Copilot evidence.
 
 If hook startup later becomes material, keep the orchestrator warm behind a Unix
 socket and replace the shell hook with a small compiled client. Do not rewrite
@@ -183,11 +189,11 @@ The command surface is grouped by responsibility:
 | Group | Representative commands | Primary caller |
 |-------|-------------------------|----------------|
 | Run lifecycle | `work start`, `resume`, `show`, `log`, `wait`, `pause`, `end`, `finish`, `browser` | Human or principal agent |
-| Human decisions | `approve`, `reject`, `answer`, `steer`, `task abort`, `work budget` | Human, sometimes relayed |
+| Human decisions | `approve`, `reject`, `answer`, `steer`, `work end` | Human, sometimes relayed |
 | Phase inspection | `phase show`, `phase brief` | Human, principal agent, driver |
-| Worker contract | `task done`, `ask`, `discover`, `note` | Worker wrapper |
-| Driver internals | `task next`, `dispatch`, `gate check`, `plan import` | Driver or debugging |
-| Sensor management | `sensor list`, `info`, `run`, `audit` | Human, CI, driver |
+| Durable run facts | `ask`, `answer`, `discover`, `note`, `plan revise` | Human or principal agent |
+| Driver diagnostics | `gate check` | Driver or debugging |
+| Sensor management | `sensor list`, `info` | Human, CI, driver |
 | Workflow management | `workflow list`, `info`, `validate`, `render` | Human or principal agent |
 | Diagnostics | `doctor`, `prime`, `work report` | All trusted operational callers |
 
@@ -200,9 +206,10 @@ segment because VS Code remote-port forwarding rewrites query delimiters.
 `--no-open` suppresses the local launch for manual or forwarded use. `senawa work
 web` remains the low-level supervisor command for automation.
 
-The complete argument grammar belongs in generated CLI reference once the
-implementation begins. Design documents define authority and behavior, not a
-second parser specification.
+The complete argument grammar is generated from Commander in
+[the CLI reference](../reference/cli.md). `init`, `sensor run`, `task done`, and
+`task abort` remain omitted until versioned scaffold assets, sensor expectation,
+worker completion, and cancellation contracts exist.
 
 ## Build order
 
@@ -213,9 +220,9 @@ hostile-output regression tests immediately.
 
 ### Slice 1: quality seam
 
-Implement `init`, sensor discovery, `sensor run`, `gate check`, and `doctor`.
-This yields one command that answers whether work satisfies declared policy,
-without any agents.
+Implement definition validation, sensor discovery, `gate check`, and `doctor`.
+`init` and individual `sensor run` remain deferred until versioned scaffold
+assets and a sensor expectation contract exist.
 
 ### Slice 2: enforcement
 

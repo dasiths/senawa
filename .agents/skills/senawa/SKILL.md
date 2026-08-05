@@ -14,13 +14,15 @@ next workflow transition.
 | Intent | Command |
 |--------|---------|
 | Validate repository definitions | `senawa doctor` |
+| Validate a workflow | `senawa workflow validate [<name>]` |
 | List workflows | `senawa workflow list` |
 | Inspect a workflow | `senawa workflow info <name>` |
-| Start requested work | `senawa work start "<goal>" --workflow <name> --detach` |
+| Start requested work | `senawa work start "<goal>" --workflow <name>` |
 | Read bounded status | `senawa work show` |
 | Open the run console | `senawa browser [<run>]` |
 | Wait for a bounded interval | `senawa work wait --timeout <seconds>` |
 | Continue a stopped run | `senawa work resume` |
+| Pause an idle driver | `senawa work pause` |
 | Approve an artifact | `senawa approve <phase>` |
 | Reject an artifact | `senawa reject <phase> --reason "<reason>"` |
 | Steer a worker | `senawa steer <task> "<instruction>"` |
@@ -35,3 +37,8 @@ approve. Quote sanitized sensor findings when work is refused.
 Exit code `2` from a start or resume is a normal decision point. Read `status`
 and `needs`, then report exactly what the run requires. Any other nonzero exit is
 a failure and should be relayed without reinterpretation.
+
+Beads is the default runtime. Use global `--runtime file` only for development,
+tests, or the file-backed demo. Never retry a failed Beads command with the file
+runtime. Start and resume are foreground commands; no detached driver is
+available.

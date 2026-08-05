@@ -33,6 +33,8 @@ export const JournalEventNameSchema = z.enum([
   "gate.evaluated",
   "question.asked",
   "question.answered",
+  "discovery.recorded",
+  "note.recorded",
   "steering.recorded",
 ]);
 

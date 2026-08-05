@@ -22,6 +22,7 @@ import type {
   JournalEvent,
   OutputRecord,
   RuntimeArtifact,
+  RuntimeBackend,
   RuntimeLease,
   RuntimeState,
   RuntimeTask,
@@ -35,6 +36,7 @@ interface RuntimeEnvelope {
 
 interface ActiveRunPointer {
   readonly runId: string;
+  readonly backend: RuntimeBackend;
   readonly operationId: string;
   readonly createdAt: string;
 }
@@ -76,6 +78,7 @@ export interface FileRunPersistenceStores {
 }
 
 export interface FileRunPersistenceOptions {
+  readonly backend?: RuntimeBackend;
   readonly afterStep?: (
     step: "active-run" | "documents" | "evidence" | "runtime-state",
   ) => void | Promise<void>;
@@ -177,12 +180,18 @@ export class FileRuntimeStateStore implements RuntimeStateStoragePort {
 export class FileActiveRunRegistry implements ActiveRunStoragePort {
   private readonly path: string;
 
-  constructor(repositoryRoot: string) {
+  constructor(
+    repositoryRoot: string,
+    private readonly backend: RuntimeBackend = "file",
+  ) {
     this.path = resolve(repositoryRoot, ".agents", ".copilot-tracking", "active-run.json");
   }
 
   async getActiveRunId(): Promise<string | null> {
-    return (await readJsonIfPresent<ActiveRunPointer>(this.path))?.runId ?? null;
+    const current = await readJsonIfPresent<ActiveRunPointer>(this.path);
+    if (current === null) return null;
+    this.assertBackend(current);
+    return current.runId;
   }
 
   async reserveActiveRun(input: {
@@ -192,10 +201,11 @@ export class FileActiveRunRegistry implements ActiveRunStoragePort {
   }): Promise<void> {
     const current = await readJsonIfPresent<ActiveRunPointer>(this.path);
     if (current !== null) {
+      this.assertBackend(current);
       if (current.runId === input.runId && current.operationId === input.operationId) return;
       throw new ActiveRunError(current.runId);
     }
-    await writeJson(this.path, input);
+    await writeJson(this.path, { ...input, backend: this.backend });
   }
 
   async releaseActiveRun(input: {
@@ -204,8 +214,17 @@ export class FileActiveRunRegistry implements ActiveRunStoragePort {
   }): Promise<void> {
     const current = await readJsonIfPresent<ActiveRunPointer>(this.path);
     if (current === null) return;
+    this.assertBackend(current);
     if (current.runId !== input.runId) throw new ActiveRunError(current.runId);
     await rm(this.path, { force: true });
+  }
+
+  private assertBackend(pointer: ActiveRunPointer): void {
+    if (pointer.backend !== this.backend) {
+      throw new Error(
+        `Run ${pointer.runId} uses ${String(pointer.backend)} runtime, not selected ${this.backend} runtime`,
+      );
+    }
   }
 }
 
@@ -525,6 +544,11 @@ export class FileRunPersistence implements RunPersistencePort {
       this.stores.leases.readLeaseFence(runId, "driver"),
       this.stores.leases.readLeaseFence(runId, "web"),
     ]);
+    if (identity.backend !== (this.options.backend ?? "file")) {
+      throw new Error(
+        `Run ${runId} uses ${String(identity.backend)} runtime, not selected ${this.options.backend ?? "file"} runtime`,
+      );
+    }
     const outputs: Record<string, OutputRecord[]> = {};
     await Promise.all(
       owners.map(async (owner) => {

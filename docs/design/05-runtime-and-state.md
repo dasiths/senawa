@@ -79,9 +79,9 @@ One transition follows this shape:
 7. Invalidate affected read-cache entries.
 8. Repeat until completion, human intervention, pause, exhaustion, or error.
 
-The command forms of `senawa task next`, `senawa dispatch`, and
-`senawa gate check` expose these code paths for debugging. The driver calls the
-same operations in process; it does not shell out to itself.
+`senawa gate check` exposes gate evaluation for debugging. Task selection and
+dispatch remain in-process driver operations rather than public command forms;
+the driver does not shell out to itself.
 
 ## Intent and outcome
 
@@ -175,6 +175,11 @@ issue metadata. Immutable identity, snapshots, and artifacts remain owned by
 `@senawa/observability`; active-run ownership and fenced leases remain local
 file authorities.
 
+Run identity and the repository active-run pointer also store `backend` as
+`beads` or `file`. The selected composition validates both records before
+reading or mutating a run. Status and reports expose the backend. A process
+cannot reopen a file run through Beads or a Beads run through file state.
+
 On 2026-08-05, the shared file and Beads contracts passed against `bd 1.1.2`.
 The Beads suite proved restart reconstruction, stale revision rejection, stable
 atomic claim receipts, closed-task retention, event-bead filtering, additive
@@ -194,9 +199,14 @@ authoritative Beads nodes and no `runtime-state.json`:
 pnpm demo:beads
 ```
 
+Phase 8 then made this Beads composition the omitted-option default. Explicit
+global `--runtime file` remains available for development and tests. Focused
+composition tests proved the default selection, invalid-option rejection, and
+that a missing Beads executable creates no file runtime state. The default
+Beads demo completed through the same CLI and browser application instance.
+
 This evidence covers real Beads with deterministic workers. It does not cover a
-live Copilot worker, multiple active drivers, cross-host leases, or the Phase 8
-production-default composition switch.
+live Copilot worker, multiple active drivers, or cross-host leases.
 
 ## Status projection
 
@@ -204,6 +214,7 @@ production-default composition switch.
 
 ```json
 {
+  "backend": "beads",
   "status": "awaiting_approval",
   "needs": {
     "action": "approve",

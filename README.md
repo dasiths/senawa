@@ -7,10 +7,10 @@ Senawa (සේනාව) is an orchestration harness for [GitHub Copilot CLI](ht
 Three ideas hold the design together.
 
 Durable workflow state lives outside the model, behind a runtime graph-store
-boundary. The current vertical slice explicitly composes split file-backed
-development and test adapters; the target production adapter uses
-[beads](https://github.com/gastownhall/beads). Agents ask runtime state what is
-workable rather than remembering a plan.
+boundary. Ordinary CLI commands use
+[beads](https://github.com/gastownhall/beads). The split file-backed runtime is
+available only through explicit global `--runtime file` for development and
+tests. Agents ask runtime state what is workable rather than remembering a plan.
 
 Every agent-facing operation crosses the Senawa boundary. The principal agent
 uses the CLI. Hosted workers use typed Senawa tools, and subprocess workers use a
@@ -36,7 +36,10 @@ inside it cannot redefine.
 | Middle | the run driver, deterministic | minutes to hours | steer it any time; it asks at declared approvals and escalations |
 | Inner | one worker, alone | seconds to minutes | absent by design; this is where the harness pushes back |
 
-`senawa work start` drives the run and stops when it needs you, so the loop advances without anyone watching it. Cancel it and `senawa work resume` picks up where it stopped. When a principal agent starts it on your behalf it runs detached, which is what lets you keep asking questions and steering while the work continues.
+`senawa work start` drives the run in the foreground and stops when it needs a
+decision. `senawa work resume` picks up from durable state. Detached execution
+is not exposed because the current process does not provide a durable background
+driver lifecycle.
 
 Version 1 allows one unfinished Senawa run per repository and one active worker
 turn. If a run cannot be completed or resumed, `senawa work end --reason "..."`
@@ -53,28 +56,28 @@ run again on top of what it already produced.
 you   Add Entity Framework support for the persistence layer
 PA    [senawa workflow list] I can run standard-delivery or hotfix. Which?
 you   standard-delivery
-PA    [senawa work start "<goal>" --workflow standard-delivery --detach] Started.
+PA    [senawa work start "<goal>" --workflow standard-delivery] Define is ready.
 PA    [senawa work wait --timeout 300] Define is ready: artifacts/define/v1.json
 you   looks right, go on
-PA    [senawa approve define] [senawa work resume --detach]
+PA    [senawa approve define] [senawa work resume]
 PA    [senawa work wait --timeout 300] Research is ready: v1
 you   approve
-PA    [senawa approve research] [senawa work resume --detach]
+PA    [senawa approve research] [senawa work resume]
 PA    [senawa work wait --timeout 300] Plan is ready: v1, 6 tasks
 you   no error handling on the adapter boundary
-PA    [senawa reject plan --reason "<reason>"] [senawa work resume --detach]
+PA    [senawa reject plan --reason "<reason>"] [senawa work resume]
 PA    [senawa work wait --timeout 300] Plan v2 adds two tasks for it
 you   approve
-PA    [senawa approve plan] [senawa work resume --detach] Implementing.
+PA    [senawa approve plan] [senawa work resume] Implementing.
 you   how is it going?
 PA    [senawa work show] 4 of 6 closed.
       bd-a1b2 was refused once on unit-tests and passed on its second attempt.
 PA    [senawa work wait --timeout 300] Verify is ready: v1
 you   add the tasks in extra-tasks.json
-PA    [senawa plan revise --add extra-tasks.json] [senawa work resume --detach]
+PA    [senawa plan revise --add extra-tasks.json] [senawa work resume]
 PA    [senawa work wait --timeout 300] Done, verify re-ran: v2
 you   accept
-PA    [senawa approve verify] [senawa work resume --detach]
+PA    [senawa approve verify] [senawa work resume]
 PA    [senawa work wait --timeout 300] Run accepted. Report at report.md
 ```
 
@@ -123,8 +126,8 @@ discoveries, and notes. Offline conformance uses deterministic adapters and a
 recording fake executable. It does not establish live Copilot transport or SDK
 behavior.
 
-The `senawa` app explicitly composes `@senawa/runtime-file`,
-`@senawa/artifact-store`, and `@senawa/observability`. Mutable runtime state,
+The `senawa` app composes `@senawa/runtime-beads` by default and selects
+`@senawa/runtime-file` only for explicit `--runtime file` commands. Mutable runtime state,
 active-run ownership, fenced leases, immutable documents, journal JSONL, and
 session/turn output streams each have one file authority. Owner output replay is
 derived across those streams. A write-ahead transaction
@@ -142,8 +145,10 @@ HTML, and Markdown syntax in untrusted fields. `@senawa/web` and
 `@senawa/report` remain thin re-export facades while compatibility importers are
 migrated. The `senawa` app wires target adapters directly.
 
-The Beads adapter described by the target architecture is pending. The
-deterministic offline demo is ready and covered by integration tests. The opt-in
+Run identity and the active-run pointer record the selected backend. Status and
+reports expose it, and reopening through another backend is rejected. Beads
+startup errors are terminal and never fall back to file state. The deterministic
+file and Beads offline demos are covered by integration tests. The opt-in
 Copilot subprocess host is implemented, but this production live-worker path has
 not been validated in this slice. Existing live-model claims remain limited to
 the probes that recorded them.
@@ -163,13 +168,19 @@ pnpm demo
 ```
 
 The command builds Senawa, creates an isolated temporary repository, runs
-`senawa doctor`, starts the deterministic workflow and production web
+`senawa --runtime file doctor`, starts the deterministic workflow and production web
 supervisor, exercises HTTP rejection and approvals, verifies SSE replay and live
 task output, and runs real command gates. It copies the repository's `.senawa`
 definitions and Copilot-facing Senawa skill into the temporary repository. The
 fixture typecheck passes; its tests fail on the first task attempt and pass on
 the second, proving rework before the run finishes and renders its report. The
 command then terminates the server. It does not invoke Copilot.
+
+Run the equivalent default-Beads acceptance path with `pnpm demo:beads`. The
+complete generated command grammar is in the [CLI reference](docs/reference/cli.md).
+`senawa init`, individual `sensor run`, `task done`, and `task abort` remain
+deferred because their current scaffold, expectation, completion, or cancellation
+contracts are not sufficient for a safe public command.
 
 Keep the completed browser console running only for explicit inspection:
 
@@ -227,7 +238,7 @@ flowchart LR
     S --> D{Deterministic run driver}
     D --> W[Researcher, planner, implementors, verifiers]
     W -->|typed Senawa tools or restricted CLI| S
-    S --> G[(Runtime graph store<br/>file-backed now, beads target)]
+    S --> G[(Runtime graph store<br/>Beads by default)]
     S --> SEN[sensors and gates]
     S --> J[(journal)]
     W --> T[(telemetry)]
@@ -254,7 +265,7 @@ headless with no principal agent at all.
 | Principal agent | The Copilot session you talk to, carrying the senawa skill. Relays your intent as `senawa` commands and explains what came back. It never decides what runs next, and the harness runs without it |
 | Worker session | A role-scoped worker with its own context window, model, reasoning effort, and tool permissions. A separate session, not an in-process helper |
 | Artifact | A phase's schema-validated output, versioned rather than overwritten. A plan's tasks become the implementation frontier |
-| Graph state | The dependency graph of phases, tasks, and gates plus orchestration metadata, held by the current file-backed store behind the pending beads adapter |
+| Graph state | The dependency graph of phases, tasks, and gates plus orchestration metadata, held by Beads for ordinary commands |
 | Sensor | A tool that measures a property of the work and returns an assessment plus evidence. Builds, tests, linters, and reviewer agents |
 | Gate | A rule that consumes sensor readings and resists progress when they are red |
 | Anchor | A deterministic reading that cannot be argued with. Every blocking gate needs at least one, or the harness is only agreeing with itself |
@@ -265,10 +276,10 @@ headless with no principal agent at all.
 
 ## Prerequisites
 
-The offline vertical slice requires Node.js 22 or later, pnpm 10 or later, and
-Git. The opt-in live-worker path also requires GitHub Copilot CLI with an active
-Copilot subscription. The current file-backed runtime does not require `bd`;
-that binary becomes required when the pending beads adapter lands.
+The offline vertical slice requires Node.js 22 or later, pnpm 10 or later, Git,
+and `bd` 1.1.x for ordinary commands. Explicit `--runtime file` development and
+test commands do not require `bd`. The opt-in live-worker path also requires
+GitHub Copilot CLI with an active Copilot subscription.
 
 A repository running Senawa must provide `.senawa/sensors.yaml`, workflows,
 schemas, and worker profiles under `.senawa/`. It must also provide

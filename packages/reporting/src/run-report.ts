@@ -18,6 +18,8 @@ export function renderRunReport(run: ReportRun): string {
     "",
     `Workflow: ${escapeMarkdown(run.identity.workflow)}`,
     "",
+    `Runtime: ${escapeMarkdown(run.identity.backend)}`,
+    "",
     `Goal: ${escapeMarkdown(run.identity.request.goal)}`,
     "",
   ];

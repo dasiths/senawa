@@ -4,9 +4,11 @@ import {
   type JournalEventName,
   type JsonObject,
   JsonObjectSchema,
+  type PlanArtifact,
   PlanArtifactSchema,
   type RunSnapshot,
   type RuntimeArtifact,
+  type RuntimeBackend,
   type RuntimeDispatch,
   type RuntimeLease,
   type RuntimePhase,
@@ -78,6 +80,7 @@ export class RunCommandService implements RunDriver {
     private readonly identifiers: IdentifierPort,
     private readonly scheduler: SchedulerPort,
     private readonly driverLeaseTtlMs = 30_000,
+    private readonly backend: RuntimeBackend = "file",
   ) {
     this.store = new RuntimeCoordinator(store, identifiers);
   }
@@ -92,6 +95,7 @@ export class RunCommandService implements RunDriver {
       apiVersion: "senawa.dev/runtime/v1",
       identity: {
         runId,
+        backend: this.backend,
         workflow: snapshot.workflow.metadata.name,
         request: input.request,
         createdAt: snapshot.createdAt,
@@ -212,6 +216,129 @@ export class RunCommandService implements RunDriver {
       emit(state, "work.resumed", actor, this.now(), {});
     });
     return this.drive(runId, actor);
+  }
+
+  async pause(runId: string, actor: CommandActor): Promise<TransitionResult> {
+    await this.store.updateRun(runId, (state) => {
+      assertMutable(state);
+      if (state.activeTurn !== null) {
+        throw new Error("Cannot pause while a worker turn is active");
+      }
+      if (state.status === "paused") return;
+      state.status = "paused";
+      emit(state, "work.paused", actor, this.now(), {});
+    });
+    return { runId, kind: "idle" };
+  }
+
+  async checkGate(
+    runId: string,
+    gateId: string,
+    owner: { readonly kind: "phase" | "task"; readonly id: string },
+    actor: CommandActor,
+  ): Promise<GateEvaluation> {
+    const state = await this.store.readRun(runId);
+    assertMutable(state);
+    const phase = owner.kind === "phase" ? requirePhase(state, owner.id) : undefined;
+    const attempt = phase?.iteration ?? requireTask(state, owner.id).attempt;
+    const artifact =
+      phase?.artifactVersion !== null && phase?.artifactVersion !== undefined
+        ? state.artifacts.find(
+            (candidate) =>
+              candidate.phaseId === owner.id && candidate.version === phase.artifactVersion,
+          )?.content
+        : undefined;
+    const evaluation = await this.gateEvaluator.evaluate({
+      runId,
+      owner,
+      attempt,
+      gateId,
+      policy: state.snapshot.policy,
+      ...(artifact === undefined ? {} : { artifact }),
+    });
+    await this.store.updateRun(runId, (draft) => {
+      assertMutable(draft);
+      appendGateEvaluation(draft, evaluation, { owner, attempt }, this.now(), actor);
+    });
+    return evaluation;
+  }
+
+  async ask(runId: string, question: string, actor: CommandActor) {
+    const questionId = `question-${this.identifiers.createId()}`;
+    await this.store.updateRun(runId, (state) => {
+      assertMutable(state);
+      emit(state, "question.asked", actor, this.now(), { questionId, question });
+    });
+    return { runId, questionId };
+  }
+
+  async answer(runId: string, questionId: string, answer: string, actor: CommandActor) {
+    await this.store.updateRun(runId, (state) => {
+      assertMutable(state);
+      const asked = state.journal.some((event) => {
+        const { questionId: recordedQuestionId } = event.data;
+        return event.event === "question.asked" && recordedQuestionId === questionId;
+      });
+      if (!asked) throw new Error(`Unknown question ${questionId}`);
+      const answered = state.journal.some((event) => {
+        const { questionId: recordedQuestionId } = event.data;
+        return event.event === "question.answered" && recordedQuestionId === questionId;
+      });
+      if (answered) throw new Error(`Question ${questionId} is already answered`);
+      emit(state, "question.answered", actor, this.now(), { questionId, answer });
+    });
+    return { runId, questionId };
+  }
+
+  async discover(runId: string, title: string, actor: CommandActor) {
+    const discoveryId = `discovery-${this.identifiers.createId()}`;
+    await this.store.updateRun(runId, (state) => {
+      assertMutable(state);
+      emit(state, "discovery.recorded", actor, this.now(), { discoveryId, title });
+    });
+    return { runId, discoveryId };
+  }
+
+  async note(runId: string, note: string, actor: CommandActor) {
+    const noteId = `note-${this.identifiers.createId()}`;
+    await this.store.updateRun(runId, (state) => {
+      assertMutable(state);
+      emit(state, "note.recorded", actor, this.now(), { noteId, note });
+    });
+    return { runId, noteId };
+  }
+
+  async revisePlan(runId: string, input: PlanArtifact, actor: CommandActor) {
+    const plan = PlanArtifactSchema.parse(input);
+    let added: string[] = [];
+    await this.store.updateRun(runId, (state) => {
+      assertMutable(state);
+      const known = new Set(state.tasks.map((task) => task.key));
+      const additions = plan.tasks.filter((task) => !known.has(task.key));
+      const available = new Set([...known, ...additions.map((task) => task.key)]);
+      for (const task of additions) {
+        if (state.snapshot.workerProfiles[task.role] === undefined) {
+          throw new Error(`Plan task ${task.key} references missing worker profile ${task.role}`);
+        }
+        for (const dependency of task.dependsOn) {
+          if (!available.has(dependency)) {
+            throw new Error(`Plan task ${task.key} references unknown dependency ${dependency}`);
+          }
+        }
+        state.tasks.push({
+          ...task,
+          status: "pending",
+          attempt: 0,
+          dispatchFailures: 0,
+          sessionId: null,
+          steering: [],
+          reworkFindings: [],
+        });
+      }
+      added = additions.map((task) => task.key);
+      emit(state, "plan.revised", actor, this.now(), { summary: plan.summary, tasks: added });
+    });
+    return { runId, added };
   }
 
   async end(runId: string, reason: string, actor: CommandActor): Promise<TransitionResult> {
@@ -1299,11 +1426,12 @@ function appendWorkerResult(
 function appendGateEvaluation(
   state: RuntimeState,
   evaluation: GateEvaluation,
-  turn: WorkerTurn,
+  turn: Pick<WorkerTurn, "owner" | "attempt">,
   now: Date,
+  actor: CommandActor = { channel: "driver" },
 ): void {
   for (const reading of evaluation.readings) {
-    emit(state, "sensor.started", { channel: "driver" }, now, {
+    emit(state, "sensor.started", actor, now, {
       gateId: evaluation.gateId,
       sensorId: reading.sensorId,
       ownerKind: turn.owner.kind,
@@ -1313,12 +1441,12 @@ function appendGateEvaluation(
     emit(
       state,
       "error" in reading.result ? "sensor.error" : "sensor.completed",
-      { channel: "driver" },
+      actor,
       now,
       sensorEvidence(evaluation.gateId, reading, turn),
     );
   }
-  emit(state, "gate.evaluated", { channel: "driver" }, now, {
+  emit(state, "gate.evaluated", actor, now, {
     gateId: evaluation.gateId,
     ownerKind: turn.owner.kind,
     ownerId: turn.owner.id,
@@ -1334,7 +1462,11 @@ function appendGateEvaluation(
   });
 }
 
-function sensorEvidence(gateId: string, reading: SensorReading, turn: WorkerTurn): JsonObject {
+function sensorEvidence(
+  gateId: string,
+  reading: SensorReading,
+  turn: Pick<WorkerTurn, "owner" | "attempt">,
+): JsonObject {
   return {
     gateId,
     sensorId: reading.sensorId,

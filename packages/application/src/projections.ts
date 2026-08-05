@@ -2,6 +2,7 @@ import type { RuntimeDispatch, RuntimePhase, RuntimeState, RuntimeTask } from "@
 
 export interface RunStatusProjection {
   readonly runId: string;
+  readonly backend: RuntimeState["identity"]["backend"];
   readonly workflow: string;
   readonly status: RuntimeState["status"];
   readonly needs: null | {
@@ -70,6 +71,7 @@ export function projectRunStatus(state: RuntimeState): RunStatusProjection {
     .map((task) => ({ key: task.key, title: truncate(task.title, 160), role: task.role }));
   return {
     runId: state.identity.runId,
+    backend: state.identity.backend,
     workflow: state.identity.workflow,
     status: state.status,
     needs:

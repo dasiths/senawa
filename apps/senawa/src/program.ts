@@ -1,6 +1,7 @@
+import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { startWebSupervisor } from "@senawa/browser";
-import type { CommandActor } from "@senawa/domain";
+import { type CommandActor, PlanArtifactSchema } from "@senawa/domain";
 import { Command, CommanderError, Option } from "commander";
 import type { SenawaServices } from "./services.js";
 
@@ -36,9 +37,9 @@ export async function runCli(
         .default("deterministic"),
     )
     .addOption(
-      new Option("--runtime <runtime>", "runtime backend for internal and offline validation")
+      new Option("--runtime <runtime>", "runtime backend (file is for development and tests)")
         .choices(["file", "beads"])
-        .default("file"),
+        .default("beads"),
     )
     .showHelpAfterError()
     .exitOverride()
@@ -62,21 +63,70 @@ export async function runCli(
     .command("render")
     .argument("<name>")
     .action(async (name: string) => io.stdout(await options.services.queries.renderWorkflow(name)));
+  workflow
+    .command("validate")
+    .argument("[name]")
+    .action(async (name?: string) => {
+      const definitions = await options.services.loadDefinitions(name);
+      writeJson(io, { ok: true, workflow: definitions.workflow.metadata.name });
+    });
+
+  const sensor = program.command("sensor");
+  sensor.command("list").action(async () => {
+    const definitions = await options.services.loadDefinitions();
+    writeJson(
+      io,
+      definitions.policy.sensors.map(({ id, description, kind, cost, trust }) => ({
+        id,
+        description,
+        kind,
+        cost,
+        trust,
+      })),
+    );
+  });
+  sensor
+    .command("info")
+    .argument("<id>")
+    .action(async (id: string) => {
+      const definitions = await options.services.loadDefinitions();
+      const found = definitions.policy.sensors.find((candidate) => candidate.id === id);
+      if (found === undefined) throw new Error(`Unknown sensor ${id}`);
+      writeJson(io, found);
+    });
+
+  const gate = program.command("gate");
+  gate
+    .command("check")
+    .argument("<id>")
+    .option("--phase <phase>")
+    .option("--task <task>")
+    .action(async (id: string, commandOptions: { phase?: string; task?: string }) => {
+      const owner = selectedOwner(commandOptions);
+      writeJson(
+        io,
+        await options.services.commands.checkGate(
+          await requireActiveRun(options.services),
+          id,
+          owner,
+          actor,
+        ),
+      );
+    });
 
   const work = program.command("work");
   work
     .command("start")
     .argument("<goal>")
     .requiredOption("--workflow <name>")
-    .option("--detach")
-    .action(async (goal: string, commandOptions: { workflow: string; detach?: boolean }) => {
+    .action(async (goal: string, commandOptions: { workflow: string }) => {
       const started = await options.services.commands.start({
         actor,
         definitions: await options.services.loadDefinitions(commandOptions.workflow),
         request: { goal, constraints: [] },
       });
       const result = await options.services.commands.drive(started.runId, actor);
-      writeJson(io, { ...result, detach: commandOptions.detach ?? false });
+      writeJson(io, result);
       if (result.kind === "awaiting-approval" || result.kind === "task-escalated") resultCode = 2;
     });
   work.command("resume").action(async () => {
@@ -84,6 +134,18 @@ export async function runCli(
     const result = await options.services.commands.resume(runId, actor);
     writeJson(io, result);
     if (result.kind === "awaiting-approval" || result.kind === "task-escalated") resultCode = 2;
+  });
+  work.command("pause").action(async () => {
+    writeJson(
+      io,
+      await options.services.commands.pause(await requireActiveRun(options.services), actor),
+    );
+  });
+  work.command("finish").action(async () => {
+    writeJson(
+      io,
+      await options.services.commands.finish(await requireActiveRun(options.services), actor),
+    );
   });
   work
     .command("show")
@@ -124,6 +186,117 @@ export async function runCli(
     .action(async (runId?: string) =>
       io.stdout(
         await options.services.queries.report(runId ?? (await requireActiveRun(options.services))),
+      ),
+    );
+
+  const phase = program.command("phase");
+  phase
+    .command("show")
+    .argument("<id>")
+    .option("--run <runId>")
+    .action(async (id: string, commandOptions: { run?: string }) => {
+      const status = await requireStatus(options.services, commandOptions.run);
+      const found = status.phases.find((candidate) => candidate.id === id);
+      if (found === undefined) throw new Error(`Unknown phase ${id}`);
+      writeJson(io, found);
+    });
+  phase
+    .command("brief")
+    .argument("<id>")
+    .option("--run <runId>")
+    .action(async (id: string, commandOptions: { run?: string }) => {
+      const status = await requireStatus(options.services, commandOptions.run);
+      const found = status.phases.find((candidate) => candidate.id === id);
+      if (found === undefined) throw new Error(`Unknown phase ${id}`);
+      writeJson(io, {
+        runId: status.runId,
+        backend: status.backend,
+        phase: found.id,
+        status: found.status,
+        iteration: found.iteration,
+        artifactVersion: found.artifactVersion,
+        needs: status.needs?.phaseId === id ? status.needs : null,
+      });
+    });
+
+  const task = program.command("task");
+  task
+    .command("show")
+    .argument("<id>")
+    .option("--run <runId>")
+    .action(async (id: string, commandOptions: { run?: string }) => {
+      const status = await requireStatus(options.services, commandOptions.run);
+      const found = status.tasks.find((candidate) => candidate.key === id);
+      if (found === undefined) throw new Error(`Unknown task ${id}`);
+      writeJson(io, found);
+    });
+
+  const plan = program.command("plan");
+  plan
+    .command("revise")
+    .requiredOption("--add <file>")
+    .action(async (commandOptions: { add: string }) => {
+      const parsed = PlanArtifactSchema.parse(
+        JSON.parse(await readFile(commandOptions.add, "utf8")) as unknown,
+      );
+      writeJson(
+        io,
+        await options.services.commands.revisePlan(
+          await requireActiveRun(options.services),
+          parsed,
+          actor,
+        ),
+      );
+    });
+
+  program
+    .command("ask")
+    .argument("<question>")
+    .action(async (question: string) =>
+      writeJson(
+        io,
+        await options.services.commands.ask(
+          await requireActiveRun(options.services),
+          question,
+          actor,
+        ),
+      ),
+    );
+  program
+    .command("answer")
+    .argument("<questionId>")
+    .argument("<answer>")
+    .action(async (questionId: string, answer: string) =>
+      writeJson(
+        io,
+        await options.services.commands.answer(
+          await requireActiveRun(options.services),
+          questionId,
+          answer,
+          actor,
+        ),
+      ),
+    );
+  program
+    .command("discover")
+    .argument("<title>")
+    .action(async (title: string) =>
+      writeJson(
+        io,
+        await options.services.commands.discover(
+          await requireActiveRun(options.services),
+          title,
+          actor,
+        ),
+      ),
+    );
+  program
+    .command("note")
+    .argument("<note>")
+    .action(async (note: string) =>
+      writeJson(
+        io,
+        await options.services.commands.note(await requireActiveRun(options.services), note, actor),
       ),
     );
   work
@@ -261,6 +434,24 @@ async function requireActiveRun(services: SenawaServices): Promise<string> {
   const runId = await services.queries.activeRunId();
   if (runId === null) throw new Error("No active run exists");
   return runId;
+}
+
+async function requireStatus(services: SenawaServices, runId?: string) {
+  const status = await services.queries.status(runId);
+  if (status === null) throw new Error("No active run exists");
+  return status;
+}
+
+function selectedOwner(options: { readonly phase?: string; readonly task?: string }): {
+  readonly kind: "phase" | "task";
+  readonly id: string;
+} {
+  if ((options.phase === undefined) === (options.task === undefined)) {
+    throw new Error("Select exactly one gate owner with --phase or --task");
+  }
+  return options.phase === undefined
+    ? { kind: "task", id: options.task ?? "" }
+    : { kind: "phase", id: options.phase };
 }
 
 function writeJson(io: CliIo, value: unknown): void {

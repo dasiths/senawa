@@ -6,7 +6,8 @@ path with deterministic workers.
 
 It validates configuration loading, versioned artifacts, approval and rejection,
 SSE replay, task dependencies, gate-driven rework, finish, and report rendering.
-It does not validate Copilot behavior or the pending Beads production adapter.
+Every spawned CLI process passes `--runtime file`. The demo does not validate
+Copilot behavior or the default Beads production adapter.
 
 Run it from the repository root:
 
