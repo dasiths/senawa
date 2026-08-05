@@ -1,6 +1,17 @@
-import { isAbsolute, relative } from "node:path";
+import {
+  appendFile,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
   CopilotClient,
+  type CopilotClientOptions,
   defineTool,
   type ModelInfo,
   type PermissionRequest,
@@ -9,6 +20,7 @@ import {
   RuntimeConnection,
   type SessionConfig,
   type SessionEvent,
+  type SessionFsProvider,
   type Tool,
 } from "@github/copilot-sdk";
 import type {
@@ -79,14 +91,11 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
   constructor(private readonly options: CopilotSdkWorkerOptions) {
     this.client =
       options.client ??
-      new CopilotClient({
-        connection: RuntimeConnection.forStdio({ path: options.runtimePath ?? "copilot" }),
-        mode: "empty",
-        baseDirectory: options.isolationRoot,
-        logLevel: "none",
-        onGetTraceContext: () =>
+      new CopilotClient(
+        createCopilotSdkClientOptions(options, () =>
           this.traceparent === undefined ? {} : { traceparent: this.traceparent },
-      });
+        ),
+      );
   }
 
   async describe(): Promise<WorkerAdapterDescriptor> {
@@ -323,6 +332,10 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
       onPermissionRequest: permissionHandler,
       hooks: { onPreToolUse: () => ({}) },
       onEvent: eventHandler,
+      createSessionFsProvider: (session) =>
+        new LocalSessionFsProvider(
+          resolve(this.options.isolationRoot, "sessions", session.sessionId),
+        ),
     } satisfies ResumeSessionConfig;
     const session =
       turn.operation === "create"
@@ -422,6 +435,108 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     await this.sessions.get(sessionId)?.disconnect();
     return this.client.resumeSession(sessionId, { ...config, continuePendingWork: false });
   }
+}
+
+export function createCopilotSdkClientOptions(
+  options: Pick<CopilotSdkWorkerOptions, "repositoryRoot" | "runtimePath">,
+  onGetTraceContext: () => Record<string, string> = () => ({}),
+): CopilotClientOptions {
+  return {
+    connection: RuntimeConnection.forStdio({ path: options.runtimePath ?? "copilot" }),
+    mode: "empty",
+    workingDirectory: options.repositoryRoot,
+    useLoggedInUser: true,
+    logLevel: "none",
+    sessionFs: {
+      initialCwd: options.repositoryRoot,
+      sessionStatePath: "/state",
+      conventions: "posix",
+    },
+    onGetTraceContext,
+  };
+}
+
+export class LocalSessionFsProvider implements SessionFsProvider {
+  constructor(private readonly root: string) {}
+
+  readFile(path: string): Promise<string> {
+    return readFile(this.path(path), "utf8");
+  }
+
+  async writeFile(path: string, content: string, mode?: number): Promise<void> {
+    const target = this.path(path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content, mode === undefined ? undefined : { mode });
+  }
+
+  async appendFile(path: string, content: string, mode?: number): Promise<void> {
+    const target = this.path(path);
+    await mkdir(dirname(target), { recursive: true });
+    await appendFile(target, content, mode === undefined ? undefined : { mode });
+  }
+
+  async exists(path: string): Promise<boolean> {
+    try {
+      await stat(this.path(path));
+      return true;
+    } catch (error) {
+      if (isNodeError(error, "ENOENT")) return false;
+      throw error;
+    }
+  }
+
+  async stat(path: string) {
+    const details = await stat(this.path(path));
+    return {
+      isFile: details.isFile(),
+      isDirectory: details.isDirectory(),
+      size: details.size,
+      mtime: details.mtime.toISOString(),
+      birthtime: details.birthtime.toISOString(),
+    };
+  }
+
+  async mkdir(path: string, recursive: boolean, mode?: number): Promise<void> {
+    await mkdir(this.path(path), { recursive, ...(mode === undefined ? {} : { mode }) });
+  }
+
+  readdir(path: string): Promise<string[]> {
+    return readdir(this.path(path));
+  }
+
+  async readdirWithTypes(path: string) {
+    const entries = await readdir(this.path(path), { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isFile() || entry.isDirectory())
+      .map((entry) => ({
+        name: entry.name,
+        type: entry.isDirectory() ? ("directory" as const) : ("file" as const),
+      }));
+  }
+
+  rm(path: string, recursive: boolean, force: boolean): Promise<void> {
+    return rm(this.path(path), { recursive, force });
+  }
+
+  async rename(source: string, destination: string): Promise<void> {
+    const target = this.path(destination);
+    await mkdir(dirname(target), { recursive: true });
+    await rename(this.path(source), target);
+  }
+
+  private path(path: string): string {
+    const normalized = path.replaceAll("\\", "/").replace(/^\/+/, "");
+    const target = resolve(this.root, normalized);
+    const rootPrefix = this.root.endsWith(sep) ? this.root : `${this.root}${sep}`;
+    if (target !== this.root && !target.startsWith(rootPrefix)) {
+      throw new Error(`Session filesystem path escapes its root: ${path}`);
+    }
+    return target;
+  }
+}
+
+function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error && error.code === code;
 }
 
 function workerAuthorization(turn: WorkerTurn): WorkerAuthorization {

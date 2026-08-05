@@ -1,3 +1,6 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   ModelInfo,
   PermissionRequest,
@@ -13,6 +16,8 @@ import {
   type CopilotSdkClient,
   type CopilotSdkSession,
   CopilotSdkWorkerAdapter,
+  createCopilotSdkClientOptions,
+  LocalSessionFsProvider,
 } from "./copilot-sdk-worker.js";
 import { runWorkerSessionConformance } from "./worker-conformance.test-support.js";
 
@@ -94,6 +99,34 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     await adapter.release(turn.sessionId, "archive-delete");
     expect(client.deleted).toEqual([turn.sessionId]);
     expect((await adapter.inspect({ ...turn, turnId: "unknown" })).state).toBe("missing");
+  });
+
+  it("uses the logged-in runtime home while isolating only session state", () => {
+    const options = createCopilotSdkClientOptions({
+      repositoryRoot: "/workspace",
+      runtimePath: "/usr/local/bin/copilot",
+    });
+
+    expect(options).not.toHaveProperty("baseDirectory");
+    expect(options.useLoggedInUser).toBe(true);
+    expect(options.workingDirectory).toBe("/workspace");
+    expect(options.sessionFs).toEqual({
+      initialCwd: "/workspace",
+      sessionStatePath: "/state",
+      conventions: "posix",
+    });
+  });
+
+  it("contains SDK session files under the assigned session root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "senawa-sdk-fs-"));
+    const provider = new LocalSessionFsProvider(root);
+
+    await provider.writeFile("/state/events.jsonl", "one\n");
+    await provider.appendFile("/state/events.jsonl", "two\n");
+    expect(await provider.readFile("/state/events.jsonl")).toBe("one\ntwo\n");
+    expect(await provider.exists("/state/events.jsonl")).toBe(true);
+    expect(await provider.readdir("/state")).toEqual(["events.jsonl"]);
+    await expect(provider.writeFile("../../outside", "denied")).rejects.toThrow("escapes");
   });
 
   it("normalizes lifecycle, text, tool, model, usage, and artifact events", async () => {
