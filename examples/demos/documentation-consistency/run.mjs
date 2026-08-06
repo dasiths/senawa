@@ -218,12 +218,23 @@ async function verifyRepository(existingStatus) {
     "docs:links",
     "lint",
     "typecheck",
-    "test",
     "build",
     "check:boundaries",
     "bundle:check",
   ]) {
     run("pnpm", [script], { cwd: repositoryRoot });
+  }
+  run("pnpm", ["vitest", "run", "--exclude", "tests/contract/beads-persistence.test.ts"], {
+    cwd: repositoryRoot,
+  });
+  for (const pattern of [
+    "persists revisions|rejects a stale|claims one dependency|fences an expired",
+    "reconstructs unsettled dispatch|imports tasks additively",
+    "creates and resolves human gates|recovers each split transition",
+  ]) {
+    run("pnpm", ["vitest", "run", "tests/contract/beads-persistence.test.ts", "-t", pattern], {
+      cwd: repositoryRoot,
+    });
   }
   runSenawa(["sensor", "audit", status.runId]);
   runSenawa(["work", "report", status.runId]);
