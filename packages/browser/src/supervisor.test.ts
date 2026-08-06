@@ -243,8 +243,9 @@ async function browserSession(supervisor: WebSupervisor) {
         headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json" },
         body: JSON.stringify(command),
       });
-      expect(response.status).toBe(202);
-      return response.json();
+      const body = await response.json();
+      expect(response.status, JSON.stringify(body)).toBe(202);
+      return body;
     },
   };
 }

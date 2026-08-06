@@ -1,8 +1,7 @@
-import { posix } from "node:path";
 import type { RuntimePhase, RuntimeState, RuntimeTask } from "@senawa/domain";
 
 export function createPhasePrompt(
-  state: Pick<RuntimeState, "artifacts" | "identity" | "snapshot">,
+  state: Pick<RuntimeState, "artifacts" | "identity" | "phases" | "snapshot">,
   phase: RuntimePhase,
   iteration: number,
 ): string {
@@ -13,22 +12,24 @@ export function createPhasePrompt(
   if (definition.executor.kind !== "agent") {
     throw new Error(`Phase ${phase.id} does not have an agent output contract`);
   }
-  const schemaPath = posix.normalize(
-    posix.join(".senawa/workflows", definition.executor.output.schema),
-  );
+  const schemaPath = resolveSnapshotPath(".senawa/workflows", definition.executor.output.schema);
   const schemaFile = state.snapshot.files.find((file) => file.path === schemaPath);
   if (schemaFile === undefined) {
     throw new Error(`Phase ${phase.id} frozen output schema is missing: ${schemaPath}`);
   }
   const dependencyArtifacts = Object.fromEntries(
-    definition.dependsOn.map((dependency) => {
+    definition.dependsOn.flatMap((dependency) => {
       const artifact = state.artifacts
         .filter((candidate) => candidate.phaseId === dependency)
         .sort((left, right) => right.version - left.version)[0];
-      if (artifact === undefined) {
-        throw new Error(`Phase ${phase.id} is missing dependency artifact ${dependency}`);
-      }
-      return [dependency, artifact.content];
+      return artifact === undefined ? [] : [[dependency, artifact.content]];
+    }),
+  );
+  const dependencyPhases = Object.fromEntries(
+    definition.dependsOn.map((dependency) => {
+      const runtimePhase = state.phases.find((candidate) => candidate.id === dependency);
+      if (runtimePhase === undefined) throw new Error(`Unknown dependency phase ${dependency}`);
+      return [dependency, { status: runtimePhase.status, iteration: runtimePhase.iteration }];
     }),
   );
   const taskFrontier = state.snapshot.workflow.spec.phases.find(
@@ -44,6 +45,7 @@ export function createPhasePrompt(
       pathConvention:
         "Use repository-relative paths only. Never guess an absolute repository root.",
     },
+    dependencyPhases,
     dependencyArtifacts,
     ...(definition.actions?.some((action) => action.kind === "import-plan") &&
     taskFrontier?.executor.kind === "task-frontier"
@@ -60,6 +62,21 @@ export function createPhasePrompt(
       artifactSchema: JSON.parse(schemaFile.content),
     },
   });
+}
+
+function resolveSnapshotPath(base: string, reference: string): string {
+  const parts = base.split("/").filter(Boolean);
+  for (const segment of reference.replaceAll("\\", "/").split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (parts.pop() === undefined)
+        throw new Error(`Snapshot path escapes repository: ${reference}`);
+      continue;
+    }
+    parts.push(segment);
+  }
+  if (parts.length === 0) throw new Error(`Snapshot path is empty: ${reference}`);
+  return parts.join("/");
 }
 
 export function createTaskPrompt(state: RuntimeState, task: RuntimeTask, attempt: number): string {

@@ -32,7 +32,7 @@ describe("phase worker prompts", () => {
       sessionId: null,
       rejectionReason: "Keep the scope documentation-only",
     };
-    const state: Pick<RuntimeState, "artifacts" | "identity" | "snapshot"> = {
+    const state: Pick<RuntimeState, "artifacts" | "identity" | "phases" | "snapshot"> = {
       identity: {
         runId: snapshot.runId,
         backend: "beads",
@@ -43,6 +43,7 @@ describe("phase worker prompts", () => {
       },
       snapshot,
       artifacts: [],
+      phases: [phase],
     };
 
     expect(JSON.parse(createPhasePrompt(state, phase, 2))).toMatchObject({
@@ -68,7 +69,7 @@ describe("phase worker prompts", () => {
       definitions,
       new Date("2026-08-06T00:00:00.000Z"),
     );
-    const state: Pick<RuntimeState, "artifacts" | "identity" | "snapshot"> = {
+    const state: Pick<RuntimeState, "artifacts" | "identity" | "phases" | "snapshot"> = {
       identity: {
         runId: snapshot.runId,
         backend: "beads",
@@ -78,6 +79,16 @@ describe("phase worker prompts", () => {
         fingerprint: snapshot.fingerprint,
       },
       snapshot,
+      phases: [
+        {
+          id: "research",
+          status: "accepted",
+          iteration: 1,
+          artifactVersion: 1,
+          sessionId: "research-session",
+          rejectionReason: null,
+        },
+      ],
       artifacts: [
         {
           phaseId: "research",
@@ -100,6 +111,7 @@ describe("phase worker prompts", () => {
 
     expect(JSON.parse(createPhasePrompt(state, phase, 1))).toMatchObject({
       repository: { pathConvention: expect.stringContaining("repository-relative") },
+      dependencyPhases: { research: { status: "accepted", iteration: 1 } },
       dependencyArtifacts: { research: { summary: "Approved evidence" } },
       taskPlanning: {
         requiredRole: "implementor",
