@@ -197,6 +197,67 @@ describe("application run use cases", () => {
     expect(persistence.order).toEqual(["worker-event", "output-commit"]);
   });
 
+  it("allocates fresh physical identities after a missing phase dispatch", async () => {
+    const persistence = new FakeRunPersistence();
+    const turns: WorkerTurn[] = [];
+    let failFirst = true;
+    const commands = new RunCommandService(
+      persistence,
+      {
+        async execute(turn) {
+          turns.push(turn);
+          if (failFirst) {
+            failFirst = false;
+            throw new Error("transport failed before session creation");
+          }
+          return {
+            sessionId: turn.sessionId,
+            artifact: DefinitionArtifactSchema.parse({
+              summary: "Recovered with fresh identities",
+              inScope: ["application"],
+              outOfScope: [],
+              acceptanceCriteria: ["The retry is independently durable"],
+              constraints: [],
+              openQuestions: [],
+            }),
+            output: [],
+          };
+        },
+        async inspect() {
+          return { state: "missing" as const };
+        },
+      },
+      {
+        async evaluate(input) {
+          return { gateId: input.gateId, accepted: true, readings: [], findings: [] };
+        },
+      },
+      { validatePhaseArtifact: () => undefined },
+      clock,
+      new SequenceIdentifiers("retry"),
+      { scheduleEvery: () => () => undefined },
+    );
+    const runId = "fresh-retry-identities";
+    await commands.start({
+      actor: { channel: "direct-cli" },
+      request: { goal: "Recover a missing dispatch", constraints: [] },
+      runId,
+      snapshot: createRunSnapshot(runId, definitions, clock.now()),
+    });
+    const actor = { channel: "driver" as const };
+
+    await expect(commands.drive(runId, actor)).rejects.toThrow("transport failed");
+    expect((await commands.resume(runId, actor)).kind).toBe("idle");
+    expect((await commands.resume(runId, actor)).kind).toBe("awaiting-approval");
+
+    expect(turns).toHaveLength(2);
+    expect(turns[1]).toMatchObject({ operation: "create", attempt: 1 });
+    expect(turns[1]?.sessionId).not.toBe(turns[0]?.sessionId);
+    expect(turns[1]?.turnId).not.toBe(turns[0]?.turnId);
+    expect(turns[1]?.operationId).not.toBe(turns[0]?.operationId);
+    expect(turns[1]?.dispatchId).not.toBe(turns[0]?.dispatchId);
+  });
+
   it("forces cancellation and reconciles a stranded dispatch before terminal release", async () => {
     const persistence = new FakeRunPersistence();
     let cancelled = false;

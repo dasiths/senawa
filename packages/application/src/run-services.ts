@@ -534,34 +534,19 @@ export class RunCommandService implements RunDriver {
       });
       return { runId: state.identity.runId, kind: "idle", phaseId: phase.id };
     }
-    const priorFailure =
-      active?.ownerKind === "phase"
-        ? undefined
-        : [...state.dispatches]
-            .reverse()
-            .find(
-              (dispatch) =>
-                dispatch.ownerKind === "phase" &&
-                dispatch.ownerId === phase.id &&
-                dispatch.workAttempt === iteration &&
-                dispatch.status === "failed",
-            );
     const operation =
       active?.ownerKind === "phase"
         ? active.operation
-        : (priorFailure?.operation ?? (phase.sessionId === null ? "create" : "resume"));
+        : phase.sessionId === null
+          ? "create"
+          : "resume";
     const sessionId =
       active?.ownerKind === "phase"
         ? active.sessionId
-        : (priorFailure?.sessionId ?? phase.sessionId ?? this.identifiers.createId());
-    const turnId =
-      active?.ownerKind === "phase"
-        ? active.turnId
-        : (priorFailure?.turnId ?? this.identifiers.createId());
+        : (phase.sessionId ?? this.identifiers.createId());
+    const turnId = active?.ownerKind === "phase" ? active.turnId : this.identifiers.createId();
     const operationId =
-      active?.ownerKind === "phase"
-        ? active.operationId
-        : (priorFailure?.operationId ?? this.identifiers.createId());
+      active?.ownerKind === "phase" ? active.operationId : this.identifiers.createId();
     const dispatchId =
       active?.ownerKind === "phase" ? active.dispatchId : this.identifiers.createId();
     if (active?.ownerKind !== "phase") {
@@ -752,19 +737,10 @@ export class RunCommandService implements RunDriver {
     const task = await this.store.claimReadyTask(state.identity.runId);
     if (task === null) return { runId: state.identity.runId, kind: "idle", phaseId: phase.id };
     const attempt = task.attempt + 1;
-    const priorFailure = [...state.dispatches]
-      .reverse()
-      .find(
-        (dispatch) =>
-          dispatch.ownerKind === "task" &&
-          dispatch.ownerId === task.key &&
-          dispatch.workAttempt === attempt &&
-          dispatch.status === "failed",
-      );
-    const operation = priorFailure?.operation ?? (task.sessionId === null ? "create" : "resume");
-    const sessionId = priorFailure?.sessionId ?? task.sessionId ?? this.identifiers.createId();
-    const turnId = priorFailure?.turnId ?? this.identifiers.createId();
-    const operationId = priorFailure?.operationId ?? this.identifiers.createId();
+    const operation = task.sessionId === null ? "create" : "resume";
+    const sessionId = task.sessionId ?? this.identifiers.createId();
+    const turnId = this.identifiers.createId();
+    const operationId = this.identifiers.createId();
     const dispatchId = this.identifiers.createId();
     await this.store.updateRun(state.identity.runId, (draft) => {
       const currentPhase = requirePhase(draft, phase.id);
@@ -968,6 +944,7 @@ export class RunCommandService implements RunDriver {
         const current = requireTask(draft, task.key);
         current.dispatchFailures += 1;
         current.status = current.attempt === 0 ? "pending" : "rework";
+        current.sessionId = null;
         draft.activeTurn = null;
         emit(draft, "dispatch.failed", { channel: "driver" }, this.now(), {
           taskId: task.key,
@@ -1031,6 +1008,7 @@ export class RunCommandService implements RunDriver {
         const phase = requirePhase(draft, turn.owner.id);
         phase.status = "pending";
         phase.iteration = Math.max(0, turn.attempt - 1);
+        phase.sessionId = null;
         draft.activeTurn = null;
         if (observation.state === "missing") {
           emit(draft, "dispatch.failed", { channel: "driver" }, this.now(), {
