@@ -191,6 +191,7 @@ async function verifyRepository(existingStatus) {
     status.tasks.length > 0 && status.tasks.every((task) => task.status === "closed"),
     "Not every implementation task was closed",
   );
+  await verifyFrozenSensorPolicy(status.runId);
   const currentBranch = output("git", ["branch", "--show-current"], repositoryRoot);
   assert(
     currentBranch === metadata.branch,
@@ -236,7 +237,7 @@ async function verifyRepository(existingStatus) {
       cwd: repositoryRoot,
     });
   }
-  runSenawa(["sensor", "audit", status.runId]);
+  verifySensorAudit(senawaJson(["sensor", "audit", status.runId]));
   runSenawa(["work", "report", status.runId]);
   print(
     JSON.stringify(
@@ -256,6 +257,50 @@ async function verifyRepository(existingStatus) {
       2,
     ),
   );
+}
+
+async function verifyFrozenSensorPolicy(runId) {
+  const snapshot = JSON.parse(
+    await readFile(
+      join(repositoryRoot, ".agents", ".copilot-tracking", runId, "snapshot.json"),
+      "utf8",
+    ),
+  );
+  const sensors = new Map(snapshot.policy.sensors.map((sensor) => [sensor.id, sensor]));
+  assert(
+    sensors.get("artifact-present")?.config?.artifactKind === "phase-output",
+    "Frozen artifact sensor configuration is invalid",
+  );
+  assert(
+    sensors.get("typecheck")?.config?.command === "pnpm typecheck" &&
+      sensors.get("typecheck")?.config?.parser === "raw",
+    "Frozen typecheck sensor configuration is invalid",
+  );
+  assert(
+    sensors.get("unit-tests")?.config?.command === "pnpm test" &&
+      sensors.get("unit-tests")?.config?.parser === "raw" &&
+      sensors.get("unit-tests")?.config?.timeoutMs === 600_000,
+    "Frozen unit-test sensor configuration is invalid",
+  );
+  for (const gate of snapshot.policy.gates) {
+    assert(
+      gate.checks.some((check) => {
+        const sensor = sensors.get(check.sensor);
+        return check.advisory !== true && sensor?.kind === "deterministic";
+      }),
+      `Frozen gate ${gate.id} has no deterministic blocking sensor`,
+    );
+  }
+}
+
+function verifySensorAudit(audit) {
+  const sensors = new Map(audit.sensors.map((sensor) => [sensor.sensorId, sensor]));
+  for (const sensorId of ["artifact-present", "typecheck", "unit-tests"]) {
+    const sensor = sensors.get(sensorId);
+    assert(sensor !== undefined && sensor.samples > 0, `Sensor ${sensorId} produced no evidence`);
+    assert(sensor.agreement === 1, `Sensor ${sensorId} produced inconsistent outcomes`);
+    assert(sensor.drifted === false, `Sensor ${sensorId} drifted during the integration run`);
+  }
 }
 
 async function requireDemoRepository() {
