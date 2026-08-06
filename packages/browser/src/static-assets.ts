@@ -270,6 +270,8 @@ function render(){
 
 function updateCommandProgress(){
   if(!commandPending||pendingCommand===null)return;
+  if(state.status==="finished"){q("#last-command").textContent="run finished";return}
+  if(state.status==="ended"){q("#last-command").textContent="run ended";return}
   const decidedPhase=pendingPhaseId===null?null:state.phases.find((phase)=>phase.id===pendingPhaseId);
   if(decidedPhase?.status==="awaiting_approval"){
     q("#last-command").textContent=pendingCommand+" in progress…";

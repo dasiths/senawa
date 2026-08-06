@@ -179,6 +179,8 @@ describe("loopback web supervisor", () => {
     expect(appJs).toContain('pendingCommand+" in progress…"');
     expect(appJs).toContain('activeTask.title+" · "+activeTask.status');
     expect(appJs).toContain('activePhase.id+" · "+activePhase.status');
+    expect(appJs).toContain('state.status==="finished"');
+    expect(appJs).toContain('textContent="run finished"');
     expect(appJs).toContain('/worker-events");');
     expect(appJs).toContain("appendWorkerRecord(JSON.parse(event.data))");
   });
