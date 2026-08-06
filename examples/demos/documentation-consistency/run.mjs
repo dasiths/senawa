@@ -95,13 +95,16 @@ async function prepareRepository() {
 
 async function startWorkflow() {
   runSenawa(["work", "start", goal, "--workflow", "standard-delivery"], [0, 2]);
+  const status = senawaJson(["work", "show"]);
+  assert(status !== null, "Started workflow did not establish active ownership");
+  await writeMetadata({ ...(await readMetadata()), runId: status.runId });
 }
 
 async function driveWorkflow() {
   const terminal = createInterface({ input: process.stdin, output: process.stdout });
   try {
     for (;;) {
-      const status = activeStatus();
+      const status = await activeStatus();
       if (status.status === "finished") {
         await verifyRepository(status);
         return;
@@ -172,7 +175,7 @@ async function driveWorkflow() {
 
 async function verifyRepository(existingStatus) {
   const metadata = await readMetadata();
-  const status = existingStatus ?? activeStatus();
+  const status = existingStatus ?? (await activeStatus());
   assert(status.backend === "beads", `Expected Beads backend, received ${status.backend}`);
   assert(status.workflow === "standard-delivery", `Unexpected workflow ${status.workflow}`);
   assert(status.status === "finished", `Workflow status is ${status.status}, not finished`);
@@ -286,9 +289,14 @@ function senawaJson(arguments_) {
   return JSON.parse(result.stdout);
 }
 
-function activeStatus() {
-  const status = senawaJson(["work", "show"]);
-  assert(status !== null, "No active workflow exists in the prepared demo repository");
+async function activeStatus() {
+  const metadata = await readMetadata();
+  const status = senawaJson([
+    "work",
+    "show",
+    ...(typeof metadata.runId === "string" ? [metadata.runId] : []),
+  ]);
+  assert(status !== null, "No workflow exists in the prepared demo repository");
   return status;
 }
 
