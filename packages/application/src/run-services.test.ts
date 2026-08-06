@@ -1,7 +1,7 @@
 import { createRunSnapshot, loadRepositoryDefinitions } from "@senawa/configuration";
 import { DefinitionArtifactSchema, type RuntimeState } from "@senawa/domain";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { WorkerTurn } from "./ports.js";
+import { RuntimeRevisionConflictError, type WorkerTurn } from "./ports.js";
 import { projectRunStatus } from "./projections.js";
 import { RunCommandService, RunQueryService } from "./run-services.js";
 import { FakeClock, FakeRunPersistence, SequenceIdentifiers } from "./testing.js";
@@ -333,6 +333,51 @@ describe("application run use cases", () => {
     });
   });
 
+  it("reuses durable artifact evidence when the runtime commit retries", async () => {
+    const persistence = new SplitArtifactPersistence();
+    const artifact = DefinitionArtifactSchema.parse({
+      summary: "Reuse immutable artifact evidence",
+      inScope: ["application"],
+      outOfScope: [],
+      acceptanceCriteria: ["A split commit does not duplicate the artifact"],
+      constraints: [],
+      openQuestions: [],
+    });
+    const commands = new RunCommandService(
+      persistence,
+      {
+        async execute(turn) {
+          return { sessionId: turn.sessionId, artifact, output: [] };
+        },
+      },
+      {
+        async evaluate(input) {
+          return { gateId: input.gateId, accepted: true, readings: [], findings: [] };
+        },
+      },
+      { validatePhaseArtifact: () => undefined },
+      clock,
+      new SequenceIdentifiers("split-artifact"),
+      { scheduleEvery: () => () => undefined },
+    );
+    const runId = "split-artifact-retry";
+    await commands.start({
+      actor: { channel: "direct-cli" },
+      request: { goal: "Recover split artifact persistence", constraints: [] },
+      runId,
+      snapshot: createRunSnapshot(runId, definitions, clock.now()),
+    });
+
+    await expect(commands.drive(runId, { channel: "driver" })).resolves.toMatchObject({
+      kind: "awaiting-approval",
+      phaseId: "define",
+    });
+
+    const state = (await persistence.readRun(runId)).state;
+    expect(state.artifacts).toHaveLength(1);
+    expect(state.phases[0]).toMatchObject({ artifactVersion: 1, status: "awaiting_approval" });
+  });
+
   it("reopens an escalated task when an operator records steering", async () => {
     const persistence = new FakeRunPersistence();
     const commands = new RunCommandService(
@@ -538,6 +583,25 @@ class OrderedEvidencePersistence extends FakeRunPersistence {
   override async commitRun(input: Parameters<FakeRunPersistence["commitRun"]>[0]) {
     const hasOutput = Object.values(input.state.outputs).some((records) => records.length > 0);
     if (hasOutput && !this.order.includes("output-commit")) this.order.push("output-commit");
+    return super.commitRun(input);
+  }
+}
+
+class SplitArtifactPersistence extends FakeRunPersistence {
+  private split = false;
+
+  override async commitRun(input: Parameters<FakeRunPersistence["commitRun"]>[0]) {
+    if (!this.split && input.state.artifacts.length > 0) {
+      this.split = true;
+      const previous = (await this.readRun(input.runId)).state;
+      const state = structuredClone(input.state);
+      state.status = previous.status;
+      state.phases = previous.phases;
+      state.activeTurn = previous.activeTurn;
+      state.dispatches = previous.dispatches;
+      await super.commitRun({ ...input, state });
+      throw new RuntimeRevisionConflictError(input.runId, input.operationId);
+    }
     return super.commitRun(input);
   }
 }

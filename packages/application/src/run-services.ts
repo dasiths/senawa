@@ -4,6 +4,7 @@ import {
   type JournalEventName,
   type JsonObject,
   JsonObjectSchema,
+  type JsonValue,
   type PlanArtifact,
   PlanArtifactSchema,
   type RunSnapshot,
@@ -1677,6 +1678,18 @@ function appendArtifact(
   now: Date,
 ): RuntimeArtifact {
   const version = (phase.artifactVersion ?? 0) + 1;
+  const parsedContent = JsonObjectSchema.parse(content);
+  const existing = state.artifacts.find(
+    (artifact) => artifact.phaseId === phase.id && artifact.version === version,
+  );
+  if (existing !== undefined) {
+    if (!jsonValuesEqual(existing.content, parsedContent)) {
+      throw new Error(`Artifact ${existing.path} already exists with different content`);
+    }
+    phase.artifactVersion = version;
+    phase.rejectionReason = null;
+    return existing;
+  }
   const consumed = Object.fromEntries(
     state.phases
       .filter((candidate) => candidate.artifactVersion !== null)
@@ -1687,13 +1700,38 @@ function appendArtifact(
     version,
     path: `artifacts/${phase.id}/v${version}.json`,
     createdAt: now.toISOString(),
-    content: JsonObjectSchema.parse(content),
+    content: parsedContent,
     consumed,
   };
   state.artifacts.push(artifact);
   phase.artifactVersion = version;
   phase.rejectionReason = null;
   return artifact;
+}
+
+function jsonValuesEqual(left: JsonValue, right: JsonValue): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonValuesEqual(value, right[index] as JsonValue))
+    );
+  }
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") {
+    return false;
+  }
+  const leftKeys = Object.keys(left).toSorted();
+  const rightKeys = Object.keys(right).toSorted();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] &&
+        jsonValuesEqual(left[key] as JsonValue, right[key] as JsonValue),
+    )
+  );
 }
 
 function appendWorkerResult(

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   ActiveRunError,
   type ActiveRunStoragePort,
@@ -60,6 +61,7 @@ interface PersistenceTransaction {
   readonly operationId: string;
   readonly createdAt: string;
   readonly expectedRevision?: string;
+  readonly previousRuntime?: StoredRuntimeState;
   readonly runtime: StoredRuntimeState;
   readonly identity: RuntimeState["identity"];
   readonly snapshot: RuntimeState["snapshot"];
@@ -537,12 +539,7 @@ export class FileRunPersistence implements RunPersistencePort {
         graphDefinition(transaction.snapshot),
       );
     } else {
-      await this.stores.runtime.commitRuntimeState({
-        runId: transaction.runId,
-        expectedRevision: transaction.expectedRevision ?? "",
-        operationId: transaction.operationId,
-        state: transaction.runtime,
-      });
+      await this.commitRuntimeTransaction(transaction);
     }
     await this.options.afterStep?.("runtime-state");
     if (transaction.terminal) {
@@ -553,6 +550,32 @@ export class FileRunPersistence implements RunPersistencePort {
     }
     await rm(this.transactionPath, { force: true });
     await this.stores.notifications?.publishRunChanged(transaction.runId);
+  }
+
+  private async commitRuntimeTransaction(transaction: PersistenceTransaction): Promise<void> {
+    try {
+      await this.stores.runtime.commitRuntimeState({
+        runId: transaction.runId,
+        expectedRevision: transaction.expectedRevision ?? "",
+        operationId: transaction.operationId,
+        state: transaction.runtime,
+      });
+    } catch (error) {
+      if (
+        !(error instanceof RuntimeRevisionConflictError) ||
+        transaction.previousRuntime === undefined
+      ) {
+        throw error;
+      }
+      const current = await this.stores.runtime.readRuntimeState(transaction.runId);
+      if (!isDeepStrictEqual(current.state, transaction.previousRuntime)) throw error;
+      await this.stores.runtime.commitRuntimeState({
+        runId: transaction.runId,
+        expectedRevision: current.revision,
+        operationId: transaction.operationId,
+        state: transaction.runtime,
+      });
+    }
   }
 
   private async readAssembled(runId: string): Promise<VersionedRunState> {
@@ -655,6 +678,7 @@ function transactionForCommit(
     operationId,
     createdAt: next.identity.createdAt,
     expectedRevision,
+    previousRuntime: storedState(previous),
     runtime: storedState(next),
     identity: next.identity,
     snapshot: next.snapshot,

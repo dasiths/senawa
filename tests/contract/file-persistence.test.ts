@@ -121,6 +121,46 @@ it("recovers a split create interrupted after durable evidence", async () => {
   expect(await persistence(root).getActiveRunId()).toBe(state.identity.runId);
 });
 
+it("rebases a split commit over an evidence-only runtime revision", async () => {
+  const root = await temporaryRoot();
+  const state = createRuntimeFixture("run-evidence-revision");
+  const initial = persistence(root);
+  await initial.createRun(state, "start-evidence-revision");
+  const current = await initial.readRun(state.identity.runId);
+  const next = structuredClone(current.state);
+  next.status = "paused";
+  next.journal.push(createJournalEvent(state.identity.runId, 1, "paused"));
+  let advanced = false;
+  const interleaved = persistence(root, {
+    async afterStep(step) {
+      if (step !== "evidence" || advanced) return;
+      advanced = true;
+      const runtime = new FileRuntimeStateStore(root);
+      const observed = await runtime.readRuntimeState(state.identity.runId);
+      await runtime.commitRuntimeState({
+        runId: state.identity.runId,
+        expectedRevision: observed.revision,
+        operationId: "record-concurrent-evidence",
+        state: observed.state,
+      });
+    },
+  });
+
+  const committed = await interleaved.commitRun({
+    runId: state.identity.runId,
+    expectedRevision: current.revision,
+    operationId: "pause-after-evidence",
+    state: next,
+  });
+
+  expect(committed.state.status).toBe("paused");
+  expect(committed.state.journal).toHaveLength(1);
+  expect(committed.state.journal[0]).toMatchObject({
+    event: "work.resumed",
+    data: { message: "paused" },
+  });
+});
+
 it("stores worker output in a session and turn stream", async () => {
   const root = await temporaryRoot();
   const output = new FileOutputLogStore(root);
