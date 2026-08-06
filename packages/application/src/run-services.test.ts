@@ -258,6 +258,143 @@ describe("application run use cases", () => {
     expect(turns[1]?.dispatchId).not.toBe(turns[0]?.dispatchId);
   });
 
+  it("reconciles a completed turn from durable events after the worker process exits", async () => {
+    const persistence = new FakeRunPersistence();
+    let executeCount = 0;
+    const artifact = DefinitionArtifactSchema.parse({
+      summary: "Recovered from durable worker events",
+      inScope: ["application"],
+      outOfScope: [],
+      acceptanceCriteria: ["A restarted driver can prove completion"],
+      constraints: [],
+      openQuestions: [],
+    });
+    const commands = new RunCommandService(
+      persistence,
+      {
+        async execute(turn, onEvent) {
+          executeCount += 1;
+          await onEvent?.({
+            apiVersion: "senawa.dev/worker-event/v1",
+            eventId: `${turn.turnId}:artifact`,
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+            ts: clock.now().toISOString(),
+            traceId: turn.traceId,
+            kind: "artifact",
+            artifact,
+          });
+          await onEvent?.({
+            apiVersion: "senawa.dev/worker-event/v1",
+            eventId: `${turn.turnId}:completed`,
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+            ts: clock.now().toISOString(),
+            traceId: turn.traceId,
+            kind: "lifecycle",
+            event: "completed",
+            durationMs: 1,
+          });
+          throw new Error("driver exited after durable worker completion");
+        },
+        async inspect() {
+          return { state: "missing" as const };
+        },
+      },
+      {
+        async evaluate(input) {
+          return { gateId: input.gateId, accepted: true, readings: [], findings: [] };
+        },
+      },
+      { validatePhaseArtifact: () => undefined },
+      clock,
+      new SequenceIdentifiers("durable-completion"),
+      { scheduleEvery: () => () => undefined },
+    );
+    const runId = "durable-worker-completion";
+    await commands.start({
+      actor: { channel: "direct-cli" },
+      request: { goal: "Recover completed durable work", constraints: [] },
+      runId,
+      snapshot: createRunSnapshot(runId, definitions, clock.now()),
+    });
+
+    await expect(commands.drive(runId, { channel: "driver" })).rejects.toThrow(
+      "driver exited after durable worker completion",
+    );
+    await expect(commands.resume(runId, { channel: "driver" })).resolves.toMatchObject({
+      kind: "awaiting-approval",
+      phaseId: "define",
+    });
+
+    expect(executeCount).toBe(1);
+    expect(await new RunQueryService(persistence).artifact(runId, "define")).toMatchObject({
+      content: artifact,
+    });
+  });
+
+  it("reopens an escalated task when an operator records steering", async () => {
+    const persistence = new FakeRunPersistence();
+    const commands = new RunCommandService(
+      persistence,
+      {
+        async execute() {
+          throw new Error("not dispatched");
+        },
+      },
+      {
+        async evaluate(input) {
+          return { gateId: input.gateId, accepted: true, readings: [], findings: [] };
+        },
+      },
+      { validatePhaseArtifact: () => undefined },
+      clock,
+      new SequenceIdentifiers("steering-recovery"),
+      { scheduleEvery: () => () => undefined },
+    );
+    const runId = "steering-recovery";
+    await commands.start({
+      actor: { channel: "direct-cli" },
+      request: { goal: "Recover escalated work", constraints: [] },
+      runId,
+      snapshot: createRunSnapshot(runId, definitions, clock.now()),
+    });
+    const current = await persistence.readRun(runId);
+    current.state.status = "paused";
+    current.state.tasks = [
+      {
+        key: "recover-me",
+        title: "Recover me",
+        dependsOn: [],
+        paths: ["docs"],
+        acceptance: ["The task can continue"],
+        role: "implementor",
+        status: "escalated",
+        attempt: 1,
+        dispatchFailures: 2,
+        sessionId: null,
+        steering: [],
+      },
+    ];
+    await persistence.commitRun({
+      runId,
+      expectedRevision: current.revision,
+      operationId: "seed-escalation",
+      state: current.state,
+    });
+
+    await commands.steer(runId, "recover-me", "Retry after confirming the prior turn completed", {
+      channel: "direct-cli",
+    });
+
+    expect((await persistence.readRun(runId)).state.tasks[0]).toMatchObject({
+      status: "rework",
+      attempt: 1,
+      dispatchFailures: 0,
+      steering: ["Retry after confirming the prior turn completed"],
+    });
+  });
+
   it("forces cancellation and reconciles a stranded dispatch before terminal release", async () => {
     const persistence = new FakeRunPersistence();
     let cancelled = false;

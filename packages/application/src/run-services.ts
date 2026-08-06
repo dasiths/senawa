@@ -207,6 +207,10 @@ export class RunCommandService implements RunDriver {
         throw new Error(`Task ${taskId} cannot be steered`);
       }
       task.steering.push(instruction);
+      if (task.status === "escalated") {
+        task.status = task.attempt === 0 ? "pending" : "rework";
+        task.dispatchFailures = 0;
+      }
       emit(state, "steering.recorded", actor, this.now(), { taskId, instruction });
     });
     return { runId, kind: "idle", taskId };
@@ -1039,14 +1043,40 @@ export class RunCommandService implements RunDriver {
     };
   }
 
-  private inspectWorkerTurn(turn: WorkerTurn) {
-    return (
-      this.workerHost.inspect?.(turn) ??
-      Promise.resolve({
+  private async inspectWorkerTurn(turn: WorkerTurn) {
+    const observation =
+      (await this.workerHost.inspect?.(turn)) ??
+      ({
         state: "unknown" as const,
         detail: "Worker host does not support inspection",
-      })
+      } as const);
+    if (observation.state === "completed" || observation.state === "active") {
+      return observation;
+    }
+    const records = (await this.store.readWorkerEvents(turn.runId)).filter(
+      (record) =>
+        record.dispatchId === turn.dispatchId &&
+        record.operationId === turn.operationId &&
+        record.event.sessionId === turn.sessionId &&
+        record.event.turnId === turn.turnId,
     );
+    const terminal = records.findLast((record) => record.event.kind === "lifecycle");
+    if (terminal?.event.kind !== "lifecycle" || terminal.event.event !== "completed") {
+      return observation;
+    }
+    const artifact = records.findLast((record) => record.event.kind === "artifact")?.event;
+    return {
+      state: "completed" as const,
+      result: {
+        sessionId: turn.sessionId,
+        ...(artifact?.kind === "artifact" ? { artifact: artifact.artifact } : {}),
+        output: records.flatMap((record) =>
+          record.event.kind === "text" && record.event.delta !== true
+            ? [{ stream: record.event.stream, text: record.event.text }]
+            : [],
+        ),
+      },
+    };
   }
 
   private async executeWorkerSafely(turn: WorkerTurn): Promise<WorkerResult> {
@@ -1124,6 +1154,10 @@ class RuntimeCoordinator {
       entryId: record.event.eventId,
       record,
     });
+  }
+
+  readWorkerEvents(runId: string): Promise<readonly WorkerEventRecord[]> {
+    return this.port.readWorkerEvents(runId);
   }
 
   async appendLiveOutput(input: {
