@@ -237,7 +237,11 @@ async function verifyRepository(existingStatus) {
       cwd: repositoryRoot,
     });
   }
-  verifySensorAudit(senawaJson(["sensor", "audit", status.runId]));
+  verifySensorAudit(senawaJson(["sensor", "audit", status.runId]), status.tasks.length);
+  await verifyFinalSensorOutcomes(
+    status.runId,
+    status.tasks.map((task) => task.key),
+  );
   runSenawa(["work", "report", status.runId]);
   print(
     JSON.stringify(
@@ -293,13 +297,45 @@ async function verifyFrozenSensorPolicy(runId) {
   }
 }
 
-function verifySensorAudit(audit) {
+function verifySensorAudit(audit, taskCount) {
   const sensors = new Map(audit.sensors.map((sensor) => [sensor.sensorId, sensor]));
   for (const sensorId of ["artifact-present", "typecheck", "unit-tests"]) {
     const sensor = sensors.get(sensorId);
     assert(sensor !== undefined && sensor.samples > 0, `Sensor ${sensorId} produced no evidence`);
-    assert(sensor.agreement === 1, `Sensor ${sensorId} produced inconsistent outcomes`);
     assert(sensor.drifted === false, `Sensor ${sensorId} drifted during the integration run`);
+  }
+  assert(sensors.get("typecheck").samples >= taskCount, "Not every task ran the typecheck sensor");
+  assert(sensors.get("unit-tests").samples >= taskCount, "Not every task ran the unit-test sensor");
+}
+
+async function verifyFinalSensorOutcomes(runId, taskIds) {
+  const journal = (
+    await readFile(
+      join(repositoryRoot, ".agents", ".copilot-tracking", runId, "journal.jsonl"),
+      "utf8",
+    )
+  )
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line).payload);
+  for (const taskId of taskIds) {
+    for (const sensorId of ["typecheck", "unit-tests"]) {
+      const latest = journal
+        .filter(
+          (event) =>
+            (event.event === "sensor.completed" || event.event === "sensor.error") &&
+            event.data?.ownerKind === "task" &&
+            event.data?.ownerId === taskId &&
+            event.data?.sensorId === sensorId,
+        )
+        .at(-1);
+      assert(latest !== undefined, `Task ${taskId} has no ${sensorId} outcome`);
+      assert(
+        latest.event === "sensor.completed" && latest.data?.verdict === "pass",
+        `Task ${taskId} did not finish with a passing ${sensorId} outcome`,
+      );
+    }
   }
 }
 
