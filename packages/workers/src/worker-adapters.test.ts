@@ -197,6 +197,7 @@ describe("worker adapter conformance", () => {
     expect(authorizeWorkerPaths(authorization, "write", [{ path: "../outside.ts" }]).allowed).toBe(
       false,
     );
+    expect(authorizeWorkerPaths(authorization, "read", [{ path: "." }]).allowed).toBe(true);
     expect(
       authorizeWorkerPaths(authorization, "write", [
         { path: "packages/workers/src/frozen/data.ts" },

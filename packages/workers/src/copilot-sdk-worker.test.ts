@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -139,6 +139,21 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     expect(await provider.exists("/state/events.jsonl")).toBe(true);
     expect(await provider.readdir("/state")).toEqual(["events.jsonl"]);
     await expect(provider.writeFile("../../outside", "denied")).rejects.toThrow("escapes");
+  });
+
+  it("routes project files to the repository while isolating runtime state", async () => {
+    const root = await mkdtemp(join(tmpdir(), "senawa-sdk-repository-fs-"));
+    const repositoryRoot = join(root, "repository");
+    const sessionRoot = join(root, "session");
+    await mkdir(repositoryRoot, { recursive: true });
+    await writeFile(join(repositoryRoot, "README.md"), "repository\n");
+    const provider = new LocalSessionFsProvider(sessionRoot, repositoryRoot);
+
+    expect(await provider.readFile(join(repositoryRoot, "README.md"))).toBe("repository\n");
+    expect(await provider.readFile("README.md")).toBe("repository\n");
+    await provider.writeFile("/state/events.jsonl", "state\n");
+    expect(await readFile(join(sessionRoot, "state", "events.jsonl"), "utf8")).toBe("state\n");
+    expect(() => provider.readFile(join(root, "outside.md"))).toThrow("escapes its repository");
   });
 
   it("normalizes lifecycle, text, tool, model, usage, and artifact events", async () => {

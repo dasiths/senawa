@@ -360,6 +360,7 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
       createSessionFsProvider: (session) =>
         new LocalSessionFsProvider(
           resolve(this.options.isolationRoot, "sessions", session.sessionId),
+          this.options.repositoryRoot,
         ),
     } satisfies ResumeSessionConfig;
     const session =
@@ -482,7 +483,13 @@ export function createCopilotSdkClientOptions(
 }
 
 export class LocalSessionFsProvider implements SessionFsProvider {
-  constructor(private readonly root: string) {}
+  private readonly root: string;
+  private readonly repositoryRoot: string | undefined;
+
+  constructor(root: string, repositoryRoot?: string) {
+    this.root = resolve(root);
+    this.repositoryRoot = repositoryRoot === undefined ? undefined : resolve(repositoryRoot);
+  }
 
   readFile(path: string): Promise<string> {
     return readFile(this.path(path), "utf8");
@@ -550,13 +557,22 @@ export class LocalSessionFsProvider implements SessionFsProvider {
   }
 
   private path(path: string): string {
+    if (this.repositoryRoot !== undefined && path !== "/state" && !path.startsWith("/state/")) {
+      const target = isAbsolute(path) ? resolve(path) : resolve(this.repositoryRoot, path);
+      this.assertWithin(target, this.repositoryRoot, path, "repository");
+      return target;
+    }
     const normalized = path.replaceAll("\\", "/").replace(/^\/+/, "");
     const target = resolve(this.root, normalized);
-    const rootPrefix = this.root.endsWith(sep) ? this.root : `${this.root}${sep}`;
-    if (target !== this.root && !target.startsWith(rootPrefix)) {
-      throw new Error(`Session filesystem path escapes its root: ${path}`);
-    }
+    this.assertWithin(target, this.root, path, "session root");
     return target;
+  }
+
+  private assertWithin(target: string, root: string, path: string, boundary: string): void {
+    const rootPrefix = root.endsWith(sep) ? root : `${root}${sep}`;
+    if (target !== root && !target.startsWith(rootPrefix)) {
+      throw new Error(`Session filesystem path escapes its ${boundary}: ${path}`);
+    }
   }
 }
 
@@ -620,7 +636,7 @@ function authorizeSdkRequest(
 
 function policyPath(repositoryRoot: string, path: string): string {
   if (!isAbsolute(path)) return path;
-  return relative(repositoryRoot, path).replaceAll("\\", "/");
+  return relative(repositoryRoot, path).replaceAll("\\", "/") || ".";
 }
 
 function sdkAvailableTools(turn: WorkerTurn, tools: readonly Tool[]): string[] {

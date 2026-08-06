@@ -184,7 +184,7 @@ function tryNormalizeRepositoryPath(path: string): string | null {
     if (part === "**" && index !== segments.length - 1) return null;
     parts.push(part);
   }
-  return parts.length === 0 ? null : parts.join("/");
+  return parts.length === 0 ? "." : parts.join("/");
 }
 
 function isWithinScope(path: string, scope: string): boolean {
