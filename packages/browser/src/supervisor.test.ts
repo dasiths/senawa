@@ -174,9 +174,11 @@ describe("loopback web supervisor", () => {
     expect(appJs).not.toContain('positions["phase:implement"]');
     expect(appJs).not.toContain('target:"phase:verify"');
     expect(appJs).toContain('q("#resume").hidden=["awaiting_approval","ended","finished"]');
-    expect(appJs).toContain("setCommandPending(command,true)");
+    expect(appJs).toContain("setCommandPending(command,true,extra)");
     expect(appJs).toContain("button.disabled=pending");
-    expect(appJs).toContain('command+" in progress…"');
+    expect(appJs).toContain('pendingCommand+" in progress…"');
+    expect(appJs).toContain('activeTask.title+" · "+activeTask.status');
+    expect(appJs).toContain('activePhase.id+" · "+activePhase.status');
     expect(appJs).toContain('/worker-events");');
     expect(appJs).toContain("appendWorkerRecord(JSON.parse(event.data))");
   });

@@ -98,6 +98,8 @@ let workerSource=null;
 let records=[];
 let graph=null;
 let commandPending=false;
+let pendingCommand=null;
+let pendingPhaseId=null;
 let recordsRenderPending=false;
 
 cytoscape.use(cytoscapeDagre);
@@ -263,6 +265,22 @@ function render(){
   q("#steering").hidden=node?.kind!=="task"||["closed","ended"].includes(node.status);
   q("#resume").hidden=["awaiting_approval","ended","finished"].includes(state.status);
   q("#ending").hidden=["ended","finished"].includes(state.status);
+  updateCommandProgress();
+}
+
+function updateCommandProgress(){
+  if(!commandPending||pendingCommand===null)return;
+  const decidedPhase=pendingPhaseId===null?null:state.phases.find((phase)=>phase.id===pendingPhaseId);
+  if(decidedPhase?.status==="awaiting_approval"){
+    q("#last-command").textContent=pendingCommand+" in progress…";
+    return;
+  }
+  const activeTask=state.tasks.find((task)=>task.status==="in_progress"||task.status==="rework");
+  const activePhase=state.phases.find((phase)=>phase.status==="running");
+  if(activeTask){q("#last-command").textContent=activeTask.title+" · "+activeTask.status.replaceAll("_"," ")+"…";return}
+  if(activePhase){q("#last-command").textContent=activePhase.id+" · "+activePhase.status.replaceAll("_"," ")+"…";return}
+  if(state.needs?.phaseId){q("#last-command").textContent="awaiting "+state.needs.phaseId+" decision";return}
+  q("#last-command").textContent=pendingCommand+" accepted; continuing…";
 }
 
 function renderRecords(){
@@ -323,22 +341,24 @@ function select(id){
 }
 
 async function refresh(){state=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/snapshot");render()}
-function setCommandPending(command,pending){
+function setCommandPending(command,pending,extra={}){
   commandPending=pending;
+  pendingCommand=pending?command:null;
+  pendingPhaseId=pending&&typeof extra.phaseId==="string"?extra.phaseId:null;
   q(".controls").setAttribute("aria-busy",String(pending));
   for(const button of document.querySelectorAll(".controls button"))button.disabled=pending;
   q("#last-command").classList.toggle("busy",pending);
-  if(pending)q("#last-command").textContent=command+" in progress…";
+  if(pending)updateCommandProgress();
 }
 async function command(command,extra={}){
   if(commandPending)return;
-  setCommandPending(command,true);
+  setCommandPending(command,true,extra);
   try{
     const response=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/commands",{method:"POST",body:JSON.stringify({apiVersion:"senawa.dev/browser-command/v1",command,...extra})});
     q("#last-command").textContent=command+" completed";
     if(response.snapshot){state=response.snapshot;render()}else{await refresh()}
   }catch(error){q("#last-command").textContent="refused: "+error.message}
-  finally{setCommandPending(command,false)}
+  finally{setCommandPending(command,false,extra)}
 }
 
 q("#approve").addEventListener("click",()=>command("approve",{phaseId:selected,note:q("#decision-note").value||undefined}));
