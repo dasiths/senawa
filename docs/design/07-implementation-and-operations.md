@@ -204,15 +204,15 @@ The command surface is grouped by responsibility:
 
 | Group | Representative commands | Primary caller |
 |-------|-------------------------|----------------|
-| Run lifecycle | `work start`, `resume`, `show`, `log`, `wait`, `pause`, `end`, `finish`, `browser` | Human or principal agent |
+| Run lifecycle | `work start`, `resume`, `show`, `wait`, `pause`, `end`, `finish`, `browser`, `work web` | Human or principal agent |
 | Human decisions | `approve`, `reject`, `answer`, `steer`, `work end` | Human, sometimes relayed |
-| Phase inspection | `phase show`, `phase brief` | Human, principal agent, driver |
+| Phase inspection | `phase show`, `phase brief`, `phase artifact` | Human, principal agent, driver |
 | Durable run facts | `ask`, `answer`, `discover`, `note`, `plan revise` | Human or principal agent |
 | Driver diagnostics | `gate check` | Driver or debugging |
 | Sensor management | `sensor list`, `info` | Human, CI, driver |
 | Sensor audit | `sensor audit [<run>]` | Human, CI |
 | Workflow management | `workflow list`, `info`, `validate`, `render` | Human or principal agent |
-| Diagnostics | `doctor`, `prime`, `work report` | All trusted operational callers |
+| Diagnostics | `doctor`, `work report` | All trusted operational callers |
 
 `senawa browser [<run>]` is the user-facing console command. It creates a fresh
 high-entropy bootstrap capability, opens it through the configured system

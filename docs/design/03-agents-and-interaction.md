@@ -54,7 +54,8 @@ is pinned to their own task, so a completion request cannot target another task.
 | `work start`, `resume`, `pause`, `end` | In-process operation | Yes | No | Relay on request |
 | `approve`, `reject`, `plan revise` | No | Yes | No | Relay explicit decision |
 | `steer`, `answer` | No | Yes | No | Draft and relay |
-| `ask`, `discover`, `note` | No | Yes | Future binding | Relay on request |
+| `ask`, `discover` | No | Yes | Recognized v1 capability keywords | Relay on request |
+| `note` | No | Yes | Future binding | Relay on request |
 | `work show`, `work report`, `workflow info`, `doctor` | Yes | Yes | No | Yes |
 
 The principal agent is the least contained caller because it runs in the human's
@@ -105,7 +106,7 @@ Instructions have two owners:
 | Brief scaffolding | Senawa | Scope, input references, output contract, rules, iteration context |
 | Enforcement | Senawa | Host capability ceiling, typed tools, permission callbacks, isolation, hooks, gates, and audit |
 
-`senawa task brief` and `senawa phase brief` compose those layers with current
+`senawa phase brief` composes those layers with current
 artifact paths and graph state. They pass paths rather than copying large
 artifacts into a prompt.
 
