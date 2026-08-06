@@ -94,7 +94,11 @@ same-process readers sooner. `@senawa/browser` owns authenticated HTTP routes,
 strict command schemas, graph assets, durable replay, and asynchronous command
 receipt projection. Browser commands append to a run-scoped file receipt log,
 then execute under the fenced web-supervisor lease through the shared application
-service. Beads runtime reads reconstruct from fresh `bd list --all` output so a
+service. Receipt-local SSE supports durable replay and live terminal updates;
+same-process notifications reduce latency and bounded server polling observes
+independent writers. Worker questions use a separate authenticated answer route
+to avoid deadlocking the active command receipt. Beads runtime reads reconstruct
+from fresh `bd list --all` output so a
 long-lived portal observes independent process commits. `@senawa/reporting`
 reads an application-owned evidence projection and escapes untrusted Markdown,
 HTML, control characters, and instruction-like tags with deterministic caps. It

@@ -90,7 +90,11 @@ describe("production SDK worker bindings", () => {
       ?.handle({ note: "Durable context" }, context);
 
     const actor = { channel: "worker", sessionId: turn.sessionId };
-    expect(ask).toHaveBeenCalledWith(turn.runId, "Which boundary?", actor);
+    expect(ask).toHaveBeenCalledWith(turn.runId, "Which boundary?", actor, {
+      owner: turn.owner,
+      sessionId: turn.sessionId,
+      turnId: turn.turnId,
+    });
     expect(discover).toHaveBeenCalledWith(turn.runId, "Follow-up work", actor);
     expect(note).toHaveBeenCalledWith(turn.runId, "Durable context", actor);
   });

@@ -13,6 +13,7 @@ export interface BrowserCommandReceiptStore {
   submit(runId: string, payload: BrowserRunCommand): Promise<BrowserCommandReceipt>;
   get(runId: string, commandId: string): Promise<BrowserCommandReceipt | null>;
   active(runId: string): Promise<BrowserCommandReceipt | null>;
+  read(runId: string, after: number, limit: number): Promise<readonly BrowserCommandReceipt[]>;
   claim(input: {
     readonly runId: string;
     readonly webLease: RuntimeLease;
@@ -68,25 +69,29 @@ export interface BrowserCommandExecutor {
 
 export class DurableBrowserCommandService {
   constructor(
-    private readonly receipts: BrowserCommandReceiptStore,
+    private readonly receiptStore: BrowserCommandReceiptStore,
     private readonly commands: BrowserCommandExecutor,
     private readonly scheduler: SchedulerPort,
   ) {}
 
   submit(runId: string, payload: BrowserRunCommand): Promise<BrowserCommandReceipt> {
-    return this.receipts.submit(runId, payload);
+    return this.receiptStore.submit(runId, payload);
   }
 
   receipt(runId: string, commandId: string): Promise<BrowserCommandReceipt | null> {
-    return this.receipts.get(runId, commandId);
+    return this.receiptStore.get(runId, commandId);
   }
 
   activeReceipt(runId: string): Promise<BrowserCommandReceipt | null> {
-    return this.receipts.active(runId);
+    return this.receiptStore.active(runId);
+  }
+
+  receipts(runId: string, after: number, limit: number): Promise<readonly BrowserCommandReceipt[]> {
+    return this.receiptStore.read(runId, after, limit);
   }
 
   async processNext(runId: string, webLease: RuntimeLease, claimTtlMs: number): Promise<boolean> {
-    const receipt = await this.receipts.claim({ runId, webLease, ttlMs: claimTtlMs });
+    const receipt = await this.receiptStore.claim({ runId, webLease, ttlMs: claimTtlMs });
     if (receipt === null) return false;
     const claim = {
       runId,
@@ -98,18 +103,20 @@ export class DurableBrowserCommandService {
     const stopHeartbeat = this.scheduler.scheduleEvery(
       Math.max(1_000, Math.floor(claimTtlMs / 3)),
       () => {
-        void this.receipts.renewClaim({ ...claim, ttlMs: claimTtlMs }).catch((error: unknown) => {
-          claimFailure = error;
-        });
+        void this.receiptStore
+          .renewClaim({ ...claim, ttlMs: claimTtlMs })
+          .catch((error: unknown) => {
+            claimFailure = error;
+          });
       },
     );
     try {
       const result = await this.commands.executeBrowserCommand(runId, receipt.payload);
       if (claimFailure !== undefined) throw claimFailure;
-      await this.receipts.complete({ ...claim, result });
+      await this.receiptStore.complete({ ...claim, result });
     } catch (error) {
       if (claimFailure === undefined) {
-        await this.receipts
+        await this.receiptStore
           .refuse({ ...claim, error: sanitizedCommandError(error) })
           .catch(() => undefined);
       }

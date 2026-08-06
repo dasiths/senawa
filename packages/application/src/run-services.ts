@@ -36,7 +36,12 @@ import type {
   WorkflowCatalogPort,
 } from "./ports.js";
 import { RuntimeRevisionConflictError } from "./ports.js";
-import { projectRunStatus, type RunStatusProjection } from "./projections.js";
+import {
+  type OpenWorkerQuestion,
+  projectOpenWorkerQuestions,
+  projectRunStatus,
+  type RunStatusProjection,
+} from "./projections.js";
 import { createPhasePrompt, createTaskPrompt } from "./prompts.js";
 
 const ansiEscapePattern = new RegExp(`${String.fromCodePoint(27)}\\[[0-?]*[ -/]*[@-~]`, "gu");
@@ -46,6 +51,28 @@ const questionAnswerTimeoutMs = 540_000;
 export interface ActiveQuestionTurn {
   readonly sessionId: string;
   readonly turnId: string;
+}
+
+export interface WorkerQuestionContext extends ActiveQuestionTurn {
+  readonly owner: { readonly kind: "phase" | "task"; readonly id: string };
+}
+
+export interface AnswerQuestionOptions {
+  readonly submissionId?: string;
+}
+
+export class QuestionUnavailableError extends Error {
+  constructor(readonly reason: "unknown" | "answered" | "stale") {
+    super(`Question is unavailable: ${reason}`);
+    this.name = "QuestionUnavailableError";
+  }
+}
+
+export class QuestionSubmissionConflictError extends Error {
+  constructor() {
+    super("Question answer submission conflicts with an existing submission");
+    this.name = "QuestionSubmissionConflictError";
+  }
 }
 
 export interface WaitForQuestionAnswerOptions {
@@ -346,29 +373,98 @@ export class RunCommandService implements RunDriver {
     return evaluation;
   }
 
-  async ask(runId: string, question: string, actor: CommandActor) {
+  async ask(
+    runId: string,
+    question: string,
+    actor: CommandActor,
+    workerContext?: WorkerQuestionContext,
+  ) {
     const questionId = `question-${this.identifiers.createId()}`;
     await this.store.updateRun(runId, (state) => {
       assertMutable(state);
+      if (actor.channel === "worker") {
+        if (workerContext === undefined || actor.sessionId !== workerContext.sessionId) {
+          throw new QuestionUnavailableError("stale");
+        }
+        const active = state.activeTurn;
+        if (
+          state.status !== "running" ||
+          active?.sessionId !== workerContext.sessionId ||
+          active.turnId !== workerContext.turnId ||
+          active.ownerKind !== workerContext.owner.kind ||
+          active.ownerId !== workerContext.owner.id
+        ) {
+          throw new QuestionUnavailableError("stale");
+        }
+        emit(state, "question.asked", actor, this.now(), {
+          questionId,
+          question,
+          sessionId: workerContext.sessionId,
+          turnId: workerContext.turnId,
+          ownerKind: workerContext.owner.kind,
+          ownerId: workerContext.owner.id,
+        });
+        return;
+      }
       emit(state, "question.asked", actor, this.now(), { questionId, question });
     });
     return { runId, questionId };
   }
 
-  async answer(runId: string, questionId: string, answer: string, actor: CommandActor) {
+  async answer(
+    runId: string,
+    questionId: string,
+    answer: string,
+    actor: CommandActor,
+    options: AnswerQuestionOptions = {},
+  ) {
     await this.store.updateRun(runId, (state) => {
+      const replay = state.journal.find((event) => {
+        return (
+          event.event === "question.answered" &&
+          options.submissionId !== undefined &&
+          Reflect.get(event.data, "submissionId") === options.submissionId
+        );
+      });
+      if (replay !== undefined) {
+        if (
+          Reflect.get(replay.data, "questionId") === questionId &&
+          Reflect.get(replay.data, "answer") === answer
+        ) {
+          return;
+        }
+        throw new QuestionSubmissionConflictError();
+      }
       assertMutable(state);
-      const asked = state.journal.some((event) => {
-        const { questionId: recordedQuestionId } = event.data;
-        return event.event === "question.asked" && recordedQuestionId === questionId;
+      const asked = state.journal.find((event) => {
+        return (
+          event.event === "question.asked" && Reflect.get(event.data, "questionId") === questionId
+        );
       });
-      if (!asked) throw new Error(`Unknown question ${questionId}`);
-      const answered = state.journal.some((event) => {
-        const { questionId: recordedQuestionId } = event.data;
-        return event.event === "question.answered" && recordedQuestionId === questionId;
+      if (asked === undefined) throw new QuestionUnavailableError("unknown");
+      const answered = state.journal.some(
+        (event) =>
+          event.event === "question.answered" &&
+          Reflect.get(event.data, "questionId") === questionId,
+      );
+      if (answered) throw new QuestionUnavailableError("answered");
+      if (asked.actor.channel === "worker") {
+        const active = state.activeTurn;
+        if (
+          state.status !== "running" ||
+          active?.sessionId !== Reflect.get(asked.data, "sessionId") ||
+          active.turnId !== Reflect.get(asked.data, "turnId") ||
+          active.ownerKind !== Reflect.get(asked.data, "ownerKind") ||
+          active.ownerId !== Reflect.get(asked.data, "ownerId")
+        ) {
+          throw new QuestionUnavailableError("stale");
+        }
+      }
+      emit(state, "question.answered", actor, this.now(), {
+        questionId,
+        answer,
+        ...(options.submissionId === undefined ? {} : { submissionId: options.submissionId }),
       });
-      if (answered) throw new Error(`Question ${questionId} is already answered`);
-      emit(state, "question.answered", actor, this.now(), { questionId, answer });
     });
     return { runId, questionId };
   }
@@ -1420,6 +1516,10 @@ export class RunQueryService {
     return projectRunStatus(await this.store.readRun(resolved));
   }
 
+  async openWorkerQuestions(runId: string): Promise<readonly OpenWorkerQuestion[]> {
+    return projectOpenWorkerQuestions(await this.store.readRun(runId));
+  }
+
   waitForQuestionAnswer(
     runId: string,
     questionId: string,
@@ -1493,6 +1593,11 @@ export class RunQueryService {
     if (asked.actor.channel !== "worker" || asked.actor.sessionId !== expectedTurn.sessionId) {
       throw new Error(
         `Question ${questionId} does not belong to worker session ${expectedTurn.sessionId}`,
+      );
+    }
+    if (Reflect.get(asked.data, "turnId") !== expectedTurn.turnId) {
+      throw new Error(
+        `Question ${questionId} does not belong to worker turn ${expectedTurn.turnId}`,
       );
     }
     if (

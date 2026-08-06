@@ -20,7 +20,11 @@ export function createSdkWorkerBindings(
     "senawa.ask": async (input, context) => {
       const question = requiredString(Reflect.get(input, "question"), "question");
       const services = getServices();
-      const result = await services.commands.ask(context.runId, question, workerActor(context));
+      const result = await services.commands.ask(context.runId, question, workerActor(context), {
+        owner: context.owner,
+        sessionId: context.sessionId,
+        turnId: context.turnId,
+      });
       const answer = await services.queries.waitForQuestionAnswer(
         context.runId,
         result.questionId,

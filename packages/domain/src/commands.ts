@@ -78,6 +78,16 @@ const BrowserCommandBase = {
     .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u),
 };
 
+export const BrowserQuestionAnswerSchema = z
+  .object({
+    apiVersion: z.literal("senawa.dev/question-answer/v1"),
+    submissionId: z
+      .string()
+      .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u),
+    answer: NonEmptyStringSchema.max(4000),
+  })
+  .strict();
+
 export const BrowserRunCommandSchema = z.discriminatedUnion("command", [
   z
     .object({
@@ -196,5 +206,6 @@ export const BrowserCommandReceiptSchema = z.discriminatedUnion("status", [
 export type CommandActor = z.infer<typeof CommandActorSchema>;
 export type RunCommand = z.infer<typeof RunCommandSchema>;
 export type BrowserRunCommand = z.infer<typeof BrowserRunCommandSchema>;
+export type BrowserQuestionAnswer = z.infer<typeof BrowserQuestionAnswerSchema>;
 export type BrowserCommandReceipt = z.infer<typeof BrowserCommandReceiptSchema>;
 export type BrowserCommandReceiptError = z.infer<typeof BrowserCommandReceiptErrorSchema>;

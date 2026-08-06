@@ -577,6 +577,7 @@ describe("application run use cases", () => {
       harness.runId,
       "Which boundary?",
       harness.workerActor,
+      harness.workerContext,
     );
     await harness.commands.answer(
       harness.runId,
@@ -597,8 +598,18 @@ describe("application run use cases", () => {
 
   it("ignores unrelated answers until the matching question is answered", async () => {
     const harness = await createQuestionHarness("correlated-answer");
-    const first = await harness.commands.ask(harness.runId, "First?", harness.workerActor);
-    const second = await harness.commands.ask(harness.runId, "Second?", harness.workerActor);
+    const first = await harness.commands.ask(
+      harness.runId,
+      "First?",
+      harness.workerActor,
+      harness.workerContext,
+    );
+    const second = await harness.commands.ask(
+      harness.runId,
+      "Second?",
+      harness.workerActor,
+      harness.workerContext,
+    );
     await harness.commands.answer(harness.runId, second.questionId, "Second answer", {
       channel: "direct-cli",
     });
@@ -623,7 +634,12 @@ describe("application run use cases", () => {
 
   it("cancels a pending answer wait and releases its poller", async () => {
     const harness = await createQuestionHarness("cancel-answer-wait");
-    const question = await harness.commands.ask(harness.runId, "Continue?", harness.workerActor);
+    const question = await harness.commands.ask(
+      harness.runId,
+      "Continue?",
+      harness.workerActor,
+      harness.workerContext,
+    );
     const controller = new AbortController();
     const waiting = harness.queries.waitForQuestionAnswer(
       harness.runId,
@@ -642,7 +658,12 @@ describe("application run use cases", () => {
 
   it("times out a pending answer wait and releases its poller", async () => {
     const harness = await createQuestionHarness("timeout-answer-wait");
-    const question = await harness.commands.ask(harness.runId, "Continue?", harness.workerActor);
+    const question = await harness.commands.ask(
+      harness.runId,
+      "Continue?",
+      harness.workerActor,
+      harness.workerContext,
+    );
     vi.spyOn(harness.persistence, "readRun").mockImplementation(() => new Promise(() => undefined));
     const waiting = harness.queries.waitForQuestionAnswer(
       harness.runId,
@@ -662,7 +683,12 @@ describe("application run use cases", () => {
 
   it("rejects a pending answer when the active turn is replaced", async () => {
     const harness = await createQuestionHarness("stale-answer-turn");
-    const question = await harness.commands.ask(harness.runId, "Continue?", harness.workerActor);
+    const question = await harness.commands.ask(
+      harness.runId,
+      "Continue?",
+      harness.workerActor,
+      harness.workerContext,
+    );
     const waiting = harness.queries.waitForQuestionAnswer(
       harness.runId,
       question.questionId,
@@ -683,7 +709,12 @@ describe("application run use cases", () => {
 
   it("rejects a pending answer when the run becomes terminal", async () => {
     const harness = await createQuestionHarness("terminal-answer-turn");
-    const question = await harness.commands.ask(harness.runId, "Continue?", harness.workerActor);
+    const question = await harness.commands.ask(
+      harness.runId,
+      "Continue?",
+      harness.workerActor,
+      harness.workerContext,
+    );
     const waiting = harness.queries.waitForQuestionAnswer(
       harness.runId,
       question.questionId,
@@ -701,6 +732,101 @@ describe("application run use cases", () => {
 
     await rejection;
     expect(harness.scheduler.activeCount).toBe(0);
+  });
+
+  it("projects multiple open worker questions and classifies replaced turns as stale", async () => {
+    const harness = await createQuestionHarness("open-question-projection");
+    await harness.commands.ask(
+      harness.runId,
+      "<img src=x onerror=alert(1)>",
+      harness.workerActor,
+      harness.workerContext,
+    );
+    const second = await harness.commands.ask(
+      harness.runId,
+      "Second?",
+      harness.workerActor,
+      harness.workerContext,
+    );
+    await harness.commands.ask(harness.runId, "CLI-only?", { channel: "direct-cli" });
+
+    expect(await harness.queries.openWorkerQuestions(harness.runId)).toEqual([
+      expect.objectContaining({
+        question: "<img src=x onerror=alert(1)>",
+        askedSeq: expect.any(Number),
+        ownerKind: "phase",
+        ownerId: "define",
+        status: "answerable",
+      }),
+      expect.objectContaining({ questionId: second.questionId, status: "answerable" }),
+    ]);
+
+    await updateRuntime(harness.persistence, harness.runId, (state) => {
+      if (state.activeTurn === null) throw new Error("Expected an active turn");
+      state.activeTurn = { ...state.activeTurn, turnId: "replacement-turn" };
+    });
+
+    expect(await harness.queries.openWorkerQuestions(harness.runId)).toEqual([
+      expect.objectContaining({ status: "stale" }),
+      expect.objectContaining({ status: "stale" }),
+    ]);
+    await expect(
+      harness.commands.answer(
+        harness.runId,
+        second.questionId,
+        "Too late",
+        { channel: "web" },
+        { submissionId: "11111111-1111-4111-8111-111111111111" },
+      ),
+    ).rejects.toMatchObject({ name: "QuestionUnavailableError", reason: "stale" });
+  });
+
+  it("makes exact answer submission replays idempotent and rejects conflicting reuse", async () => {
+    const harness = await createQuestionHarness("answer-idempotency");
+    const question = await harness.commands.ask(
+      harness.runId,
+      "Which boundary?",
+      harness.workerActor,
+      harness.workerContext,
+    );
+    const options = { submissionId: "11111111-1111-4111-8111-111111111111" };
+
+    await harness.commands.answer(
+      harness.runId,
+      question.questionId,
+      "Application",
+      { channel: "web" },
+      options,
+    );
+    await updateRuntime(harness.persistence, harness.runId, (state) => {
+      state.status = "ended";
+      state.endReason = "run advanced after the durable answer";
+      state.activeTurn = null;
+    });
+    await expect(
+      harness.commands.answer(
+        harness.runId,
+        question.questionId,
+        "Application",
+        { channel: "web" },
+        options,
+      ),
+    ).resolves.toEqual({ runId: harness.runId, questionId: question.questionId });
+    await expect(
+      harness.commands.answer(
+        harness.runId,
+        question.questionId,
+        "Changed",
+        { channel: "web" },
+        options,
+      ),
+    ).rejects.toMatchObject({ name: "QuestionSubmissionConflictError" });
+    expect(
+      (await harness.persistence.readRun(harness.runId)).state.journal.filter(
+        (event) => event.event === "question.answered",
+      ),
+    ).toHaveLength(1);
+    expect(await harness.queries.openWorkerQuestions(harness.runId)).toEqual([]);
   });
 });
 
@@ -753,6 +879,11 @@ async function createQuestionHarness(runId: string) {
     scheduler,
     clock: localClock,
     expectedTurn,
+    workerContext: {
+      owner: { kind: "phase" as const, id: "define" },
+      sessionId: expectedTurn.sessionId,
+      turnId: expectedTurn.turnId,
+    },
     workerActor: { channel: "worker" as const, sessionId: expectedTurn.sessionId },
   };
 }

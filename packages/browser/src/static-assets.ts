@@ -46,21 +46,25 @@ export const indexHtml = `<!doctype html>
       <div id="terminal" class="terminal" role="log"></div>
     </section>
     <aside class="controls">
+      <section id="questions">
+        <small>OPEN QUESTIONS <span id="question-count">0</span></small>
+        <div id="question-list"></div>
+      </section>
       <small>SELECTED NODE</small>
       <h2 id="selected-name">None</h2>
       <p id="selected-detail">Choose a graph node.</p>
       <section id="approval" hidden>
         <textarea id="decision-note" placeholder="Decision note"></textarea>
-        <div><button id="approve">Approve</button><button id="reject" class="danger">Reject</button></div>
+        <div><button id="approve" class="run-command">Approve</button><button id="reject" class="danger run-command">Reject</button></div>
       </section>
       <section id="steering" hidden>
         <textarea id="instruction" placeholder="Steering instruction"></textarea>
-        <button id="steer">Send steer</button>
+        <button id="steer" class="run-command">Send steer</button>
       </section>
-      <section><button id="resume">Resume</button></section>
+      <section><button id="resume" class="run-command">Resume</button></section>
       <section id="ending">
         <textarea id="end-reason" placeholder="Reason required"></textarea>
-        <button id="end" class="danger">End run</button>
+        <button id="end" class="danger run-command">End run</button>
       </section>
       <p id="last-command" role="status" aria-live="polite">No browser command sent.</p>
     </aside>
@@ -83,6 +87,7 @@ dl{margin-top:30px}dl div{display:flex;justify-content:space-between;padding:10p
 .line{display:grid;grid-template-columns:72px 52px minmax(0,1fr);gap:8px}.line .meta{color:#839089}.line.stderr .stream{color:#ff9aa4}
 .controls section{margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}textarea{width:100%;min-height:70px;padding:9px;resize:vertical}
 button{min-height:36px;margin-top:8px;padding:8px 12px;color:#fff;background:var(--green);border:0;border-radius:4px;font-weight:700;cursor:pointer}.danger{background:var(--red)}button:disabled{cursor:wait;opacity:.55}#last-command.busy{color:var(--blue);font-weight:700}#last-command.busy::before{content:"";display:inline-block;width:8px;height:8px;margin-right:7px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+#questions{margin-top:0;padding-top:0;border-top:0}#questions small{display:flex;justify-content:space-between}#question-list:empty::after{content:"None";display:block;margin-top:8px;color:#67716d;font-size:12px}.question{padding:12px 0;border-bottom:1px solid var(--line)}.question p{margin:6px 0;font-size:13px;line-height:1.4;overflow-wrap:anywhere}.question textarea{min-height:56px;font:12px/1.4 monospace}.question button{width:100%}.question .question-status{color:#67716d;font-size:11px}.question.stale textarea,.question.stale button{cursor:not-allowed}
 #approval div{display:grid;grid-template-columns:1fr 1fr;gap:8px}#steer,#resume,#end{width:100%}#last-command{color:#67716d;font:11px/1.5 monospace}
 @media(max-width:980px){.workspace{grid-template-columns:190px minmax(0,1fr)}.controls{grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}
 @media(max-width:680px){.workspace{display:block}.overview,.controls{border:0;border-bottom:1px solid var(--line)}.stage{padding:20px 12px}.graph{height:640px}.terminal{height:340px}}
@@ -95,13 +100,18 @@ let state=null;
 let selected=null;
 let outputSource=null;
 let workerSource=null;
+let receiptSource=null;
 let records=[];
 let graph=null;
 let commandPending=false;
 let activeReceipt=null;
+let openQuestions=[];
+const questionDrafts=new Map();
+const questionSubmissions=new Map();
+const questionPending=new Set();
 let pendingCommand=null;
 let pendingPhaseId=null;
-let receiptPoll=null;
+let receiptCursor=0;
 let recordsRenderPending=false;
 
 cytoscape.use(cytoscapeDagre);
@@ -109,7 +119,7 @@ cytoscape.use(cytoscapeDagre);
 async function api(path,options={}){
   const response=await fetch(path,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options});
   const body=await response.json();
-  if(!response.ok)throw new Error(body.error?.message||body.error||("HTTP "+response.status));
+  if(!response.ok){const error=new Error(body.error?.message||body.error||("HTTP "+response.status));error.code=body.error?.code;error.status=response.status;throw error}
   return body;
 }
 
@@ -267,7 +277,57 @@ function render(){
   q("#steering").hidden=node?.kind!=="task"||["closed","ended"].includes(node.status);
   q("#resume").hidden=["awaiting_approval","ended","finished"].includes(state.status);
   q("#ending").hidden=["ended","finished"].includes(state.status);
+  renderQuestions();
   updateCommandProgress();
+}
+
+function renderQuestions(){
+  q("#question-count").textContent=String(openQuestions.length);
+  const list=q("#question-list");
+  list.replaceChildren();
+  for(const question of openQuestions){
+    const form=text("form","","question "+question.status);
+    const owner=text("small",question.ownerKind+" "+question.ownerId+" · "+new Date(question.askedAt).toLocaleTimeString([],{hour12:false}));
+    const prompt=text("p",question.question);
+    const answer=document.createElement("textarea");
+    answer.maxLength=4000;
+    answer.placeholder="Answer";
+    answer.value=questionDrafts.get(question.questionId)||"";
+    answer.addEventListener("input",()=>questionDrafts.set(question.questionId,answer.value));
+    const button=text("button","Answer");
+    button.type="submit";
+    const status=text("p",question.status==="stale"?"No longer awaiting this answer":"","question-status");
+    const locked=question.status!=="answerable"||questionPending.has(question.questionId);
+    answer.disabled=locked;
+    button.disabled=locked;
+    form.addEventListener("submit",(event)=>{event.preventDefault();void submitAnswer(question,answer,button,status)});
+    form.append(owner,prompt,answer,button,status);
+    list.append(form);
+  }
+}
+
+async function submitAnswer(question,answer,button,status){
+  if(questionPending.has(question.questionId)||question.status!=="answerable")return;
+  questionPending.add(question.questionId);
+  answer.disabled=true;
+  button.disabled=true;
+  status.textContent="Submitting…";
+  const submissionId=questionSubmissions.get(question.questionId)||crypto.randomUUID();
+  questionSubmissions.set(question.questionId,submissionId);
+  try{
+    await api("/api/v1/runs/"+encodeURIComponent(runId)+"/questions/"+encodeURIComponent(question.questionId)+"/answer",{method:"POST",body:JSON.stringify({apiVersion:"senawa.dev/question-answer/v1",submissionId,answer:answer.value})});
+    status.textContent="Answered";
+    questionDrafts.delete(question.questionId);
+    questionSubmissions.delete(question.questionId);
+    await refresh();
+  }catch(error){
+    status.textContent=error.status===409?"No longer awaiting this answer":error.message;
+    if(error.status===409)await refresh();
+  }finally{
+    questionPending.delete(question.questionId);
+    const current=openQuestions.find((candidate)=>candidate.questionId===question.questionId);
+    if(current?.status==="answerable"){answer.disabled=false;button.disabled=false}
+  }
 }
 
 function updateCommandProgress(){
@@ -348,12 +408,20 @@ function select(id){
   }
 }
 
-async function refresh(){state=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/snapshot");render()}
+async function refresh(){
+  const [snapshot,questions]=await Promise.all([
+    api("/api/v1/runs/"+encodeURIComponent(runId)+"/snapshot"),
+    api("/api/v1/runs/"+encodeURIComponent(runId)+"/questions/open"),
+  ]);
+  state=snapshot;
+  openQuestions=questions.questions;
+  render();
+}
 function receiptActive(){return activeReceipt!==null&&["queued","running"].includes(activeReceipt.status)}
 function updateControlsLocked(){
   const locked=commandPending||receiptActive();
-  q(".controls").setAttribute("aria-busy",String(locked));
-  for(const button of document.querySelectorAll(".controls button"))button.disabled=locked;
+  q("#last-command").setAttribute("aria-busy",String(locked));
+  for(const button of document.querySelectorAll(".run-command"))button.disabled=locked;
   q("#last-command").classList.toggle("busy",locked);
 }
 function setCommandPending(command,pending,extra={}){
@@ -363,28 +431,27 @@ function setCommandPending(command,pending,extra={}){
   if(pending)q("#last-command").textContent=command+" submitting…";
 }
 function applyReceipt(receipt){
+  if(receipt.seq<=receiptCursor)return false;
+  receiptCursor=receipt.seq;
   activeReceipt=receipt;
   pendingCommand=receipt.payload.command;
   pendingPhaseId=typeof receipt.payload.phaseId==="string"?receipt.payload.phaseId:null;
   updateControlsLocked();
   updateCommandProgress();
+  return true;
 }
-async function pollReceipt(){
-  if(activeReceipt===null)return;
-  clearTimeout(receiptPoll);
-  try{
-    const response=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/commands/"+encodeURIComponent(activeReceipt.commandId));
-    applyReceipt(response.receipt);
-    if(["queued","running"].includes(response.receipt.status)){receiptPoll=setTimeout(pollReceipt,250);return}
-    await refresh();
-  }catch(error){
-    q("#last-command").textContent="receipt unavailable: "+error.message;
-    receiptPoll=setTimeout(pollReceipt,1000);
-  }
+function startReceiptStream(){
+  receiptSource?.close();
+  receiptSource=new EventSource("/api/v1/runs/"+encodeURIComponent(runId)+"/commands/events");
+  receiptSource.onmessage=(event)=>{
+    const receipt=JSON.parse(event.data);
+    if(!applyReceipt(receipt))return;
+    if(["completed","refused"].includes(receipt.status))void refresh();
+  };
 }
 async function recoverActiveReceipt(){
   const response=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/commands/active");
-  if(response.receipt!==null){applyReceipt(response.receipt);void pollReceipt()}
+  if(response.receipt!==null)applyReceipt(response.receipt);
 }
 async function command(command,extra={}){
   if(commandPending)return;
@@ -392,7 +459,6 @@ async function command(command,extra={}){
   try{
     const response=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/commands",{method:"POST",body:JSON.stringify({apiVersion:"senawa.dev/browser-command/v1",commandId:crypto.randomUUID(),command,...extra})});
     applyReceipt(response.receipt);
-    void pollReceipt();
   }catch(error){q("#last-command").textContent="refused: "+error.message}
   finally{setCommandPending(command,false,extra)}
 }
@@ -404,5 +470,5 @@ q("#resume").addEventListener("click",()=>command("resume"));
 q("#end").addEventListener("click",()=>command("end",{reason:q("#end-reason").value}));
 addEventListener("resize",()=>{graph?.resize();graph?.fit(undefined,32)});
 
-Promise.all([refresh(),recoverActiveReceipt()]).then(()=>{select(selected);const events=new EventSource("/api/v1/runs/"+encodeURIComponent(runId)+"/events/stream");events.onopen=()=>q("#connection").textContent="Live";events.onmessage=refresh;events.onerror=()=>q("#connection").textContent="Reconnecting"}).catch((error)=>q("#connection").textContent=error.message);
+Promise.all([refresh(),recoverActiveReceipt()]).then(()=>{select(selected);startReceiptStream();const events=new EventSource("/api/v1/runs/"+encodeURIComponent(runId)+"/events/stream");events.onopen=()=>q("#connection").textContent="Live";events.onmessage=refresh;events.onerror=()=>q("#connection").textContent="Reconnecting"}).catch((error)=>q("#connection").textContent=error.message);
 `;

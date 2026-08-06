@@ -41,7 +41,12 @@ export function createRuntimeComposition(
         )
       : new FileRuntimeStateStore(repositoryRoot);
   const leases = new FileLeaseStore(repositoryRoot);
-  const receiptStore = new FileBrowserCommandReceiptStore(repositoryRoot, leases);
+  const receiptStore = new FileBrowserCommandReceiptStore(
+    repositoryRoot,
+    leases,
+    undefined,
+    notifier,
+  );
   const persistence = new FileRunPersistence(
     repositoryRoot,
     {

@@ -133,12 +133,23 @@ export class RunCommands {
     return this.application.checkGate(runId, gateId, owner, actor);
   }
 
-  ask(runId: string, question: string, actor: CommandActor) {
-    return this.application.ask(runId, question, actor);
+  ask(
+    runId: string,
+    question: string,
+    actor: CommandActor,
+    workerContext?: Parameters<ApplicationRunCommandService["ask"]>[3],
+  ) {
+    return this.application.ask(runId, question, actor, workerContext);
   }
 
-  answer(runId: string, questionId: string, answer: string, actor: CommandActor) {
-    return this.application.answer(runId, questionId, answer, actor);
+  answer(
+    runId: string,
+    questionId: string,
+    answer: string,
+    actor: CommandActor,
+    options?: Parameters<ApplicationRunCommandService["answer"]>[4],
+  ) {
+    return this.application.answer(runId, questionId, answer, actor, options);
   }
 
   discover(runId: string, title: string, actor: CommandActor) {

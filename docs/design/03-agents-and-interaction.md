@@ -98,6 +98,13 @@ state. It returns only the answer correlated to the same active session and turn
 It fails when that turn becomes stale or terminal and does not resume, advance,
 or complete the workflow. Questions still do not create Beads gates.
 
+The portal projects every unanswered worker question with its owner and time.
+Questions matching the active session and turn provide an answer form; stale
+questions remain visible but disabled. Answer submission has its own UUID for
+exact replay and uses a separate authenticated endpoint, so it remains available
+while the browser command receipt is occupied by the worker that asked. Dynamic
+question and answer text is rendered through DOM text nodes.
+
 ## Browser command receipts
 
 The loopback browser submits discrete commands to a run-scoped append-only
@@ -107,9 +114,10 @@ time under its fenced lease and invokes the same application command service use
 by the CLI. Receipts record queued, running, completed, or refused state; they do
 not determine run completion.
 
-The browser recovers a nonterminal receipt after reload and polls it for command
-status while run and worker state continue over SSE. Command IDs make submission
-idempotent. Application journal events carry the same command ID so a restarted
+The browser recovers a nonterminal receipt after reload, then replays and tails
+receipt-local sequence numbers over SSE while run and worker state continue over
+their existing SSE streams. Command IDs make submission idempotent. Application
+journal events carry the same command ID so a restarted
 processor can replay approve, reject, steer, resume, or end without duplicating
 an already committed transition. A graceful supervisor shutdown retains its web
 claim until active command execution finishes.

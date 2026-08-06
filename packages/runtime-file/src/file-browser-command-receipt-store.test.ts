@@ -5,6 +5,7 @@ import {
   BrowserCommandClaimConflictError,
   BrowserCommandIdConflictError,
   BrowserCommandInProgressError,
+  type RunChangeNotificationPort,
 } from "@senawa/application";
 import type { BrowserRunCommand } from "@senawa/domain";
 import { describe, expect, it } from "vitest";
@@ -70,6 +71,63 @@ describe("file browser command receipt store", () => {
     ).resolves.toMatchObject({ status: "queued" });
   });
 
+  it("replays durable receipt records after a cursor and notifies only for appends", async () => {
+    const fixture = await createFixture();
+    const observed: number[] = [];
+    const unsubscribe = fixture.notifier.subscribe((changedRunId) => {
+      if (changedRunId !== fixture.runId) return;
+      void fixture.store.read(fixture.runId, 0, 500).then((receipts) => {
+        observed.push(receipts.at(-1)?.seq ?? 0);
+      });
+    });
+    const command = resumeCommand(firstCommandId);
+    const submitted = await fixture.store.submit(fixture.runId, command);
+    await fixture.store.submit(fixture.runId, command);
+    const lease = await fixture.leases.acquireLease(fixture.runId, "web", "web-replay", 10_000);
+    const claimed = await fixture.store.claim({
+      runId: fixture.runId,
+      webLease: lease,
+      ttlMs: 5_000,
+    });
+    if (claimed === null) throw new Error("Expected a receipt claim");
+    await fixture.store.renewClaim({
+      runId: fixture.runId,
+      commandId: claimed.commandId,
+      claimOwner: lease.owner,
+      claimFence: lease.fence,
+      ttlMs: 5_000,
+    });
+    await fixture.store.complete({
+      runId: fixture.runId,
+      commandId: claimed.commandId,
+      claimOwner: lease.owner,
+      claimFence: lease.fence,
+      result: { runId: fixture.runId, kind: "idle" },
+    });
+    unsubscribe();
+
+    expect(submitted.seq).toBe(1);
+    expect((await fixture.store.read(fixture.runId, 1, 2)).map((receipt) => receipt.seq)).toEqual([
+      2, 3,
+    ]);
+    expect((await fixture.store.read(fixture.runId, 3, 500)).map((receipt) => receipt.seq)).toEqual(
+      [4],
+    );
+    await expect(fixture.store.read(fixture.runId, -1, 1)).rejects.toThrow(
+      "Invalid receipt replay cursor",
+    );
+
+    const reopened = new FileBrowserCommandReceiptStore(
+      fixture.root,
+      new FileLeaseStore(fixture.root, fixture.now),
+      fixture.now,
+    );
+    await expect(reopened.read(fixture.runId, 3, 1)).resolves.toEqual([
+      expect.objectContaining({ seq: 4, status: "completed" }),
+    ]);
+    await expect.poll(() => observed).toEqual([1, 2, 3, 4]);
+  });
+
   it("reclaims expired running receipts and rejects stale-fence completion", async () => {
     const fixture = await createFixture();
     await fixture.store.submit(fixture.runId, resumeCommand(firstCommandId));
@@ -129,16 +187,31 @@ async function createFixture() {
   let timestamp = Date.parse("2026-08-06T12:00:00.000Z");
   const now = () => new Date(timestamp);
   const leases = new FileLeaseStore(root, now);
+  const notifier = new TestNotifier();
   return {
     root,
     runId,
     now,
     leases,
-    store: new FileBrowserCommandReceiptStore(root, leases, now),
+    notifier,
+    store: new FileBrowserCommandReceiptStore(root, leases, now, notifier),
     advance(milliseconds: number) {
       timestamp += milliseconds;
     },
   };
+}
+
+class TestNotifier implements RunChangeNotificationPort {
+  private readonly listeners = new Set<(runId: string) => void>();
+
+  subscribe(listener: (runId: string) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  publishRunChanged(runId: string): void {
+    for (const listener of this.listeners) listener(runId);
+  }
 }
 
 function resumeCommand(commandId: string): BrowserRunCommand {

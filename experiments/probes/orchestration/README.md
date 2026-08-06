@@ -164,8 +164,9 @@ path the architecture forbids.
 Production tests now submit a caller-identified command to a separate run-scoped
 receipt log and return HTTP `202` after durable append, before command execution.
 The active web supervisor claims one command under its fenced lease and invokes
-the shared application command service. The browser polls the receipt while run
-and output state continue over their existing SSE streams.
+the shared application command service. The browser replays and tails the receipt
+over its own SSE cursor while run and output state continue over their existing
+SSE streams.
 
 The measured offline cases established:
 
@@ -180,6 +181,13 @@ The measured offline cases established:
 * Unexpected execution errors are sanitized before they enter a refused receipt.
 * Portal reload recovers the active receipt, while terminal workflow state remains
   projected from the application query rather than the receipt.
+* Receipt SSE replays receipt-local sequence numbers, tails terminal updates,
+  reconnects from Last-Event-ID without gaps or duplicates, and honors writable
+  backpressure. A bounded server-side durable reread catches independent writers.
+* A production-composition real-Beads contract queued one receipt, killed the web
+  supervisor with `SIGKILL`, waited for the persisted lease to expire, and
+  completed the same receipt through a fresh composition without duplicate
+  approval or resume events. The no-credit contract completed in 39.3 seconds.
 
 The same run also exposed an instance-local Beads read cache that let a long-lived
 portal return stale runtime state after an independent process committed recovery.
@@ -194,6 +202,16 @@ durable question ID. The application query waits for the matching
 active, then returns the answer through the original tool result. Focused tests
 cover unrelated answers, reverse-order delivery, stale and terminal turns,
 cancellation, and timeout races. The binding never resumes or advances the run.
+
+### Browser worker question controls
+
+Production browser tests project unanswered worker questions from the durable
+journal with owner, session, and turn provenance. Questions matching the active
+turn remain answerable; replaced or terminal turns remain visible as stale and
+disabled. Answers use a separate authenticated endpoint with a UUID submission
+ID, exact replay idempotency, changed-payload conflict, strict Origin and schema
+checks, and DOM text-node rendering. Answer controls remain available while a
+command receipt is active, avoiding the receipt-queue deadlock.
 
 The blocking lifecycle determines where the server lives. The driver exits when
 a human decision is due, which is exactly when the browser must remain available.
@@ -236,8 +254,6 @@ TLS are separate decisions rather than flags the local probe should imply are sa
 * That the HTTP command adapter calls real Senawa command handlers instead of a
   parallel state transition implementation
 * Forced takeover of a live or stale driver lease after the shutdown grace period
-* A complete browser receipt workflow against a real Beads runtime; receipt
-  storage is backend-neutral, but current HTTP receipt tests use the file runtime
 
 ### Single active run and graceful end, offline
 
@@ -316,3 +332,4 @@ bash experiments/probes/orchestration/end-to-end.sh   # spends AI credits
 | 2026-08-04 | Restricted version 1 to one unfinished run per repository and one active worker turn. Added the active-run pointer, singleton web-supervisor lease, graceful `work end`, terminal `ended` projection, archival before replacement, and browser end control. Proved a competing run and supervisor are refused and that an ended run no longer blocks a replacement. The replacement test found that `bd init` must run once per repository rather than once per work item. |
 | 2026-08-05 | Replaced the single-use production browser bootstrap with a supervisor-lifetime path capability. Repeated valid requests mint the same HttpOnly session, incorrect capabilities remain unauthorized, cross-origin commands remain refused, and VS Code remote-port forwarding preserves the URL. |
 | 2026-08-06 | Added production durable browser command receipts and active worker answer delivery. Proved immediate durable acknowledgement, idempotent replay, competing-command refusal, fenced graceful shutdown, queued and stale-running recovery, sanitized refusal, command-correlated transition replay, and correlated answer delivery through the original SDK tool call. A real-Beads contract separately proved long-lived readers observe independent recovery after removing the aggregate read cache. |
+| 2026-08-06 | Closed the remaining browser evidence: a no-credit real-Beads contract recovered one receipt after supervisor `SIGKILL` and lease expiry without duplicate transitions; receipt-local SSE proved replay, live tail, Last-Event-ID reconnect, independent-writer polling, and backpressure; portal question controls proved active and stale projection, idempotent answers, receipt-independent controls, security, reload, and DOM-safe rendering. |

@@ -1,4 +1,80 @@
-import type { RuntimeDispatch, RuntimePhase, RuntimeState, RuntimeTask } from "@senawa/domain";
+import type {
+  JournalEvent,
+  RuntimeDispatch,
+  RuntimePhase,
+  RuntimeState,
+  RuntimeTask,
+} from "@senawa/domain";
+
+export interface OpenWorkerQuestion {
+  readonly questionId: string;
+  readonly question: string;
+  readonly askedAt: string;
+  readonly askedSeq: number;
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly ownerKind: "phase" | "task";
+  readonly ownerId: string;
+  readonly status: "answerable" | "stale";
+}
+
+export function projectOpenWorkerQuestions(state: RuntimeState): readonly OpenWorkerQuestion[] {
+  const answered = new Set(
+    state.journal
+      .filter((event) => event.event === "question.answered")
+      .map((event) => Reflect.get(event.data, "questionId"))
+      .filter((questionId): questionId is string => typeof questionId === "string"),
+  );
+  return state.journal
+    .filter((event) => event.event === "question.asked")
+    .flatMap((event) => projectOpenWorkerQuestion(state, event, answered));
+}
+
+function projectOpenWorkerQuestion(
+  state: RuntimeState,
+  event: JournalEvent,
+  answered: ReadonlySet<string>,
+): readonly OpenWorkerQuestion[] {
+  const questionId = Reflect.get(event.data, "questionId");
+  const question = Reflect.get(event.data, "question");
+  const sessionId = Reflect.get(event.data, "sessionId");
+  const turnId = Reflect.get(event.data, "turnId");
+  const ownerKind = Reflect.get(event.data, "ownerKind");
+  const ownerId = Reflect.get(event.data, "ownerId");
+  if (
+    event.actor.channel !== "worker" ||
+    typeof questionId !== "string" ||
+    typeof question !== "string" ||
+    typeof sessionId !== "string" ||
+    typeof turnId !== "string" ||
+    (ownerKind !== "phase" && ownerKind !== "task") ||
+    typeof ownerId !== "string" ||
+    answered.has(questionId)
+  ) {
+    return [];
+  }
+  const active = state.activeTurn;
+  return [
+    {
+      questionId,
+      question,
+      askedAt: event.ts,
+      askedSeq: event.seq,
+      sessionId,
+      turnId,
+      ownerKind,
+      ownerId,
+      status:
+        state.status === "running" &&
+        active?.sessionId === sessionId &&
+        active.turnId === turnId &&
+        active.ownerKind === ownerKind &&
+        active.ownerId === ownerId
+          ? "answerable"
+          : "stale",
+    },
+  ];
+}
 
 export interface RunStatusProjection {
   readonly runId: string;

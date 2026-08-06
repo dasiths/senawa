@@ -5,10 +5,19 @@ import {
   BrowserCommandInProgressError,
   type DurableBrowserCommandService,
   LeaseConflictError,
+  QuestionSubmissionConflictError,
+  QuestionUnavailableError,
   type RunChangeNotificationPort,
+  type RunCommandService,
   type RunQueryService,
 } from "@senawa/application";
-import { BrowserRunCommandSchema, type RuntimeLease } from "@senawa/domain";
+import {
+  BrowserQuestionAnswerSchema,
+  BrowserRunCommandSchema,
+  IdentifierSchema,
+  type RuntimeLease,
+} from "@senawa/domain";
+import { beginSse } from "./sse.js";
 import {
   appJs,
   cytoscapeDagreJs,
@@ -21,13 +30,20 @@ import {
 const cookieName = "senawa_session";
 
 export interface BrowserServices {
+  readonly commands: Pick<RunCommandService, "answer">;
   readonly browserCommands: Pick<
     DurableBrowserCommandService,
-    "submit" | "receipt" | "activeReceipt" | "processNext"
+    "submit" | "receipt" | "activeReceipt" | "receipts" | "processNext"
   >;
   readonly queries: Pick<
     RunQueryService,
-    "activeRunId" | "status" | "journal" | "output" | "workerEvents" | "artifact"
+    | "activeRunId"
+    | "status"
+    | "openWorkerQuestions"
+    | "journal"
+    | "output"
+    | "workerEvents"
+    | "artifact"
   >;
   readonly notifier: RunChangeNotificationPort;
   acquireWebLease(runId: string, owner: string, ttlMs: number): Promise<RuntimeLease>;
@@ -100,7 +116,7 @@ export async function startWebSupervisor(
       await route(request, response, url, runId, expectedOrigin, services, () => void drain());
     } catch (error) {
       sendJson(response, statusForError(error), {
-        error: { code: "request_failed", message: errorMessage(error) },
+        error: { code: errorCode(error), message: errorMessage(error) },
       });
     }
   });
@@ -224,15 +240,58 @@ async function route(
     return;
   }
   if (request.method === "GET" && url.pathname === `${prefix}/events/stream`) {
-    beginSse(request, response, runId, cursor(url, request), services, (after) =>
-      services.queries.journal(runId, after, 500),
-    );
+    beginSse(request, response, {
+      runId,
+      initialCursor: cursor(url, request),
+      notifier: services.notifier,
+      read: (after) => services.queries.journal(runId, after, 500),
+      prepareHeaders: (target) => securityHeaders(target, "text/event-stream; charset=utf-8"),
+    });
+    return;
+  }
+  if (request.method === "GET" && url.pathname === `${prefix}/questions/open`) {
+    sendJson(response, 200, {
+      apiVersion: "senawa.dev/open-worker-questions/v1",
+      questions: await services.queries.openWorkerQuestions(runId),
+    });
+    return;
+  }
+  const answerMatch = url.pathname.match(
+    new RegExp(`^${escapeRegex(prefix)}/questions/([^/]+)/answer$`, "u"),
+  );
+  if (request.method === "POST" && answerMatch !== null) {
+    if (request.headers.origin !== expectedOrigin) {
+      sendJson(response, 403, { error: { code: "origin_rejected", message: "Origin rejected" } });
+      return;
+    }
+    if (!isJsonContentType(request.headers["content-type"])) {
+      sendJson(response, 415, { error: { code: "content_type", message: "JSON required" } });
+      return;
+    }
+    const questionId = IdentifierSchema.parse(decodeURIComponent(answerMatch[1] ?? ""));
+    const input = BrowserQuestionAnswerSchema.parse(await readJsonBody(request));
+    await services.commands.answer(runId, questionId, input.answer, { channel: "web" }, input);
+    sendJson(response, 200, {
+      apiVersion: "senawa.dev/question-answer-result/v1",
+      questionId,
+      status: "answered",
+    });
     return;
   }
   if (request.method === "GET" && url.pathname === `${prefix}/commands/active`) {
     sendJson(response, 200, {
       apiVersion: "senawa.dev/browser-command-receipt-result/v1",
       receipt: await services.browserCommands.activeReceipt(runId),
+    });
+    return;
+  }
+  if (request.method === "GET" && url.pathname === `${prefix}/commands/events`) {
+    beginSse(request, response, {
+      runId,
+      initialCursor: cursor(url, request),
+      notifier: services.notifier,
+      read: (after) => services.browserCommands.receipts(runId, after, 500),
+      prepareHeaders: (target) => securityHeaders(target, "text/event-stream; charset=utf-8"),
     });
     return;
   }
@@ -268,18 +327,26 @@ async function route(
         await services.queries.output(runId, owner.kind, owner.id, after, limit(url)),
       );
     } else if (streamMatch[2] === "events") {
-      beginSse(request, response, runId, after, services, (next) =>
-        services.queries.output(runId, owner.kind, owner.id, next, 500),
-      );
+      beginSse(request, response, {
+        runId,
+        initialCursor: after,
+        notifier: services.notifier,
+        read: (next) => services.queries.output(runId, owner.kind, owner.id, next, 500),
+        prepareHeaders: (target) => securityHeaders(target, "text/event-stream; charset=utf-8"),
+      });
     } else if (owner.kind === "run") {
       sendJson(response, 400, {
         error: { code: "invalid_stream", message: "Run owners have no worker event stream" },
       });
     } else {
       const workerKind: "phase" | "task" = owner.kind === "phase" ? "phase" : "task";
-      beginSse(request, response, runId, after, services, (next) =>
-        services.queries.workerEvents(runId, workerKind, owner.id, next, 500),
-      );
+      beginSse(request, response, {
+        runId,
+        initialCursor: after,
+        notifier: services.notifier,
+        read: (next) => services.queries.workerEvents(runId, workerKind, owner.id, next, 500),
+        prepareHeaders: (target) => securityHeaders(target, "text/event-stream; charset=utf-8"),
+      });
     }
     return;
   }
@@ -324,58 +391,6 @@ async function route(
   sendJson(response, 404, { error: { code: "not_found", message: "Not found" } });
 }
 
-function beginSse<T extends { seq: number }>(
-  request: IncomingMessage,
-  response: ServerResponse,
-  runId: string,
-  initialCursor: number,
-  services: BrowserServices,
-  read: (after: number) => Promise<readonly T[]>,
-): void {
-  securityHeaders(response, "text/event-stream; charset=utf-8");
-  response.setHeader("Connection", "keep-alive");
-  response.setHeader("X-Accel-Buffering", "no");
-  response.writeHead(200);
-  response.write("retry: 1000\n\n");
-  let current = initialCursor;
-  let flushing = false;
-  let pending = true;
-  const flush = async () => {
-    if (flushing) {
-      pending = true;
-      return;
-    }
-    flushing = true;
-    try {
-      do {
-        pending = false;
-        for (const record of await read(current)) {
-          if (record.seq <= current) continue;
-          response.write(`id: ${record.seq}\ndata: ${JSON.stringify(record)}\n\n`);
-          current = record.seq;
-        }
-      } while (pending);
-    } catch {
-      response.end();
-    } finally {
-      flushing = false;
-    }
-  };
-  const unsubscribe = services.notifier.subscribe((changedRunId) => {
-    if (changedRunId === runId) void flush();
-  });
-  void flush();
-  const durablePoll = setInterval(() => void flush(), 250);
-  durablePoll.unref();
-  const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 15_000);
-  heartbeat.unref();
-  request.once("close", () => {
-    clearInterval(durablePoll);
-    clearInterval(heartbeat);
-    unsubscribe();
-  });
-}
-
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   let body = "";
   for await (const chunk of request) {
@@ -403,7 +418,7 @@ function parseStream(value: string): { kind: "run" | "phase" | "task"; id: strin
 }
 
 function cursor(url: URL, request: IncomingMessage): number {
-  const raw = url.searchParams.get("after") ?? request.headers["last-event-id"] ?? "0";
+  const raw = request.headers["last-event-id"] ?? url.searchParams.get("after") ?? "0";
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 0) throw new Error("Invalid replay cursor");
   return value;
@@ -451,7 +466,9 @@ function statusForError(error: unknown): number {
   if (
     error instanceof LeaseConflictError ||
     error instanceof BrowserCommandIdConflictError ||
-    error instanceof BrowserCommandInProgressError
+    error instanceof BrowserCommandInProgressError ||
+    error instanceof QuestionUnavailableError ||
+    error instanceof QuestionSubmissionConflictError
   ) {
     return 409;
   }
@@ -461,7 +478,16 @@ function statusForError(error: unknown): number {
   return 409;
 }
 
+function errorCode(error: unknown): string {
+  if (error instanceof QuestionUnavailableError) return "question_unavailable";
+  if (error instanceof QuestionSubmissionConflictError) return "submission_conflict";
+  return "request_failed";
+}
+
 function errorMessage(error: unknown): string {
+  if (error instanceof QuestionUnavailableError) return "Question is no longer available";
+  if (error instanceof QuestionSubmissionConflictError)
+    return "Submission conflicts with an answer";
   if (
     error instanceof LeaseConflictError ||
     error instanceof BrowserCommandIdConflictError ||

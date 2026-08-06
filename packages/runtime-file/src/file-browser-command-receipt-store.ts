@@ -9,6 +9,7 @@ import {
   type BrowserCommandReceiptError,
   type BrowserCommandReceiptStore,
   type LeaseStoragePort,
+  type RunChangeNotificationPort,
 } from "@senawa/application";
 import {
   BrowserCommandReceiptSchema,
@@ -30,6 +31,7 @@ export class FileBrowserCommandReceiptStore implements BrowserCommandReceiptStor
     repositoryRoot: string,
     private readonly leases: LeaseStoragePort,
     private readonly now: () => Date = () => new Date(),
+    private readonly notifications?: RunChangeNotificationPort,
   ) {
     this.trackingDirectory = resolve(repositoryRoot, ".agents", ".copilot-tracking");
   }
@@ -72,6 +74,18 @@ export class FileBrowserCommandReceiptStore implements BrowserCommandReceiptStor
       .filter((candidate) => isNonterminal(candidate.status))
       .toSorted((left, right) => right.seq - left.seq)[0];
     return receipt === undefined ? null : structuredClone(receipt);
+  }
+
+  async read(
+    runId: string,
+    after: number,
+    limit: number,
+  ): Promise<readonly BrowserCommandReceipt[]> {
+    validateReplay(after, limit);
+    return (await readReceipts(this.path(runId)))
+      .filter((receipt) => receipt.seq > after)
+      .slice(0, limit)
+      .map((receipt) => structuredClone(receipt));
   }
 
   claim(input: {
@@ -230,6 +244,7 @@ export class FileBrowserCommandReceiptStore implements BrowserCommandReceiptStor
         await appendReceipt(path, assigned);
         receipts.push(assigned);
         current.set(assigned.commandId, assigned);
+        this.notifications?.publishRunChanged(runId);
         return structuredClone(assigned);
       };
       return operation(current, append);
@@ -365,6 +380,13 @@ function assertCommandId(value: string): void {
 function validateTtl(ttlMs: number): void {
   if (!Number.isSafeInteger(ttlMs) || ttlMs < 1)
     throw new Error("Command claim TTL must be positive");
+}
+
+function validateReplay(after: number, limit: number): void {
+  if (!Number.isSafeInteger(after) || after < 0) throw new Error("Invalid receipt replay cursor");
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+    throw new Error("Invalid receipt replay limit");
+  }
 }
 
 function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {

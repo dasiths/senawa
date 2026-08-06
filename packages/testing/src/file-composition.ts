@@ -25,7 +25,7 @@ export function createFileTestComposition(
   const leases = new FileLeaseStore(repositoryRoot, now);
   return {
     notifier,
-    receiptStore: new FileBrowserCommandReceiptStore(repositoryRoot, leases, now),
+    receiptStore: new FileBrowserCommandReceiptStore(repositoryRoot, leases, now, notifier),
     persistence: new FileRunPersistence(repositoryRoot, {
       runtime: new FileRuntimeStateStore(repositoryRoot),
       activeRuns: new FileActiveRunRegistry(repositoryRoot),

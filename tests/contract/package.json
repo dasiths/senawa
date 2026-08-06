@@ -5,9 +5,11 @@
   "type": "module",
   "dependencies": {
     "@senawa/artifact-store": "workspace:*",
+    "@senawa/browser": "workspace:*",
     "@senawa/observability": "workspace:*",
     "@senawa/runtime-beads": "workspace:*",
     "@senawa/runtime-file": "workspace:*",
-    "@senawa/testing": "workspace:*"
+    "@senawa/testing": "workspace:*",
+    "esbuild": "0.25.12"
   }
 }

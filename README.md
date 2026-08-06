@@ -148,12 +148,15 @@ The `senawa` app composes `@senawa/runtime-beads` by default and selects
 `@senawa/runtime-file` only for explicit `--runtime file` commands. Mutable runtime state,
 active-run ownership, fenced leases, immutable documents, journal JSONL, and
 session/turn output streams each have one file authority. Owner output replay is
-derived across those streams. A write-ahead transaction
+derived across those streams. Browser commands have a separate run-scoped,
+append-only receipt authority with fenced claims and restart recovery. A
+write-ahead transaction
 replays interrupted cross-store commits on reopen. Shared contracts cover
 restart, revisions, document conflicts, journal and output idempotency, lease
-fencing, mid-commit crash recovery, dispatch reconstruction, and projections. Browser SSE polls durable
-cursors as its correctness path, so independent process writes and supervisor
-restart do not depend on process-local notifications.
+fencing, mid-commit crash recovery, dispatch reconstruction, and projections.
+Run, output, worker, and receipt SSE streams reread durable cursors as their
+correctness path, so independent process writes and supervisor restart do not
+depend on process-local notifications.
 
 The loopback console now lives in `@senawa/browser`, and `@senawa/reporting`
 renders from an application evidence projection rather than a runtime adapter.
@@ -231,7 +234,11 @@ The bootstrap capability remains valid only while that supervisor process is
 running. Keep it private: anyone who can reach the loopback or forwarded port
 and possesses the URL can obtain a browser session. Authentication remains
 necessary because the console can approve, reject, steer, resume, and end runs,
-and its output can contain source, prompts, paths, and process diagnostics.
+answer active worker questions, and display source, prompts, paths, and process
+diagnostics. Command POSTs return after durable receipt submission; the fenced
+supervisor executes and recovers the command while receipt-local SSE reports
+queued, running, completed, or refused state. Worker answers use a separate
+authenticated route so they remain available while a command receipt is active.
 
 The live-worker launcher is separate and guarded:
 
@@ -335,12 +342,12 @@ packages/domain/             pure contracts, schemas, events, and transition inv
 packages/configuration/      repository definitions, snapshots, fingerprints, and diagnostics
 packages/application/        commands, queries, driver, prompts, projections, and ports
 packages/runtime-beads/      production Beads runtime graph and split-write reconciliation
-packages/runtime-file/       explicit development and test runtime, active-run, lease, and recovery adapter
+packages/runtime-file/       explicit dev/test runtime, active-run, lease, receipt, and recovery adapter
 packages/artifact-store/     immutable run identity, snapshot, and artifact documents
 packages/observability/      append-only journal, output streams, and notification hints
 packages/workers/            worker lifecycle, negotiation, authorization, events, and binding adapters
 packages/sensors/            ordered gate evaluation, command sensors, cache, and evidence seams
-packages/browser/            authenticated loopback HTTP, durable SSE replay, and graph console
+packages/browser/            authenticated HTTP, receipt and output SSE, questions, and graph console
 packages/reporting/          report rendering over application evidence projections
 packages/testing/            shared adapter contracts and deterministic fixtures
 tests/contract/              shared storage, recovery, fencing, dispatch, and projection suites
