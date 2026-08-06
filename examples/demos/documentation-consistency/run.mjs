@@ -5,7 +5,9 @@ import { createInterface } from "node:readline/promises";
 
 const repositoryRoot = resolve(process.cwd());
 const arguments_ = process.argv.slice(2);
+if (arguments_[0] === "--") arguments_.shift();
 const command = arguments_[0]?.startsWith("-") === false ? arguments_.shift() : "run";
+const autoApprove = arguments_.includes("--auto-approve");
 const timestamp = new Date().toISOString().replaceAll(/[-:]/gu, "").replace(/\..+$/u, "Z");
 const branch = optionValue(arguments_, "--branch") ?? `demo/documentation-consistency-${timestamp}`;
 const goal =
@@ -111,8 +113,17 @@ async function driveWorkflow() {
       }
       if (status.needs?.action === "approve-or-reject") {
         const phaseId = status.needs.phaseId;
-        print(`\nPhase ${phaseId} requires your decision. Full artifact:`);
+        print(`\nPhase ${phaseId} produced a schema-valid artifact:`);
         runSenawa(["phase", "artifact", phaseId]);
+        if (autoApprove) {
+          runSenawa([
+            "note",
+            `Integration demo auto-approval was explicitly authorized for phase ${phaseId}.`,
+          ]);
+          runSenawa(["approve", phaseId]);
+          runSenawa(["work", "resume"], [0, 2]);
+          continue;
+        }
         const decision = await askChoice(
           terminal,
           "Choose [a]pprove, [r]eject, or [e]nd: ",
@@ -136,6 +147,10 @@ async function driveWorkflow() {
       if (status.unsettledDispatch !== null) {
         print(`Dispatch requires reconciliation: ${status.unsettledDispatch.operatorAction}`);
       }
+      if (autoApprove) {
+        runSenawa(["work", "resume"], [0, 2]);
+        continue;
+      }
       const decision = await askChoice(terminal, "Choose [r]esume or [e]nd: ", new Set(["r", "e"]));
       if (decision === "e") {
         const reason = await askRequired(terminal, "End reason: ");
@@ -149,7 +164,9 @@ async function driveWorkflow() {
     print(
       `Repository retained on branch: ${output("git", ["branch", "--show-current"], repositoryRoot)}`,
     );
-    print("Resume with: pnpm demo:docs -- resume --confirm-cost");
+    print(
+      `Resume with: pnpm demo:docs -- resume --confirm-cost${autoApprove ? " --auto-approve" : ""}`,
+    );
   }
 }
 
@@ -413,16 +430,16 @@ function print(value) {
 
 function printHelp() {
   print(`Usage:
-  pnpm demo:docs -- --confirm-cost [--branch <name>]
+  pnpm demo:docs -- --confirm-cost [--auto-approve] [--branch <name>]
   pnpm demo:docs -- prepare [--branch <name>]
-  pnpm demo:docs -- start --confirm-cost
-  pnpm demo:docs -- resume --confirm-cost
+  pnpm demo:docs -- start --confirm-cost [--auto-approve]
+  pnpm demo:docs -- resume --confirm-cost [--auto-approve]
   pnpm demo:docs -- verify
 
 Commands:
   run      Create a branch in place, run the live workflow, and verify it
   prepare  Validate the repository and create the branch without starting an SDK session
   start    Start the live workflow on the prepared branch
-  resume   Continue an interrupted workflow with explicit human decisions
+  resume   Continue an interrupted workflow interactively or with authorized auto-approval
   verify   Re-run all completion and repository assertions without using AI credits`);
 }

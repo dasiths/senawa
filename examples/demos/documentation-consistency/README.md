@@ -5,10 +5,11 @@ the production `standard-delivery` workflow there. It uses Beads as the runtime
 authority, executes every agent through the authenticated Copilot SDK adapter,
 and stops for your explicit decision at each human gate.
 
-The launcher never approves, rejects, or ends work on your behalf. After the
-final approval, it checks the run state, task closure, branch identity, changed
-paths, documentation links, lint, types, tests, build, package boundaries,
-bundles, sensor evidence, and the complete provenance report.
+Interactive mode never approves, rejects, or ends work on your behalf.
+Auto-approval requires the explicit `--auto-approve` flag. After the final
+approval, the launcher checks the run state, task closure, branch identity,
+changed paths, documentation links, lint, types, tests, build, package
+boundaries, bundles, sensor evidence, and the complete provenance report.
 
 > [!WARNING]
 > The full demo spends GitHub Copilot AI credits and changes the current Git
@@ -44,6 +45,22 @@ printed in full before the launcher asks you to approve, reject, or end the
 run. Rejection requires a reason and resumes the same bounded workflow after
 Senawa records your decision.
 
+## Run the complete integration test
+
+Use auto-approval when the objective is to test the complete integration path
+without stopping at human gates:
+
+```bash
+pnpm demo:docs -- --confirm-cost --auto-approve
+```
+
+The launcher prints every schema-valid artifact, records a durable Senawa note
+that auto-approval was explicitly authorized, approves the phase through the
+public CLI, and resumes the driver. It does not bypass artifact validation,
+deterministic gates, task rework, task convergence, or final verification.
+
+Interactive approval remains the default for normal operator use.
+
 Use an explicit branch name when a stable name is useful:
 
 ```bash
@@ -72,12 +89,12 @@ Start and resume are foreground operations. If the process is interrupted,
 remain on the prepared branch and run:
 
 ```bash
-pnpm demo:docs -- resume --confirm-cost
+pnpm demo:docs -- resume --confirm-cost --auto-approve
 ```
 
 The resume path reads the durable active run, shows any pending artifact or
-dispatch reconciliation, and asks for the next human decision. It does not
-create another run.
+dispatch reconciliation, and continues the same run. Omit `--auto-approve` to
+make each subsequent decision interactively. It does not create another run.
 
 ## Repeat verification
 
