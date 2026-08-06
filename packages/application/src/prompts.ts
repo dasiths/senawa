@@ -2,7 +2,7 @@ import { posix } from "node:path";
 import type { RuntimePhase, RuntimeState, RuntimeTask } from "@senawa/domain";
 
 export function createPhasePrompt(
-  state: Pick<RuntimeState, "identity" | "snapshot">,
+  state: Pick<RuntimeState, "artifacts" | "identity" | "snapshot">,
   phase: RuntimePhase,
   iteration: number,
 ): string {
@@ -20,12 +20,40 @@ export function createPhasePrompt(
   if (schemaFile === undefined) {
     throw new Error(`Phase ${phase.id} frozen output schema is missing: ${schemaPath}`);
   }
+  const dependencyArtifacts = Object.fromEntries(
+    definition.dependsOn.map((dependency) => {
+      const artifact = state.artifacts
+        .filter((candidate) => candidate.phaseId === dependency)
+        .sort((left, right) => right.version - left.version)[0];
+      if (artifact === undefined) {
+        throw new Error(`Phase ${phase.id} is missing dependency artifact ${dependency}`);
+      }
+      return [dependency, artifact.content];
+    }),
+  );
+  const taskFrontier = state.snapshot.workflow.spec.phases.find(
+    (candidate) => candidate.executor.kind === "task-frontier",
+  );
   return JSON.stringify({
     kind: "phase",
     phase: phase.id,
     iteration,
     goal: state.identity.request.goal,
     rejectionReason: phase.rejectionReason,
+    repository: {
+      pathConvention:
+        "Use repository-relative paths only. Never guess an absolute repository root.",
+    },
+    dependencyArtifacts,
+    ...(definition.actions?.some((action) => action.kind === "import-plan") &&
+    taskFrontier?.executor.kind === "task-frontier"
+      ? {
+          taskPlanning: {
+            requiredRole: taskFrontier.executor.role,
+            instruction: "Every planned task must use this configured task-frontier role.",
+          },
+        }
+      : {}),
     submission: {
       tool: "senawa.phase.submit",
       instruction: "Submit exactly one artifact matching this frozen JSON Schema.",
