@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { WorkRequestSchema } from "./artifacts.js";
-import { IdentifierSchema, NonEmptyStringSchema } from "./common.js";
+import { IdentifierSchema, NonEmptyStringSchema, Sha256Schema, TimestampSchema } from "./common.js";
 
 export const CommandActorSchema = z
   .object({
@@ -71,7 +71,12 @@ export const RunCommandSchema = z.discriminatedUnion("command", [
   FinishCommandSchema,
 ]);
 
-const BrowserCommandBase = { apiVersion: z.literal("senawa.dev/browser-command/v1") };
+const BrowserCommandBase = {
+  apiVersion: z.literal("senawa.dev/browser-command/v1"),
+  commandId: z
+    .string()
+    .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u),
+};
 
 export const BrowserRunCommandSchema = z.discriminatedUnion("command", [
   z
@@ -108,6 +113,88 @@ export const BrowserRunCommandSchema = z.discriminatedUnion("command", [
     .strict(),
 ]);
 
+const BrowserCommandReceiptBase = {
+  apiVersion: z.literal("senawa.dev/browser-command-receipt/v1"),
+  seq: z.number().int().positive(),
+  commandId: BrowserCommandBase.commandId,
+  runId: IdentifierSchema,
+  payload: BrowserRunCommandSchema,
+  payloadDigest: Sha256Schema,
+  submittedAt: TimestampSchema,
+};
+
+const BrowserCommandClaim = {
+  attempt: z.number().int().positive(),
+  startedAt: TimestampSchema,
+  claimOwner: IdentifierSchema,
+  claimFence: z.number().int().positive(),
+  claimExpiresAt: TimestampSchema,
+};
+
+const BrowserCommandTransitionResultSchema = z
+  .object({
+    runId: IdentifierSchema,
+    kind: z.enum([
+      "started",
+      "phase-submitted",
+      "awaiting-approval",
+      "task-closed",
+      "task-rework",
+      "task-escalated",
+      "phase-accepted",
+      "finished",
+      "ended",
+      "idle",
+    ]),
+    phaseId: IdentifierSchema.optional(),
+    taskId: IdentifierSchema.optional(),
+  })
+  .strict();
+
+export const BrowserCommandReceiptErrorSchema = z
+  .object({
+    code: z.literal("command_refused"),
+    message: NonEmptyStringSchema.max(500),
+  })
+  .strict();
+
+export const BrowserCommandReceiptSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      ...BrowserCommandReceiptBase,
+      status: z.literal("queued"),
+      attempt: z.literal(0),
+    })
+    .strict(),
+  z
+    .object({
+      ...BrowserCommandReceiptBase,
+      ...BrowserCommandClaim,
+      status: z.literal("running"),
+    })
+    .strict(),
+  z
+    .object({
+      ...BrowserCommandReceiptBase,
+      ...BrowserCommandClaim,
+      status: z.literal("completed"),
+      completedAt: TimestampSchema,
+      result: BrowserCommandTransitionResultSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...BrowserCommandReceiptBase,
+      ...BrowserCommandClaim,
+      status: z.literal("refused"),
+      completedAt: TimestampSchema,
+      error: BrowserCommandReceiptErrorSchema,
+    })
+    .strict(),
+]);
+
 export type CommandActor = z.infer<typeof CommandActorSchema>;
 export type RunCommand = z.infer<typeof RunCommandSchema>;
 export type BrowserRunCommand = z.infer<typeof BrowserRunCommandSchema>;
+export type BrowserCommandReceipt = z.infer<typeof BrowserCommandReceiptSchema>;
+export type BrowserCommandReceiptError = z.infer<typeof BrowserCommandReceiptErrorSchema>;

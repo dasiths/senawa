@@ -40,10 +40,11 @@ const sdkHost =
 
 try {
   const runtime = selectRuntime(arguments_);
-  const { persistence, notifier } = createRuntimeComposition(repositoryRoot, runtime);
+  const { persistence, notifier, receiptStore } = createRuntimeComposition(repositoryRoot, runtime);
   services = createSenawaServices(repositoryRoot, {
     persistence,
     notifier,
+    receiptStore,
     runtimeBackend: runtime,
     ...(workerHost === "copilot"
       ? {

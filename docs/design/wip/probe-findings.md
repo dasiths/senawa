@@ -87,6 +87,8 @@ about the SDK should be re-checked when the mirror catches up.
 | 45 | The full report can aggregate hostile provenance and cumulative usage | **Confirmed offline.** All eight sections rendered with deterministic caps and escaping; cumulative AIU and cost were counted once per dispatch |
 | 46 | Sensor drift and latency can be audited from recorded evidence | **Confirmed offline.** Verdict transitions, agreement, and p95 duration were derived from journal facts; absent hook samples remained explicitly unreported |
 | 47 | One production SDK adapter can implement the stable worker port without exposing SDK cursors | **Confirmed offline with an injected fake client.** SDK 1.0.7 declarations and fake events covered create, resume, native tools, permissions, negotiation, trace headers, abort, normalized events, and retention; live execution remains unvalidated |
+| 48 | Browser commands can be acknowledged durably before execution and recovered after supervisor restart | **Confirmed offline in the production HTTP path.** Idempotent receipts, claim fencing, queued and stale-running recovery, correlated transition replay, graceful shutdown, and sanitized refusal passed; a complete real-Beads browser receipt workflow remains unmeasured |
+| 49 | A human answer can return to the active SDK worker without creating another turn | **Confirmed offline.** The original `senawa.ask` tool call remains pending, correlates the durable answer to its session and turn, and refuses stale, terminal, cancelled, or timed-out waits without advancing the workflow |
 
 ## Hook latency
 

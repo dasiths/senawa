@@ -92,9 +92,27 @@ direct prompt would create a wait the driver cannot observe.
 
 `senawa ask "<question>"` records a durable question ID in the run journal.
 The human or principal agent relays
-`senawa answer <question-id> "<answer>"`. The current operation records the
-exchange across restart but does not yet create a blocking Beads gate or resume
-a worker session automatically.
+`senawa answer <question-id> "<answer>"`. For the SDK host, the original typed
+`senawa.ask` tool call remains pending while an application query watches durable
+state. It returns only the answer correlated to the same active session and turn.
+It fails when that turn becomes stale or terminal and does not resume, advance,
+or complete the workflow. Questions still do not create Beads gates.
+
+## Browser command receipts
+
+The loopback browser submits discrete commands to a run-scoped append-only
+receipt queue. HTTP `202` means the command was durably queued, not that its
+workflow transition completed. The active web supervisor claims one command at a
+time under its fenced lease and invokes the same application command service used
+by the CLI. Receipts record queued, running, completed, or refused state; they do
+not determine run completion.
+
+The browser recovers a nonterminal receipt after reload and polls it for command
+status while run and worker state continue over SSE. Command IDs make submission
+idempotent. Application journal events carry the same command ID so a restarted
+processor can replay approve, reject, steer, resume, or end without duplicating
+an already committed transition. A graceful supervisor shutdown retains its web
+claim until active command execution finishes.
 
 ## Role instructions and briefs
 

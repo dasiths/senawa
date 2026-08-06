@@ -1,12 +1,14 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import {
+  BrowserCommandIdConflictError,
+  BrowserCommandInProgressError,
+  type DurableBrowserCommandService,
   LeaseConflictError,
   type RunChangeNotificationPort,
-  type RunCommandService,
   type RunQueryService,
 } from "@senawa/application";
-import { BrowserRunCommandSchema, type CommandActor, type RuntimeLease } from "@senawa/domain";
+import { BrowserRunCommandSchema, type RuntimeLease } from "@senawa/domain";
 import {
   appJs,
   cytoscapeDagreJs,
@@ -16,11 +18,13 @@ import {
   stylesCss,
 } from "./static-assets.js";
 
-const actor: CommandActor = { channel: "web" };
 const cookieName = "senawa_session";
 
 export interface BrowserServices {
-  readonly commands: Pick<RunCommandService, "approve" | "reject" | "steer" | "resume" | "end">;
+  readonly browserCommands: Pick<
+    DurableBrowserCommandService,
+    "submit" | "receipt" | "activeReceipt" | "processNext"
+  >;
   readonly queries: Pick<
     RunQueryService,
     "activeRunId" | "status" | "journal" | "output" | "workerEvents" | "artifact"
@@ -61,6 +65,8 @@ export async function startWebSupervisor(
   const sessionToken = randomBytes(32).toString("base64url");
   let expectedHost = "";
   let expectedOrigin = "";
+  let stopping = false;
+  let draining: Promise<void> | null = null;
   let closing: Promise<void> | null = null;
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolvePromise) => {
@@ -91,7 +97,7 @@ export async function startWebSupervisor(
         sendJson(response, 401, { error: { code: "unauthorized", message: "Unauthorized" } });
         return;
       }
-      await route(request, response, url, runId, expectedOrigin, services);
+      await route(request, response, url, runId, expectedOrigin, services, () => void drain());
     } catch (error) {
       sendJson(response, statusForError(error), {
         error: { code: "request_failed", message: errorMessage(error) },
@@ -128,12 +134,33 @@ export async function startWebSupervisor(
     Math.max(1_000, Math.floor(leaseTtlMs / 3)),
   );
   heartbeat.unref();
+  void drain();
+
+  function drain(): Promise<void> {
+    if (stopping) return Promise.resolve();
+    if (draining !== null) return draining;
+    draining = (async () => {
+      while (
+        !stopping &&
+        (await services.browserCommands.processNext(runId, webLease, leaseTtlMs))
+      ) {
+        // Version 1 permits one nonterminal command, but loop after recovery for completeness.
+      }
+    })()
+      .catch(() => undefined)
+      .finally(() => {
+        draining = null;
+      });
+    return draining;
+  }
 
   async function close(): Promise<void> {
     if (closing !== null) return closing;
     closing = (async () => {
-      clearInterval(heartbeat);
+      stopping = true;
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+      await draining;
+      clearInterval(heartbeat);
       await services.releaseWebLease(runId, webLease).catch(() => undefined);
       resolveClosed();
     })();
@@ -156,6 +183,7 @@ async function route(
   runId: string,
   expectedOrigin: string,
   services: BrowserServices,
+  commandSubmitted: () => void,
 ): Promise<void> {
   if (request.method === "GET" && url.pathname === `/runs/${encodeURIComponent(runId)}`) {
     sendText(response, 200, indexHtml, "text/html; charset=utf-8");
@@ -199,6 +227,31 @@ async function route(
     beginSse(request, response, runId, cursor(url, request), services, (after) =>
       services.queries.journal(runId, after, 500),
     );
+    return;
+  }
+  if (request.method === "GET" && url.pathname === `${prefix}/commands/active`) {
+    sendJson(response, 200, {
+      apiVersion: "senawa.dev/browser-command-receipt-result/v1",
+      receipt: await services.browserCommands.activeReceipt(runId),
+    });
+    return;
+  }
+  const receiptMatch = url.pathname.match(
+    new RegExp(
+      `^${escapeRegex(prefix)}/commands/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$`,
+      "u",
+    ),
+  );
+  if (request.method === "GET" && receiptMatch !== null) {
+    const receipt = await services.browserCommands.receipt(runId, receiptMatch[1] ?? "");
+    if (receipt === null) {
+      sendJson(response, 404, { error: { code: "not_found", message: "Receipt not found" } });
+    } else {
+      sendJson(response, 200, {
+        apiVersion: "senawa.dev/browser-command-receipt-result/v1",
+        receipt,
+      });
+    }
     return;
   }
 
@@ -253,45 +306,22 @@ async function route(
       sendJson(response, 403, { error: { code: "origin_rejected", message: "Origin rejected" } });
       return;
     }
-    if (!(request.headers["content-type"] ?? "").startsWith("application/json")) {
+    if (!isJsonContentType(request.headers["content-type"])) {
       sendJson(response, 415, { error: { code: "content_type", message: "JSON required" } });
       return;
     }
     const command = BrowserRunCommandSchema.parse(await readJsonBody(request));
-    const result = await executeBrowserCommand(command, runId, services);
+    const receipt = await services.browserCommands.submit(runId, command);
+    response.setHeader("Location", `${prefix}/commands/${encodeURIComponent(receipt.commandId)}`);
     sendJson(response, 202, {
-      apiVersion: "senawa.dev/browser-command-result/v1",
-      accepted: true,
-      result,
-      snapshot: await services.queries.status(runId),
+      apiVersion: "senawa.dev/browser-command-receipt-result/v1",
+      receipt,
     });
+    commandSubmitted();
     return;
   }
 
   sendJson(response, 404, { error: { code: "not_found", message: "Not found" } });
-}
-
-async function executeBrowserCommand(
-  command: ReturnType<typeof BrowserRunCommandSchema.parse>,
-  runId: string,
-  services: BrowserServices,
-) {
-  switch (command.command) {
-    case "approve": {
-      await services.commands.approve(runId, command.phaseId, actor, command.note);
-      return services.commands.resume(runId, actor);
-    }
-    case "reject": {
-      await services.commands.reject(runId, command.phaseId, command.reason, actor);
-      return services.commands.resume(runId, actor);
-    }
-    case "steer":
-      return services.commands.steer(runId, command.taskId, command.instruction, actor);
-    case "resume":
-      return services.commands.resume(runId, actor);
-    case "end":
-      return services.commands.end(runId, command.reason, actor);
-  }
 }
 
 function beginSse<T extends { seq: number }>(
@@ -362,6 +392,10 @@ function authorized(request: IncomingMessage, token: string): boolean {
     .some((part) => part === `${cookieName}=${token}`);
 }
 
+function isJsonContentType(value: string | undefined): boolean {
+  return value?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
+}
+
 function parseStream(value: string): { kind: "run" | "phase" | "task"; id: string } {
   const match = value.match(/^(run|phase|task):([a-z0-9]+(?:[._-][a-z0-9]+)*)$/u);
   if (match === null) throw new Error("Unknown output stream");
@@ -414,7 +448,13 @@ class BodyTooLargeError extends Error {}
 
 function statusForError(error: unknown): number {
   if (error instanceof BodyTooLargeError) return 413;
-  if (error instanceof LeaseConflictError) return 409;
+  if (
+    error instanceof LeaseConflictError ||
+    error instanceof BrowserCommandIdConflictError ||
+    error instanceof BrowserCommandInProgressError
+  ) {
+    return 409;
+  }
   if (error instanceof SyntaxError || (error instanceof Error && error.name === "ZodError")) {
     return 400;
   }
@@ -422,7 +462,18 @@ function statusForError(error: unknown): number {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (
+    error instanceof LeaseConflictError ||
+    error instanceof BrowserCommandIdConflictError ||
+    error instanceof BrowserCommandInProgressError
+  ) {
+    return error.message;
+  }
+  if (error instanceof BodyTooLargeError) return "Request body too large";
+  if (error instanceof SyntaxError || (error instanceof Error && error.name === "ZodError")) {
+    return "Invalid request";
+  }
+  return "Request failed";
 }
 
 function escapeRegex(value: string): string {

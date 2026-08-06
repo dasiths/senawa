@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LeaseConflictError } from "@senawa/application";
+import { DurableBrowserCommandService, LeaseConflictError } from "@senawa/application";
 import { loadRepositoryDefinitions } from "@senawa/configuration";
 import type { CommandActor } from "@senawa/domain";
 import { createFileTestComposition } from "@senawa/testing";
@@ -64,6 +65,54 @@ describe("loopback web supervisor", () => {
         }),
       });
       expect(crossOriginCommand.status).toBe(403);
+      const missingOrigin = await fetch(`${origin}/api/v1/runs/${first.runId}/commands`, {
+        method: "POST",
+        headers: { Cookie: cookie, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiVersion: "senawa.dev/browser-command/v1",
+          commandId: randomUUID(),
+          command: "resume",
+        }),
+      });
+      expect(missingOrigin.status).toBe(403);
+      const wrongContentType = await fetch(`${origin}/api/v1/runs/${first.runId}/commands`, {
+        method: "POST",
+        headers: { Cookie: cookie, Origin: origin, "Content-Type": "text/plain" },
+        body: "{}",
+      });
+      expect(wrongContentType.status).toBe(415);
+      const spoofedContentType = await fetch(`${origin}/api/v1/runs/${first.runId}/commands`, {
+        method: "POST",
+        headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json-evil" },
+        body: "{}",
+      });
+      expect(spoofedContentType.status).toBe(415);
+      const malformed = await fetch(`${origin}/api/v1/runs/${first.runId}/commands`, {
+        method: "POST",
+        headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiVersion: "senawa.dev/browser-command/v1",
+          commandId: "../../receipt",
+          command: "resume",
+          claimOwner: "client-authority",
+        }),
+      });
+      expect(malformed.status).toBe(400);
+      const oversized = await fetch(`${origin}/api/v1/runs/${first.runId}/commands`, {
+        method: "POST",
+        headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json" },
+        body: JSON.stringify({ value: "x".repeat(8_192) }),
+      });
+      expect(oversized.status).toBe(413);
+      const unauthorizedReceipt = await fetch(
+        `${origin}/api/v1/runs/${first.runId}/commands/${randomUUID()}`,
+      );
+      expect(unauthorizedReceipt.status).toBe(401);
+      const crossRunReceipt = await fetch(
+        `${origin}/api/v1/runs/another-run/commands/${randomUUID()}`,
+        { headers: { Cookie: cookie } },
+      );
+      expect(crossRunReceipt.status).toBe(404);
       expect(bootstrap.headers.has("access-control-allow-origin")).toBe(false);
     } finally {
       await first.close();
@@ -175,7 +224,11 @@ describe("loopback web supervisor", () => {
     expect(appJs).not.toContain('target:"phase:verify"');
     expect(appJs).toContain('q("#resume").hidden=["awaiting_approval","ended","finished"]');
     expect(appJs).toContain("setCommandPending(command,true,extra)");
-    expect(appJs).toContain("button.disabled=pending");
+    expect(appJs).toContain("commandPending||receiptActive()");
+    expect(appJs).toContain("button.disabled=locked");
+    expect(appJs).toContain("commandId:crypto.randomUUID()");
+    expect(appJs).toContain("async function recoverActiveReceipt()");
+    expect(appJs).toContain("async function pollReceipt()");
     expect(appJs).toContain('pendingCommand+" in progress…"');
     expect(appJs).toContain('activeTask.title+" · "+activeTask.status');
     expect(appJs).toContain('activePhase.id+" · "+activePhase.status');
@@ -183,6 +236,218 @@ describe("loopback web supervisor", () => {
     expect(appJs).toContain('textContent="run finished"');
     expect(appJs).toContain('/worker-events");');
     expect(appJs).toContain("appendWorkerRecord(JSON.parse(event.data))");
+  });
+
+  it("acknowledges durably before execution and enforces command idempotency", async () => {
+    const services = await createRun("async-command-run");
+    let releaseExecution!: () => void;
+    const executionGate = new Promise<void>((resolve) => {
+      releaseExecution = resolve;
+    });
+    const delayedServices = {
+      ...services,
+      browserCommands: {
+        submit: services.browserCommands.submit.bind(services.browserCommands),
+        receipt: services.browserCommands.receipt.bind(services.browserCommands),
+        activeReceipt: services.browserCommands.activeReceipt.bind(services.browserCommands),
+        async processNext(...input: Parameters<typeof services.browserCommands.processNext>) {
+          await executionGate;
+          return services.browserCommands.processNext(...input);
+        },
+      },
+    };
+    const supervisor = await startWebSupervisor(delayedServices);
+    const browser = await rawBrowserSession(supervisor);
+    const commandId = "33333333-3333-4333-8333-333333333333";
+    const command = {
+      apiVersion: "senawa.dev/browser-command/v1",
+      commandId,
+      command: "reject",
+      phaseId: "define",
+      reason: "Prove durable acknowledgement",
+    } as const;
+    try {
+      const submitted = await browser.post(command);
+      expect(submitted.response.status).toBe(202);
+      expect(submitted.response.headers.get("location")).toBe(
+        `/api/v1/runs/async-command-run/commands/${commandId}`,
+      );
+      expect(submitted.body.receipt).toMatchObject({ commandId, status: "queued", seq: 1 });
+      expect((await services.queries.status("async-command-run"))?.needs?.phaseId).toBe("define");
+
+      const active = await browser.active();
+      expect(active.receipt).toMatchObject({ commandId, status: "queued" });
+      const replay = await browser.post(command);
+      expect(replay.response.status).toBe(202);
+      expect(replay.body.receipt).toEqual(submitted.body.receipt);
+
+      const changed = await browser.post({ ...command, reason: "Changed content" });
+      expect(changed.response.status).toBe(409);
+      const competing = await browser.post({ ...command, commandId: randomUUID() });
+      expect(competing.response.status).toBe(409);
+
+      releaseExecution();
+      expect(await browser.terminal(commandId)).toMatchObject({ status: "completed" });
+      expect((await browser.active()).receipt).toBeNull();
+    } finally {
+      releaseExecution();
+      await supervisor.close();
+    }
+  });
+
+  it("keeps the web claim fenced until graceful shutdown finishes active execution", async () => {
+    const services = await createRun("graceful-command-shutdown-run");
+    let releaseExecution!: () => void;
+    const executionGate = new Promise<void>((resolve) => {
+      releaseExecution = resolve;
+    });
+    const browserCommands = new DurableBrowserCommandService(
+      services.receiptStore,
+      {
+        async executeBrowserCommand(runId, payload) {
+          await executionGate;
+          return services.commands.executeBrowserCommand(runId, payload);
+        },
+      },
+      {
+        scheduleEvery: () => () => undefined,
+      },
+    );
+    const supervisor = await startWebSupervisor({ ...services, browserCommands });
+    const browser = await rawBrowserSession(supervisor);
+    const commandId = "88888888-8888-4888-8888-888888888888";
+    await browser.post({
+      apiVersion: "senawa.dev/browser-command/v1",
+      commandId,
+      command: "reject",
+      phaseId: "define",
+      reason: "Finish before releasing the web claim",
+    });
+    await waitForStoredReceipt(services, "graceful-command-shutdown-run", commandId, "running");
+
+    let closed = false;
+    const closing = supervisor.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(closed).toBe(false);
+    await expect(startWebSupervisor(services)).rejects.toBeInstanceOf(LeaseConflictError);
+
+    releaseExecution();
+    await closing;
+    expect((await services.receiptStore.get(supervisor.runId, commandId))?.status).toBe(
+      "completed",
+    );
+  });
+
+  it("recovers queued and stale-running receipts after supervisor startup", async () => {
+    const queuedServices = await createRun("queued-recovery-run");
+    const queuedCommand = {
+      apiVersion: "senawa.dev/browser-command/v1",
+      commandId: "44444444-4444-4444-8444-444444444444",
+      command: "reject",
+      phaseId: "define",
+      reason: "Recover queued command",
+    } as const;
+    await queuedServices.browserCommands.submit("queued-recovery-run", queuedCommand);
+    const queuedSupervisor = await startWebSupervisor(queuedServices);
+    try {
+      const browser = await rawBrowserSession(queuedSupervisor);
+      expect(await browser.terminal(queuedCommand.commandId)).toMatchObject({
+        status: "completed",
+      });
+    } finally {
+      await queuedSupervisor.close();
+    }
+
+    const staleServices = await createRun("stale-recovery-run");
+    const staleCommand = {
+      ...queuedCommand,
+      commandId: "55555555-5555-4555-8555-555555555555",
+      reason: "Recover stale running command",
+    };
+    await staleServices.browserCommands.submit("stale-recovery-run", staleCommand);
+    const staleLease = await staleServices.acquireWebLease(
+      "stale-recovery-run",
+      "web-stopped",
+      30_000,
+    );
+    await staleServices.receiptStore.claim({
+      runId: "stale-recovery-run",
+      webLease: staleLease,
+      ttlMs: 30_000,
+    });
+    await staleServices.releaseWebLease("stale-recovery-run", staleLease);
+    const restarted = await startWebSupervisor(staleServices);
+    try {
+      const browser = await rawBrowserSession(restarted);
+      expect(await browser.terminal(staleCommand.commandId)).toMatchObject({
+        status: "completed",
+        attempt: 2,
+      });
+    } finally {
+      await restarted.close();
+    }
+  });
+
+  it("replays command-correlated application effects without duplicating transitions", async () => {
+    const services = await createRun("command-replay-run");
+    const command = {
+      apiVersion: "senawa.dev/browser-command/v1",
+      commandId: "66666666-6666-4666-8666-666666666666",
+      command: "reject",
+      phaseId: "define",
+      reason: "Recover after application commit",
+    } as const;
+    await services.commands.executeBrowserCommand("command-replay-run", command);
+    await services.browserCommands.submit("command-replay-run", command);
+    const supervisor = await startWebSupervisor(services);
+    try {
+      const browser = await rawBrowserSession(supervisor);
+      expect(await browser.terminal(command.commandId)).toMatchObject({ status: "completed" });
+      const correlated = (await services.queries.journal("command-replay-run")).filter(
+        (event) => Reflect.get(event.data, "commandId") === command.commandId,
+      );
+      expect(correlated.filter((event) => event.event === "phase.rejected")).toHaveLength(1);
+      expect(correlated.filter((event) => event.event === "work.resumed")).toHaveLength(1);
+    } finally {
+      await supervisor.close();
+    }
+  });
+
+  it("sanitizes unexpected command execution failures", async () => {
+    const services = await createRun("sanitized-error-run");
+    const browserCommands = new DurableBrowserCommandService(
+      services.receiptStore,
+      {
+        async executeBrowserCommand() {
+          throw new Error("Unexpected secret at /home/private/token.txt");
+        },
+      },
+      {
+        scheduleEvery: () => () => undefined,
+      },
+    );
+    const supervisor = await startWebSupervisor({ ...services, browserCommands });
+    try {
+      const browser = await rawBrowserSession(supervisor);
+      const commandId = "77777777-7777-4777-8777-777777777777";
+      expect(
+        await browser.post({
+          apiVersion: "senawa.dev/browser-command/v1",
+          commandId,
+          command: "resume",
+        }),
+      ).toMatchObject({ response: { status: 202 } });
+      const receipt = await browser.terminal(commandId);
+      expect(receipt).toMatchObject({
+        status: "refused",
+        error: { message: "The command could not be completed" },
+      });
+      expect(receipt.error?.message).not.toContain("/home/private");
+    } finally {
+      await supervisor.close();
+    }
   });
 
   it("drives the production workflow from rejection through finish over HTTP", async () => {
@@ -227,14 +492,17 @@ async function createRun(runId: string) {
 
 function servicesForRoot(root: string) {
   const composition = createFileTestComposition(root);
-  return createSenawaServices(root, {
-    ...composition,
-    gateEvaluator: {
-      async evaluate(input) {
-        return { gateId: input.gateId, accepted: true, readings: [], findings: [] };
+  return {
+    ...createSenawaServices(root, {
+      ...composition,
+      gateEvaluator: {
+        async evaluate(input) {
+          return { gateId: input.gateId, accepted: true, readings: [], findings: [] };
+        },
       },
-    },
-  });
+    }),
+    receiptStore: composition.receiptStore,
+  };
 }
 
 function sseReader(response: Response): () => Promise<{ seq: number }> {
@@ -268,16 +536,71 @@ async function browserSession(supervisor: WebSupervisor) {
   const origin = new URL(supervisor.url).origin;
   return {
     async command(command: unknown) {
+      const payload = { ...(command as object), commandId: randomUUID() };
       const response = await fetch(`${origin}/api/v1/runs/${supervisor.runId}/commands`, {
+        method: "POST",
+        headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = (await response.json()) as {
+        receipt?: { commandId: string; status: string; error?: { message: string } };
+      };
+      expect(response.status, JSON.stringify(body)).toBe(202);
+      if (body.receipt === undefined)
+        throw new Error("Command acknowledgement omitted its receipt");
+      for (;;) {
+        const currentResponse = await fetch(
+          `${origin}/api/v1/runs/${supervisor.runId}/commands/${body.receipt.commandId}`,
+          { headers: { Cookie: cookie } },
+        );
+        const current = (await currentResponse.json()) as typeof body;
+        if (current.receipt?.status === "completed") return current;
+        if (current.receipt?.status === "refused") {
+          throw new Error(current.receipt.error?.message ?? "Browser command was refused");
+        }
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+      }
+    },
+  };
+}
+
+async function rawBrowserSession(supervisor: WebSupervisor) {
+  const bootstrap = await fetch(supervisor.bootstrapUrl, { redirect: "manual" });
+  const cookie = bootstrap.headers.get("set-cookie")?.split(";", 1)[0];
+  if (cookie === undefined) throw new Error("Bootstrap did not issue a session cookie");
+  const origin = new URL(supervisor.url).origin;
+  const prefix = `${origin}/api/v1/runs/${supervisor.runId}/commands`;
+  return {
+    async post(command: unknown) {
+      const response = await fetch(prefix, {
         method: "POST",
         headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json" },
         body: JSON.stringify(command),
       });
-      const body = await response.json();
-      expect(response.status, JSON.stringify(body)).toBe(202);
-      return body;
+      return { response, body: (await response.json()) as { receipt?: CommandReceipt } };
+    },
+    async active() {
+      const response = await fetch(`${prefix}/active`, { headers: { Cookie: cookie } });
+      return (await response.json()) as { receipt: CommandReceipt | null };
+    },
+    async terminal(commandId: string): Promise<CommandReceipt> {
+      for (;;) {
+        const response = await fetch(`${prefix}/${commandId}`, { headers: { Cookie: cookie } });
+        const body = (await response.json()) as { receipt: CommandReceipt };
+        if (body.receipt.status === "completed" || body.receipt.status === "refused") {
+          return body.receipt;
+        }
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+      }
     },
   };
+}
+
+interface CommandReceipt {
+  readonly commandId: string;
+  readonly status: "queued" | "running" | "completed" | "refused";
+  readonly attempt: number;
+  readonly error?: { readonly message: string };
 }
 
 async function approve(browser: Awaited<ReturnType<typeof browserSession>>, phaseId: string) {
@@ -286,4 +609,18 @@ async function approve(browser: Awaited<ReturnType<typeof browserSession>>, phas
     command: "approve",
     phaseId,
   });
+}
+
+async function waitForStoredReceipt(
+  services: Awaited<ReturnType<typeof createRun>>,
+  runId: string,
+  commandId: string,
+  status: "queued" | "running",
+) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const receipt = await services.receiptStore.get(runId, commandId);
+    if (receipt?.status === status) return receipt;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Receipt ${commandId} did not reach ${status}`);
 }

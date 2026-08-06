@@ -9,6 +9,7 @@ import {
 import { type BeadsClient, BeadsRuntimeStateStore } from "@senawa/runtime-beads";
 import {
   FileActiveRunRegistry,
+  FileBrowserCommandReceiptStore,
   FileLeaseStore,
   FileRunPersistence,
   FileRuntimeStateStore,
@@ -39,6 +40,8 @@ export function createRuntimeComposition(
           options.beadsClient === undefined ? {} : { client: options.beadsClient },
         )
       : new FileRuntimeStateStore(repositoryRoot);
+  const leases = new FileLeaseStore(repositoryRoot);
+  const receiptStore = new FileBrowserCommandReceiptStore(repositoryRoot, leases);
   const persistence = new FileRunPersistence(
     repositoryRoot,
     {
@@ -48,12 +51,12 @@ export function createRuntimeComposition(
       journal: new FileJournalStore(repositoryRoot, notifier),
       output: new FileOutputLogStore(repositoryRoot, notifier),
       workerEvents: new FileWorkerEventStore(repositoryRoot, notifier),
-      leases: new FileLeaseStore(repositoryRoot),
+      leases,
       notifications: notifier,
     },
     backend === "beads" ? { backend, lockTimeoutMs: 120_000, staleLockMs: 300_000 } : { backend },
   );
-  return { persistence, notifier };
+  return { persistence, notifier, receiptStore };
 }
 
 function optionValue(arguments_: readonly string[], name: string): string | undefined {

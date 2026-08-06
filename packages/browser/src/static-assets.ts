@@ -98,8 +98,10 @@ let workerSource=null;
 let records=[];
 let graph=null;
 let commandPending=false;
+let activeReceipt=null;
 let pendingCommand=null;
 let pendingPhaseId=null;
+let receiptPoll=null;
 let recordsRenderPending=false;
 
 cytoscape.use(cytoscapeDagre);
@@ -269,7 +271,11 @@ function render(){
 }
 
 function updateCommandProgress(){
-  if(!commandPending||pendingCommand===null)return;
+  if(activeReceipt===null||pendingCommand===null)return;
+  if(activeReceipt.status==="queued"){q("#last-command").textContent=pendingCommand+" queued";return}
+  if(activeReceipt.status==="refused"){q("#last-command").textContent="refused: "+activeReceipt.error.message;return}
+  if(activeReceipt.status==="completed"){q("#last-command").textContent=pendingCommand+" completed";return}
+  if(state===null){q("#last-command").textContent=pendingCommand+" in progress…";return}
   if(state.status==="finished"){q("#last-command").textContent="run finished";return}
   if(state.status==="ended"){q("#last-command").textContent="run ended";return}
   const decidedPhase=pendingPhaseId===null?null:state.phases.find((phase)=>phase.id===pendingPhaseId);
@@ -343,22 +349,50 @@ function select(id){
 }
 
 async function refresh(){state=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/snapshot");render()}
+function receiptActive(){return activeReceipt!==null&&["queued","running"].includes(activeReceipt.status)}
+function updateControlsLocked(){
+  const locked=commandPending||receiptActive();
+  q(".controls").setAttribute("aria-busy",String(locked));
+  for(const button of document.querySelectorAll(".controls button"))button.disabled=locked;
+  q("#last-command").classList.toggle("busy",locked);
+}
 function setCommandPending(command,pending,extra={}){
   commandPending=pending;
-  pendingCommand=pending?command:null;
-  pendingPhaseId=pending&&typeof extra.phaseId==="string"?extra.phaseId:null;
-  q(".controls").setAttribute("aria-busy",String(pending));
-  for(const button of document.querySelectorAll(".controls button"))button.disabled=pending;
-  q("#last-command").classList.toggle("busy",pending);
-  if(pending)updateCommandProgress();
+  if(pending){pendingCommand=command;pendingPhaseId=typeof extra.phaseId==="string"?extra.phaseId:null}
+  updateControlsLocked();
+  if(pending)q("#last-command").textContent=command+" submitting…";
+}
+function applyReceipt(receipt){
+  activeReceipt=receipt;
+  pendingCommand=receipt.payload.command;
+  pendingPhaseId=typeof receipt.payload.phaseId==="string"?receipt.payload.phaseId:null;
+  updateControlsLocked();
+  updateCommandProgress();
+}
+async function pollReceipt(){
+  if(activeReceipt===null)return;
+  clearTimeout(receiptPoll);
+  try{
+    const response=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/commands/"+encodeURIComponent(activeReceipt.commandId));
+    applyReceipt(response.receipt);
+    if(["queued","running"].includes(response.receipt.status)){receiptPoll=setTimeout(pollReceipt,250);return}
+    await refresh();
+  }catch(error){
+    q("#last-command").textContent="receipt unavailable: "+error.message;
+    receiptPoll=setTimeout(pollReceipt,1000);
+  }
+}
+async function recoverActiveReceipt(){
+  const response=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/commands/active");
+  if(response.receipt!==null){applyReceipt(response.receipt);void pollReceipt()}
 }
 async function command(command,extra={}){
   if(commandPending)return;
   setCommandPending(command,true,extra);
   try{
-    const response=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/commands",{method:"POST",body:JSON.stringify({apiVersion:"senawa.dev/browser-command/v1",command,...extra})});
-    q("#last-command").textContent=command+" completed";
-    if(response.snapshot){state=response.snapshot;render()}else{await refresh()}
+    const response=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/commands",{method:"POST",body:JSON.stringify({apiVersion:"senawa.dev/browser-command/v1",commandId:crypto.randomUUID(),command,...extra})});
+    applyReceipt(response.receipt);
+    void pollReceipt();
   }catch(error){q("#last-command").textContent="refused: "+error.message}
   finally{setCommandPending(command,false,extra)}
 }
@@ -370,5 +404,5 @@ q("#resume").addEventListener("click",()=>command("resume"));
 q("#end").addEventListener("click",()=>command("end",{reason:q("#end-reason").value}));
 addEventListener("resize",()=>{graph?.resize();graph?.fit(undefined,32)});
 
-refresh().then(()=>{select(selected);const events=new EventSource("/api/v1/runs/"+encodeURIComponent(runId)+"/events/stream");events.onopen=()=>q("#connection").textContent="Live";events.onmessage=refresh;events.onerror=()=>q("#connection").textContent="Reconnecting"}).catch((error)=>q("#connection").textContent=error.message);
+Promise.all([refresh(),recoverActiveReceipt()]).then(()=>{select(selected);const events=new EventSource("/api/v1/runs/"+encodeURIComponent(runId)+"/events/stream");events.onopen=()=>q("#connection").textContent="Live";events.onmessage=refresh;events.onerror=()=>q("#connection").textContent="Reconnecting"}).catch((error)=>q("#connection").textContent=error.message);
 `;

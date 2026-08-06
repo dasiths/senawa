@@ -43,6 +43,33 @@ Copy this section for each idea and update it in place as the idea matures.
 
 ## Decisions
 
+### 2026-08-06: Durable browser command receipts
+
+* Status: `probing`
+* Owner: `docs/design/03-agents-and-interaction.md`
+* Question: Can the browser acknowledge a command after durable submission,
+    execute it independently of the initiating HTTP connection, recover it after
+    supervisor restart, and still leave every workflow transition under the
+    shared application command service and driver?
+* Context: Live portal approvals and rejections currently hold the HTTP request
+    open through Beads writes, worker execution, sensors, and the next decision
+    boundary. Browser reload or supervisor restart can lose command progress even
+    though the underlying workflow remains recoverable.
+* Options: Keep synchronous POSTs, use the orchestration journal as a queue, or
+    add a separate run-scoped durable command receipt queue
+* Evidence obtained: Idempotent submission, changed-payload refusal, single-command
+    claiming, completion and refusal receipts, browser reload projection, and
+    supervisor restart recovery passed in the production HTTP path with file
+    runtime composition. A real-Beads contract separately proved cross-process
+    runtime freshness for a long-lived reader.
+* Evidence still needed: Run one complete queued or recovered browser receipt
+    through the real-Beads composition.
+* Probe: `experiments/probes/orchestration/README.md#durable-browser-command-receipts`
+* Outcome: The separate receipt queue is implemented and current guidance owns
+    its contract. Keep the decision probing until one real-Beads browser receipt
+    workflow closes the remaining composition-level evidence gap.
+* Promotion: `pending`
+
 ### 2026-08-05: Port-first production architecture migration
 
 * Status: `probing`

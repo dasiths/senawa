@@ -1,4 +1,5 @@
 import {
+  type BrowserRunCommand,
   type CommandActor,
   type GateEvaluation,
   type JournalEventName,
@@ -39,6 +40,19 @@ import { projectRunStatus, type RunStatusProjection } from "./projections.js";
 import { createPhasePrompt, createTaskPrompt } from "./prompts.js";
 
 const ansiEscapePattern = new RegExp(`${String.fromCodePoint(27)}\\[[0-?]*[ -/]*[@-~]`, "gu");
+const questionAnswerPollIntervalMs = 250;
+const questionAnswerTimeoutMs = 540_000;
+
+export interface ActiveQuestionTurn {
+  readonly sessionId: string;
+  readonly turnId: string;
+}
+
+export interface WaitForQuestionAnswerOptions {
+  readonly pollIntervalMs?: number;
+  readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
+}
 
 export interface StartRunInput {
   readonly actor: CommandActor;
@@ -141,13 +155,54 @@ export class RunCommandService implements RunDriver {
     return { runId, kind: "started" };
   }
 
+  async executeBrowserCommand(
+    runId: string,
+    command: BrowserRunCommand,
+  ): Promise<TransitionResult> {
+    const actor: CommandActor = { channel: "web" };
+    switch (command.command) {
+      case "approve": {
+        const state = await this.store.readRun(runId);
+        if (!hasCommandEvent(state, command.commandId, "phase.approved")) {
+          await this.approve(runId, command.phaseId, actor, command.note, command.commandId);
+        }
+        return this.resume(runId, actor, command.commandId);
+      }
+      case "reject": {
+        const state = await this.store.readRun(runId);
+        if (!hasCommandEvent(state, command.commandId, "phase.rejected")) {
+          await this.reject(runId, command.phaseId, command.reason, actor, command.commandId);
+        }
+        return this.resume(runId, actor, command.commandId);
+      }
+      case "steer": {
+        const state = await this.store.readRun(runId);
+        if (hasCommandEvent(state, command.commandId, "steering.recorded")) {
+          return { runId, kind: "idle", taskId: command.taskId };
+        }
+        return this.steer(runId, command.taskId, command.instruction, actor, command.commandId);
+      }
+      case "resume":
+        return this.resume(runId, actor, command.commandId);
+      case "end": {
+        const state = await this.store.readRun(runId);
+        if (hasCommandEvent(state, command.commandId, "work.ended")) {
+          return { runId, kind: "ended" };
+        }
+        return this.end(runId, command.reason, actor, {}, command.commandId);
+      }
+    }
+  }
+
   async approve(
     runId: string,
     phaseId: string,
     actor: CommandActor,
     note?: string,
+    commandId?: string,
   ): Promise<TransitionResult> {
     await this.store.updateRun(runId, (state) => {
+      if (commandId !== undefined && hasCommandEvent(state, commandId, "phase.approved")) return;
       assertMutable(state);
       const phase = requirePhase(state, phaseId);
       if (phase.status !== "awaiting_approval") {
@@ -158,6 +213,7 @@ export class RunCommandService implements RunDriver {
         phaseId,
         iteration: phase.iteration,
         ...(note === undefined ? {} : { note }),
+        ...(commandId === undefined ? {} : { commandId }),
       });
       if (workflowPhase(state, phaseId).actions?.some((action) => action.kind === "import-plan")) {
         importPlan(state, phase, actor, this.now());
@@ -172,8 +228,10 @@ export class RunCommandService implements RunDriver {
     phaseId: string,
     reason: string,
     actor: CommandActor,
+    commandId?: string,
   ): Promise<TransitionResult> {
     await this.store.updateRun(runId, (state) => {
+      if (commandId !== undefined && hasCommandEvent(state, commandId, "phase.rejected")) return;
       assertMutable(state);
       const phase = requirePhase(state, phaseId);
       const definition = workflowPhase(state, phaseId);
@@ -190,6 +248,7 @@ export class RunCommandService implements RunDriver {
         phaseId,
         iteration: phase.iteration,
         reason,
+        ...(commandId === undefined ? {} : { commandId }),
       });
     });
     return { runId, kind: "idle", phaseId };
@@ -200,8 +259,10 @@ export class RunCommandService implements RunDriver {
     taskId: string,
     instruction: string,
     actor: CommandActor,
+    commandId?: string,
   ): Promise<TransitionResult> {
     await this.store.updateRun(runId, (state) => {
+      if (commandId !== undefined && hasCommandEvent(state, commandId, "steering.recorded")) return;
       assertMutable(state);
       const task = state.tasks.find((candidate) => candidate.key === taskId);
       if (task === undefined || task.status === "closed" || task.status === "ended") {
@@ -212,20 +273,30 @@ export class RunCommandService implements RunDriver {
         task.status = task.attempt === 0 ? "pending" : "rework";
         task.dispatchFailures = 0;
       }
-      emit(state, "steering.recorded", actor, this.now(), { taskId, instruction });
+      emit(state, "steering.recorded", actor, this.now(), {
+        taskId,
+        instruction,
+        ...(commandId === undefined ? {} : { commandId }),
+      });
     });
     return { runId, kind: "idle", taskId };
   }
 
-  async resume(runId: string, actor: CommandActor): Promise<TransitionResult> {
-    await this.store.updateRun(runId, (state) => {
-      assertMutable(state);
-      if (state.status === "awaiting_approval") {
-        throw new Error("The run requires approval or rejection before it can resume");
-      }
-      state.status = "running";
-      emit(state, "work.resumed", actor, this.now(), {});
-    });
+  async resume(runId: string, actor: CommandActor, commandId?: string): Promise<TransitionResult> {
+    const current = await this.store.readRun(runId);
+    if (commandId === undefined || !hasCommandEvent(current, commandId, "work.resumed")) {
+      await this.store.updateRun(runId, (state) => {
+        if (commandId !== undefined && hasCommandEvent(state, commandId, "work.resumed")) return;
+        assertMutable(state);
+        if (state.status === "awaiting_approval") {
+          throw new Error("The run requires approval or rejection before it can resume");
+        }
+        state.status = "running";
+        emit(state, "work.resumed", actor, this.now(), {
+          ...(commandId === undefined ? {} : { commandId }),
+        });
+      });
+    }
     return this.drive(runId, actor);
   }
 
@@ -358,6 +429,7 @@ export class RunCommandService implements RunDriver {
     reason: string,
     actor: CommandActor,
     options: EndRunOptions = {},
+    commandId?: string,
   ): Promise<TransitionResult> {
     const initial = await this.store.readRun(runId);
     assertMutable(initial);
@@ -391,6 +463,7 @@ export class RunCommandService implements RunDriver {
         : null;
     try {
       await this.store.updateRun(runId, (state) => {
+        if (commandId !== undefined && hasCommandEvent(state, commandId, "work.ended")) return;
         assertMutable(state);
         if (activeTurn !== null && state.activeTurn?.dispatchId === activeTurn.dispatchId) {
           const dispatch = requireDispatch(state, activeTurn.dispatchId);
@@ -432,7 +505,11 @@ export class RunCommandService implements RunDriver {
         state.activeTurn = null;
         state.status = "ended";
         state.endReason = reason;
-        emit(state, "work.ended", actor, this.now(), { reason, forced: options.force === true });
+        emit(state, "work.ended", actor, this.now(), {
+          reason,
+          forced: options.force === true,
+          ...(commandId === undefined ? {} : { commandId }),
+        });
       });
     } finally {
       if (takeover !== null) await this.store.releaseLease(runId, "driver", takeover);
@@ -1320,6 +1397,14 @@ export class RunQueryService {
     store: RunPersistencePort,
     private readonly catalog?: WorkflowCatalogPort,
     private readonly reports?: ReportingPort,
+    private readonly clock: ClockPort = { now: () => new Date() },
+    private readonly scheduler: SchedulerPort = {
+      scheduleEvery(intervalMs, task) {
+        const timer = setInterval(task, intervalMs);
+        timer.unref();
+        return () => clearInterval(timer);
+      },
+    },
   ) {
     this.persistence = store;
     this.store = new RuntimeCoordinator(store);
@@ -1333,6 +1418,98 @@ export class RunQueryService {
     const resolved = runId ?? (await this.store.getActiveRunId());
     if (resolved === null) return null;
     return projectRunStatus(await this.store.readRun(resolved));
+  }
+
+  waitForQuestionAnswer(
+    runId: string,
+    questionId: string,
+    expectedTurn: ActiveQuestionTurn,
+    options: WaitForQuestionAnswerOptions = {},
+  ): Promise<string> {
+    const pollIntervalMs = positiveDuration(
+      options.pollIntervalMs ?? questionAnswerPollIntervalMs,
+      "Question answer poll interval",
+    );
+    const timeoutMs = positiveDuration(
+      options.timeoutMs ?? questionAnswerTimeoutMs,
+      "Question answer timeout",
+    );
+    const deadline = this.clock.now().getTime() + timeoutMs;
+    const check = () => this.readQuestionAnswer(runId, questionId, expectedTurn);
+    if (options.signal?.aborted === true) return Promise.reject(questionWaitAborted(questionId));
+
+    return new Promise<string>((resolve, reject) => {
+      let settled = false;
+      let checking = false;
+      let cancelTimer: () => void = () => undefined;
+      const finish = (outcome: { readonly answer: string } | { readonly error: unknown }) => {
+        if (settled) return;
+        settled = true;
+        cancelTimer();
+        options.signal?.removeEventListener("abort", onAbort);
+        if ("answer" in outcome) resolve(outcome.answer);
+        else reject(outcome.error);
+      };
+      const onAbort = () => finish({ error: questionWaitAborted(questionId) });
+      const poll = () => {
+        if (settled) return;
+        if (this.clock.now().getTime() >= deadline) {
+          finish({ error: new Error(`Timed out waiting for answer to ${questionId}`) });
+          return;
+        }
+        if (checking) return;
+        checking = true;
+        void check()
+          .then((answer) => {
+            if (this.clock.now().getTime() >= deadline) {
+              finish({ error: new Error(`Timed out waiting for answer to ${questionId}`) });
+              return;
+            }
+            if (answer !== null) finish({ answer });
+          })
+          .catch((error: unknown) => finish({ error }))
+          .finally(() => {
+            checking = false;
+          });
+      };
+      cancelTimer = this.scheduler.scheduleEvery(pollIntervalMs, poll);
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      if (options.signal?.aborted === true) onAbort();
+      else poll();
+    });
+  }
+
+  private async readQuestionAnswer(
+    runId: string,
+    questionId: string,
+    expectedTurn: ActiveQuestionTurn,
+  ): Promise<string | null> {
+    const state = await this.store.readRun(runId);
+    const asked = state.journal.find(
+      (event) =>
+        event.event === "question.asked" && Reflect.get(event.data, "questionId") === questionId,
+    );
+    if (asked === undefined) throw new Error(`Unknown question ${questionId}`);
+    if (asked.actor.channel !== "worker" || asked.actor.sessionId !== expectedTurn.sessionId) {
+      throw new Error(
+        `Question ${questionId} does not belong to worker session ${expectedTurn.sessionId}`,
+      );
+    }
+    if (
+      state.status !== "running" ||
+      state.activeTurn?.sessionId !== expectedTurn.sessionId ||
+      state.activeTurn.turnId !== expectedTurn.turnId
+    ) {
+      throw new Error(`Worker turn ${expectedTurn.turnId} is no longer active`);
+    }
+    const answered = state.journal.find(
+      (event) =>
+        event.event === "question.answered" && Reflect.get(event.data, "questionId") === questionId,
+    );
+    const answer = answered === undefined ? undefined : Reflect.get(answered.data, "answer");
+    if (answered === undefined) return null;
+    if (typeof answer !== "string") throw new Error(`Answer for ${questionId} is invalid`);
+    return answer;
   }
 
   async journal(runId: string, after = 0, limit = 200) {
@@ -1867,6 +2044,13 @@ function emit(
   });
 }
 
+function hasCommandEvent(state: RuntimeState, commandId: string, event: JournalEventName): boolean {
+  return state.journal.some(
+    (candidate) =>
+      candidate.event === event && Reflect.get(candidate.data, "commandId") === commandId,
+  );
+}
+
 function assertMutable(state: RuntimeState): void {
   if (state.status === "finished" || state.status === "ended") {
     throw new Error(`Run ${state.identity.runId} is ${state.status}`);
@@ -1890,6 +2074,15 @@ function boundedLimit(value: number): number {
   if (!Number.isSafeInteger(value) || value < 1)
     throw new Error("Limit must be a positive integer");
   return Math.min(value, 500);
+}
+
+function positiveDuration(value: number, name: string): number {
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be positive`);
+  return Math.floor(value);
+}
+
+function questionWaitAborted(questionId: string): Error {
+  return new Error(`Waiting for answer to ${questionId} was cancelled`);
 }
 
 function errorMessage(error: unknown): string {

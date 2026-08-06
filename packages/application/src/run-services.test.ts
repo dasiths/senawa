@@ -1,6 +1,6 @@
 import { createRunSnapshot, loadRepositoryDefinitions } from "@senawa/configuration";
 import { DefinitionArtifactSchema, type RuntimeState } from "@senawa/domain";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { RuntimeRevisionConflictError, type WorkerTurn } from "./ports.js";
 import { projectRunStatus } from "./projections.js";
 import { RunCommandService, RunQueryService } from "./run-services.js";
@@ -570,7 +570,229 @@ describe("application run use cases", () => {
       status: "unreported",
     });
   });
+
+  it("delivers an answer that was committed before waiting", async () => {
+    const harness = await createQuestionHarness("answer-before-wait");
+    const question = await harness.commands.ask(
+      harness.runId,
+      "Which boundary?",
+      harness.workerActor,
+    );
+    await harness.commands.answer(
+      harness.runId,
+      question.questionId,
+      "Keep it in application queries.",
+      { channel: "direct-cli" },
+    );
+
+    await expect(
+      harness.queries.waitForQuestionAnswer(
+        harness.runId,
+        question.questionId,
+        harness.expectedTurn,
+      ),
+    ).resolves.toBe("Keep it in application queries.");
+    expect(harness.scheduler.activeCount).toBe(0);
+  });
+
+  it("ignores unrelated answers until the matching question is answered", async () => {
+    const harness = await createQuestionHarness("correlated-answer");
+    const first = await harness.commands.ask(harness.runId, "First?", harness.workerActor);
+    const second = await harness.commands.ask(harness.runId, "Second?", harness.workerActor);
+    await harness.commands.answer(harness.runId, second.questionId, "Second answer", {
+      channel: "direct-cli",
+    });
+    let settled = false;
+    const waiting = harness.queries
+      .waitForQuestionAnswer(harness.runId, first.questionId, harness.expectedTurn)
+      .finally(() => {
+        settled = true;
+      });
+
+    await flushMicrotasks();
+    await harness.scheduler.tick();
+    expect(settled).toBe(false);
+
+    await harness.commands.answer(harness.runId, first.questionId, "First answer", {
+      channel: "direct-cli",
+    });
+    await harness.scheduler.tick();
+    await expect(waiting).resolves.toBe("First answer");
+    expect(harness.scheduler.activeCount).toBe(0);
+  });
+
+  it("cancels a pending answer wait and releases its poller", async () => {
+    const harness = await createQuestionHarness("cancel-answer-wait");
+    const question = await harness.commands.ask(harness.runId, "Continue?", harness.workerActor);
+    const controller = new AbortController();
+    const waiting = harness.queries.waitForQuestionAnswer(
+      harness.runId,
+      question.questionId,
+      harness.expectedTurn,
+      { signal: controller.signal },
+    );
+    const rejection = expect(waiting).rejects.toThrow("was cancelled");
+
+    await flushMicrotasks();
+    controller.abort();
+
+    await rejection;
+    expect(harness.scheduler.activeCount).toBe(0);
+  });
+
+  it("times out a pending answer wait and releases its poller", async () => {
+    const harness = await createQuestionHarness("timeout-answer-wait");
+    const question = await harness.commands.ask(harness.runId, "Continue?", harness.workerActor);
+    vi.spyOn(harness.persistence, "readRun").mockImplementation(() => new Promise(() => undefined));
+    const waiting = harness.queries.waitForQuestionAnswer(
+      harness.runId,
+      question.questionId,
+      harness.expectedTurn,
+      { timeoutMs: 100 },
+    );
+    const rejection = expect(waiting).rejects.toThrow("Timed out waiting for answer");
+
+    await flushMicrotasks();
+    harness.clock.set(new Date(harness.clock.now().getTime() + 100));
+    await harness.scheduler.tick();
+
+    await rejection;
+    expect(harness.scheduler.activeCount).toBe(0);
+  });
+
+  it("rejects a pending answer when the active turn is replaced", async () => {
+    const harness = await createQuestionHarness("stale-answer-turn");
+    const question = await harness.commands.ask(harness.runId, "Continue?", harness.workerActor);
+    const waiting = harness.queries.waitForQuestionAnswer(
+      harness.runId,
+      question.questionId,
+      harness.expectedTurn,
+    );
+    const rejection = expect(waiting).rejects.toThrow("is no longer active");
+    await flushMicrotasks();
+    await updateRuntime(harness.persistence, harness.runId, (state) => {
+      if (state.activeTurn === null) throw new Error("Expected an active turn");
+      state.activeTurn = { ...state.activeTurn, turnId: "replacement-turn" };
+    });
+
+    await harness.scheduler.tick();
+
+    await rejection;
+    expect(harness.scheduler.activeCount).toBe(0);
+  });
+
+  it("rejects a pending answer when the run becomes terminal", async () => {
+    const harness = await createQuestionHarness("terminal-answer-turn");
+    const question = await harness.commands.ask(harness.runId, "Continue?", harness.workerActor);
+    const waiting = harness.queries.waitForQuestionAnswer(
+      harness.runId,
+      question.questionId,
+      harness.expectedTurn,
+    );
+    const rejection = expect(waiting).rejects.toThrow("is no longer active");
+    await flushMicrotasks();
+    await updateRuntime(harness.persistence, harness.runId, (state) => {
+      state.status = "ended";
+      state.endReason = "operator ended the run";
+      state.activeTurn = null;
+    });
+
+    await harness.scheduler.tick();
+
+    await rejection;
+    expect(harness.scheduler.activeCount).toBe(0);
+  });
 });
+
+async function createQuestionHarness(runId: string) {
+  const persistence = new FakeRunPersistence();
+  const localClock = new FakeClock(new Date("2026-08-06T12:00:00.000Z"));
+  const scheduler = new ManualScheduler();
+  const identifiers = new SequenceIdentifiers("question-wait");
+  const commands = new RunCommandService(
+    persistence,
+    {
+      async execute() {
+        throw new Error("not dispatched");
+      },
+    },
+    {
+      async evaluate(input) {
+        return { gateId: input.gateId, accepted: true, readings: [], findings: [] };
+      },
+    },
+    { validatePhaseArtifact: () => undefined },
+    localClock,
+    identifiers,
+    scheduler,
+  );
+  await commands.start({
+    actor: { channel: "direct-cli" },
+    request: { goal: "Wait for a durable human answer", constraints: [] },
+    runId,
+    snapshot: createRunSnapshot(runId, definitions, localClock.now()),
+  });
+  const expectedTurn = { sessionId: "question-session", turnId: "question-turn" };
+  await updateRuntime(persistence, runId, (state) => {
+    state.activeTurn = {
+      ownerKind: "phase",
+      ownerId: "define",
+      sessionId: expectedTurn.sessionId,
+      attempt: 1,
+      turnId: expectedTurn.turnId,
+      dispatchId: "question-dispatch",
+      operationId: "question-operation",
+      operation: "create",
+    };
+  });
+  return {
+    runId,
+    persistence,
+    commands,
+    queries: new RunQueryService(persistence, undefined, undefined, localClock, scheduler),
+    scheduler,
+    clock: localClock,
+    expectedTurn,
+    workerActor: { channel: "worker" as const, sessionId: expectedTurn.sessionId },
+  };
+}
+
+async function updateRuntime(
+  persistence: FakeRunPersistence,
+  runId: string,
+  update: (state: RuntimeState) => void,
+): Promise<void> {
+  const current = await persistence.readRun(runId);
+  update(current.state);
+  await persistence.commitRun({
+    runId,
+    expectedRevision: current.revision,
+    operationId: `test-update-${current.revision}`,
+    state: current.state,
+  });
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 5; index += 1) await Promise.resolve();
+}
+
+class ManualScheduler {
+  private readonly tasks = new Set<() => void>();
+
+  get activeCount(): number {
+    return this.tasks.size;
+  }
+
+  scheduleEvery(_intervalMs: number, task: () => void): () => void {
+    this.tasks.add(task);
+    return () => this.tasks.delete(task);
+  }
+
+  async tick(): Promise<void> {
+    for (const task of [...this.tasks]) task();
+    await flushMicrotasks();
+  }
+}
 
 class OrderedEvidencePersistence extends FakeRunPersistence {
   readonly order: string[] = [];

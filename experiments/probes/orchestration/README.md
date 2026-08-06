@@ -159,6 +159,42 @@ adapter must invoke the same authority-checked core operations as the CLI and
 driver. If it implements phase transitions itself, it becomes the second control
 path the architecture forbids.
 
+### Durable browser command receipts
+
+Production tests now submit a caller-identified command to a separate run-scoped
+receipt log and return HTTP `202` after durable append, before command execution.
+The active web supervisor claims one command under its fenced lease and invokes
+the shared application command service. The browser polls the receipt while run
+and output state continue over their existing SSE streams.
+
+The measured offline cases established:
+
+* Replaying one command ID and payload returns the original receipt, while a
+  changed payload or competing nonterminal command is refused.
+* Queued commands and running commands whose web claim became stale are recovered
+  after supervisor startup.
+* Command-correlated application events prevent duplicate rejection and resume
+  transitions when execution is replayed after an application commit.
+* Graceful supervisor shutdown keeps its web lease fenced until active command
+  execution finishes. A replacement supervisor cannot claim the command early.
+* Unexpected execution errors are sanitized before they enter a refused receipt.
+* Portal reload recovers the active receipt, while terminal workflow state remains
+  projected from the application query rather than the receipt.
+
+The same run also exposed an instance-local Beads read cache that let a long-lived
+portal return stale runtime state after an independent process committed recovery.
+A real-Beads contract now proves that a reader opened before an independent
+write and recovery observes the recovered revision without manual invalidation.
+
+### Active worker answer delivery
+
+The production SDK binding now keeps `senawa.ask` pending after recording its
+durable question ID. The application query waits for the matching
+`question.answered` event while verifying the originating session and turn remain
+active, then returns the answer through the original tool result. Focused tests
+cover unrelated answers, reverse-order delivery, stale and terminal turns,
+cancellation, and timeout races. The binding never resumes or advances the run.
+
 The blocking lifecycle determines where the server lives. The driver exits when
 a human decision is due, which is exactly when the browser must remain available.
 The first production shape should therefore be a separate loopback process,
@@ -200,6 +236,8 @@ TLS are separate decisions rather than flags the local probe should imply are sa
 * That the HTTP command adapter calls real Senawa command handlers instead of a
   parallel state transition implementation
 * Forced takeover of a live or stale driver lease after the shutdown grace period
+* A complete browser receipt workflow against a real Beads runtime; receipt
+  storage is backend-neutral, but current HTTP receipt tests use the file runtime
 
 ### Single active run and graceful end, offline
 
@@ -277,3 +315,4 @@ bash experiments/probes/orchestration/end-to-end.sh   # spends AI credits
 | 2026-08-04 | Added the offline browser run console. Proved graph observation, durable per-phase stdout/stderr replay followed by live SSE, cursor reconnect without gaps, responsive desktop/mobile layout, browser approval and steering, and rejection of arbitrary or cross-origin commands. Left real Senawa command-handler integration and live Copilot event normalization explicitly unproven. |
 | 2026-08-04 | Restricted version 1 to one unfinished run per repository and one active worker turn. Added the active-run pointer, singleton web-supervisor lease, graceful `work end`, terminal `ended` projection, archival before replacement, and browser end control. Proved a competing run and supervisor are refused and that an ended run no longer blocks a replacement. The replacement test found that `bd init` must run once per repository rather than once per work item. |
 | 2026-08-05 | Replaced the single-use production browser bootstrap with a supervisor-lifetime path capability. Repeated valid requests mint the same HttpOnly session, incorrect capabilities remain unauthorized, cross-origin commands remain refused, and VS Code remote-port forwarding preserves the URL. |
+| 2026-08-06 | Added production durable browser command receipts and active worker answer delivery. Proved immediate durable acknowledgement, idempotent replay, competing-command refusal, fenced graceful shutdown, queued and stale-running recovery, sanitized refusal, command-correlated transition replay, and correlated answer delivery through the original SDK tool call. A real-Beads contract separately proved long-lived readers observe independent recovery after removing the aggregate read cache. |

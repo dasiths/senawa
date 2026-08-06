@@ -91,7 +91,11 @@ idempotency, lease fencing, mid-commit crash recovery, dispatch reconstruction,
 and status projections.
 Browser SSE rereads durable cursors on bounded polling; notifications only wake
 same-process readers sooner. `@senawa/browser` owns authenticated HTTP routes,
-strict command schemas, graph assets, and durable replay. `@senawa/reporting`
+strict command schemas, graph assets, durable replay, and asynchronous command
+receipt projection. Browser commands append to a run-scoped file receipt log,
+then execute under the fenced web-supervisor lease through the shared application
+service. Beads runtime reads reconstruct from fresh `bd list --all` output so a
+long-lived portal observes independent process commits. `@senawa/reporting`
 reads an application-owned evidence projection and escapes untrusted Markdown,
 HTML, control characters, and instruction-like tags with deterministic caps. It
 renders all eight documented process sections and aggregates cumulative AIU and
@@ -120,14 +124,14 @@ the documented `bd --json` contract with `BD_JSON_ENVELOPE=1`.
 | `@senawa/domain` | Pure schemas, identifiers, snapshots, state contracts, events, and transition invariants |
 | `@senawa/configuration` | Repository discovery, YAML and JSON loading, schema compilation, profiles, workflow catalog, doctor preflight, snapshots, and fingerprints |
 | `@senawa/application` | Commands, queries, driver, prompts, projections, and application-owned ports; imports domain only |
-| `@senawa/runtime-beads` | Beads 1.1.x runtime graph, atomic claims, gates, revisions, operation receipts, cache invalidation, and split-write reconciliation |
-| `@senawa/runtime-file` | Explicit development and test runtime state, active-run registry, fenced leases, and split-store recovery |
+| `@senawa/runtime-beads` | Beads 1.1.x runtime graph, atomic claims, gates, revisions, operation receipts, fresh reconstruction, and split-write reconciliation |
+| `@senawa/runtime-file` | Explicit development and test runtime state, active-run registry, fenced leases, browser command receipts, and split-store recovery |
 | `@senawa/artifact-store` | Immutable run identity, snapshot, and versioned artifact documents |
 | `@senawa/observability` | Append-only journal and output JSONL, stable cursors, notification hints, and future telemetry seams |
 | `@senawa/testing` | Shared adapter contracts and deterministic fixtures; production packages do not import it |
 | `@senawa/workers` | Deterministic, recording, subprocess, and Copilot SDK lifecycle adapters, capability negotiation, authorization, normalized events, native typed bindings, and fake-client conformance |
 | `@senawa/sensors` | Application gate port implementation, ordered built-in artifact or command execution, normalization, cache identity, and evidence spill seams; generic extension loading pending |
-| `@senawa/browser` | Authenticated loopback HTTP routes, strict command schemas, durable SSE replay, static graph assets, and application command/query consumption |
+| `@senawa/browser` | Authenticated loopback HTTP routes, strict command schemas, asynchronous receipt projection, durable SSE replay, static graph assets, and application command/query consumption |
 | `@senawa/reporting` | Report renderer and untrusted Markdown hygiene over application evidence projections |
 | `senawa` | Full command-line interface |
 | `senawa-hook` | Minimal hook entry point with no graph or heavy dependencies |
