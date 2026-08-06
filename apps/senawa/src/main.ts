@@ -65,6 +65,8 @@ try {
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;
+} finally {
+  await sdkHost?.shutdown();
 }
 
 async function openBrowser(url: string): Promise<void> {

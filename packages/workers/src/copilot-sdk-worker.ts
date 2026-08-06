@@ -64,6 +64,7 @@ export interface CopilotSdkSession {
 
 export interface CopilotSdkClient {
   start(): Promise<void>;
+  stop(): Promise<readonly Error[]>;
   listModels(): Promise<ModelInfo[]>;
   createSession(config: SessionConfig): Promise<CopilotSdkSession>;
   resumeSession(sessionId: string, config: ResumeSessionConfig): Promise<CopilotSdkSession>;
@@ -255,6 +256,18 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     if (session !== undefined) await session.disconnect();
     this.sessions.delete(sessionId);
     if (disposition === "archive-delete") await this.client.deleteSession(sessionId);
+  }
+
+  async shutdown(): Promise<void> {
+    if (!this.started) return;
+    const sessions = new Set([...this.sessions.values(), ...this.active.values()]);
+    await Promise.all([...sessions].map((session) => session.disconnect()));
+    this.sessions.clear();
+    this.active.clear();
+    this.traceparent = undefined;
+    const errors = await this.client.stop();
+    this.started = false;
+    if (errors.length > 0) throw new AggregateError(errors, "Copilot SDK shutdown failed");
   }
 
   private async startTurn(turn: WorkerTurn): Promise<WorkerTurnHandle> {

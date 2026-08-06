@@ -102,6 +102,17 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     expect((await adapter.inspect({ ...turn, turnId: "unknown" })).state).toBe("missing");
   });
 
+  it("disconnects retained sessions and stops the SDK client on shutdown", async () => {
+    const { adapter, client } = fixture();
+    await (await adapter.create(turn)).result;
+
+    await adapter.shutdown();
+
+    expect(client.sessions[0]?.disconnected).toBe(true);
+    expect(client.stopCount).toBe(1);
+    expect(client.deleted).toEqual([]);
+  });
+
   it("uses the logged-in runtime home while isolating only session state", () => {
     const options = createCopilotSdkClientOptions({
       repositoryRoot: "/workspace",
@@ -329,8 +340,14 @@ class FakeSdkClient implements CopilotSdkClient {
   eventHandlerPresentAtCreate = false;
   invokePhaseSubmission = false;
   blockSend = false;
+  stopCount = 0;
 
   async start(): Promise<void> {}
+
+  async stop(): Promise<readonly Error[]> {
+    this.stopCount += 1;
+    return [];
+  }
 
   async listModels(): Promise<ModelInfo[]> {
     return [
