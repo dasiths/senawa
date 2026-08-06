@@ -430,6 +430,18 @@ export class FileRunPersistence implements RunPersistencePort {
     return this.stores.output.readOutput(runId, ownerKind, ownerId, after, limit);
   }
 
+  appendOutput(input: Parameters<OutputLogStoragePort["appendOutput"]>[0]) {
+    return this.stores.output.appendOutput(input);
+  }
+
+  outputHead(runId: string, ownerKind: "run" | "phase" | "task", ownerId: string) {
+    return this.stores.output.outputHead(runId, ownerKind, ownerId);
+  }
+
+  listOutputOwners(runId: string) {
+    return this.stores.output.listOutputOwners(runId);
+  }
+
   appendWorkerEvent(input: {
     readonly runId: string;
     readonly entryId: string;

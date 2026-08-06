@@ -1,3 +1,4 @@
+import { execPath } from "node:process";
 import { type RepositoryPolicy, RepositoryPolicySchema, type SensorResult } from "@senawa/domain";
 import { describe, expect, it } from "vitest";
 import {
@@ -10,6 +11,38 @@ import {
 const repositoryRoot = "/tmp/senawa-sensor-test";
 
 describe("CommandGateEvaluator", () => {
+  it("streams command output and lifecycle before completing the assessment", async () => {
+    const progress: Array<{ stream: string; text: string }> = [];
+    const evaluator = new CommandGateEvaluator(process.cwd());
+    const policy = commandPolicy([
+      commandSensor(
+        "streaming",
+        `${execPath} -e "process.stdout.write('out');process.stderr.write('err')"`,
+        "cheap",
+      ),
+    ]);
+
+    const evaluation = await evaluator.evaluate({
+      ...input(policy),
+      async onOutput({ stream, text }) {
+        progress.push({ stream, text });
+      },
+    });
+
+    expect(evaluation.accepted).toBe(true);
+    expect(progress[0]).toMatchObject({
+      stream: "system",
+      text: expect.stringContaining("started"),
+    });
+    expect(progress).toEqual(
+      expect.arrayContaining([
+        { stream: "stdout", text: "out" },
+        { stream: "stderr", text: "err" },
+      ]),
+    );
+    expect(progress.at(-1)).toEqual({ stream: "system", text: "sensor streaming exited 0" });
+  });
+
   it("runs deterministic command sensors in gate order with frozen run context", async () => {
     const calls: Array<{ command: string; env: NodeJS.ProcessEnv }> = [];
     const runner = runnerReturning({ exitCode: 0, stdout: "ok", stderr: "" }, calls);

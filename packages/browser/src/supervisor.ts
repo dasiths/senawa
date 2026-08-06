@@ -23,7 +23,7 @@ export interface BrowserServices {
   readonly commands: Pick<RunCommandService, "approve" | "reject" | "steer" | "resume" | "end">;
   readonly queries: Pick<
     RunQueryService,
-    "activeRunId" | "status" | "journal" | "output" | "artifact"
+    "activeRunId" | "status" | "journal" | "output" | "workerEvents" | "artifact"
   >;
   readonly notifier: RunChangeNotificationPort;
   acquireWebLease(runId: string, owner: string, ttlMs: number): Promise<RuntimeLease>;
@@ -203,7 +203,7 @@ async function route(
   }
 
   const streamMatch = url.pathname.match(
-    new RegExp(`^${escapeRegex(prefix)}/streams/([^/]+)/(records|events)$`, "u"),
+    new RegExp(`^${escapeRegex(prefix)}/streams/([^/]+)/(records|events|worker-events)$`, "u"),
   );
   if (request.method === "GET" && streamMatch !== null) {
     const owner = parseStream(decodeURIComponent(streamMatch[1] ?? ""));
@@ -214,9 +214,18 @@ async function route(
         200,
         await services.queries.output(runId, owner.kind, owner.id, after, limit(url)),
       );
-    } else {
+    } else if (streamMatch[2] === "events") {
       beginSse(request, response, runId, after, services, (next) =>
         services.queries.output(runId, owner.kind, owner.id, next, 500),
+      );
+    } else if (owner.kind === "run") {
+      sendJson(response, 400, {
+        error: { code: "invalid_stream", message: "Run owners have no worker event stream" },
+      });
+    } else {
+      const workerKind: "phase" | "task" = owner.kind === "phase" ? "phase" : "task";
+      beginSse(request, response, runId, after, services, (next) =>
+        services.queries.workerEvents(runId, workerKind, owner.id, next, 500),
       );
     }
     return;
@@ -268,10 +277,14 @@ async function executeBrowserCommand(
   services: BrowserServices,
 ) {
   switch (command.command) {
-    case "approve":
-      return services.commands.approve(runId, command.phaseId, actor, command.note);
-    case "reject":
-      return services.commands.reject(runId, command.phaseId, command.reason, actor);
+    case "approve": {
+      await services.commands.approve(runId, command.phaseId, actor, command.note);
+      return services.commands.resume(runId, actor);
+    }
+    case "reject": {
+      await services.commands.reject(runId, command.phaseId, command.reason, actor);
+      return services.commands.resume(runId, actor);
+    }
     case "steer":
       return services.commands.steer(runId, command.taskId, command.instruction, actor);
     case "resume":

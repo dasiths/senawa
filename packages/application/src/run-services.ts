@@ -261,6 +261,7 @@ export class RunCommandService implements RunDriver {
       gateId,
       policy: state.snapshot.policy,
       ...(artifact === undefined ? {} : { artifact }),
+      onOutput: this.sensorOutput(runId, owner),
     });
     await this.store.updateRun(runId, (draft) => {
       assertMutable(draft);
@@ -647,6 +648,7 @@ export class RunCommandService implements RunDriver {
       gateId: definition.exit?.gate ?? "none",
       policy: state.snapshot.policy,
       ...(result.artifact === undefined ? {} : { artifact: result.artifact }),
+      onOutput: this.sensorOutput(state.identity.runId, turn.owner),
     });
     await heartbeat.assertActive();
     let transition: TransitionResult = {
@@ -838,6 +840,7 @@ export class RunCommandService implements RunDriver {
       attempt,
       gateId,
       policy: state.snapshot.policy,
+      onOutput: this.sensorOutput(state.identity.runId, turn.owner),
     });
     await heartbeat.assertActive();
     let transition: TransitionResult = {
@@ -1075,6 +1078,27 @@ export class RunCommandService implements RunDriver {
     }
   }
 
+  private sensorOutput(
+    runId: string,
+    owner: { readonly kind: "phase" | "task"; readonly id: string },
+  ) {
+    const evaluationId = this.identifiers.createId();
+    let sequence = 0;
+    return async (input: {
+      readonly sensorId: string;
+      readonly stream: "stdout" | "stderr" | "system";
+      readonly text: string;
+    }) => {
+      await this.store.appendLiveOutput({
+        runId,
+        owner,
+        entryId: `sensor-${evaluationId}-${sequence++}`,
+        stream: input.stream,
+        text: input.text,
+      });
+    };
+  }
+
   private now(): Date {
     return this.clock.now();
   }
@@ -1099,6 +1123,30 @@ class RuntimeCoordinator {
       runId: record.runId,
       entryId: record.event.eventId,
       record,
+    });
+  }
+
+  async appendLiveOutput(input: {
+    readonly runId: string;
+    readonly owner: { readonly kind: "phase" | "task"; readonly id: string };
+    readonly entryId: string;
+    readonly stream: "stdout" | "stderr" | "system";
+    readonly text: string;
+  }): Promise<void> {
+    await this.port.appendOutput({
+      runId: input.runId,
+      ownerKind: input.owner.kind,
+      ownerId: input.owner.id,
+      entryId: input.entryId,
+      record: {
+        apiVersion: "senawa.dev/output/v1",
+        seq: 0,
+        ts: new Date().toISOString(),
+        runId: input.runId,
+        owner: input.owner,
+        stream: input.stream,
+        text: sanitizeOutput(input.text),
+      },
     });
   }
 
@@ -1264,6 +1312,22 @@ export class RunQueryService {
     limit = 200,
   ) {
     return this.persistence.readOutput(runId, ownerKind, ownerId, after, boundedLimit(limit));
+  }
+
+  async workerEvents(
+    runId: string,
+    ownerKind: "phase" | "task",
+    ownerId: string,
+    after = 0,
+    limit = 200,
+  ) {
+    const records = (await this.persistence.readWorkerEvents(runId)).filter(
+      (record) => record.owner.kind === ownerKind && record.owner.id === ownerId,
+    );
+    return records
+      .map((record, index) => ({ seq: index + 1, ...record }))
+      .filter((record) => record.seq > after)
+      .slice(0, boundedLimit(limit));
   }
 
   async artifact(

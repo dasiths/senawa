@@ -213,11 +213,13 @@ describe("Commander CLI", () => {
       await pair(
         cliServices,
         webServices,
-        () =>
-          runCli(["reject", "define", "--reason", "Clarify boundaries"], {
+        async () => {
+          await runCli(["reject", "define", "--reason", "Clarify boundaries"], {
             services: cliServices,
             io,
-          }),
+          });
+          return runCli(["work", "resume"], { services: cliServices, io });
+        },
         () =>
           browser.command({
             apiVersion: "senawa.dev/browser-command/v1",
@@ -229,13 +231,10 @@ describe("Commander CLI", () => {
       await pair(
         cliServices,
         webServices,
-        () => runCli(["work", "resume"], { services: cliServices, io }),
-        () => browser.command({ apiVersion: "senawa.dev/browser-command/v1", command: "resume" }),
-      );
-      await pair(
-        cliServices,
-        webServices,
-        () => runCli(["approve", "define"], { services: cliServices, io }),
+        async () => {
+          await runCli(["approve", "define"], { services: cliServices, io });
+          return runCli(["work", "resume"], { services: cliServices, io });
+        },
         () =>
           browser.command({
             apiVersion: "senawa.dev/browser-command/v1",
@@ -246,13 +245,10 @@ describe("Commander CLI", () => {
       await pair(
         cliServices,
         webServices,
-        () => runCli(["work", "resume"], { services: cliServices, io }),
-        () => browser.command({ apiVersion: "senawa.dev/browser-command/v1", command: "resume" }),
-      );
-      await pair(
-        cliServices,
-        webServices,
-        () => runCli(["approve", "research"], { services: cliServices, io }),
+        async () => {
+          await runCli(["approve", "research"], { services: cliServices, io });
+          return runCli(["work", "resume"], { services: cliServices, io });
+        },
         () =>
           browser.command({
             apiVersion: "senawa.dev/browser-command/v1",
@@ -263,37 +259,15 @@ describe("Commander CLI", () => {
       await pair(
         cliServices,
         webServices,
-        () => runCli(["work", "resume"], { services: cliServices, io }),
-        () => browser.command({ apiVersion: "senawa.dev/browser-command/v1", command: "resume" }),
-      );
-      await pair(
-        cliServices,
-        webServices,
-        () => runCli(["approve", "plan"], { services: cliServices, io }),
+        async () => {
+          await runCli(["approve", "plan"], { services: cliServices, io });
+          return runCli(["work", "resume"], { services: cliServices, io });
+        },
         () =>
           browser.command({
             apiVersion: "senawa.dev/browser-command/v1",
             command: "approve",
             phaseId: "plan",
-          }),
-      );
-
-      await cliServices.commands.advance("parity-run", driverActor);
-      await webServices.commands.advance("parity-run", driverActor);
-      await pair(
-        cliServices,
-        webServices,
-        () =>
-          runCli(["steer", "implement-change", "Preserve the graph boundary"], {
-            services: cliServices,
-            io,
-          }),
-        () =>
-          browser.command({
-            apiVersion: "senawa.dev/browser-command/v1",
-            command: "steer",
-            taskId: "implement-change",
-            instruction: "Preserve the graph boundary",
           }),
       );
       await pair(

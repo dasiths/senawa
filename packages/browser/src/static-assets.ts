@@ -62,7 +62,7 @@ export const indexHtml = `<!doctype html>
         <textarea id="end-reason" placeholder="Reason required"></textarea>
         <button id="end" class="danger">End run</button>
       </section>
-      <p id="last-command">No browser command sent.</p>
+      <p id="last-command" role="status" aria-live="polite">No browser command sent.</p>
     </aside>
   </main>
 </body>
@@ -82,7 +82,7 @@ dl{margin-top:30px}dl div{display:flex;justify-content:space-between;padding:10p
 .terminal{height:430px;overflow:auto;padding:14px 16px;color:#d9e4dc;background:var(--terminal);border-radius:4px;font:12px/1.6 monospace;white-space:pre-wrap;word-break:break-word}
 .line{display:grid;grid-template-columns:72px 52px minmax(0,1fr);gap:8px}.line .meta{color:#839089}.line.stderr .stream{color:#ff9aa4}
 .controls section{margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}textarea{width:100%;min-height:70px;padding:9px;resize:vertical}
-button{min-height:36px;margin-top:8px;padding:8px 12px;color:#fff;background:var(--green);border:0;border-radius:4px;font-weight:700;cursor:pointer}.danger{background:var(--red)}
+button{min-height:36px;margin-top:8px;padding:8px 12px;color:#fff;background:var(--green);border:0;border-radius:4px;font-weight:700;cursor:pointer}.danger{background:var(--red)}button:disabled{cursor:wait;opacity:.55}#last-command.busy{color:var(--blue);font-weight:700}#last-command.busy::before{content:"";display:inline-block;width:8px;height:8px;margin-right:7px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 #approval div{display:grid;grid-template-columns:1fr 1fr;gap:8px}#steer,#resume,#end{width:100%}#last-command{color:#67716d;font:11px/1.5 monospace}
 @media(max-width:980px){.workspace{grid-template-columns:190px minmax(0,1fr)}.controls{grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}
 @media(max-width:680px){.workspace{display:block}.overview,.controls{border:0;border-bottom:1px solid var(--line)}.stage{padding:20px 12px}.graph{height:640px}.terminal{height:340px}}
@@ -94,8 +94,11 @@ const runId=location.pathname.split("/").filter(Boolean)[1];
 let state=null;
 let selected=null;
 let outputSource=null;
+let workerSource=null;
 let records=[];
 let graph=null;
+let commandPending=false;
+let recordsRenderPending=false;
 
 cytoscape.use(cytoscapeDagre);
 
@@ -273,9 +276,35 @@ function renderRecords(){
   terminal.scrollTop=terminal.scrollHeight;
 }
 
+function scheduleRecordsRender(){
+  if(recordsRenderPending)return;
+  recordsRenderPending=true;
+  requestAnimationFrame(()=>{recordsRenderPending=false;renderRecords()});
+}
+
+function appendWorkerRecord(record){
+  const event=record.event;
+  if(event.kind==="text"){
+    const key="worker-text:"+event.turnId+":"+event.stream;
+    const existing=records.find((item)=>item.key===key);
+    if(existing){existing.text=event.delta?existing.text+event.text:event.text;existing.ts=event.ts}
+    else{records.push({key,seq:record.seq,ts:event.ts,stream:event.stream,text:event.text})}
+  }else if(event.kind==="tool"){
+    records.push({key:"worker:"+event.eventId,seq:record.seq,ts:event.ts,stream:event.state==="failed"||event.state==="denied"?"stderr":"system",text:"tool "+event.name+" "+event.state+(event.detail?": "+event.detail:"")});
+  }else if(event.kind==="lifecycle"){
+    records.push({key:"worker:"+event.eventId,seq:record.seq,ts:event.ts,stream:event.event==="failed"?"stderr":"system",text:"worker "+event.event+(event.detail?": "+event.detail:"")});
+  }else if(event.kind==="model"){
+    records.push({key:"worker:"+event.eventId,seq:record.seq,ts:event.ts,stream:"system",text:"model "+event.resolved});
+  }else if(event.kind==="usage"){
+    records.push({key:"worker:"+event.eventId,seq:record.seq,ts:event.ts,stream:"system",text:"usage "+event.cumulativeNanoAiu+" nano AIU"});
+  }
+  scheduleRecordsRender();
+}
+
 function select(id){
   selected=id;
   outputSource?.close();
+  workerSource?.close();
   records=[];
   render();
   renderRecords();
@@ -284,12 +313,33 @@ function select(id){
   outputSource=new EventSource("/api/v1/runs/"+encodeURIComponent(runId)+"/streams/"+encodeURIComponent((node?.kind||"phase")+":"+id)+"/events");
   outputSource.onmessage=(event)=>{
     const record=JSON.parse(event.data);
-    if(!records.some((item)=>item.seq===record.seq)){records.push(record);renderRecords()}
+    const key="output:"+record.seq;
+    if(!records.some((item)=>item.key===key)){records.push({...record,key});scheduleRecordsRender()}
   };
+  if(node?.kind==="phase"||node?.kind==="task"){
+    workerSource=new EventSource("/api/v1/runs/"+encodeURIComponent(runId)+"/streams/"+encodeURIComponent(node.kind+":"+id)+"/worker-events");
+    workerSource.onmessage=(event)=>appendWorkerRecord(JSON.parse(event.data));
+  }
 }
 
 async function refresh(){state=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/snapshot");render()}
-async function command(command,extra={}){try{await api("/api/v1/runs/"+encodeURIComponent(runId)+"/commands",{method:"POST",body:JSON.stringify({apiVersion:"senawa.dev/browser-command/v1",command,...extra})});q("#last-command").textContent=command+" accepted";await refresh()}catch(error){q("#last-command").textContent="refused: "+error.message}}
+function setCommandPending(command,pending){
+  commandPending=pending;
+  q(".controls").setAttribute("aria-busy",String(pending));
+  for(const button of document.querySelectorAll(".controls button"))button.disabled=pending;
+  q("#last-command").classList.toggle("busy",pending);
+  if(pending)q("#last-command").textContent=command+" in progress…";
+}
+async function command(command,extra={}){
+  if(commandPending)return;
+  setCommandPending(command,true);
+  try{
+    const response=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/commands",{method:"POST",body:JSON.stringify({apiVersion:"senawa.dev/browser-command/v1",command,...extra})});
+    q("#last-command").textContent=command+" completed";
+    if(response.snapshot){state=response.snapshot;render()}else{await refresh()}
+  }catch(error){q("#last-command").textContent="refused: "+error.message}
+  finally{setCommandPending(command,false)}
+}
 
 q("#approve").addEventListener("click",()=>command("approve",{phaseId:selected,note:q("#decision-note").value||undefined}));
 q("#reject").addEventListener("click",()=>command("reject",{phaseId:selected,reason:q("#decision-note").value}));

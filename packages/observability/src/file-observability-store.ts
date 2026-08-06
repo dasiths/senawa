@@ -193,7 +193,10 @@ export class FileOutputLogStore implements OutputLogStoragePort {
 export class FileWorkerEventStore implements WorkerEventStoragePort {
   private readonly trackingDirectory: string;
 
-  constructor(repositoryRoot: string) {
+  constructor(
+    repositoryRoot: string,
+    private readonly notifications?: NotificationPort,
+  ) {
     this.trackingDirectory = resolve(repositoryRoot, ".agents", ".copilot-tracking");
   }
 
@@ -218,6 +221,7 @@ export class FileWorkerEventStore implements WorkerEventStoragePort {
       false,
       equivalentWorkerRecord,
     );
+    await this.notifications?.publishRunChanged(input.runId);
     if (record.owner.kind === "task") await this.materializeTaskEvidence(record);
     return record;
   }

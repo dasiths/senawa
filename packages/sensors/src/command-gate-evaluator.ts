@@ -40,6 +40,11 @@ export interface GateEvaluationInput {
   readonly gateId: string;
   readonly policy: RepositoryPolicy;
   readonly artifact?: JsonObject;
+  readonly onOutput?: (input: {
+    readonly sensorId: string;
+    readonly stream: "stdout" | "stderr" | "system";
+    readonly text: string;
+  }) => Promise<void>;
 }
 
 export interface GateEvaluator {
@@ -61,6 +66,7 @@ export interface CommandRunner {
       readonly cwd: string;
       readonly env: NodeJS.ProcessEnv;
       readonly timeoutMs: number;
+      readonly onOutput?: (stream: "stdout" | "stderr", text: string) => Promise<void>;
     },
   ): Promise<CommandExecution>;
 }
@@ -236,6 +242,11 @@ export class CommandGateEvaluator implements GateEvaluator, GateEvaluationPort {
 
     const config = CommandSensorConfigSchema.safeParse(sensor.config);
     if (!config.success) return executionError(`Invalid ${sensor.id} configuration`);
+    await input.onOutput?.({
+      sensorId: sensor.id,
+      stream: "system",
+      text: `sensor ${sensor.id} started: ${config.data.command}`,
+    });
     const execution = await this.runner.execute(config.data.command, {
       cwd: this.repositoryRoot,
       timeoutMs: config.data.timeoutMs ?? this.timeoutMs,
@@ -245,6 +256,17 @@ export class CommandGateEvaluator implements GateEvaluator, GateEvaluationPort {
         SENAWA_OWNER_ID: input.owner.id,
         SENAWA_ATTEMPT: String(input.attempt),
       },
+      async onOutput(stream, text) {
+        await input.onOutput?.({ sensorId: sensor.id, stream, text });
+      },
+    });
+    await input.onOutput?.({
+      sensorId: sensor.id,
+      stream: "system",
+      text:
+        execution.exitCode === null
+          ? `sensor ${sensor.id} ended without an exit code`
+          : `sensor ${sensor.id} exited ${execution.exitCode}`,
     });
     if (
       execution.error !== undefined ||
@@ -312,7 +334,12 @@ export class CommandGateEvaluator implements GateEvaluator, GateEvaluationPort {
 export class SpawnCommandRunner implements CommandRunner {
   execute(
     command: string,
-    options: { readonly cwd: string; readonly env: NodeJS.ProcessEnv; readonly timeoutMs: number },
+    options: {
+      readonly cwd: string;
+      readonly env: NodeJS.ProcessEnv;
+      readonly timeoutMs: number;
+      readonly onOutput?: (stream: "stdout" | "stderr", text: string) => Promise<void>;
+    },
   ): Promise<CommandExecution> {
     return new Promise((resolve) => {
       const child = spawn(command, {
@@ -325,21 +352,35 @@ export class SpawnCommandRunner implements CommandRunner {
       let stderr = "";
       let spawnError: string | undefined;
       let timedOut = false;
+      let outputWrites = Promise.resolve();
+      const publish = (stream: "stdout" | "stderr", text: string) => {
+        outputWrites = outputWrites.then(() => options.onOutput?.(stream, text));
+      };
       const timer = setTimeout(() => {
         timedOut = true;
         child.kill("SIGKILL");
       }, options.timeoutMs);
       child.stdout.on("data", (chunk: Buffer) => {
-        stdout = appendCapped(stdout, chunk.toString());
+        const text = chunk.toString();
+        stdout = appendCapped(stdout, text);
+        publish("stdout", text);
       });
       child.stderr.on("data", (chunk: Buffer) => {
-        stderr = appendCapped(stderr, chunk.toString());
+        const text = chunk.toString();
+        stderr = appendCapped(stderr, text);
+        publish("stderr", text);
       });
       child.once("error", (error) => {
         spawnError = error.message;
       });
-      child.once("close", (exitCode) => {
+      child.once("close", async (exitCode) => {
         clearTimeout(timer);
+        try {
+          await outputWrites;
+        } catch (error) {
+          resolve({ exitCode: null, stdout, stderr, error: String(error) });
+          return;
+        }
         resolve({
           exitCode,
           stdout,

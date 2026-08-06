@@ -47,7 +47,7 @@ export function createRuntimeComposition(
       documents: new FileRunDocumentStore(repositoryRoot),
       journal: new FileJournalStore(repositoryRoot, notifier),
       output: new FileOutputLogStore(repositoryRoot, notifier),
-      workerEvents: new FileWorkerEventStore(repositoryRoot),
+      workerEvents: new FileWorkerEventStore(repositoryRoot, notifier),
       leases: new FileLeaseStore(repositoryRoot),
       notifications: notifier,
     },

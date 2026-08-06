@@ -149,7 +149,7 @@ export class SubprocessWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     return descriptor("copilot-subprocess", subprocessCapabilities, {
       inspect: "session-only",
       replay: false,
-      streaming: false,
+      streaming: true,
       cancellation: true,
       nativeTypedTools: false,
       commandBridge: false,
@@ -183,7 +183,9 @@ export class SubprocessWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     onEvent?: (event: WorkerSessionEvent) => Promise<void>,
   ): Promise<WorkerResult> {
     this.sessions.add(turn.sessionId);
-    return consumeHandle(this.start(turn), onEvent);
+    const result = await this.run(turn, onEvent);
+    this.completed.set(turn.turnId, result);
+    return result;
   }
 
   async inspect(turn: WorkerTurn): Promise<WorkerTurnObservation> {
@@ -223,8 +225,44 @@ export class SubprocessWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     return createHandle(turn, result);
   }
 
-  private run(turn: WorkerTurn): Promise<WorkerResult> {
+  private async run(
+    turn: WorkerTurn,
+    onEvent?: (event: WorkerSessionEvent) => Promise<void>,
+  ): Promise<WorkerResult> {
     const arguments_ = buildCopilotArguments(turn);
+    let eventIndex = 0;
+    const workerEvent = (value: UnsavedWorkerEvent): WorkerSessionEvent =>
+      ({
+        ...value,
+        eventId: `${turn.turnId}:subprocess:${eventIndex++}`,
+        ts: new Date().toISOString(),
+        traceId: turn.traceId,
+      }) as WorkerSessionEvent;
+    const publish = async (value: UnsavedWorkerEvent) => onEvent?.(workerEvent(value));
+    await publish({
+      apiVersion: "senawa.dev/worker-event/v1",
+      sessionId: turn.sessionId,
+      turnId: turn.turnId,
+      kind: "lifecycle",
+      event: turn.operation === "create" ? "created" : "resumed",
+    });
+    await publish({
+      apiVersion: "senawa.dev/worker-event/v1",
+      sessionId: turn.sessionId,
+      turnId: turn.turnId,
+      kind: "lifecycle",
+      event: "started",
+    });
+    await publish({
+      apiVersion: "senawa.dev/worker-event/v1",
+      sessionId: turn.sessionId,
+      turnId: turn.turnId,
+      kind: "model",
+      requested: turn.requestedModel?.id ?? turn.resolvedModel.id,
+      resolved: turn.resolvedModel.id,
+      reason: "exact",
+    });
+    const startedAt = Date.now();
     return new Promise((resolveResult, rejectResult) => {
       const child = spawn(this.options.executable ?? "copilot", arguments_, {
         cwd: this.options.repositoryRoot,
@@ -241,11 +279,27 @@ export class SubprocessWorkerAdapter implements WorkerSessionPort, WorkerExecuti
       this.active.set(turn.turnId, child);
       let stdout = "";
       let stderr = "";
+      let eventWrites = Promise.resolve();
+      const publishChunk = (stream: "stdout" | "stderr", text: string) => {
+        eventWrites = eventWrites.then(() =>
+          publish({
+            apiVersion: "senawa.dev/worker-event/v1",
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+            kind: "text",
+            stream,
+            text,
+            delta: true,
+          }),
+        );
+      };
       child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
         stdout += chunk;
+        publishChunk("stdout", chunk);
       });
       child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
         stderr += chunk;
+        publishChunk("stderr", chunk);
       });
       const timeout = setTimeout(() => child.kill("SIGTERM"), this.options.timeoutMs ?? 240_000);
       child.once("error", (error) => {
@@ -253,10 +307,25 @@ export class SubprocessWorkerAdapter implements WorkerSessionPort, WorkerExecuti
         this.active.delete(turn.turnId);
         rejectResult(error);
       });
-      child.once("close", (code) => {
+      child.once("close", async (code) => {
         clearTimeout(timeout);
         this.active.delete(turn.turnId);
+        try {
+          await eventWrites;
+        } catch (error) {
+          rejectResult(error);
+          return;
+        }
         if (code !== 0) {
+          await publish({
+            apiVersion: "senawa.dev/worker-event/v1",
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+            kind: "lifecycle",
+            event: "failed",
+            detail: stderr.trim() || `Subprocess exited ${code ?? 1}`,
+            durationMs: Math.max(0, Date.now() - startedAt),
+          });
           rejectResult(new Error(`Copilot worker exited ${code ?? 1}: ${stderr.trim()}`));
           return;
         }
@@ -271,6 +340,23 @@ export class SubprocessWorkerAdapter implements WorkerSessionPort, WorkerExecuti
             return;
           }
         }
+        if (artifact !== undefined) {
+          await publish({
+            apiVersion: "senawa.dev/worker-event/v1",
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+            kind: "artifact",
+            artifact,
+          });
+        }
+        await publish({
+          apiVersion: "senawa.dev/worker-event/v1",
+          sessionId: turn.sessionId,
+          turnId: turn.turnId,
+          kind: "lifecycle",
+          event: "completed",
+          durationMs: Math.max(0, Date.now() - startedAt),
+        });
         resolveResult({
           sessionId: turn.sessionId,
           ...(artifact === undefined ? {} : { artifact }),

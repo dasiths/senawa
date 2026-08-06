@@ -97,6 +97,28 @@ describe("loopback web supervisor", () => {
     }
   });
 
+  it("replays durable worker events through the selected-owner SSE stream", async () => {
+    const services = await createRun("worker-stream-run");
+    const supervisor = await startWebSupervisor(services);
+    const bootstrap = await fetch(supervisor.bootstrapUrl, { redirect: "manual" });
+    const cookie = bootstrap.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
+    const origin = new URL(supervisor.url).origin;
+    const controller = new AbortController();
+    try {
+      const response = await fetch(
+        `${origin}/api/v1/runs/worker-stream-run/streams/${encodeURIComponent("phase:define")}/worker-events`,
+        { headers: { Cookie: cookie }, signal: controller.signal },
+      );
+      expect(response.status).toBe(200);
+      const next = sseReader(response);
+      expect((await next()).seq).toBe(1);
+      expect((await next()).seq).toBe(2);
+    } finally {
+      controller.abort();
+      await supervisor.close();
+    }
+  });
+
   it("replays writes made while the supervisor is stopped", async () => {
     const services = await createRun("restart-replay-run");
     const first = await startWebSupervisor(services);
@@ -152,6 +174,11 @@ describe("loopback web supervisor", () => {
     expect(appJs).not.toContain('positions["phase:implement"]');
     expect(appJs).not.toContain('target:"phase:verify"');
     expect(appJs).toContain('q("#resume").hidden=["awaiting_approval","ended","finished"]');
+    expect(appJs).toContain("setCommandPending(command,true)");
+    expect(appJs).toContain("button.disabled=pending");
+    expect(appJs).toContain('command+" in progress…"');
+    expect(appJs).toContain('/worker-events");');
+    expect(appJs).toContain("appendWorkerRecord(JSON.parse(event.data))");
   });
 
   it("drives the production workflow from rejection through finish over HTTP", async () => {
@@ -165,12 +192,11 @@ describe("loopback web supervisor", () => {
         phaseId: "define",
         reason: "Exercise artifact rework",
       });
-      await browser.command({ apiVersion: "senawa.dev/browser-command/v1", command: "resume" });
-      await approveAndResume(browser, "define");
-      await approveAndResume(browser, "research");
-      await approveAndResume(browser, "plan");
+      await approve(browser, "define");
+      await approve(browser, "research");
+      await approve(browser, "plan");
       expect((await services.queries.status("production-demo-run"))?.needs?.phaseId).toBe("verify");
-      await approveAndResume(browser, "verify");
+      await approve(browser, "verify");
 
       expect((await services.queries.status("production-demo-run"))?.status).toBe("finished");
       expect(await services.queries.report("production-demo-run")).toContain(
@@ -250,14 +276,10 @@ async function browserSession(supervisor: WebSupervisor) {
   };
 }
 
-async function approveAndResume(
-  browser: Awaited<ReturnType<typeof browserSession>>,
-  phaseId: string,
-) {
-  await browser.command({
+async function approve(browser: Awaited<ReturnType<typeof browserSession>>, phaseId: string) {
+  return browser.command({
     apiVersion: "senawa.dev/browser-command/v1",
     command: "approve",
     phaseId,
   });
-  return browser.command({ apiVersion: "senawa.dev/browser-command/v1", command: "resume" });
 }
