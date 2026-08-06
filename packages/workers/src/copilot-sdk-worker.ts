@@ -51,13 +51,17 @@ const sdkCapabilities: readonly WorkerCapability[] = [
   "senawa.discover",
   "senawa.note",
 ];
+export const SDK_TURN_TIMEOUT_MS = 600_000;
 
 export interface CopilotSdkSession {
   readonly sessionId: string;
-  sendAndWait(options: {
-    readonly prompt: string;
-    readonly requestHeaders?: Record<string, string>;
-  }): Promise<{ readonly data: { readonly content: string } } | undefined>;
+  sendAndWait(
+    options: {
+      readonly prompt: string;
+      readonly requestHeaders?: Record<string, string>;
+    },
+    timeout?: number,
+  ): Promise<{ readonly data: { readonly content: string } } | undefined>;
   abort(): Promise<void>;
   disconnect(): Promise<void>;
 }
@@ -398,14 +402,17 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     );
     const startedAt = Date.now();
     const result = session
-      .sendAndWait({
-        prompt: turn.prompt,
-        requestHeaders: {
-          traceparent: turn.traceparent,
-          "x-senawa-dispatch-id": turn.dispatchId,
-          "x-senawa-operation-id": turn.operationId,
+      .sendAndWait(
+        {
+          prompt: turn.prompt,
+          requestHeaders: {
+            traceparent: turn.traceparent,
+            "x-senawa-dispatch-id": turn.dispatchId,
+            "x-senawa-operation-id": turn.operationId,
+          },
         },
-      })
+        SDK_TURN_TIMEOUT_MS,
+      )
       .then((response) => {
         if (response?.data.content !== undefined && output.length === 0) {
           output.push({ stream: "stdout", text: response.data.content });

@@ -18,6 +18,7 @@ import {
   CopilotSdkWorkerAdapter,
   createCopilotSdkClientOptions,
   LocalSessionFsProvider,
+  SDK_TURN_TIMEOUT_MS,
   sdkToolName,
 } from "./copilot-sdk-worker.js";
 import { runWorkerSessionConformance } from "./worker-conformance.test-support.js";
@@ -79,6 +80,7 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     expect(client.created).toEqual([turn.sessionId]);
     expect(client.eventHandlerPresentAtCreate).toBe(true);
     expect(client.sessions[0]?.eventHandlerPresentAtSend).toBe(true);
+    expect(client.sessions[0]?.sendTimeout).toBe(SDK_TURN_TIMEOUT_MS);
     expect((await adapter.inspect(turn)).state).toBe("completed");
 
     const resumedTurn = { ...turn, operation: "resume" as const, turnId: "turn-sdk-two" };
@@ -418,6 +420,7 @@ class FakeSdkSession implements CopilotSdkSession {
   disconnected = false;
   eventHandlerPresentAtSend = false;
   requestHeaders: Record<string, string> | undefined;
+  sendTimeout: number | undefined;
   private rejectBlocked: ((error: Error) => void) | undefined;
 
   constructor(
@@ -427,12 +430,16 @@ class FakeSdkSession implements CopilotSdkSession {
     private readonly shouldBlock: () => boolean,
   ) {}
 
-  async sendAndWait(options: {
-    readonly prompt: string;
-    readonly requestHeaders?: Record<string, string>;
-  }): Promise<{ readonly data: { readonly content: string } } | undefined> {
+  async sendAndWait(
+    options: {
+      readonly prompt: string;
+      readonly requestHeaders?: Record<string, string>;
+    },
+    timeout?: number,
+  ): Promise<{ readonly data: { readonly content: string } } | undefined> {
     this.eventHandlerPresentAtSend = this.config.onEvent !== undefined;
     this.requestHeaders = options.requestHeaders;
+    this.sendTimeout = timeout;
     if (this.shouldBlock()) {
       return new Promise((_resolve, reject) => {
         this.rejectBlocked = reject;
