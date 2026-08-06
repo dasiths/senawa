@@ -45,6 +45,11 @@ context, maps cancellation to `abort()`, and separates retain from irreversible
 delete. It reports session-only inspection and no replay because Senawa durable
 events, not experimental SDK cursors, own replay. No live Copilot subprocess or
 SDK transport was exercised.
+
+> **NOTE:** Offline conformance uses deterministic adapters, a bounded recording
+> fake executable, and an injected fake SDK client. Live SDK session execution is
+> unvalidated.
+
 The CLI selects this adapter explicitly with `--worker-host sdk`; constructing
 ordinary deterministic, browser, and diagnostic commands does not resolve or
 start the SDK runtime.
@@ -164,7 +169,8 @@ require failures do not escape the build.
 The current workspace exposes `pnpm bundle:check` for CLI and hook startup,
 `pnpm demo` for the isolated file-backed no-credit browser workflow,
 `pnpm demo:beads` for the equivalent real-Beads workflow, and `pnpm demo:live`
-for the guarded Copilot implementation-worker path. Each offline demo terminates
+for the guarded Copilot implementation-worker path using `--runtime file`. Each
+offline demo terminates
 its supervisor by default; `pnpm demo -- --keep-server` is the explicit
 inspection mode. Its temporary repository runs real command sensors: typecheck
 passes, while tests fail on attempt 1 and pass on attempt 2 to prove deterministic

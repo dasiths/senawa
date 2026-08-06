@@ -118,3 +118,17 @@ It fails unless all of these conditions hold:
 Runtime evidence under `.agents/.copilot-tracking/` and Beads state are excluded
 from the documentation-only changed-path assertion but remain available for
 inspection.
+
+## Verification checklist
+
+After the workflow completes, run these commands from the repository root to
+confirm the documentation changes are consistent and the project is healthy:
+
+```bash
+pnpm docs:links
+pnpm lint
+pnpm typecheck
+pnpm test
+```
+
+All four commands must pass before the task is considered accepted.
