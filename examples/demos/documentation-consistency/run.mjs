@@ -360,7 +360,7 @@ function runSenawa(arguments_, acceptedCodes = [0]) {
     [
       join(repositoryRoot, "apps", "senawa", "dist", "senawa.mjs"),
       "--worker-host",
-      "sdk",
+      "copilot-sdk",
       ...arguments_,
     ],
     { cwd: repositoryRoot, acceptedCodes },
@@ -373,7 +373,7 @@ function senawaJson(arguments_) {
     [
       join(repositoryRoot, "apps", "senawa", "dist", "senawa.mjs"),
       "--worker-host",
-      "sdk",
+      "copilot-sdk",
       ...arguments_,
     ],
     { cwd: repositoryRoot, stdio: "pipe" },
@@ -398,7 +398,7 @@ function assertNoActiveRun() {
     [
       join(repositoryRoot, "apps", "senawa", "dist", "senawa.mjs"),
       "--worker-host",
-      "sdk",
+      "copilot-sdk",
       "work",
       "show",
     ],

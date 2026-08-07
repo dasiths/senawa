@@ -102,6 +102,12 @@ export function createRuntimeFixture(runId: string): RuntimeState {
       request: { goal: "test", constraints: [] },
       createdAt: snapshot.createdAt,
       fingerprint: snapshot.fingerprint,
+      workerHost: {
+        kind: "simulated",
+        adapter: "simulated-worker",
+        adapterVersion: "1",
+        legacy: false,
+      },
     },
     snapshot,
     status: "running",
@@ -134,6 +140,7 @@ export function createTaskRuntimeFixture(runId: string): RuntimeState {
     title: key,
     dependsOn,
     paths: [`src/${key}.ts`],
+    repositoryChange: "required",
     acceptance: [`${key} passes`],
     role: "worker",
     status: "pending",
@@ -158,6 +165,7 @@ export function createTaskRuntimeFixture(runId: string): RuntimeState {
               executor: {
                 kind: "task-frontier",
                 role: "worker",
+                repositoryChanges: ["required"],
                 concurrency: 1,
                 reentrant: true,
               },

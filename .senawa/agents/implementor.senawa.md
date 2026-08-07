@@ -5,8 +5,9 @@ metadata:
   name: implementor
 spec:
   model:
-    id: claude-sonnet-4.6
+    id: claude-sonnet-5
     effort: high
+    effortMode: preferred
   tools:
     - repository.read
     - repository.edit

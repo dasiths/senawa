@@ -18,7 +18,7 @@ It holds no model context and no authoritative plan in memory.
 | Driver lease | `driver.lock` | Heartbeat state is local and transient |
 | Steering inbox | `steering.jsonl` | Consumed between transitions |
 | Artifacts, snapshot, sessions, sensor cache | Work directory | These values are immutable documents or file-backed evidence |
-| Run identity | `work.json` | Immutable pointer to workflow, epic, fingerprint, and input |
+| Run identity | `work.json` | Immutable pointer to workflow, epic, fingerprint, input, runtime backend, worker host, adapter, and adapter version |
 | Status cache | `cache.json` | Derived and safe to delete |
 
 Where a cache and beads disagree, beads wins. Deleting `cache.json` and resuming
@@ -88,9 +88,9 @@ the driver does not shell out to itself.
 Dispatch crosses a process or RPC boundary, so the journal records both sides:
 
 ```text
-task.dispatching { task, attempt, session_id }
+task.dispatching { task, attempt, session_id, worker_host, dispatch_id }
     ... create or resume the session ...
-task.dispatched  { task, attempt, session_id, resolved_model }
+task.dispatched  { task, attempt, session_id, requested_model, resolved_model }
 ```
 
 An intent with no outcome signals reconciliation. `senawa work resume` checks the
@@ -104,6 +104,12 @@ stable session identifier:
 
 Worker failures and dispatch failures have separate budgets. A model flag or
 runtime outage must not consume the allowance intended for code rework.
+
+The selected canonical worker host and adapter version are frozen before the
+first dispatch. Resume resolves that persisted identity and refuses an explicit
+host mismatch. Legacy runs without host identity decode as legacy simulation;
+Senawa never infers live execution from a configured profile model. Offline file
+and Beads persistence contracts cover this migration and recovery behavior.
 
 ## Driver lease
 
@@ -200,7 +206,7 @@ The command was:
 pnpm exec vitest run tests/contract/beads-persistence.test.ts packages/runtime-beads/src/beads-client.test.ts
 ```
 
-The deterministic CLI and browser workflow also completed with eight
+The simulated CLI and browser workflow also completed with eight
 authoritative Beads nodes and no `runtime-state.json`:
 
 ```bash
@@ -213,7 +219,7 @@ composition tests proved the default selection, invalid-option rejection, and
 that a missing Beads executable creates no file runtime state. The default
 Beads demo completed through the same CLI and browser application instance.
 
-This evidence covers real Beads with deterministic workers. It does not cover a
+This evidence covers real Beads with simulated workers. It does not cover a
 live Copilot worker, multiple active drivers, or cross-host leases.
 
 ## Status projection
@@ -223,6 +229,11 @@ live Copilot worker, multiple active drivers, or cross-host leases.
 ```json
 {
   "backend": "beads",
+  "workerHost": {
+    "kind": "copilot-sdk",
+    "adapter": "copilot-sdk",
+    "adapterVersion": "1.0.7"
+  },
   "status": "awaiting_approval",
   "needs": {
     "action": "approve",
@@ -278,12 +289,19 @@ parallelism with the waves reported by structural graph validation.
 
 ## Model and effort resolution
 
-Execution metadata contains portable hints, not runtime flags. Before session
-creation, the dispatcher maps model and reasoning effort through a capability
-table. Unsupported effort is omitted rather than forwarded as a hard error.
+Execution metadata contains portable requests, not unchecked runtime flags.
+Before run creation and again before dispatch, the selected host resolves exact
+model and reasoning-effort requests through its authenticated catalog.
+Unsupported required effort fails closed. Unsupported preferred effort may
+resolve to the catalog default and records the degradation.
 
-The graph records both requested hints and resolved runtime values. The run report
-must describe what actually ran.
+Durable worker evidence distinguishes configured, requested, resolved, and
+invoked model identity and effort. A simulated host records no invoked model
+even when its profile names one. The
+[offline contracts](wip/probe-findings.md#live-default-and-evidence-contracts)
+cover persistence, negotiation, simulation labels, and mismatch refusal. A
+connected no-invocation diagnostic resolved the configured Sonnet 5 and Opus 5
+IDs on 2026-08-07; live invocation remains unvalidated.
 
 ## Next reading
 

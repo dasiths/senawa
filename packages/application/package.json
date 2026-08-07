@@ -9,6 +9,7 @@
     "./testing": "./src/testing.ts"
   },
   "dependencies": {
+    "@noble/hashes": "^2.2.0",
     "@senawa/domain": "workspace:*"
   },
   "devDependencies": {

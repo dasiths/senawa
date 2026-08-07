@@ -43,12 +43,14 @@ export const PlanTaskSchema = z
     title: NonEmptyStringSchema,
     dependsOn: z.array(IdentifierSchema).default([]),
     paths: z.array(RelativePathSchema).min(1),
+    repositoryChange: z.enum(["required", "optional", "forbidden"]).default("required"),
     acceptance: z.array(NonEmptyStringSchema).min(1),
     role: IdentifierSchema,
     execution: z
       .object({
         model: NonEmptyStringSchema.optional(),
         effort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
+        effortMode: z.enum(["required", "preferred"]).optional(),
         group: IdentifierSchema.optional(),
       })
       .strict()
@@ -110,4 +112,5 @@ export type WorkRequest = z.infer<typeof WorkRequestSchema>;
 export type DefinitionArtifact = z.infer<typeof DefinitionArtifactSchema>;
 export type ResearchArtifact = z.infer<typeof ResearchArtifactSchema>;
 export type PlanArtifact = z.infer<typeof PlanArtifactSchema>;
+export type RepositoryChangeExpectation = z.infer<typeof PlanTaskSchema>["repositoryChange"];
 export type VerificationArtifact = z.infer<typeof VerificationArtifactSchema>;

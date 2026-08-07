@@ -115,7 +115,7 @@ sensors:
     config:
       agent: architecture-reviewer
       rubric: .agents/rubrics/architecture.md
-      model: claude-sonnet-4.6
+      model: claude-sonnet-5
 ```
 
 Inferential extensions may launch reviewer sessions, but they do not own session
@@ -192,6 +192,26 @@ Worker hosts return only a session ID, an optional artifact, and output records.
 They cannot return a gate verdict. `RunCommandService` invokes the injected
 `GateEvaluator` after every phase or task turn, journals sensor and gate evidence,
 and uses only that evaluation to accept, close, rework, or pause work.
+
+## Trusted task-change evidence
+
+Every imported task carries a `repositoryChange` expectation. The standard task
+frontier permits only `required`, so a model-authored plan cannot weaken the
+contract. Senawa captures a path-limited baseline before worker execution and a
+post-turn delta before gate evaluation. The delta separates pre-existing,
+in-scope, out-of-scope, frozen, and uncertain changes and binds the measurement
+to run, task, attempt, dispatch, and turn identifiers.
+
+The worker's reported patch is advisory. The deterministic `task-change` sensor
+uses the trusted delta and reports disagreement. A required no-op, an
+out-of-scope change, a frozen-path change, or unresolved recovery attribution
+blocks before typecheck and tests can make the task look successful. These
+refusal paths are [confirmed offline](wip/probe-findings.md#live-default-and-evidence-contracts).
+
+The `work-done` gate is schema-aware. It requires the current verification
+artifact to declare `verdict: pass` and requires resolvable current evidence; a
+schema-valid failing verdict cannot finish work. Simulated verification remains
+simulated evidence and cannot establish live implementation quality.
 
 ## Evaluation order
 

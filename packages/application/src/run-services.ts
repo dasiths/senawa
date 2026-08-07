@@ -17,20 +17,29 @@ import {
   type RuntimeState,
   type RuntimeTask,
   type SensorReading,
+  type WorkerHostIdentity,
   type WorkerProfile,
   type WorkRequest,
 } from "@senawa/domain";
 import type { RunDriver } from "./driver.js";
+import {
+  artifactDigest,
+  artifactInputs,
+  resolvePhaseInputManifest,
+  resolveTaskInputManifest,
+} from "./input-manifests.js";
 import type {
   ArtifactValidationPort,
   ClockPort,
   GateEvaluationPort,
   IdentifierPort,
   ReportingPort,
+  RepositoryEvidencePort,
   RunPersistencePort,
   SchedulerPort,
   WorkerEventRecord,
   WorkerExecutionPort,
+  WorkerHostResolverPort,
   WorkerResult,
   WorkerTurn,
   WorkflowCatalogPort,
@@ -38,11 +47,15 @@ import type {
 import { RuntimeRevisionConflictError } from "./ports.js";
 import {
   type OpenWorkerQuestion,
+  type PhaseBriefProjection,
   projectOpenWorkerQuestions,
+  projectPhaseBrief,
   projectRunStatus,
   type RunStatusProjection,
 } from "./projections.js";
 import { createPhasePrompt, createTaskPrompt } from "./prompts.js";
+import { UnconfiguredRepositoryEvidencePort } from "./repository-evidence.js";
+import { fixedWorkerHostResolver } from "./workers.js";
 
 const ansiEscapePattern = new RegExp(`${String.fromCodePoint(27)}\\[[0-?]*[ -/]*[@-~]`, "gu");
 const questionAnswerPollIntervalMs = 250;
@@ -93,6 +106,11 @@ export interface EndRunOptions {
   readonly graceMs?: number;
 }
 
+export interface ArtifactDecisionExpectation {
+  readonly expectedVersion?: number;
+  readonly expectedDigest?: string;
+}
+
 export interface TransitionResult {
   readonly runId: string;
   readonly kind:
@@ -121,7 +139,7 @@ export class RunCommandService implements RunDriver {
 
   constructor(
     store: RunPersistencePort,
-    private readonly workerHost: WorkerExecutionPort,
+    workerHost: WorkerExecutionPort | WorkerHostResolverPort,
     private readonly gateEvaluator: GateEvaluationPort,
     private readonly artifactValidator: ArtifactValidationPort,
     private readonly clock: ClockPort,
@@ -129,9 +147,21 @@ export class RunCommandService implements RunDriver {
     private readonly scheduler: SchedulerPort,
     private readonly driverLeaseTtlMs = 30_000,
     private readonly backend: RuntimeBackend = "file",
+    private readonly workerHostIdentity: WorkerHostIdentity = {
+      kind: "simulated",
+      adapter: "simulated-worker",
+      adapterVersion: "1",
+      legacy: false,
+    },
+    private readonly repositoryEvidence: RepositoryEvidencePort = new UnconfiguredRepositoryEvidencePort(),
   ) {
     this.store = new RuntimeCoordinator(store, identifiers);
+    this.workerHosts = isWorkerHostResolver(workerHost)
+      ? workerHost
+      : fixedWorkerHostResolver(workerHost);
   }
+
+  private readonly workerHosts: WorkerHostResolverPort;
 
   async start(input: StartRunInput): Promise<TransitionResult> {
     const runId = input.runId ?? `run-${this.identifiers.createId()}`;
@@ -139,16 +169,24 @@ export class RunCommandService implements RunDriver {
     if (snapshot.runId !== runId) {
       throw new Error(`Run snapshot ${snapshot.runId} does not match requested run ${runId}`);
     }
+    const identity = {
+      runId,
+      backend: this.backend,
+      workflow: snapshot.workflow.metadata.name,
+      request: input.request,
+      createdAt: snapshot.createdAt,
+      fingerprint: snapshot.fingerprint,
+      workerHost: this.workerHostIdentity,
+    };
+    await this.workerHosts.preflight(
+      identity.workerHost,
+      Object.entries(snapshot.workerProfiles).map(([role, profile]) =>
+        workerPreflightRequest(role, profile),
+      ),
+    );
     const state: RuntimeState = {
       apiVersion: "senawa.dev/runtime/v1",
-      identity: {
-        runId,
-        backend: this.backend,
-        workflow: snapshot.workflow.metadata.name,
-        request: input.request,
-        createdAt: snapshot.createdAt,
-        fingerprint: snapshot.fingerprint,
-      },
+      identity,
       snapshot,
       status: "running",
       endReason: null,
@@ -172,6 +210,7 @@ export class RunCommandService implements RunDriver {
     emit(state, "work.started", input.actor, this.now(), {
       workflow: state.identity.workflow,
       goal: input.request.goal,
+      workerHost: { ...state.identity.workerHost },
     });
     emit(state, "workflow.instantiated", input.actor, this.now(), {
       phases: state.phases.slice(0, 12).map((phase) => phase.id),
@@ -191,14 +230,28 @@ export class RunCommandService implements RunDriver {
       case "approve": {
         const state = await this.store.readRun(runId);
         if (!hasCommandEvent(state, command.commandId, "phase.approved")) {
-          await this.approve(runId, command.phaseId, actor, command.note, command.commandId);
+          await this.approve(runId, command.phaseId, actor, command.note, command.commandId, {
+            ...(command.expectedVersion === undefined
+              ? {}
+              : { expectedVersion: command.expectedVersion }),
+            ...(command.expectedDigest === undefined
+              ? {}
+              : { expectedDigest: command.expectedDigest }),
+          });
         }
         return this.resume(runId, actor, command.commandId);
       }
       case "reject": {
         const state = await this.store.readRun(runId);
         if (!hasCommandEvent(state, command.commandId, "phase.rejected")) {
-          await this.reject(runId, command.phaseId, command.reason, actor, command.commandId);
+          await this.reject(runId, command.phaseId, command.reason, actor, command.commandId, {
+            ...(command.expectedVersion === undefined
+              ? {}
+              : { expectedVersion: command.expectedVersion }),
+            ...(command.expectedDigest === undefined
+              ? {}
+              : { expectedDigest: command.expectedDigest }),
+          });
         }
         return this.resume(runId, actor, command.commandId);
       }
@@ -227,14 +280,33 @@ export class RunCommandService implements RunDriver {
     actor: CommandActor,
     note?: string,
     commandId?: string,
+    expectation: ArtifactDecisionExpectation = {},
   ): Promise<TransitionResult> {
+    const beforeApproval = await this.store.readRun(runId);
+    assertApprovalAuthority(beforeApproval, phaseId, actor);
+    assertArtifactDecisionExpectation(beforeApproval, phaseId, expectation);
+    const definition = workflowPhase(beforeApproval, phaseId);
+    if (definition.actions?.some((action) => action.kind === "import-plan")) {
+      const phase = requirePhase(beforeApproval, phaseId);
+      const artifact = beforeApproval.artifacts.find(
+        (candidate) => candidate.phaseId === phaseId && candidate.version === phase.artifactVersion,
+      );
+      if (artifact === undefined)
+        throw new Error(`Phase ${phaseId} has no plan artifact to import`);
+      await this.preflightPlanTasks(
+        beforeApproval,
+        PlanArtifactSchema.parse(artifact.content).tasks,
+      );
+    }
     await this.store.updateRun(runId, (state) => {
       if (commandId !== undefined && hasCommandEvent(state, commandId, "phase.approved")) return;
       assertMutable(state);
       const phase = requirePhase(state, phaseId);
+      assertApprovalAuthority(state, phaseId, actor);
       if (phase.status !== "awaiting_approval") {
         throw new Error(`Phase ${phaseId} is not awaiting approval`);
       }
+      assertArtifactDecisionExpectation(state, phaseId, expectation);
       phase.status = "accepted";
       emit(state, "phase.approved", actor, this.now(), {
         phaseId,
@@ -256,15 +328,18 @@ export class RunCommandService implements RunDriver {
     reason: string,
     actor: CommandActor,
     commandId?: string,
+    expectation: ArtifactDecisionExpectation = {},
   ): Promise<TransitionResult> {
     await this.store.updateRun(runId, (state) => {
       if (commandId !== undefined && hasCommandEvent(state, commandId, "phase.rejected")) return;
       assertMutable(state);
       const phase = requirePhase(state, phaseId);
       const definition = workflowPhase(state, phaseId);
+      assertApprovalAuthority(state, phaseId, actor);
       if (phase.status !== "awaiting_approval") {
         throw new Error(`Phase ${phaseId} is not awaiting approval`);
       }
+      assertArtifactDecisionExpectation(state, phaseId, expectation);
       if (phase.iteration >= definition.iteration.max) {
         throw new Error(`Phase ${phaseId} exhausted its iteration budget`);
       }
@@ -309,8 +384,21 @@ export class RunCommandService implements RunDriver {
     return { runId, kind: "idle", taskId };
   }
 
-  async resume(runId: string, actor: CommandActor, commandId?: string): Promise<TransitionResult> {
+  async resume(
+    runId: string,
+    actor: CommandActor,
+    commandId?: string,
+    expectedWorkerHost?: WorkerHostIdentity["kind"],
+  ): Promise<TransitionResult> {
     const current = await this.store.readRun(runId);
+    if (
+      expectedWorkerHost !== undefined &&
+      current.identity.workerHost.kind !== expectedWorkerHost
+    ) {
+      throw new Error(
+        `Run ${runId} is bound to worker host ${current.identity.workerHost.kind}; refusing explicit ${expectedWorkerHost}`,
+      );
+    }
     if (commandId === undefined || !hasCommandEvent(current, commandId, "work.resumed")) {
       await this.store.updateRun(runId, (state) => {
         if (commandId !== undefined && hasCommandEvent(state, commandId, "work.resumed")) return;
@@ -489,6 +577,8 @@ export class RunCommandService implements RunDriver {
 
   async revisePlan(runId: string, input: PlanArtifact, actor: CommandActor) {
     const plan = PlanArtifactSchema.parse(input);
+    const currentState = await this.store.readRun(runId);
+    await this.preflightPlanTasks(currentState, plan.tasks);
     let added: string[] = [];
     await this.store.updateRun(runId, (state) => {
       assertMutable(state);
@@ -520,6 +610,62 @@ export class RunCommandService implements RunDriver {
     return { runId, added };
   }
 
+  listModels(): Promise<readonly import("./workers.js").WorkerModelCatalogEntry[]> {
+    return this.workerHosts.listModels(this.workerHostIdentity);
+  }
+
+  async liveReadiness(snapshot: RunSnapshot): Promise<{
+    readonly workerHost: WorkerHostIdentity;
+    readonly profiles: readonly {
+      readonly role: string;
+      readonly requestedModel: WorkerProfile["spec"]["model"];
+      readonly resolvedModel: WorkerProfile["spec"]["model"];
+    }[];
+  }> {
+    const requests = Object.entries(snapshot.workerProfiles).map(([role, profile]) =>
+      workerPreflightRequest(role, profile),
+    );
+    const plans = await this.workerHosts.preflight(this.workerHostIdentity, requests);
+    return {
+      workerHost: this.workerHostIdentity,
+      profiles: requests.map((request, index) => ({
+        role: request.role,
+        requestedModel: request.requestedModel,
+        resolvedModel: plans[index]?.resolvedModel ?? request.requestedModel,
+      })),
+    };
+  }
+
+  private async preflightPlanTasks(
+    state: RuntimeState,
+    tasks: readonly PlanArtifact["tasks"][number][],
+  ): Promise<void> {
+    const frontiers = state.snapshot.workflow.spec.phases.filter(
+      (phase) => phase.executor.kind === "task-frontier",
+    );
+    for (const task of tasks) {
+      if (
+        frontiers.length > 0 &&
+        !frontiers.every(
+          (phase) =>
+            phase.executor.kind === "task-frontier" &&
+            phase.executor.repositoryChanges.includes(task.repositoryChange),
+        )
+      ) {
+        throw new Error(
+          `Plan task ${task.key} requests repositoryChange ${task.repositoryChange}, which is not allowed by every task frontier`,
+        );
+      }
+    }
+    await this.workerHosts.preflight(
+      state.identity.workerHost,
+      tasks.map((task) => {
+        const resolved = resolveTurnProfile(state, task.role, task.execution);
+        return workerPreflightRequest(task.role, resolved.profile, resolved.requestedModel);
+      }),
+    );
+  }
+
   async end(
     runId: string,
     reason: string,
@@ -536,15 +682,16 @@ export class RunCommandService implements RunDriver {
 
     let observation: Awaited<ReturnType<RunCommandService["inspectWorkerTurn"]>> | null = null;
     if (activeTurn !== null) {
-      if (this.workerHost.cancel === undefined) {
+      const workerHost = await this.workerHosts.resolve(initial.identity.workerHost);
+      if (workerHost.cancel === undefined) {
         throw new Error("Worker host does not support cancellation; forced end is unavailable");
       }
-      await this.workerHost.cancel(activeTurn, reason);
+      await workerHost.cancel(activeTurn, reason);
       const deadline = Date.now() + Math.max(0, options.graceMs ?? 1_000);
-      observation = await this.inspectWorkerTurn(activeTurn);
+      observation = await this.inspectWorkerTurn(initial.identity, activeTurn);
       while (observation.state === "active" && Date.now() < deadline) {
         await delay(Math.min(25, Math.max(1, deadline - Date.now())));
-        observation = await this.inspectWorkerTurn(activeTurn);
+        observation = await this.inspectWorkerTurn(initial.identity, activeTurn);
       }
     }
 
@@ -569,26 +716,28 @@ export class RunCommandService implements RunDriver {
             completeDispatch(state, activeTurn.dispatchId, this.now());
           } else if (observation?.state === "missing") {
             dispatch.status = "failed";
-            dispatch.detail = "Worker session or turn was missing during forced end";
+            const detail = "Worker session or turn was missing during forced end";
+            dispatch.detail = detail;
             emit(state, "dispatch.failed", { channel: "driver" }, this.now(), {
               dispatchId: activeTurn.dispatchId,
               operationId: activeTurn.operationId,
               ownerKind: activeTurn.owner.kind,
               ownerId: activeTurn.owner.id,
-              reason: dispatch.detail,
+              reason: detail,
             });
           } else {
             dispatch.status = "cancelled";
-            dispatch.detail =
+            const detail =
               observation?.state === "cancelled"
                 ? (observation.detail ?? reason)
                 : `Forced end after cancellation grace: ${observation?.state ?? "unreported"}`;
+            dispatch.detail = detail;
             emit(state, "worker.aborted", { channel: "driver" }, this.now(), {
               dispatchId: activeTurn.dispatchId,
               operationId: activeTurn.operationId,
               ownerKind: activeTurn.owner.kind,
               ownerId: activeTurn.owner.id,
-              reason: dispatch.detail,
+              reason: detail,
             });
           }
         }
@@ -728,7 +877,31 @@ export class RunCommandService implements RunDriver {
       active?.ownerKind === "phase" ? active.operationId : this.identifiers.createId();
     const dispatchId =
       active?.ownerKind === "phase" ? active.dispatchId : this.identifiers.createId();
+    const inputManifest =
+      active?.ownerKind === "phase"
+        ? (requireDispatch(state, dispatchId).inputManifest ??
+          resolvePhaseInputManifest(state, phase))
+        : resolvePhaseInputManifest(state, phase);
+    const turn: WorkerTurn = {
+      runId: state.identity.runId,
+      owner: { kind: "phase", id: phase.id },
+      operation,
+      turnId,
+      dispatchId,
+      operationId,
+      ...traceContext(state.identity.runId, dispatchId),
+      role,
+      ...resolveTurnProfile(state, role),
+      attempt: iteration,
+      sessionId,
+      goal: state.identity.request.goal,
+      rejectionReason: phase.rejectionReason,
+      steering: [],
+      prompt: createPhasePrompt(state, phase, iteration, inputManifest),
+      authorization: { taskPaths: [], frozenPaths: state.snapshot.policy.frozen },
+    };
     if (active?.ownerKind !== "phase") {
+      await this.preflightTurn(state.identity, turn);
       await this.store.updateRun(state.identity.runId, (draft) => {
         const current = requirePhase(draft, phase.id);
         current.status = "running";
@@ -757,6 +930,7 @@ export class RunCommandService implements RunDriver {
               operationId,
               operation,
               dispatchFailure: 0,
+              inputManifest,
             },
             this.now(),
           ),
@@ -765,28 +939,13 @@ export class RunCommandService implements RunDriver {
       });
     }
 
-    const turn: WorkerTurn = {
-      runId: state.identity.runId,
-      owner: { kind: "phase", id: phase.id },
-      operation,
-      turnId,
-      dispatchId,
-      operationId,
-      ...traceContext(state.identity.runId, dispatchId),
-      role,
-      ...resolveTurnProfile(state, role),
-      attempt: iteration,
-      sessionId,
-      goal: state.identity.request.goal,
-      rejectionReason: phase.rejectionReason,
-      steering: [],
-      prompt: createPhasePrompt(state, phase, iteration),
-      authorization: { taskPaths: [], frozenPaths: state.snapshot.policy.frozen },
-    };
     const phaseExecution =
       active?.ownerKind === "phase"
-        ? await this.reconcilePhaseDispatch(turn)
-        : { kind: "result" as const, result: await this.executeWorkerSafely(turn) };
+        ? await this.reconcilePhaseDispatch(state.identity, turn)
+        : {
+            kind: "result" as const,
+            result: await this.executeWorkerSafely(state.identity, turn),
+          };
     if (phaseExecution.kind === "deferred") return phaseExecution.transition;
     const result = phaseExecution.result;
     assertWorkerSession(turn, result);
@@ -826,6 +985,7 @@ export class RunCommandService implements RunDriver {
       gateId: definition.exit?.gate ?? "none",
       policy: state.snapshot.policy,
       ...(result.artifact === undefined ? {} : { artifact: result.artifact }),
+      inputManifest,
       onOutput: this.sensorOutput(state.identity.runId, turn.owner),
     });
     await heartbeat.assertActive();
@@ -847,7 +1007,7 @@ export class RunCommandService implements RunDriver {
         draft.status = "paused";
         return;
       }
-      const artifact = appendArtifact(draft, current, result.artifact, this.now());
+      const artifact = appendArtifact(draft, current, result.artifact, inputManifest, this.now());
       emit(draft, "phase.submitted", { channel: "worker", role }, this.now(), {
         phaseId: phase.id,
         iteration,
@@ -895,6 +1055,7 @@ export class RunCommandService implements RunDriver {
     if (state.activeTurn?.ownerKind === "task") {
       const task = requireTask(state, state.activeTurn.ownerId);
       const turn = taskTurnFromActive(state, task);
+      await this.ensureTaskBaseline(state, task, turn, true);
       const reconciliation = await this.reconcileTaskDispatch(
         state,
         phase,
@@ -911,6 +1072,7 @@ export class RunCommandService implements RunDriver {
         turn,
         reconciliation.result,
         heartbeat,
+        true,
       );
     }
 
@@ -922,6 +1084,27 @@ export class RunCommandService implements RunDriver {
     const turnId = this.identifiers.createId();
     const operationId = this.identifiers.createId();
     const dispatchId = this.identifiers.createId();
+    const inputManifest = resolveTaskInputManifest(state, task);
+    const turn: WorkerTurn = {
+      runId: state.identity.runId,
+      owner: { kind: "task", id: task.key },
+      operation,
+      turnId,
+      dispatchId,
+      operationId,
+      ...traceContext(state.identity.runId, dispatchId),
+      role: task.role,
+      ...resolveTurnProfile(state, task.role, task.execution),
+      attempt,
+      sessionId,
+      goal: state.identity.request.goal,
+      rejectionReason: null,
+      steering: [...task.steering],
+      prompt: createTaskPrompt(state, task, attempt, inputManifest),
+      authorization: { taskPaths: task.paths, frozenPaths: state.snapshot.policy.frozen },
+    };
+    await this.preflightTurn(state.identity, turn);
+    const repositoryBaseline = await this.captureTaskBaseline(task, turn, false);
     await this.store.updateRun(state.identity.runId, (draft) => {
       const currentPhase = requirePhase(draft, phase.id);
       if (currentPhase.status === "pending") {
@@ -958,6 +1141,8 @@ export class RunCommandService implements RunDriver {
             operationId,
             operation,
             dispatchFailure: current.dispatchFailures,
+            inputManifest,
+            repositoryBaseline,
           },
           this.now(),
         ),
@@ -969,28 +1154,11 @@ export class RunCommandService implements RunDriver {
         turnId,
         dispatchId,
         operationId,
+        workerHost: { ...draft.identity.workerHost },
       });
     });
 
-    const turn: WorkerTurn = {
-      runId: state.identity.runId,
-      owner: { kind: "task", id: task.key },
-      operation,
-      turnId,
-      dispatchId,
-      operationId,
-      ...traceContext(state.identity.runId, dispatchId),
-      role: task.role,
-      ...resolveTurnProfile(state, task.role, task.execution),
-      attempt,
-      sessionId,
-      goal: state.identity.request.goal,
-      rejectionReason: null,
-      steering: [...task.steering],
-      prompt: createTaskPrompt(state, task, attempt),
-      authorization: { taskPaths: task.paths, frozenPaths: state.snapshot.policy.frozen },
-    };
-    const result = await this.executeWorkerSafely(turn);
+    const result = await this.executeWorkerSafely(state.identity, turn);
     return this.completeTaskTurn(
       state,
       task,
@@ -999,6 +1167,7 @@ export class RunCommandService implements RunDriver {
       turn,
       result,
       heartbeat,
+      false,
     );
   }
 
@@ -1010,14 +1179,18 @@ export class RunCommandService implements RunDriver {
     turn: WorkerTurn,
     result: WorkerResult,
     heartbeat: LeaseHeartbeat,
+    recovered: boolean,
   ): Promise<TransitionResult> {
     const attempt = turn.attempt;
+    const repositoryDelta = await this.ensureTaskDelta(turn, recovered);
     const gate = await this.gateEvaluator.evaluate({
       runId: state.identity.runId,
       owner: turn.owner,
       attempt,
       gateId,
       policy: state.snapshot.policy,
+      repositoryChange: task.repositoryChange,
+      repositoryEvidence: repositoryDelta,
       onOutput: this.sensorOutput(state.identity.runId, turn.owner),
     });
     await heartbeat.assertActive();
@@ -1102,13 +1275,16 @@ export class RunCommandService implements RunDriver {
     maxDispatchFailures: number,
     turn: WorkerTurn,
   ): Promise<ReconciledWorkerExecution> {
-    const observation = await this.inspectWorkerTurn(turn);
+    const observation = await this.inspectWorkerTurn(state.identity, turn);
     if (observation.state === "completed") {
       assertWorkerSession(turn, observation.result);
       return { kind: "result", result: observation.result };
     }
     if (observation.state === "idle" && turn.operation === "resume") {
-      return { kind: "result", result: await this.executeWorkerSafely(turn) };
+      return {
+        kind: "result",
+        result: await this.executeWorkerSafely(state.identity, turn),
+      };
     }
     let transition: TransitionResult = {
       runId: state.identity.runId,
@@ -1168,14 +1344,17 @@ export class RunCommandService implements RunDriver {
     return { kind: "deferred", transition };
   }
 
-  private async reconcilePhaseDispatch(turn: WorkerTurn): Promise<ReconciledWorkerExecution> {
-    const observation = await this.inspectWorkerTurn(turn);
+  private async reconcilePhaseDispatch(
+    identity: RuntimeState["identity"],
+    turn: WorkerTurn,
+  ): Promise<ReconciledWorkerExecution> {
+    const observation = await this.inspectWorkerTurn(identity, turn);
     if (observation.state === "completed") {
       assertWorkerSession(turn, observation.result);
       return { kind: "result", result: observation.result };
     }
     if (observation.state === "idle" && turn.operation === "resume") {
-      return { kind: "result", result: await this.executeWorkerSafely(turn) };
+      return { kind: "result", result: await this.executeWorkerSafely(identity, turn) };
     }
     await this.store.updateRun(turn.runId, (draft) => {
       const dispatch = requireDispatch(draft, turn.dispatchId);
@@ -1217,9 +1396,10 @@ export class RunCommandService implements RunDriver {
     };
   }
 
-  private async inspectWorkerTurn(turn: WorkerTurn) {
+  private async inspectWorkerTurn(identity: RuntimeState["identity"], turn: WorkerTurn) {
+    const workerHost = await this.workerHosts.resolve(identity.workerHost);
     const observation =
-      (await this.workerHost.inspect?.(turn)) ??
+      (await workerHost.inspect?.(turn)) ??
       ({
         state: "unknown" as const,
         detail: "Worker host does not support inspection",
@@ -1253,9 +1433,13 @@ export class RunCommandService implements RunDriver {
     };
   }
 
-  private async executeWorkerSafely(turn: WorkerTurn): Promise<WorkerResult> {
+  private async executeWorkerSafely(
+    identity: RuntimeState["identity"],
+    turn: WorkerTurn,
+  ): Promise<WorkerResult> {
     try {
-      return await this.workerHost.execute(turn, (event) =>
+      const workerHost = await this.workerHosts.resolve(identity.workerHost);
+      return await workerHost.execute(turn, (event) =>
         this.store.appendWorkerEvent({
           runId: turn.runId,
           owner: turn.owner,
@@ -1263,6 +1447,8 @@ export class RunCommandService implements RunDriver {
           operationId: turn.operationId,
           role: turn.role,
           attempt: turn.attempt,
+          workerHost: identity.workerHost,
+          configuredModel: turn.profile.spec.model,
           event,
         }),
       );
@@ -1280,6 +1466,80 @@ export class RunCommandService implements RunDriver {
       });
       throw error;
     }
+  }
+
+  private async preflightTurn(identity: RuntimeState["identity"], turn: WorkerTurn): Promise<void> {
+    await this.workerHosts.preflight(identity.workerHost, [
+      workerPreflightRequest(turn.role, turn.profile, turn.requestedModel ?? turn.resolvedModel),
+    ]);
+  }
+
+  private captureTaskBaseline(task: RuntimeTask, turn: WorkerTurn, recovered: boolean) {
+    return this.repositoryEvidence.captureBaseline({
+      runId: turn.runId,
+      taskId: task.key,
+      attempt: turn.attempt,
+      dispatchId: turn.dispatchId,
+      turnId: turn.turnId,
+      expectation: task.repositoryChange,
+      authorizedPaths: turn.authorization.taskPaths,
+      frozenPaths: turn.authorization.frozenPaths,
+      recovered,
+      capturedAt: this.now().toISOString(),
+    });
+  }
+
+  private async ensureTaskBaseline(
+    state: RuntimeState,
+    task: RuntimeTask,
+    turn: WorkerTurn,
+    recovered: boolean,
+  ): Promise<void> {
+    const dispatch = requireDispatch(state, turn.dispatchId);
+    if (dispatch.repositoryBaseline !== undefined) return;
+    const repositoryBaseline = await this.captureTaskBaseline(task, turn, recovered);
+    await this.store.updateRun(turn.runId, (draft) => {
+      const current = requireDispatch(draft, turn.dispatchId);
+      if (current.repositoryBaseline === undefined) {
+        Object.assign(current, { repositoryBaseline });
+      }
+    });
+  }
+
+  private async ensureTaskDelta(
+    turn: WorkerTurn,
+    recovered: boolean,
+  ): Promise<import("@senawa/domain").RepositoryDeltaEvidence> {
+    const state = await this.store.readRun(turn.runId);
+    const dispatch = requireDispatch(state, turn.dispatchId);
+    if (dispatch.repositoryDelta !== undefined) return dispatch.repositoryDelta;
+    const baseline = dispatch.repositoryBaseline;
+    if (baseline === undefined) {
+      throw new Error(`Task dispatch ${turn.dispatchId} has no repository baseline`);
+    }
+    const diff = (await this.store.readWorkerEvents(turn.runId))
+      .filter((record) => record.dispatchId === turn.dispatchId && record.event.kind === "diff")
+      .map((record) => record.event)
+      .at(-1);
+    const repositoryDelta = await this.repositoryEvidence.captureDelta({
+      baseline,
+      workerClaim:
+        diff?.kind === "diff"
+          ? { reported: true, changed: diff.changed, patch: diff.patch }
+          : { reported: false, changed: null },
+      recovered,
+      capturedAt: this.now().toISOString(),
+    });
+    let persisted = repositoryDelta;
+    await this.store.updateRun(turn.runId, (draft) => {
+      const current = requireDispatch(draft, turn.dispatchId);
+      if (current.repositoryDelta === undefined) {
+        current.repositoryDelta = repositoryDelta;
+      } else {
+        persisted = current.repositoryDelta;
+      }
+    });
+    return persisted;
   }
 
   private sensorOutput(
@@ -1305,6 +1565,35 @@ export class RunCommandService implements RunDriver {
 
   private now(): Date {
     return this.clock.now();
+  }
+}
+
+function assertArtifactDecisionExpectation(
+  state: RuntimeState,
+  phaseId: string,
+  expectation: ArtifactDecisionExpectation,
+): void {
+  const phase = requirePhase(state, phaseId);
+  if (phase.status !== "awaiting_approval" || phase.artifactVersion === null) {
+    throw new Error(`Phase ${phaseId} is not awaiting approval`);
+  }
+  const artifact = state.artifacts.find(
+    (candidate) => candidate.phaseId === phaseId && candidate.version === phase.artifactVersion,
+  );
+  if (artifact === undefined) {
+    throw new Error(
+      `Phase ${phaseId} is awaiting artifact version ${phase.artifactVersion}, but it is unavailable`,
+    );
+  }
+  const digest = artifactDigest(artifact.content);
+  if (
+    (expectation.expectedVersion !== undefined &&
+      expectation.expectedVersion !== artifact.version) ||
+    (expectation.expectedDigest !== undefined && expectation.expectedDigest !== digest)
+  ) {
+    throw new Error(
+      `Stale decision for phase ${phaseId}; currently awaiting ${artifact.path} version ${artifact.version} digest ${digest}`,
+    );
   }
 }
 
@@ -1514,6 +1803,10 @@ export class RunQueryService {
     const resolved = runId ?? (await this.store.getActiveRunId());
     if (resolved === null) return null;
     return projectRunStatus(await this.store.readRun(resolved));
+  }
+
+  async phaseBrief(runId: string, phaseId: string): Promise<PhaseBriefProjection> {
+    return projectPhaseBrief(await this.store.readRun(runId), phaseId);
   }
 
   async openWorkerQuestions(runId: string): Promise<readonly OpenWorkerQuestion[]> {
@@ -1745,6 +2038,7 @@ function resolveTurnProfile(
   execution?: {
     readonly model?: string | undefined;
     readonly effort?: "low" | "medium" | "high" | "xhigh" | undefined;
+    readonly effortMode?: "required" | "preferred" | undefined;
   },
 ): {
   profile: WorkerProfile;
@@ -1759,15 +2053,50 @@ function resolveTurnProfile(
   if (source === undefined)
     throw new Error(`Missing snapshotted worker profile source: ${sourcePath}`);
   const effort = execution?.effort ?? profile.spec.model.effort;
+  const effortMode =
+    execution?.effortMode ??
+    (execution?.effort !== undefined
+      ? "required"
+      : (profile.spec.model.effortMode ??
+        (profile.spec.model.effort === undefined ? undefined : "required")));
   const requestedModel = {
     id: execution?.model ?? profile.spec.model.id,
     ...(effort === undefined ? {} : { effort }),
+    ...(effortMode === undefined ? {} : { effortMode }),
   };
   return {
     profile,
     profileDigest: source.sha256,
     requestedModel,
     resolvedModel: requestedModel,
+  };
+}
+
+function isWorkerHostResolver(
+  value: WorkerExecutionPort | WorkerHostResolverPort,
+): value is WorkerHostResolverPort {
+  return "resolve" in value && "preflight" in value && "listModels" in value;
+}
+
+function workerPreflightRequest(
+  role: string,
+  profile: WorkerProfile,
+  requestedModel: WorkerProfile["spec"]["model"] = profile.spec.model,
+): import("./workers.js").WorkerPreflightRequest {
+  const taskProfile = profile.spec.tools.includes("senawa.task.done");
+  const essential = taskProfile
+    ? new Set(["repository.read", "repository.edit", "senawa.task.done"])
+    : new Set(["repository.read", "senawa.phase.submit"]);
+  const requiredCapabilities = profile.spec.tools.filter((capability) => essential.has(capability));
+  return {
+    role,
+    requiredCapabilities,
+    preferredCapabilities: profile.spec.tools.filter(
+      (capability) => !requiredCapabilities.includes(capability),
+    ),
+    requireResume: true,
+    requirePathEnforcement: taskProfile,
+    requestedModel,
   };
 }
 
@@ -1785,6 +2114,15 @@ function workflowPhase(state: RuntimeState, phaseId: string) {
   const phase = state.snapshot.workflow.spec.phases.find((candidate) => candidate.id === phaseId);
   if (phase === undefined) throw new Error(`Unknown workflow phase ${phaseId}`);
   return phase;
+}
+
+function assertApprovalAuthority(state: RuntimeState, phaseId: string, actor: CommandActor): void {
+  if (
+    workflowPhase(state, phaseId).exit?.approval === "human-direct" &&
+    actor.channel !== "direct-cli"
+  ) {
+    throw new Error(`Phase ${phaseId} requires human-direct approval from the driver's terminal`);
+  }
 }
 
 function requirePhase(state: RuntimeState, phaseId: string): RuntimePhase {
@@ -1826,6 +2164,9 @@ function taskTurnFromActive(state: RuntimeState, task: RuntimeTask): WorkerTurn 
   if (active === null || active.ownerKind !== "task" || active.ownerId !== task.key) {
     throw new Error(`Task ${task.key} has no active dispatch`);
   }
+  const inputManifest =
+    requireDispatch(state, active.dispatchId).inputManifest ??
+    resolveTaskInputManifest(state, task);
   return {
     runId: state.identity.runId,
     owner: { kind: "task", id: task.key },
@@ -1841,7 +2182,7 @@ function taskTurnFromActive(state: RuntimeState, task: RuntimeTask): WorkerTurn 
     goal: state.identity.request.goal,
     rejectionReason: null,
     steering: [...task.steering],
-    prompt: createTaskPrompt(state, task, active.attempt),
+    prompt: createTaskPrompt(state, task, active.attempt, inputManifest),
     authorization: { taskPaths: task.paths, frozenPaths: state.snapshot.policy.frozen },
   };
 }
@@ -1856,6 +2197,9 @@ function workerTurnFromActive(state: RuntimeState): WorkerTurn {
   if (definition.executor.kind !== "agent") {
     throw new Error(`Phase ${phase.id} active turn does not use an agent executor`);
   }
+  const inputManifest =
+    requireDispatch(state, active.dispatchId).inputManifest ??
+    resolvePhaseInputManifest(state, phase);
   return {
     runId: state.identity.runId,
     owner: { kind: "phase", id: phase.id },
@@ -1871,7 +2215,7 @@ function workerTurnFromActive(state: RuntimeState): WorkerTurn {
     goal: state.identity.request.goal,
     rejectionReason: phase.rejectionReason,
     steering: [],
-    prompt: createPhasePrompt(state, phase, active.attempt),
+    prompt: createPhasePrompt(state, phase, active.attempt, inputManifest),
     authorization: { taskPaths: [], frozenPaths: state.snapshot.policy.frozen },
   };
 }
@@ -1929,6 +2273,13 @@ function importPlan(
   );
   if (artifact === undefined) throw new Error(`Phase ${phase.id} has no current plan artifact`);
   const plan = PlanArtifactSchema.parse(artifact.content);
+  const sourcePlan = {
+    phaseId: artifact.phaseId,
+    path: artifact.path,
+    version: artifact.version,
+    digest: artifactDigest(artifact.content),
+  };
+  const inheritedInputs = artifactInputs(state, artifact);
   for (const task of plan.tasks) {
     if (state.snapshot.workerProfiles[task.role] === undefined) {
       throw new Error(`Plan task ${task.key} references missing worker profile ${task.role}`);
@@ -1946,6 +2297,8 @@ function importPlan(
       sessionId: null,
       steering: [],
       reworkFindings: [],
+      sourcePlan,
+      inheritedInputs,
     });
     existing.add(task.key);
     added.push(task.key);
@@ -1957,6 +2310,7 @@ function appendArtifact(
   state: RuntimeState,
   phase: RuntimePhase,
   content: JsonObject,
+  inputManifest: import("@senawa/domain").ResolvedInputManifest,
   now: Date,
 ): RuntimeArtifact {
   const version = (phase.artifactVersion ?? 0) + 1;
@@ -1972,18 +2326,13 @@ function appendArtifact(
     phase.rejectionReason = null;
     return existing;
   }
-  const consumed = Object.fromEntries(
-    state.phases
-      .filter((candidate) => candidate.artifactVersion !== null)
-      .map((candidate) => [candidate.id, candidate.artifactVersion as number]),
-  );
   const artifact: RuntimeArtifact = {
     phaseId: phase.id,
     version,
     path: `artifacts/${phase.id}/v${version}.json`,
     createdAt: now.toISOString(),
     content: parsedContent,
-    consumed,
+    consumed: inputManifest.inputs,
   };
   state.artifacts.push(artifact);
   phase.artifactVersion = version;

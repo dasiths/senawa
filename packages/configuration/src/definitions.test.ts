@@ -1,6 +1,7 @@
 import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { PlanArtifactSchema } from "@senawa/domain";
 import { describe, expect, it } from "vitest";
 import {
   loadRepositoryDefinitions,
@@ -20,6 +21,9 @@ describe("repository configuration", () => {
     expect(() => RepositoryDefinitionsSchema.parse(definitions)).not.toThrow();
     expect(definitions.workflow.metadata.name).toBe("standard-delivery");
     expect(definitions.workflow.spec.phases).toHaveLength(5);
+    expect(
+      definitions.workflow.spec.phases.find((phase) => phase.id === "implement")?.executor,
+    ).toMatchObject({ kind: "task-frontier", repositoryChanges: ["required"] });
     expect(Object.keys(definitions.schemas)).toHaveLength(5);
     expect(Object.keys(definitions.workerProfiles)).toEqual([
       "definer",
@@ -29,6 +33,24 @@ describe("repository configuration", () => {
       "verifier",
     ]);
     expect(definitions).not.toHaveProperty("hookConfiguration");
+  });
+
+  it("defaults omitted legacy task change intent to required", () => {
+    const plan = PlanArtifactSchema.parse({
+      summary: "Legacy plan",
+      tasks: [
+        {
+          key: "legacy-task",
+          title: "Legacy task",
+          dependsOn: [],
+          paths: ["packages/application"],
+          acceptance: ["Done"],
+          role: "implementor",
+        },
+      ],
+    });
+
+    expect(plan.tasks[0]?.repositoryChange).toBe("required");
   });
 
   it("discovers the repository and owns the workflow catalog", async () => {
@@ -93,7 +115,13 @@ Review repository evidence.
     const fixture = await copyRepositoryConfiguration();
     const policyPath = resolve(fixture, ".senawa/sensors.yaml");
     const policy = await readFile(policyPath, "utf8");
-    await writeFile(policyPath, policy.replace("kind: deterministic", "kind: inferential"));
+    await writeFile(
+      policyPath,
+      policy.replace(
+        '  - id: artifact-present\n    extension: "@senawa/sensor-artifact"\n    kind: deterministic',
+        '  - id: artifact-present\n    extension: "@senawa/sensor-artifact"\n    kind: inferential',
+      ),
+    );
 
     await expect(loadRepositoryDefinitions(fixture)).rejects.toThrow(
       "Gate definition-accepted has no deterministic non-advisory sensor anchor",
@@ -108,6 +136,39 @@ Review repository evidence.
 
     await expect(loadRepositoryDefinitions(fixture)).rejects.toThrow(
       "Workflow phase define references missing worker profile missing-role",
+    );
+  });
+
+  it.each([
+    ["phases.define.result", "Expected phases.<phaseId>.output"],
+    ["phases.verify.output", "not an ancestor"],
+    ["phases.implement.output", "has no artifact output"],
+  ])("rejects invalid workflow input reference %s", async (reference, message) => {
+    const fixture = await copyRepositoryConfiguration();
+    const workflowPath = resolve(fixture, ".senawa/workflows/standard-delivery.yaml");
+    const workflow = await readFile(workflowPath, "utf8");
+    await writeFile(
+      workflowPath,
+      workflow.replace("definition: phases.define.output", `definition: ${reference}`),
+    );
+
+    await expect(loadRepositoryDefinitions(fixture)).rejects.toThrow(message);
+  });
+
+  it("rejects duplicate workflow input references", async () => {
+    const fixture = await copyRepositoryConfiguration();
+    const workflowPath = resolve(fixture, ".senawa/workflows/standard-delivery.yaml");
+    const workflow = await readFile(workflowPath, "utf8");
+    await writeFile(
+      workflowPath,
+      workflow.replace(
+        "definition: phases.define.output\n          research: phases.research.output",
+        "definition: phases.define.output\n          research: phases.define.output",
+      ),
+    );
+
+    await expect(loadRepositoryDefinitions(fixture)).rejects.toThrow(
+      "Duplicate workflow input reference",
     );
   });
 });

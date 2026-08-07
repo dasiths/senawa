@@ -54,8 +54,22 @@ export const indexHtml = `<!doctype html>
       <h2 id="selected-name">None</h2>
       <p id="selected-detail">Choose a graph node.</p>
       <section id="approval" hidden>
-        <textarea id="decision-note" placeholder="Decision note"></textarea>
-        <div><button id="approve" class="run-command">Approve</button><button id="reject" class="danger run-command">Reject</button></div>
+        <small>APPROVAL ARTIFACT</small>
+        <dl id="artifact-identity">
+          <div><dt>Path</dt><dd id="artifact-path">-</dd></div>
+          <div><dt>Version</dt><dd id="artifact-version">-</dd></div>
+          <div><dt>Digest</dt><dd id="artifact-digest">-</dd></div>
+          <div><dt>Kind</dt><dd id="artifact-kind">-</dd></div>
+          <div><dt>Created</dt><dd id="artifact-created">-</dd></div>
+        </dl>
+        <p id="artifact-declared"></p>
+        <ul id="artifact-counts"></ul>
+        <p><code id="artifact-command"></code></p>
+        <pre id="artifact-content" aria-label="Complete approval artifact"></pre>
+        <div id="decision-controls" hidden>
+          <textarea id="decision-note" placeholder="Decision note"></textarea>
+          <div><button id="approve" class="run-command">Approve</button><button id="reject" class="danger run-command">Reject</button></div>
+        </div>
       </section>
       <section id="steering" hidden>
         <textarea id="instruction" placeholder="Steering instruction"></textarea>
@@ -88,7 +102,7 @@ dl{margin-top:30px}dl div{display:flex;justify-content:space-between;padding:10p
 .controls section{margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}textarea{width:100%;min-height:70px;padding:9px;resize:vertical}
 button{min-height:36px;margin-top:8px;padding:8px 12px;color:#fff;background:var(--green);border:0;border-radius:4px;font-weight:700;cursor:pointer}.danger{background:var(--red)}button:disabled{cursor:wait;opacity:.55}#last-command.busy{color:var(--blue);font-weight:700}#last-command.busy::before{content:"";display:inline-block;width:8px;height:8px;margin-right:7px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 #questions{margin-top:0;padding-top:0;border-top:0}#questions small{display:flex;justify-content:space-between}#question-list:empty::after{content:"None";display:block;margin-top:8px;color:#67716d;font-size:12px}.question{padding:12px 0;border-bottom:1px solid var(--line)}.question p{margin:6px 0;font-size:13px;line-height:1.4;overflow-wrap:anywhere}.question textarea{min-height:56px;font:12px/1.4 monospace}.question button{width:100%}.question .question-status{color:#67716d;font-size:11px}.question.stale textarea,.question.stale button{cursor:not-allowed}
-#approval div{display:grid;grid-template-columns:1fr 1fr;gap:8px}#steer,#resume,#end{width:100%}#last-command{color:#67716d;font:11px/1.5 monospace}
+#artifact-identity{margin:10px 0}#artifact-identity div{display:block;padding:6px 0}#artifact-identity dd{margin-top:3px;overflow-wrap:anywhere;font-size:11px}#artifact-declared{font-size:13px;line-height:1.4}#artifact-counts{padding-left:18px;font:11px/1.5 monospace}#artifact-command{display:block;overflow-wrap:anywhere;font-size:11px}#artifact-content{max-height:280px;overflow:auto;padding:10px;color:#d9e4dc;background:var(--terminal);border-radius:4px;font:11px/1.45 monospace;white-space:pre-wrap;word-break:break-word}#decision-controls>div{display:grid;grid-template-columns:1fr 1fr;gap:8px}#steer,#resume,#end{width:100%}#last-command{color:#67716d;font:11px/1.5 monospace}
 @media(max-width:980px){.workspace{grid-template-columns:190px minmax(0,1fr)}.controls{grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}
 @media(max-width:680px){.workspace{display:block}.overview,.controls{border:0;border-bottom:1px solid var(--line)}.stage{padding:20px 12px}.graph{height:640px}.terminal{height:340px}}
 `;
@@ -113,6 +127,8 @@ let pendingCommand=null;
 let pendingPhaseId=null;
 let receiptCursor=0;
 let recordsRenderPending=false;
+let approvalArtifact=null;
+let approvalLoad=0;
 
 cytoscape.use(cytoscapeDagre);
 
@@ -273,12 +289,42 @@ function render(){
   const node=nodes().find((item)=>item.id===selected);
   q("#selected-name").textContent=node?.label||"None";
   q("#selected-detail").textContent=node?(node.role+" · "+node.status+" · attempt "+node.attempt):"Choose a graph node.";
-  q("#approval").hidden=node?.kind!=="phase"||node.status!=="awaiting_approval";
+  const awaitingApproval=node?.kind==="phase"&&node.status==="awaiting_approval";
+  q("#approval").hidden=!awaitingApproval;
+  if(awaitingApproval)void renderApproval(node.id);
   q("#steering").hidden=node?.kind!=="task"||["closed","ended"].includes(node.status);
   q("#resume").hidden=["awaiting_approval","ended","finished"].includes(state.status);
   q("#ending").hidden=["ended","finished"].includes(state.status);
   renderQuestions();
   updateCommandProgress();
+}
+
+async function renderApproval(phaseId){
+  const load=++approvalLoad;
+  approvalArtifact=null;
+  q("#decision-controls").hidden=true;
+  q("#artifact-path").textContent="Loading";
+  try{
+    const brief=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/phases/"+encodeURIComponent(phaseId)+"/brief");
+    if(load!==approvalLoad||selected!==phaseId||brief.artifact===null)return;
+    const overview=brief.artifact;
+    const artifact=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/phases/"+encodeURIComponent(phaseId)+"/artifacts/"+overview.version);
+    if(load!==approvalLoad||selected!==phaseId)return;
+    approvalArtifact=overview;
+    q("#artifact-path").textContent=overview.path;
+    q("#artifact-version").textContent=String(overview.version);
+    q("#artifact-digest").textContent=overview.digest;
+    q("#artifact-kind").textContent=overview.kind;
+    q("#artifact-created").textContent=overview.createdAt;
+    const declared=overview.declared.verdict??overview.declared.summary;
+    const declaredKind=overview.declared.verdict?"verdict":"summary";
+    q("#artifact-declared").textContent=declared?declared.attribution+" "+declaredKind+": "+declared.value:"No artifact-declared summary or verdict";
+    q("#artifact-counts").replaceChildren(...overview.counts.map((count)=>text("li",count.name+": "+count.count)));
+    q("#artifact-command").textContent=overview.fullArtifactCommand;
+    q("#artifact-content").textContent=JSON.stringify(artifact,null,2);
+    q("#decision-controls").hidden=false;
+    updateControlsLocked();
+  }catch(error){if(load===approvalLoad)q("#artifact-path").textContent="Unavailable: "+error.message}
 }
 
 function renderQuestions(){
@@ -463,8 +509,8 @@ async function command(command,extra={}){
   finally{setCommandPending(command,false,extra)}
 }
 
-q("#approve").addEventListener("click",()=>command("approve",{phaseId:selected,note:q("#decision-note").value||undefined}));
-q("#reject").addEventListener("click",()=>command("reject",{phaseId:selected,reason:q("#decision-note").value}));
+q("#approve").addEventListener("click",()=>approvalArtifact&&command("approve",{phaseId:selected,expectedVersion:approvalArtifact.version,expectedDigest:approvalArtifact.digest,note:q("#decision-note").value||undefined}));
+q("#reject").addEventListener("click",()=>approvalArtifact&&command("reject",{phaseId:selected,expectedVersion:approvalArtifact.version,expectedDigest:approvalArtifact.digest,reason:q("#decision-note").value}));
 q("#steer").addEventListener("click",()=>command("steer",{taskId:selected,instruction:q("#instruction").value}));
 q("#resume").addEventListener("click",()=>command("resume"));
 q("#end").addEventListener("click",()=>command("end",{reason:q("#end-reason").value}));

@@ -124,7 +124,11 @@ try {
 }
 
 function runCli(arguments_, acceptedCodes = [0]) {
-  const runtimeArguments = runtime === "file" ? ["--runtime", "file"] : [];
+  const runtimeArguments = [
+    "--worker-host",
+    "simulated",
+    ...(runtime === "file" ? ["--runtime", "file"] : []),
+  ];
   print(`$ senawa ${[...runtimeArguments, ...arguments_].join(" ")}`);
   const result = spawnSync(process.execPath, [cliBundle, ...runtimeArguments, ...arguments_], {
     cwd: demoRoot,
@@ -158,6 +162,8 @@ async function startWeb(runId) {
     process.execPath,
     [
       cliBundle,
+      "--worker-host",
+      "simulated",
       ...(runtime === "file" ? ["--runtime", "file"] : []),
       "work",
       "web",

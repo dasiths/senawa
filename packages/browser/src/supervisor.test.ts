@@ -6,9 +6,10 @@ import { DurableBrowserCommandService, LeaseConflictError } from "@senawa/applic
 import { loadRepositoryDefinitions } from "@senawa/configuration";
 import type { CommandActor } from "@senawa/domain";
 import { createFileTestComposition } from "@senawa/testing";
+import { SimulatedWorkerHost } from "@senawa/workers";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createSenawaServices } from "../../../apps/senawa/src/services.js";
-import { appJs } from "./static-assets.js";
+import { appJs, indexHtml } from "./static-assets.js";
 import { startWebSupervisor, type WebSupervisor } from "./supervisor.js";
 
 const actor: CommandActor = { channel: "direct-cli" };
@@ -283,6 +284,19 @@ describe("loopback web supervisor", () => {
     expect(appJs).not.toContain("innerHTML");
     expect(appJs).toContain("textContent");
     expect(appJs).toContain("document.createElement");
+    expect(indexHtml.indexOf('id="artifact-identity"')).toBeLessThan(
+      indexHtml.indexOf('id="decision-controls"'),
+    );
+    expect(indexHtml.indexOf('id="artifact-content"')).toBeLessThan(
+      indexHtml.indexOf('id="decision-controls"'),
+    );
+    expect(appJs).toContain("async function renderApproval(phaseId)");
+    expect(appJs).toContain('q("#decision-controls").hidden=true');
+    expect(appJs).toContain('q("#artifact-content").textContent=JSON.stringify(artifact,null,2)');
+    expect(appJs).toContain('declared.attribution+" "+declaredKind+": "+declared.value');
+    expect(appJs).toContain('q("#decision-controls").hidden=false');
+    expect(appJs).toContain("expectedVersion:approvalArtifact.version");
+    expect(appJs).toContain("expectedDigest:approvalArtifact.digest");
     expect(appJs).toContain("cytoscape({");
     expect(appJs).toContain("globalThis.__senawaGraph=graph");
     expect(appJs).toContain('name:"dagre"');
@@ -600,11 +614,15 @@ describe("loopback web supervisor", () => {
 
   it("recovers queued and stale-running receipts after supervisor startup", async () => {
     const queuedServices = await createRun("queued-recovery-run");
+    const queuedBrief = await queuedServices.queries.phaseBrief("queued-recovery-run", "define");
+    if (queuedBrief.artifact === null) throw new Error("definition artifact is missing");
     const queuedCommand = {
       apiVersion: "senawa.dev/browser-command/v1",
       commandId: "44444444-4444-4444-8444-444444444444",
       command: "reject",
       phaseId: "define",
+      expectedVersion: queuedBrief.artifact.version,
+      expectedDigest: queuedBrief.artifact.digest,
       reason: "Recover queued command",
     } as const;
     await queuedServices.browserCommands.submit("queued-recovery-run", queuedCommand);
@@ -613,6 +631,10 @@ describe("loopback web supervisor", () => {
       const browser = await rawBrowserSession(queuedSupervisor);
       expect(await browser.terminal(queuedCommand.commandId)).toMatchObject({
         status: "completed",
+        payload: {
+          expectedVersion: queuedBrief.artifact.version,
+          expectedDigest: queuedBrief.artifact.digest,
+        },
       });
     } finally {
       await queuedSupervisor.close();
@@ -753,6 +775,66 @@ function servicesForRoot(root: string) {
   return {
     ...createSenawaServices(root, {
       ...composition,
+      workerHost: new SimulatedWorkerHost(),
+      workerHostIdentity: {
+        kind: "simulated",
+        adapter: "simulated-worker",
+        adapterVersion: "1",
+        legacy: false,
+      },
+      repositoryEvidence: {
+        async captureBaseline(input) {
+          return {
+            version: 1,
+            kind: "repository-baseline",
+            runId: input.runId,
+            taskId: input.taskId,
+            attempt: input.attempt,
+            dispatchId: input.dispatchId,
+            turnId: input.turnId,
+            expectation: input.expectation,
+            authorizedPaths: input.authorizedPaths,
+            frozenPaths: input.frozenPaths,
+            head: "simulated-browser-head",
+            entries: [],
+            capturedAt: input.capturedAt,
+            uncertainty: [],
+            digest: "b".repeat(64),
+            evidencePath: "evidence/repository/browser-baseline.json",
+          };
+        },
+        async captureDelta(input) {
+          return {
+            version: 1,
+            kind: "repository-delta",
+            runId: input.baseline.runId,
+            taskId: input.baseline.taskId,
+            attempt: input.baseline.attempt,
+            dispatchId: input.baseline.dispatchId,
+            turnId: input.baseline.turnId,
+            expectation: input.baseline.expectation,
+            baselineDigest: input.baseline.digest,
+            headBefore: input.baseline.head,
+            headAfter: input.baseline.head,
+            preExistingChanges: [],
+            changedPaths: [
+              { path: "packages/browser-fixture.ts", status: " M", digest: "c".repeat(64) },
+            ],
+            inScopeChanges: ["packages/browser-fixture.ts"],
+            outOfScopeChanges: [],
+            frozenChanges: [],
+            uncertainty: [],
+            workerClaim: {
+              reported: input.workerClaim.reported,
+              changed: input.workerClaim.changed,
+              agreement: "disagree",
+            },
+            capturedAt: input.capturedAt,
+            digest: "d".repeat(64),
+            evidencePath: "evidence/repository/browser-delta.json",
+          };
+        },
+      },
       gateEvaluator: {
         async evaluate(input) {
           return { gateId: input.gateId, accepted: true, readings: [], findings: [] };

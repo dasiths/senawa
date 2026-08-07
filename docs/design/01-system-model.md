@@ -21,6 +21,8 @@ Three invariants carry the system:
   never the only ground truth.
 * The record of what happened is produced by harness operations, not authored by
   an agent.
+* A change-requiring task closes only against a trusted repository delta and its
+  configured deterministic gate evidence.
 
 Definitions are inputs. Beads is runtime truth. The journal is history.
 
@@ -92,6 +94,9 @@ model. Conversational execution keeps the system usable.
 | Workflow | Declares phases, dependencies, artifacts, gates, approvals, and limits | Defines legal shape before a run starts |
 | Principal agent | Converts human intent to CLI operations and explains results | Relays explicit human actions only |
 | Run driver | Repeatedly computes and performs the next legal transition | Owns control flow |
+| Runtime backend | Persists and reconstructs graph state | Stores state, never chooses transitions |
+| Worker host | Selects the operator-facing execution mode frozen into run identity | Resolves one compatible adapter without fallback |
+| Worker adapter | Implements worker negotiation, lifecycle, and event normalization | Executes a bounded turn, never grants completion |
 | Worker session | Produces one phase artifact or implements one task | Chooses implementation, never completion |
 | Sensor | Measures a property and returns a schema-valid assessment | Perceives, never decides |
 | Senawa gate | Compares sensor output with declared expectations | Decides whether measured work may advance |
@@ -104,16 +109,18 @@ model. Conversational execution keeps the system usable.
 
 1. `senawa doctor` validates extensions, schemas, sensors, gates, roles,
    workflows, and loop limits.
-2. `senawa work start` validates the request and snapshots every definition the
-   run will consume.
+2. `senawa work start` validates the request, preflights every configured role,
+  snapshots every definition the run will consume, and freezes the selected
+  worker host and adapter identity.
 3. The driver creates the phase graph in beads and computes the first legal
    transition.
 4. Agent phases produce schema-validated, versioned artifacts.
 5. The plan artifact is imported into a dependency-aware task frontier.
 6. Workers request completion through Senawa. Sensors run, and the task closes
    only when its gate accepts the readings.
-7. Declared approval points stop the driver and identify the artifact the human
-   must judge. Rejection starts another versioned iteration.
+7. Declared approval points stop the driver and identify the artifact by path,
+  version, and digest. The human sees its bounded overview and complete content
+  before deciding. Rejection starts another versioned iteration.
 8. The driver exits when the workflow completion condition is accepted, a limit
    is exhausted, or the operator interrupts it.
 9. `senawa work resume` reconciles interrupted intent and continues the same run.
@@ -127,6 +134,8 @@ Approval and steering cross the outer-to-middle boundary differently.
 Approval stops the run. A phase with `approval: human` remains blocked until the
 human approves or rejects its artifact. A relayed approval records the
 `principal-agent` channel; a workflow may require `human-direct` instead.
+Caller attribution records provenance and never upgrades the principal agent's
+authority.
 
 Steering does not stop the run. `senawa steer` writes to a durable inbox that the
 driver consumes between transitions. The instruction affects the next safe turn
@@ -150,6 +159,11 @@ Version 1 also bounds concurrency at the product level: one unfinished Senawa
 run per repository and one active Senawa-created worker turn within that run.
 `work end --reason "..."` abandons a stuck run without erasing it, then releases
 the repository for a replacement only after terminal state is durable.
+
+These authority, persisted-host, evidence, and artifact-bound decision contracts
+are [confirmed offline](wip/probe-findings.md#live-default-and-evidence-contracts).
+Authenticated Sonnet 5 and Opus 5 execution and tmux-hosted worker terminals are
+not established by that evidence.
 
 ## Next reading
 

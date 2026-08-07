@@ -18,7 +18,8 @@ It performs the conversational work a human would otherwise do manually:
 * Convert a goal into a valid workflow request.
 * Invoke `senawa work start` when the human asks to begin.
 * Read bounded status and incremental logs.
-* Present artifact paths when a decision is due.
+* Present the exact artifact path, version, digest, Senawa-generated overview,
+  and complete content when a decision is due.
 * Quote the sensor and finding behind a refusal.
 * Draft a rejection reason or steer for human confirmation.
 * Relay an explicit approval, rejection, answer, pause, abort, or steer.
@@ -62,6 +63,8 @@ The principal agent is the least contained caller because it runs in the human's
 session with the human's machine authority. The skill states intended behavior;
 it is not a security boundary. Commands carrying judgment therefore require
 explicit human intent, and approval records its channel.
+`--caller principal-agent` records that relay path but cannot satisfy a
+`human-direct` approval requirement.
 
 Ending a run is one of those judgments. The principal agent may relay
 `work end --reason "..."` only after the human explicitly chooses abandonment
@@ -132,9 +135,11 @@ Instructions have two owners:
 | Brief scaffolding | Senawa | Scope, input references, output contract, rules, iteration context |
 | Enforcement | Senawa | Host capability ceiling, typed tools, permission callbacks, isolation, hooks, gates, and audit |
 
-`senawa phase brief` composes those layers with current
-artifact paths and graph state. They pass paths rather than copying large
-artifacts into a prompt.
+Worker prompts compose those layers with an exact resolved input manifest and
+graph state. `senawa phase brief` is the separate human-facing approval
+projection: it reports immutable artifact identity, attributed summary or
+verdict, deterministic counts, and the supported full-artifact command without
+an approval recommendation.
 
 The [worker profile contract](02-workflows-and-lifecycle.md#worker-profiles)
 defines what a repository may request. Effective authority is always the
@@ -162,9 +167,16 @@ but the subprocess adapter has no authenticated command bridge. Public
 because cancelling one task must coordinate with the live driver without
 terminalizing the run; forced whole-run end does not establish that contract.
 
-## Session topology
+## Worker hosts and session topology
 
 Senawa uses independent sessions for writing work.
+
+The canonical worker hosts are `simulated`, `copilot-subprocess`, and
+`copilot-sdk`. `copilot-sdk` is the persisted default for new work;
+`simulated` must be selected explicitly for tests, offline demos, and no-credit
+probes. A failed live host is never retried through simulation. The legacy
+`deterministic`, `copilot`, and `sdk` spellings are compatibility aliases at the
+CLI boundary and are not persisted.
 
 The production SDK adapter hosts sessions through `@github/copilot-sdk` 1.0.7.
 Offline fake-client conformance proves caller-chosen create and resume,
@@ -182,12 +194,14 @@ The adapter reports inspection as session-only and replay as unavailable. SDK
 session history cannot prove a Senawa turn outcome after process loss, and the
 experimental SDK cursor never crosses the application port. The application
 persists normalized lifecycle, text, tool, model, usage, and artifact events
-under Senawa-owned durable identifiers before browser fan-out. Live SDK session
-execution, model behavior, and multi-turn retention remain unvalidated and need
-an explicitly approved paid probe.
+under Senawa-owned durable identifiers before browser fan-out. An authenticated
+no-invocation diagnostic resolved the configured Sonnet 5 and Opus 5 IDs on
+2026-08-07. Live SDK session execution, model behavior, event delivery, and
+multi-turn retention remain unvalidated and need an explicitly approved paid
+probe.
 
-A subprocess topology using `copilot -p` remains the fallback for debugging and
-CI. Senawa passes the resolved profile instructions and model directly to the
+A subprocess topology using `copilot -p` remains experimental for debugging and
+CI, never a fallback. Senawa passes the resolved profile instructions and model directly to the
 subprocess, then maps the effective semantic capabilities through a
 Senawa-owned allowlist. Profile strings never become command options directly.
 The subprocess exposes the same session identity and per-task controls without
@@ -219,6 +233,10 @@ Subprocess workers set `COPILOT_HOME` to the same per-run directory.
 
 Isolation does not remove correlation. Session identifiers appear in the journal
 and telemetry regardless of where the session store lives.
+
+No current design claim assigns worker turns to tmux panes or projects terminals
+per turn. That question remains
+[probing](wip/decision-log.md#2026-08-07-live-execution-exact-evidence-approval-presentation-and-tmux).
 
 ## Tool containment
 

@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { mkdir, open, readdir, readFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import type { RunDocumentStoragePort } from "@senawa/application";
-import type { RunIdentity, RunSnapshot, RuntimeArtifact } from "@senawa/domain";
+import {
+  decodeRunIdentity,
+  type RunIdentity,
+  type RunSnapshot,
+  type RuntimeArtifact,
+} from "@senawa/domain";
 
 interface DocumentEnvelope<T> {
   readonly operationId: string;
@@ -24,8 +29,15 @@ export class FileRunDocumentStore implements RunDocumentStoragePort {
     this.trackingDirectory = resolve(repositoryRoot, ".agents", ".copilot-tracking");
   }
 
-  publishIdentity(identity: RunIdentity, operationId: string): Promise<void> {
-    return this.publish(this.path(identity.runId, "identity.json"), identity, operationId);
+  async publishIdentity(identity: RunIdentity, operationId: string): Promise<void> {
+    const path = this.path(identity.runId, "identity.json");
+    try {
+      await this.publish(path, identity, operationId);
+    } catch (error) {
+      if (!(error instanceof DocumentConflictError)) throw error;
+      const existing = decodeRunIdentity((await readEnvelope<unknown>(path)).value);
+      if (JSON.stringify(existing) !== JSON.stringify(decodeRunIdentity(identity))) throw error;
+    }
   }
 
   publishSnapshot(snapshot: RunSnapshot, operationId: string): Promise<void> {
@@ -40,8 +52,8 @@ export class FileRunDocumentStore implements RunDocumentStoragePort {
     return this.publish(this.path(runId, artifact.path), artifact, operationId);
   }
 
-  readIdentity(runId: string): Promise<RunIdentity> {
-    return this.read(this.path(runId, "identity.json"));
+  async readIdentity(runId: string): Promise<RunIdentity> {
+    return decodeRunIdentity(await this.read<unknown>(this.path(runId, "identity.json")));
   }
 
   readSnapshot(runId: string): Promise<RunSnapshot> {

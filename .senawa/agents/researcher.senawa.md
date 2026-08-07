@@ -5,7 +5,7 @@ metadata:
   name: researcher
 spec:
   model:
-    id: claude-sonnet-4.6
+    id: claude-sonnet-5
   tools:
     - repository.read
     - senawa.phase.submit

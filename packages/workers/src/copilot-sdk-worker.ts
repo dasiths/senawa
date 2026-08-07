@@ -29,6 +29,8 @@ import type {
   WorkerBindingPort,
   WorkerCancelResult,
   WorkerExecutionPort,
+  WorkerModelCatalogEntry,
+  WorkerModelCatalogPort,
   WorkerOutput,
   WorkerResult,
   WorkerSessionEvent,
@@ -84,7 +86,11 @@ export interface CopilotSdkWorkerOptions {
   readonly client?: CopilotSdkClient;
 }
 
-export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecutionPort {
+export const COPILOT_SDK_WORKER_ADAPTER_VERSION = "1.0.7";
+
+export class CopilotSdkWorkerAdapter
+  implements WorkerSessionPort, WorkerExecutionPort, WorkerModelCatalogPort
+{
   private readonly client: CopilotSdkClient;
   private readonly sessions = new Map<string, CopilotSdkSession>();
   private readonly active = new Map<string, CopilotSdkSession>();
@@ -106,7 +112,7 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
   async describe(): Promise<WorkerAdapterDescriptor> {
     return {
       name: "copilot-sdk",
-      version: "1.0.7",
+      version: COPILOT_SDK_WORKER_ADAPTER_VERSION,
       capabilities: sdkCapabilities,
       features: {
         callerChosenIdentity: true,
@@ -124,6 +130,20 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
         traceInjection: true,
       },
     };
+  }
+
+  async listModels(): Promise<readonly WorkerModelCatalogEntry[]> {
+    await this.ensureStarted();
+    return (await this.client.listModels())
+      .map((model) => ({
+        id: model.id,
+        name: model.name,
+        supportedEfforts: model.supportedReasoningEfforts ?? [],
+        ...(model.defaultReasoningEffort === undefined
+          ? {}
+          : { defaultEffort: model.defaultReasoningEffort }),
+      }))
+      .toSorted((left, right) => left.id.localeCompare(right.id));
   }
 
   async negotiate(requirements: WorkerSessionRequirements): Promise<WorkerSessionPlan> {
@@ -150,13 +170,28 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     }
     const requestedEffort = requirements.requestedModel.effort;
     const supportedEfforts = model.supportedReasoningEfforts ?? [];
+    if (
+      requestedEffort !== undefined &&
+      !supportedEfforts.includes(requestedEffort) &&
+      requirements.requestedModel.effortMode !== "preferred"
+    ) {
+      throw new Error(
+        `Copilot SDK model ${model.id} does not support required effort ${requestedEffort}; supported efforts: ${supportedEfforts.join(", ") || "none"}`,
+      );
+    }
     const effort =
       requestedEffort === undefined || supportedEfforts.includes(requestedEffort)
         ? requestedEffort
         : model.defaultReasoningEffort;
     return {
       adapter,
-      resolvedModel: { id: model.id, ...(effort === undefined ? {} : { effort }) },
+      resolvedModel: {
+        id: model.id,
+        ...(effort === undefined ? {} : { effort }),
+        ...(requirements.requestedModel.effortMode === undefined
+          ? {}
+          : { effortMode: requirements.requestedModel.effortMode }),
+      },
       grantedCapabilities: requirements.requiredCapabilities,
       toolTransport: "native",
       unsupportedPreferences: [

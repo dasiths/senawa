@@ -11,6 +11,12 @@ describe("renderRunReport", () => {
         request: { goal: "# [Render](https://unsafe.invalid)\u0000", constraints: [] },
         createdAt: "2026-08-04T10:00:00.000Z",
         fingerprint: "a".repeat(64),
+        workerHost: {
+          kind: "simulated",
+          adapter: "simulated-worker",
+          adapterVersion: "1",
+          legacy: false,
+        },
       },
       status: "finished",
       endReason: null,
@@ -30,6 +36,7 @@ describe("renderRunReport", () => {
           title: "Validate | **output**",
           dependsOn: [],
           paths: ["packages"],
+          repositoryChange: "required",
           acceptance: ["tests pass"],
           role: "implementor",
           status: "closed",
@@ -37,6 +44,69 @@ describe("renderRunReport", () => {
           dispatchFailures: 0,
           sessionId: "task-session",
           steering: [],
+        },
+      ],
+      artifacts: [],
+      dispatches: [
+        {
+          dispatchId: "dispatch-1",
+          operationId: "operation-1",
+          turnId: "turn-1",
+          sessionId: "task-session",
+          ownerKind: "task",
+          ownerId: "validate",
+          operation: "create",
+          workAttempt: 2,
+          dispatchFailure: 0,
+          createdAt: "2026-08-04T10:01:00.000Z",
+          updatedAt: "2026-08-04T10:01:01.000Z",
+          status: "completed",
+          inputManifest: {
+            version: 1,
+            inputs: [
+              {
+                name: "definition",
+                reference: "phases.define.output",
+                ownerKind: "phase",
+                ownerId: "define",
+                path: "artifacts/define/v1.json",
+                version: 1,
+                digest: "b".repeat(64),
+                schemaKind: "phase-artifact",
+                summary: { summary: "Bounded definition" },
+                content: { summary: "Bounded definition" },
+              },
+            ],
+          },
+          repositoryDelta: {
+            version: 1,
+            kind: "repository-delta",
+            runId: "run-report",
+            taskId: "validate",
+            attempt: 2,
+            dispatchId: "dispatch-1",
+            turnId: "turn-1",
+            expectation: "required",
+            baselineDigest: "c".repeat(64),
+            headBefore: "head-before",
+            headAfter: "head-after",
+            preExistingChanges: [],
+            changedPaths: [
+              {
+                path: "packages/reporting/src/run-report.ts",
+                status: " M",
+                digest: "d".repeat(64),
+              },
+            ],
+            inScopeChanges: ["packages/reporting/src/run-report.ts"],
+            outOfScopeChanges: [],
+            frozenChanges: [],
+            uncertainty: [],
+            workerClaim: { reported: true, changed: false, agreement: "disagree" },
+            capturedAt: "2026-08-04T10:01:01.000Z",
+            digest: "e".repeat(64),
+            evidencePath: "evidence/repository/tasks/validate/attempt-2/dispatch-1/delta.json",
+          },
         },
       ],
       artifactCount: 1,
@@ -89,6 +159,7 @@ describe("renderRunReport", () => {
           operationId: "operation-1",
           role: "implementor<script>",
           attempt: 2,
+          configuredModel: { id: "profile-configured", effort: "medium" },
           event: {
             apiVersion: "senawa.dev/worker-event/v1",
             eventId: "event-1",
@@ -98,6 +169,7 @@ describe("renderRunReport", () => {
             kind: "model",
             requested: "requested",
             resolved: "model|unsafe",
+            requestedEffort: "xhigh",
             resolvedEffort: "high",
           },
         },
@@ -119,6 +191,33 @@ describe("renderRunReport", () => {
             cumulativeCostUsdMicros: 125_000,
           },
         },
+        {
+          runId: "run-report",
+          owner: { kind: "phase", id: "verify" },
+          dispatchId: "dispatch-live",
+          operationId: "operation-live",
+          role: "verifier",
+          attempt: 1,
+          workerHost: {
+            kind: "copilot-sdk",
+            adapter: "copilot-sdk",
+            adapterVersion: "1.0.7",
+            legacy: false,
+          },
+          configuredModel: { id: "claude-opus-5", effort: "high" },
+          event: {
+            apiVersion: "senawa.dev/worker-event/v1",
+            eventId: "event-live-model",
+            sessionId: "verify-session",
+            turnId: "verify-turn",
+            ts: "2026-08-04T10:01:02.000Z",
+            kind: "model",
+            requested: "claude-opus-5",
+            resolved: "claude-opus-5",
+            requestedEffort: "high",
+            resolvedEffort: "high",
+          },
+        },
       ],
     } satisfies ReportRun;
 
@@ -130,7 +229,27 @@ describe("renderRunReport", () => {
     expect(report).toContain("## Human Rejection and Approval History");
     expect(report).toContain("## Human Questions, Answers, and Approvals");
     expect(report).toContain("## Discoveries and Notes");
-    expect(report).toContain("## Cost by Role and Model");
+    expect(report).toContain("## Usage by Role and Invoked Model");
+    expect(report).toContain("## Consumed Inputs");
+    expect(report).toContain("## Trusted Task Evidence");
+    expect(report).toContain("artifacts/define/v1.json");
+    expect(report).toContain("phases.define.output");
+    expect(report).toContain("phase\\-artifact");
+    expect(report).toContain(
+      "evidence/repository/tasks/validate/attempt\\-2/dispatch\\-1/delta.json",
+    );
+    expect(report).toContain("| measured |");
+    expect(report).toContain("Worker host: simulated");
+    expect(report).toContain(
+      "| simulated | simulated | no | profile\\-configured | medium | requested | xhigh | model\\|unsafe | high | none | none |",
+    );
+    expect(report).toContain(
+      "| live\\-model | live\\-model | yes | claude\\-opus\\-5 | high | claude\\-opus\\-5 | high | claude\\-opus\\-5 | high | claude\\-opus\\-5 | high |",
+    );
+    expect(report).toContain(
+      "| implementor&lt;script&gt; | simulated | none | 2.500 | $0.125000 |",
+    );
+    expect(report).toContain("| verifier | live\\-model | claude\\-opus\\-5 | 0.000 | $0.000000 |");
     expect(report).toContain("2.500");
     expect(report).toContain("$0.125000");
     expect(report).toContain("Validate \\| \\*\\*output\\*\\*");

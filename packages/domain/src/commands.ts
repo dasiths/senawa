@@ -28,6 +28,8 @@ const ApproveCommandSchema = z
     actor: CommandActorSchema,
     runId: IdentifierSchema,
     phaseId: IdentifierSchema,
+    expectedVersion: z.number().int().positive().optional(),
+    expectedDigest: Sha256Schema.optional(),
     note: NonEmptyStringSchema.optional(),
   })
   .strict();
@@ -37,6 +39,8 @@ const RejectCommandSchema = z
     actor: CommandActorSchema,
     runId: IdentifierSchema,
     phaseId: IdentifierSchema,
+    expectedVersion: z.number().int().positive().optional(),
+    expectedDigest: Sha256Schema.optional(),
     reason: NonEmptyStringSchema,
   })
   .strict();
@@ -94,6 +98,8 @@ export const BrowserRunCommandSchema = z.discriminatedUnion("command", [
       ...BrowserCommandBase,
       command: z.literal("approve"),
       phaseId: IdentifierSchema,
+      expectedVersion: z.number().int().positive().optional(),
+      expectedDigest: Sha256Schema.optional(),
       note: NonEmptyStringSchema.max(1000).optional(),
     })
     .strict(),
@@ -102,6 +108,8 @@ export const BrowserRunCommandSchema = z.discriminatedUnion("command", [
       ...BrowserCommandBase,
       command: z.literal("reject"),
       phaseId: IdentifierSchema,
+      expectedVersion: z.number().int().positive().optional(),
+      expectedDigest: Sha256Schema.optional(),
       reason: NonEmptyStringSchema.max(1000),
     })
     .strict(),

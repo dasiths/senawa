@@ -10,6 +10,7 @@ import {
   buildCopilotArguments,
   DeterministicWorkerAdapter,
   RecordingWorkerAdapter,
+  SimulatedWorkerAdapter,
   SubprocessWorkerAdapter,
 } from "./worker-adapters.js";
 import { runWorkerSessionConformance } from "./worker-conformance.test-support.js";
@@ -51,7 +52,7 @@ const turn: WorkerTurn = {
 
 runWorkerSessionConformance(
   [
-    { name: "deterministic", createAdapter: () => new DeterministicWorkerAdapter() },
+    { name: "simulated", createAdapter: () => new SimulatedWorkerAdapter() },
     {
       name: "fake subprocess",
       async createAdapter() {
@@ -106,7 +107,7 @@ describe("worker adapter conformance", () => {
   });
 
   it.each([
-    ["deterministic", () => new DeterministicWorkerAdapter()],
+    ["simulated", () => new SimulatedWorkerAdapter()],
     ["recording", () => new RecordingWorkerAdapter()],
   ])(
     "supports create, resume, inspect, cancel, and release for %s",
@@ -142,6 +143,10 @@ describe("worker adapter conformance", () => {
       expect((await adapter.inspect({ ...turn, turnId: "unknown" })).state).toBe("missing");
     },
   );
+
+  it("preserves the deprecated deterministic adapter constructor", () => {
+    expect(new DeterministicWorkerAdapter()).toBeInstanceOf(SimulatedWorkerAdapter);
+  });
 
   it("fails capability negotiation closed and reports absent typed transport", async () => {
     const adapter = new SubprocessWorkerAdapter({

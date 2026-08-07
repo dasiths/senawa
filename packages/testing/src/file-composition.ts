@@ -3,6 +3,7 @@ import {
   FileJournalStore,
   FileOutputLogStore,
   FileWorkerEventStore,
+  GitRepositoryEvidenceStore,
   RunChangeNotifier,
 } from "@senawa/observability";
 import {
@@ -20,12 +21,14 @@ export function createFileTestComposition(
   readonly persistence: FileRunPersistence;
   readonly notifier: RunChangeNotifier;
   readonly receiptStore: FileBrowserCommandReceiptStore;
+  readonly repositoryEvidence: GitRepositoryEvidenceStore;
 } {
   const notifier = new RunChangeNotifier();
   const leases = new FileLeaseStore(repositoryRoot, now);
   return {
     notifier,
     receiptStore: new FileBrowserCommandReceiptStore(repositoryRoot, leases, now, notifier),
+    repositoryEvidence: new GitRepositoryEvidenceStore(repositoryRoot),
     persistence: new FileRunPersistence(repositoryRoot, {
       runtime: new FileRuntimeStateStore(repositoryRoot),
       activeRuns: new FileActiveRunRegistry(repositoryRoot),

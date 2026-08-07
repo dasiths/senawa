@@ -4,6 +4,7 @@ import {
   FileJournalStore,
   FileOutputLogStore,
   FileWorkerEventStore,
+  GitRepositoryEvidenceStore,
   RunChangeNotifier,
 } from "@senawa/observability";
 import { type BeadsClient, BeadsRuntimeStateStore } from "@senawa/runtime-beads";
@@ -61,7 +62,12 @@ export function createRuntimeComposition(
     },
     backend === "beads" ? { backend, lockTimeoutMs: 120_000, staleLockMs: 300_000 } : { backend },
   );
-  return { persistence, notifier, receiptStore };
+  return {
+    persistence,
+    notifier,
+    receiptStore,
+    repositoryEvidence: new GitRepositoryEvidenceStore(repositoryRoot),
+  };
 }
 
 function optionValue(arguments_: readonly string[], name: string): string | undefined {

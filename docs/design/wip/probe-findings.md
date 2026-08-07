@@ -91,6 +91,76 @@ about the SDK should be re-checked when the mirror catches up.
 | 49 | A human answer can return to the active SDK worker without creating another turn | **Confirmed offline.** The original `senawa.ask` tool call remains pending, correlates the durable answer to its session and turn, and refuses stale, terminal, cancelled, or timed-out waits without advancing the workflow |
 | 50 | The portal can answer active worker questions without deadlocking command receipts | **Confirmed offline in the production browser path.** Durable question projection, active and stale classification, idempotent answer submission, Origin and schema checks, reload, DOM-safe rendering, and answer controls during an active receipt passed |
 | 51 | Fresh Beads reads are dominated more by total database size than selected-run size at current scales | **Measured on one dev container.** Across 180 full-profile reads, isolated 2-to-128 issue growth raised p50 by 6.6%, while placing 2 selected issues in a 1,024-issue database raised p50 by 29.4%; timing remains non-gating and machine-specific |
+| 52 | A completed standard workflow proves repository work occurred | **Refuted by simulated lifecycle evidence.** Run `run-7a3b2318-05ad-4431-a827-fc74577fce9e` completed without changing repository files; it did not invoke a live model or measure tmux behavior |
+| 53 | Canonical worker-host identity and live-default selection can fail closed without starting Copilot for reads | **Confirmed offline.** Canonical and alias parsing, immutable host and adapter persistence, legacy simulation migration, lazy read paths, explicit resume mismatch, exact fake-catalog preflight, and no live-to-simulation fallback passed |
+| 54 | Workflow inputs, task provenance, and verification context can share one exact manifest | **Confirmed offline.** Closed reference validation, durable dispatch manifests, recovery reuse, exact artifact `consumed` references, source-plan identity, inherited evidence, and current verification manifests passed |
+| 55 | Trusted repository evidence can prevent false success | **Measured offline in temporary Git repositories and confirmed by gate tests.** Baseline separation, in-scope, out-of-scope, frozen, and uncertain deltas passed; required no-op and invalid-scope work were refused, and a schema-valid failing verification verdict could not finish work |
+| 56 | Approval presentation can remain artifact-bound without transferring human authority | **Confirmed offline in CLI and production browser paths.** Bounded recommendation-free overviews, complete artifact access, version and digest guards, durable receipt recovery, principal-agent attribution, and `human-direct` refusal passed |
+| 57 | Reports can distinguish simulated configuration from invocation and retain exact evidence references | **Confirmed offline.** Reports include canonical host and adapter, execution and evidence classification, configured, requested, resolved, and invoked model and effort, usage, exact consumed manifests, and measured task-delta references; simulated turns report no invoked model |
+| 58 | One browser projection can retain an independently updating terminal per worker turn | **Confirmed offline for the deterministic fixture.** Two per-turn projections remained independently keyed, and bounded ANSI, control, path, line, stream, lifecycle, and secret sanitization tests passed. Tmux was unavailable, so no session, pane, reconnect, exit, or cleanup behavior was measured |
+| 59 | The authenticated SDK catalog exposes the configured Sonnet 5 and Opus 5 role models | **Measured through a connected no-invocation diagnostic on 2026-08-07.** `senawa doctor --live` resolved `claude-opus-5` for definer, planner, and verifier and `claude-sonnet-5` for researcher and implementor; preferred implementor effort `high` also resolved exactly. This proves catalog availability for this authenticated environment, not model invocation, quality, telemetry, cost, or future availability |
+
+## Live default and evidence contracts
+
+On 2026-08-07, offline production-path and contract tests accepted the Phase 1
+through 7 contracts for canonical host identity, explicit simulation, lazy host
+resolution, exact model and effort negotiation, exact input manifests, trusted
+Git repository deltas, task-change refusal, verification verdict enforcement,
+artifact-bound approval presentation, and report classification.
+
+The classifications are deliberately narrow:
+
+* Host, application, browser, gate, persistence, and report behavior is
+    `offline` evidence.
+* Temporary Git baseline and delta capture is `measured` evidence collected
+    without a model.
+* No-model worker lifecycle and refusal behavior is `simulated` evidence.
+* SDK declarations and injected fake-client behavior are `offline`, not
+    `live-model`, evidence.
+* Sonnet 5 and Opus 5 profile IDs resolved exactly through the authenticated
+    catalog on 2026-08-07 without a model invocation. Invocation and quality
+    remain unvalidated.
+* The no-credit browser-terminal fixture passed offline. Tmux session, pane,
+    capture, reconnect, exit, and cleanup semantics remain unmeasured and
+    `probing` because tmux was unavailable in the recorded environment.
+
+These results support the current numbered-guide contracts but do not prove a
+complete live workflow, model quality, live telemetry delivery, cost, or tmux
+behavior.
+
+## Worker terminal substrate
+
+On 2026-08-07, the no-credit worker-session probe ran on Node.js `v22.17.0`,
+Debian GNU/Linux 12, and Linux
+`6.18.33.2-microsoft-standard-WSL2` on `x86_64`. Tmux was unavailable on
+`PATH`. The safe default printed an actionable installation prerequisite and
+returned exit code `0`; therefore, it produced documentation-only skip evidence
+for the tmux substrate.
+
+The separately runnable browser fixture test passed two tests with zero
+failures. It confirmed offline that one immutable projection per turn can update
+without changing another turn and that output is sanitized and bounded before
+projection. No live wrapper ran, no model was invoked, and no AI cost was
+incurred. The result supports no production tmux-hosting claim.
+
+## Simulated false-success baseline
+
+On 2026-08-07, run `run-7a3b2318-05ad-4431-a827-fc74577fce9e`
+traversed the standard workflow and completed while the default simulated worker
+adapter produced phase and task results without changing repository files. Green
+workspace typecheck and unit-test sensors accepted both implementation tasks,
+and artifact-presence checks allowed the verification path to finish.
+
+This is simulated lifecycle evidence only. It shows complete driver, gate, and
+human-decision traversal, including a browser command receipt, and it exposes a
+false-success condition when task gates do not require trusted repository-delta
+evidence and the work gate does not inspect the verification verdict. It does
+not prove that implementation work occurred, that any configured model was
+invoked, that live SDK execution works, that artifact consumption was exact, or
+that approval presentation was artifact-bound.
+
+The run did not host workers in tmux or project browser terminals. It provides no
+measured tmux behavior and supports no production tmux or live-worker claim.
 
 ## Hook latency
 

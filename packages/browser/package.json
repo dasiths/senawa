@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@senawa/configuration": "workspace:*",
-    "@senawa/testing": "workspace:*"
+    "@senawa/testing": "workspace:*",
+    "@senawa/workers": "workspace:*"
   }
 }

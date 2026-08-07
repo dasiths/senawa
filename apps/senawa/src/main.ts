@@ -1,63 +1,76 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import {
+  COPILOT_SDK_WORKER_ADAPTER_VERSION,
+  COPILOT_SUBPROCESS_WORKER_ADAPTER_VERSION,
   CopilotSdkWorkerAdapter,
   CopilotSubprocessHost,
-  DeterministicWorkerHost,
+  SIMULATED_WORKER_ADAPTER_VERSION,
+  SimulatedWorkerHost,
 } from "@senawa/workers";
 import { createRuntimeComposition, selectRuntime } from "./composition.js";
 import { resolveExecutable } from "./executable.js";
+import { optionValue, parseWorkerHostOption } from "./execution-options.js";
 import { runCli } from "./program.js";
 import { createSenawaServices, type SenawaServices } from "./services.js";
 import { createSdkWorkerBindings } from "./worker-bindings.js";
+import { LazyWorkerHostResolver } from "./worker-host-resolver.js";
 
 const arguments_ = process.argv.slice(2);
 const repositoryRoot = process.cwd();
-const workerHost = optionValue(arguments_, "--worker-host") ?? "deterministic";
-const deterministicHost = new DeterministicWorkerHost();
-const copilotHost = new CopilotSubprocessHost({
-  enabled: true,
-  repositoryRoot,
-  isolationRoot: join(repositoryRoot, ".agents", ".copilot-tracking", "copilot-home"),
-});
+const workerHost = parseWorkerHostOption(optionValue(arguments_, "--worker-host")).kind;
 let services: SenawaServices | undefined;
-const sdkHost =
-  workerHost === "sdk"
-    ? new CopilotSdkWorkerAdapter({
-        repositoryRoot,
-        isolationRoot: join(repositoryRoot, ".agents", ".copilot-tracking", "copilot-sdk-home"),
-        runtimePath: resolveExecutable(
-          typeof Reflect.get(process.env, "SENAWA_COPILOT_CLI") === "string"
-            ? String(Reflect.get(process.env, "SENAWA_COPILOT_CLI"))
-            : "copilot",
-        ),
-        bindings: createSdkWorkerBindings(() => {
-          if (services === undefined) throw new Error("Senawa services are not initialized");
-          return services;
-        }),
-      })
-    : undefined;
+const copilotExecutable = () =>
+  resolveExecutable(
+    typeof Reflect.get(process.env, "SENAWA_COPILOT_CLI") === "string"
+      ? String(Reflect.get(process.env, "SENAWA_COPILOT_CLI"))
+      : "copilot",
+  );
+const workerHosts = new LazyWorkerHostResolver({
+  simulated: () => new SimulatedWorkerHost(),
+  "copilot-subprocess": () =>
+    new CopilotSubprocessHost({
+      enabled: true,
+      repositoryRoot,
+      isolationRoot: join(repositoryRoot, ".agents", ".copilot-tracking", "copilot-home"),
+      executable: copilotExecutable(),
+    }),
+  "copilot-sdk": () =>
+    new CopilotSdkWorkerAdapter({
+      repositoryRoot,
+      isolationRoot: join(repositoryRoot, ".agents", ".copilot-tracking", "copilot-sdk-home"),
+      runtimePath: copilotExecutable(),
+      bindings: createSdkWorkerBindings(() => {
+        if (services === undefined) throw new Error("Senawa services are not initialized");
+        return services;
+      }),
+    }),
+});
 
 try {
   const runtime = selectRuntime(arguments_);
-  const { persistence, notifier, receiptStore } = createRuntimeComposition(repositoryRoot, runtime);
+  const { persistence, notifier, receiptStore, repositoryEvidence } = createRuntimeComposition(
+    repositoryRoot,
+    runtime,
+  );
   services = createSenawaServices(repositoryRoot, {
     persistence,
     notifier,
     receiptStore,
+    repositoryEvidence,
     runtimeBackend: runtime,
-    ...(workerHost === "copilot"
-      ? {
-          workerHost: {
-            execute: (turn) =>
-              turn.owner.kind === "task"
-                ? copilotHost.execute(turn)
-                : deterministicHost.execute(turn),
-          },
-        }
-      : workerHost === "sdk"
-        ? { workerHost: sdkHost as CopilotSdkWorkerAdapter }
-        : {}),
+    workerHostResolver: workerHosts,
+    workerHostIdentity: {
+      kind: workerHost,
+      adapter: workerHost === "simulated" ? "simulated-worker" : workerHost,
+      adapterVersion:
+        workerHost === "copilot-sdk"
+          ? COPILOT_SDK_WORKER_ADAPTER_VERSION
+          : workerHost === "copilot-subprocess"
+            ? COPILOT_SUBPROCESS_WORKER_ADAPTER_VERSION
+            : SIMULATED_WORKER_ADAPTER_VERSION,
+      legacy: false,
+    },
   });
   process.exitCode = await runCli(arguments_, {
     services,
@@ -67,7 +80,7 @@ try {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;
 } finally {
-  await sdkHost?.shutdown();
+  await workerHosts.shutdown();
 }
 
 async function openBrowser(url: string): Promise<void> {
@@ -86,9 +99,4 @@ async function openBrowser(url: string): Promise<void> {
       resolveOpen();
     });
   });
-}
-
-function optionValue(arguments_: readonly string[], name: string): string | undefined {
-  const index = arguments_.indexOf(name);
-  return index < 0 ? undefined : arguments_[index + 1];
 }

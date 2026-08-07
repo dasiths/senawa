@@ -1,5 +1,12 @@
 import { execPath } from "node:process";
-import { type RepositoryPolicy, RepositoryPolicySchema, type SensorResult } from "@senawa/domain";
+import {
+  type JsonObject,
+  type RepositoryDeltaEvidence,
+  type RepositoryPolicy,
+  RepositoryPolicySchema,
+  type ResolvedInputManifest,
+  type SensorResult,
+} from "@senawa/domain";
 import { describe, expect, it } from "vitest";
 import {
   type CommandExecution,
@@ -253,7 +260,386 @@ describe("CommandGateEvaluator", () => {
       ).accepted,
     ).toBe(true);
   });
+
+  it("accepts a passing verification candidate with current evidence and labels simulation", async () => {
+    const evaluator = new CommandGateEvaluator(repositoryRoot);
+    const policy = verificationPolicy();
+    const evaluation = await evaluator.evaluate({
+      ...input(policy),
+      owner: { kind: "phase", id: "verify" },
+      artifact: passingVerificationArtifact(),
+      inputManifest: verificationInputManifest(),
+    });
+
+    expect(evaluation.accepted).toBe(true);
+    expect(evaluation.readings[0]?.result).toMatchObject({
+      verdict: "pass",
+      data: { executionClassification: "simulated", liveProofEligible: false },
+    });
+  });
+
+  it("rejects verification when the current evidence manifest is missing", async () => {
+    const evaluator = new CommandGateEvaluator(repositoryRoot);
+    const policy = verificationPolicy();
+    const evaluation = await evaluator.evaluate({
+      ...input(policy),
+      owner: { kind: "phase", id: "verify" },
+      artifact: passingVerificationArtifact(),
+    });
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "verification-evidence-missing" })]),
+    );
+  });
+
+  it("rejects a schema-valid failing verification candidate", async () => {
+    const evaluator = new CommandGateEvaluator(repositoryRoot);
+    const policy = verificationPolicy();
+    const evaluation = await evaluator.evaluate({
+      ...input(policy),
+      owner: { kind: "phase", id: "verify" },
+      artifact: { ...passingVerificationArtifact(), verdict: "fail" },
+      inputManifest: verificationInputManifest(),
+    });
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "verification-verdict-failed" })]),
+    );
+  });
+
+  it("rejects stale or mismatched verification evidence", async () => {
+    const evaluator = new CommandGateEvaluator(repositoryRoot);
+    const policy = verificationPolicy();
+    const manifest = verificationInputManifest();
+    const verification = manifest.inputs[0];
+    if (verification === undefined) throw new Error("Verification fixture input is missing");
+    const evaluation = await evaluator.evaluate({
+      ...input(policy),
+      owner: { kind: "phase", id: "verify" },
+      artifact: passingVerificationArtifact(),
+      inputManifest: {
+        ...manifest,
+        inputs: [
+          {
+            ...verification,
+            content: {
+              ...verification.content,
+              blockingIssues: [
+                {
+                  code: "repository-evidence-mismatch",
+                  taskId: "task-one",
+                  attempt: 2,
+                  detail: "Task delta identity does not match the current task",
+                },
+              ],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "verification-evidence-blocked" })]),
+    );
+  });
+
+  it("rejects a passing candidate with contradictory checks or unresolved findings", async () => {
+    const evaluator = new CommandGateEvaluator(repositoryRoot);
+    const policy = verificationPolicy();
+    const evaluation = await evaluator.evaluate({
+      ...input(policy),
+      owner: { kind: "phase", id: "verify" },
+      artifact: {
+        ...passingVerificationArtifact(),
+        checks: [{ name: "tests", verdict: "fail", summary: "Tests failed" }],
+        findings: ["Tests remain failing"],
+      },
+      inputManifest: verificationInputManifest(),
+    });
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "verification-check-contradiction" }),
+        expect.objectContaining({ code: "verification-findings-unresolved" }),
+      ]),
+    );
+  });
+
+  it("refuses a required no-op before running repository commands", async () => {
+    const calls: string[] = [];
+    const evaluator = new CommandGateEvaluator(repositoryRoot, {
+      runner: {
+        async execute(command) {
+          calls.push(command);
+          return { exitCode: 0, stdout: "ok", stderr: "" };
+        },
+      },
+    });
+    const policy = taskChangePolicy();
+
+    const evaluation = await evaluator.evaluate({
+      ...input(policy),
+      repositoryChange: "required",
+      repositoryEvidence: repositoryDelta(),
+    });
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "task-change-required-noop" })]),
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it("accepts an in-scope measured delta and reports a worker-claim mismatch", async () => {
+    const evaluator = new CommandGateEvaluator(repositoryRoot, {
+      runner: runnerReturning({ exitCode: 0, stdout: "ok", stderr: "" }),
+    });
+    const policy = taskChangePolicy();
+
+    const evaluation = await evaluator.evaluate({
+      ...input(policy),
+      repositoryChange: "required",
+      repositoryEvidence: repositoryDelta({
+        changedPaths: [{ path: "packages/application/src/run.ts", status: " M", digest: "b" }],
+        inScopeChanges: ["packages/application/src/run.ts"],
+        workerClaim: { reported: true, changed: false, agreement: "disagree" },
+      }),
+    });
+
+    expect(evaluation.accepted).toBe(true);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "worker-change-claim-mismatch" })]),
+    );
+    expect(evaluation.readings.map((reading) => reading.sensorId)).toEqual([
+      "task-change",
+      "check",
+    ]);
+  });
+
+  it.each([
+    ["out-of-scope", { outOfScopeChanges: ["README.md"] }, "task-change-out-of-scope"],
+    ["frozen", { frozenChanges: [".senawa/sensors.yaml"] }, "task-change-frozen"],
+  ] as const)("refuses %s measured changes", async (_name, override, code) => {
+    const evaluator = new CommandGateEvaluator(repositoryRoot, {
+      runner: runnerReturning({ exitCode: 0, stdout: "ok", stderr: "" }),
+    });
+    const policy = taskChangePolicy();
+    const path =
+      "outOfScopeChanges" in override ? override.outOfScopeChanges[0] : override.frozenChanges[0];
+
+    const evaluation = await evaluator.evaluate({
+      ...input(policy),
+      repositoryChange: "required",
+      repositoryEvidence: repositoryDelta({
+        changedPaths: [{ path, status: " M", digest: "c" }],
+        inScopeChanges: ["packages/application/src/run.ts"],
+        ...override,
+      }),
+    });
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code })]),
+    );
+  });
+
+  it("runs configured checks after a valid delta and rejects their failure", async () => {
+    const evaluator = new CommandGateEvaluator(repositoryRoot, {
+      runner: runnerReturning({ exitCode: 1, stdout: "", stderr: "failed" }),
+    });
+    const policy = taskChangePolicy();
+
+    const evaluation = await evaluator.evaluate({
+      ...input(policy),
+      repositoryChange: "required",
+      repositoryEvidence: repositoryDelta({
+        changedPaths: [{ path: "packages/domain/src/runtime.ts", status: " M", digest: "d" }],
+        inScopeChanges: ["packages/domain/src/runtime.ts"],
+      }),
+    });
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.readings.map((reading) => reading.sensorId)).toEqual([
+      "task-change",
+      "check",
+    ]);
+  });
 });
+
+function taskChangePolicy(): RepositoryPolicy {
+  return RepositoryPolicySchema.parse({
+    version: 1,
+    extensions: [{ package: "@senawa/sensor-task-change" }, { package: "@senawa/sensor-command" }],
+    sensors: [
+      {
+        id: "task-change",
+        extension: "@senawa/sensor-task-change",
+        kind: "deterministic",
+        description: "Measured task change",
+        cost: "cheap",
+        trust: "blocking",
+        scope: [],
+        config: { evidenceKind: "repository-delta" },
+      },
+      commandSensor("check", "focused-check", "standard"),
+    ],
+    gates: [
+      {
+        id: "task-gate",
+        description: "Task gate",
+        checks: [
+          {
+            sensor: "task-change",
+            expect: { path: "/verdict", operator: "equals", value: "pass" },
+          },
+          { sensor: "check", expect: { path: "/verdict", operator: "equals", value: "pass" } },
+        ],
+        onFail: "rework",
+      },
+    ],
+    frozen: [".senawa/**"],
+  });
+}
+
+function verificationPolicy(): RepositoryPolicy {
+  return RepositoryPolicySchema.parse({
+    version: 1,
+    extensions: [{ package: "@senawa/sensor-artifact" }],
+    sensors: [
+      {
+        id: "verification-current",
+        extension: "@senawa/sensor-artifact",
+        kind: "deterministic",
+        description: "Current verification evidence",
+        cost: "cheap",
+        trust: "blocking",
+        scope: [],
+        config: { artifactKind: "verification-output" },
+      },
+    ],
+    gates: [
+      {
+        id: "work-done",
+        description: "Work is verified",
+        checks: [
+          {
+            sensor: "verification-current",
+            expect: { path: "/verdict", operator: "equals", value: "pass" },
+          },
+        ],
+        onFail: "block",
+      },
+    ],
+    frozen: [".senawa/sensors.yaml"],
+  });
+}
+
+function passingVerificationArtifact(): JsonObject {
+  return {
+    verdict: "pass",
+    summary: "Current evidence passes",
+    checks: [{ name: "tests", verdict: "pass", summary: "Tests passed" }],
+    findings: [],
+  };
+}
+
+function verificationInputManifest(): ResolvedInputManifest {
+  const content: JsonObject = {
+    kind: "verification-manifest",
+    executionClassification: "simulated",
+    liveProofEligible: false,
+    acceptedArtifacts: [],
+    tasks: [
+      {
+        key: "task-one",
+        outcome: { status: "closed", attempt: 2 },
+        repositoryEvidence: {
+          path: "evidence/repository/tasks/task-one/delta.json",
+          digest: "d".repeat(64),
+        },
+        gateEvidence: [
+          {
+            gateId: "task-done",
+            sensorId: "task-change",
+            verdict: "pass",
+            matched: true,
+            advisory: false,
+            accepted: true,
+            summary: "Task change passed",
+            evidencePaths: ["evidence/repository/tasks/task-one/delta.json"],
+          },
+        ],
+        blockingIssues: [],
+      },
+    ],
+    readPaths: [
+      {
+        kind: "repository-delta",
+        path: "evidence/repository/tasks/task-one/delta.json",
+        readPath:
+          ".agents/.copilot-tracking/run-sensors/evidence/repository/tasks/task-one/delta.json",
+        digest: "d".repeat(64),
+      },
+      {
+        kind: "deterministic-gate-evidence",
+        path: "evidence/repository/tasks/task-one/delta.json",
+        readPath:
+          ".agents/.copilot-tracking/run-sensors/evidence/repository/tasks/task-one/delta.json",
+      },
+    ],
+    blockingIssues: [],
+  };
+  return {
+    version: 1,
+    inputs: [
+      {
+        name: "implementation",
+        reference: "evidence.implementation",
+        ownerKind: "evidence",
+        ownerId: "implementation",
+        path: "evidence/implementation/v2.json",
+        version: 2,
+        digest: "e".repeat(64),
+        schemaKind: "senawa.dev/verification-manifest/v1",
+        summary: { blockingIssueCount: 0 },
+        content,
+      },
+    ],
+  };
+}
+
+function repositoryDelta(
+  overrides: Partial<RepositoryDeltaEvidence> = {},
+): RepositoryDeltaEvidence {
+  return {
+    version: 1,
+    kind: "repository-delta",
+    runId: "run-sensors",
+    taskId: "task-one",
+    attempt: 2,
+    dispatchId: "dispatch-one",
+    turnId: "turn-one",
+    expectation: "required",
+    baselineDigest: "a".repeat(64),
+    headBefore: "head",
+    headAfter: "head",
+    preExistingChanges: [],
+    changedPaths: [],
+    inScopeChanges: [],
+    outOfScopeChanges: [],
+    frozenChanges: [],
+    uncertainty: [],
+    workerClaim: { reported: false, changed: null, agreement: "unreported" },
+    capturedAt: "2026-08-07T00:00:00.000Z",
+    digest: "b".repeat(64),
+    evidencePath: "evidence/repository/tasks/task-one/delta.json",
+    ...overrides,
+  };
+}
 
 function input(policy: RepositoryPolicy) {
   return {

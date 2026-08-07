@@ -2,7 +2,17 @@ version: 1
 extensions:
   - package: "@senawa/sensor-artifact"
   - package: "@senawa/sensor-command"
+  - package: "@senawa/sensor-task-change"
 sensors:
+  - id: task-change
+    extension: "@senawa/sensor-task-change"
+    kind: deterministic
+    description: Confirm that measured task changes satisfy scope and intent
+    cost: cheap
+    trust: blocking
+    scope: []
+    config:
+      evidenceKind: repository-delta
   - id: artifact-present
     extension: "@senawa/sensor-artifact"
     kind: deterministic
@@ -12,6 +22,15 @@ sensors:
     scope: []
     config:
       artifactKind: phase-output
+  - id: verification-current
+    extension: "@senawa/sensor-artifact"
+    kind: deterministic
+    description: Confirm that current verification passed with resolvable evidence
+    cost: cheap
+    trust: blocking
+    scope: []
+    config:
+      artifactKind: verification-output
   - id: typecheck
     extension: "@senawa/sensor-command"
     kind: deterministic
@@ -58,6 +77,8 @@ gates:
   - id: task-done
     description: Implementation satisfies workspace type-check and test policy
     checks:
+      - sensor: task-change
+        expect: { path: /verdict, operator: equals, value: pass }
       - sensor: typecheck
         expect: { path: /verdict, operator: equals, value: pass }
       - sensor: unit-tests
@@ -66,9 +87,11 @@ gates:
     maxRework: 3
     escalateOnExhaustion: true
   - id: work-done
-    description: Verification artifact is present and schema-valid
+    description: Current verification passes with resolvable, non-contradictory evidence
     checks:
       - sensor: artifact-present
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: verification-current
         expect: { path: /verdict, operator: equals, value: pass }
     onFail: block
     escalateOnExhaustion: true

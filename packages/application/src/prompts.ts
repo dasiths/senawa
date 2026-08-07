@@ -1,9 +1,15 @@
-import type { RuntimePhase, RuntimeState, RuntimeTask } from "@senawa/domain";
+import type {
+  ResolvedInputManifest,
+  RuntimePhase,
+  RuntimeState,
+  RuntimeTask,
+} from "@senawa/domain";
 
 export function createPhasePrompt(
   state: Pick<RuntimeState, "artifacts" | "identity" | "phases" | "snapshot">,
   phase: RuntimePhase,
   iteration: number,
+  inputManifest: ResolvedInputManifest = { version: 1, inputs: [] },
 ): string {
   const definition = state.snapshot.workflow.spec.phases.find(
     (candidate) => candidate.id === phase.id,
@@ -17,14 +23,6 @@ export function createPhasePrompt(
   if (schemaFile === undefined) {
     throw new Error(`Phase ${phase.id} frozen output schema is missing: ${schemaPath}`);
   }
-  const dependencyArtifacts = Object.fromEntries(
-    definition.dependsOn.flatMap((dependency) => {
-      const artifact = state.artifacts
-        .filter((candidate) => candidate.phaseId === dependency)
-        .sort((left, right) => right.version - left.version)[0];
-      return artifact === undefined ? [] : [[dependency, artifact.content]];
-    }),
-  );
   const dependencyPhases = Object.fromEntries(
     definition.dependsOn.map((dependency) => {
       const runtimePhase = state.phases.find((candidate) => candidate.id === dependency);
@@ -46,7 +44,7 @@ export function createPhasePrompt(
         "Use repository-relative paths only. Never guess an absolute repository root.",
     },
     dependencyPhases,
-    dependencyArtifacts,
+    inputManifest,
     ...(definition.actions?.some((action) => action.kind === "import-plan") &&
     taskFrontier?.executor.kind === "task-frontier"
       ? {
@@ -79,14 +77,37 @@ function resolveSnapshotPath(base: string, reference: string): string {
   return parts.join("/");
 }
 
-export function createTaskPrompt(state: RuntimeState, task: RuntimeTask, attempt: number): string {
+export function createTaskPrompt(
+  state: RuntimeState,
+  task: RuntimeTask,
+  attempt: number,
+  inputManifest: ResolvedInputManifest = {
+    version: 1,
+    inputs: task.inheritedInputs ?? [],
+  },
+): string {
+  const dependencyOutcomes = task.dependsOn.map((dependency) => {
+    const resolved = state.tasks.find((candidate) => candidate.key === dependency);
+    return {
+      key: dependency,
+      status: resolved?.status ?? "missing",
+      attempt: resolved?.attempt ?? 0,
+    };
+  });
   return JSON.stringify({
     kind: "task",
     task: task.key,
+    title: task.title,
     attempt,
     goal: state.identity.request.goal,
+    constraints: state.identity.request.constraints,
+    role: task.role,
     paths: task.paths,
+    repositoryChange: task.repositoryChange,
     acceptance: task.acceptance,
+    sourcePlan: task.sourcePlan ?? null,
+    inputManifest,
+    dependencyOutcomes,
     steering: task.steering,
     gateFeedback:
       task.reworkFeedback ??

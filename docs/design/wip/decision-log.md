@@ -43,6 +43,70 @@ Copy this section for each idea and update it in place as the idea matures.
 
 ## Decisions
 
+### 2026-08-07: Live execution, exact evidence, approval presentation, and tmux
+
+* Status: `probing`
+* Owner: `docs/design/01-system-model.md`,
+    `docs/design/02-workflows-and-lifecycle.md`,
+    `docs/design/03-agents-and-interaction.md`,
+    `docs/design/04-sensors-gates-and-enforcement.md`,
+    `docs/design/05-runtime-and-state.md`,
+    `docs/design/06-provenance-and-observability.md`, and
+    `docs/design/07-implementation-and-operations.md`
+* Question: Can Senawa make live SDK execution the explicit persisted default,
+    bind phase and task outcomes to exact consumed and repository evidence,
+    present immutable approval artifacts without transferring human authority,
+    and project stable per-turn tmux terminals without entering worker sessions?
+* Context: Simulated run `run-7a3b2318-05ad-4431-a827-fc74577fce9e`
+    completed the lifecycle without changing repository files. It exposed
+    false-success paths but provides no live-model or tmux evidence.
+* Options: Retain implicit simulation and aggregate evidence, or require an
+    explicit persisted worker host with no live-to-simulation fallback, exact
+    evidence manifests and repository deltas, artifact-bound approval
+    presentation, and a separately proven terminal substrate
+* Evidence needed: For the live default, an authenticated catalog-confirmed SDK
+    workflow must persist and resume the selected host, report the invoked
+    adapter and resolved model, and stop rather than simulate after live-host
+    failure.
+* Evidence needed: For exact evidence, phase and task prompts, artifact
+    provenance, repository deltas, gates, recovery, and verification must resolve
+    the same versioned inputs; required no-op work and failing verification must
+    be refused.
+* Evidence needed: For approval presentation, CLI and browser projections must
+    bind path, version, and digest to a bounded recommendation-free overview and
+    complete artifact access, while only an explicit human choice authorizes the
+    decision.
+* Evidence needed: For tmux, a no-credit deterministic-shell probe must measure
+    stable session and pane identity, bounded capture, detach and reconnect,
+    exit status, sanitization, and independent browser-terminal projection
+    before any separately cost-labeled live run.
+* Probe: `experiments/probes/worker-sessions/README.md`, with live workflow,
+    evidence, and approval checks planned in the existing orchestration subject
+* Outcome: `accepted offline` for canonical host naming and persistence, explicit
+    simulation, no-fallback composition, exact input manifests, trusted
+    repository deltas, schema-aware verification, artifact-bound presentation,
+    version-bound decisions, and report classification. Production adapters and
+    application paths passed offline tests, including a measured temporary Git
+    repository. These results do not establish authenticated model availability
+    or live execution quality.
+* Outcome: `accepted offline` for the bounded, sanitized, independently keyed
+    per-turn browser projection fixture. Two no-credit tests passed on
+    2026-08-07. This does not establish production browser integration with
+    tmux-hosted workers.
+* Outcome: `documentation-only skip` for tmux in the recorded Debian 12
+    environment because tmux was unavailable. Session and pane identity,
+    capture, detach and reconnect, exit status, disappearance, and cleanup remain
+    unmeasured.
+* Outcome: `measured` for authenticated Sonnet 5 and Opus 5 catalog availability
+    on 2026-08-07. `senawa doctor --live` resolved every configured role to its
+    exact requested model and the implementor's preferred `high` effort without
+    invoking a model. A complete live SDK workflow, live model quality and
+    telemetry, and tmux substrate behavior remain pending. The overall decision
+    and tmux production design remain `probing`.
+* Promotion: Offline contracts are promoted to the owning numbered guides and
+    linked to [Live default and evidence contracts](probe-findings.md#live-default-and-evidence-contracts).
+    Live-model and tmux claims remain unpromoted.
+
 ### 2026-08-06: Durable browser command receipts
 
 * Status: `accepted`

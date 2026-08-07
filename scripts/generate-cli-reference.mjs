@@ -8,6 +8,8 @@ const outputPath = resolve(root, "docs/reference/cli.md");
 const groups = [
   [],
   ["doctor"],
+  ["model"],
+  ["model", "list"],
   ["workflow"],
   ["workflow", "list"],
   ["workflow", "info"],

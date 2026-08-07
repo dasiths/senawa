@@ -4,9 +4,9 @@ import { resolve } from "node:path";
 const arguments_ = process.argv.slice(2);
 const confirmed = arguments_.includes("--confirm-cost");
 const goal = optionValue(arguments_, "--goal") ?? "Exercise the Senawa live worker path";
-const host = optionValue(arguments_, "--host") ?? "sdk";
-if (!new Set(["sdk", "copilot"]).has(host)) {
-  throw new Error("--host must be sdk or copilot");
+const host = optionValue(arguments_, "--host") ?? "copilot-sdk";
+if (!new Set(["copilot-sdk", "copilot-subprocess"]).has(host)) {
+  throw new Error("--host must be copilot-sdk or copilot-subprocess");
 }
 
 process.stderr.write(

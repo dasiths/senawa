@@ -3,7 +3,7 @@ import type { RunPersistencePort, WorkerEventRecord } from "./ports.js";
 
 export type RunReportProjection = Pick<
   RuntimeState,
-  "identity" | "status" | "endReason" | "phases" | "tasks"
+  "identity" | "status" | "endReason" | "phases" | "tasks" | "artifacts" | "dispatches"
 > & {
   readonly artifactCount: number;
   readonly journal: readonly JournalEvent[];
@@ -32,6 +32,8 @@ export class RunReportEvidenceReader implements ReportEvidenceReaderPort {
       endReason: state.endReason,
       phases: state.phases,
       tasks: state.tasks,
+      artifacts: state.artifacts,
+      dispatches: state.dispatches,
       artifactCount: state.artifacts.length,
       journal: state.journal,
       outputs: Object.values(state.outputs)

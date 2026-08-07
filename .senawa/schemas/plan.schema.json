@@ -25,6 +25,10 @@
             "minItems": 1,
             "items": { "type": "string", "minLength": 1 }
           },
+          "repositoryChange": {
+            "enum": ["required", "optional", "forbidden"],
+            "default": "required"
+          },
           "acceptance": {
             "type": "array",
             "minItems": 1,
@@ -37,6 +41,7 @@
             "properties": {
               "model": { "type": "string", "minLength": 1 },
               "effort": { "enum": ["low", "medium", "high", "xhigh"] },
+              "effortMode": { "enum": ["required", "preferred"] },
               "group": { "$ref": "#/$defs/identifier" }
             }
           }

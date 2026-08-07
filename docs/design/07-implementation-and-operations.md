@@ -5,7 +5,7 @@
 Senawa now has a production vertical slice across the domain, configuration,
 application, file and Beads runtimes, artifact, observability, workers, sensors,
 browser, reporting, CLI, and hook packages. The executable path validates repository definitions,
-runs the standard workflow with deterministic workers, persists versioned
+defaults new worker-producing runs to the Copilot SDK host, persists versioned
 artifacts and append-only evidence, accepts CLI and browser decisions through
 the same application commands and queries, streams output over SSE, and renders
 a run report.
@@ -33,10 +33,10 @@ phase or task ceiling.
 The user-facing skill stays under `.agents/skills/senawa/` only because Copilot
 discovers it there; it is not runtime worker configuration.
 
-`@senawa/workers` owns deterministic, recording, subprocess, and Copilot SDK
+`@senawa/workers` owns simulated, recording, Copilot subprocess, and Copilot SDK
 adapters behind an application lifecycle port. The port separates create,
 resume, inspect, cancel, release, negotiation, normalized events, and typed
-binding contracts. Offline conformance covers deterministic lifecycle behavior,
+binding contracts. Offline conformance covers simulated lifecycle behavior,
 a recording fake subprocess executable, and an injected fake SDK client against
 the pinned 1.0.7 declarations. The SDK adapter registers events before create or
 resume, binds native Senawa tools, applies canonical permission policy without
@@ -46,13 +46,19 @@ delete. It reports session-only inspection and no replay because Senawa durable
 events, not experimental SDK cursors, own replay. No live Copilot subprocess or
 SDK transport was exercised.
 
-> **NOTE:** Offline conformance uses deterministic adapters, a bounded recording
-> fake executable, and an injected fake SDK client. Live SDK session execution is
-> unvalidated.
+> **NOTE:** Offline conformance uses the simulated adapter, a bounded recording
+> fake executable, and an injected fake SDK client. A connected no-invocation
+> diagnostic resolved the configured Sonnet 5 and Opus 5 IDs on 2026-08-07;
+> live SDK session execution remains unvalidated.
 
-The CLI selects this adapter explicitly with `--worker-host sdk`; constructing
-ordinary deterministic, browser, and diagnostic commands does not resolve or
-start the SDK runtime.
+The CLI defaults new work to canonical `--worker-host copilot-sdk` and persists
+that host and adapter version in immutable run identity. Explicit
+`--worker-host simulated` is reserved for tests, offline demos, and no-credit
+probes. Read-only status, report, browser, workflow, and ordinary doctor commands
+resolve no worker host and do not start Copilot. `senawa doctor --live` and
+`senawa model list` are explicit connected diagnostics. Startup and dispatch
+fail closed on host, catalog, capability, model, or required-effort errors; no
+live failure falls back to simulation.
 
 The `senawa` app composes Beads when `--runtime` is omitted. Explicit global
 `--runtime file` selects the development and test adapter. It does not catch a
@@ -102,16 +108,18 @@ from fresh `bd list --all` output so a
 long-lived portal observes independent process commits. `@senawa/reporting`
 reads an application-owned evidence projection and escapes untrusted Markdown,
 HTML, control characters, and instruction-like tags with deterministic caps. It
-renders all eight documented process sections and aggregates cumulative AIU and
-cost checkpoints once per dispatch. Internal compatibility packages were
+renders canonical execution identity, exact consumed manifests, trusted task
+evidence, process history, and cumulative usage and cost once per dispatch.
+Internal compatibility packages were
 removed after all imports moved to final owners.
 
-The [probe findings](wip/probe-findings.md) distinguish live-model evidence,
-offline deterministic simulation, and documentation-only claims.
+The [probe findings](wip/probe-findings.md#live-default-and-evidence-contracts)
+record the Phase 1 through 7 contracts as offline or simulated evidence. Live
+SDK role-model quality and tmux behavior remain unvalidated or probing.
 
 ## Technology choice
 
-Implement the core in TypeScript on Node.js 22 or later.
+Implement the core in TypeScript on Node.js 22.12 or later.
 
 The choice is based on one toolchain across the CLI, orchestrator, graph adapter,
 sensor schemas, and report renderer; acceptable bundled hook startup; and rapid
@@ -133,7 +141,7 @@ the documented `bd --json` contract with `BD_JSON_ENVELOPE=1`.
 | `@senawa/artifact-store` | Immutable run identity, snapshot, and versioned artifact documents |
 | `@senawa/observability` | Append-only journal and output JSONL, stable cursors, notification hints, and future telemetry seams |
 | `@senawa/testing` | Shared adapter contracts and deterministic fixtures; production packages do not import it |
-| `@senawa/workers` | Deterministic, recording, subprocess, and Copilot SDK lifecycle adapters, capability negotiation, authorization, normalized events, native typed bindings, and fake-client conformance |
+| `@senawa/workers` | Simulated, recording, Copilot subprocess, and Copilot SDK lifecycle adapters, capability negotiation, authorization, normalized events, native typed bindings, and fake-client conformance |
 | `@senawa/sensors` | Application gate port implementation, ordered built-in artifact or command execution, normalization, cache identity, and evidence spill seams; generic extension loading pending |
 | `@senawa/browser` | Authenticated loopback HTTP routes, strict command schemas, asynchronous receipt projection, durable SSE replay, static graph assets, and application command/query consumption |
 | `@senawa/reporting` | Report renderer and untrusted Markdown hygiene over application evidence projections |
@@ -178,9 +186,9 @@ The current workspace exposes `pnpm bundle:check` for CLI and hook startup,
 `pnpm demo` for the isolated file-backed no-credit browser workflow,
 `pnpm demo:beads` for the equivalent real-Beads workflow, and `pnpm demo:live`
 for the guarded Copilot implementation-worker path using `--runtime file`. Each
-offline demo terminates
-its supervisor by default; `pnpm demo -- --keep-server` is the explicit
-inspection mode. Its temporary repository runs real command sensors: typecheck
+offline demo selects the simulated worker host explicitly and terminates its
+supervisor by default; `pnpm demo -- --keep-server` is the explicit inspection
+mode. Its temporary repository runs real command sensors: typecheck
 passes, while tests fail on attempt 1 and pass on attempt 2 to prove deterministic
 rework without AI credits.
 
@@ -196,14 +204,14 @@ rejection. `pnpm demo` completed with explicit `--runtime file` throughout.
 browser workflow with two dependency-ordered tasks, two deterministic rework
 events, 77 journal events, 27 output records, five immutable artifacts, eight
 Beads graph nodes, and no mutable runtime JSON blob. These are real Beads and
-deterministic-worker measurements, not live Copilot evidence.
+simulated-worker measurements, not live Copilot evidence.
 
 On 2026-08-05, the offline Phase 9 suite passed 96 tests across 20 files in
 220.14 seconds. The isolated eight-test real-Beads contract passed in 218.79
 seconds. Boundary checks, typecheck, protected-safe Biome lint, build, bundle
 startup, CLI generation, Markdown links, and diff hygiene passed. The file and
 Beads demos each completed with 77 journal events, 81 normalized worker events,
-27 output records, all eight report sections, zero AIU or cost, and no Copilot
+27 output records, the then-current eight report sections, zero AIU or cost, and no Copilot
 invocation. The bounded fake-subprocess acceptance proved create and resume
 arguments with a local executable and one-second timeout. Paid live evidence
 remains separately approval-gated and unrun.
@@ -226,7 +234,7 @@ The command surface is grouped by responsibility:
 | Sensor management | `sensor list`, `info` | Human, CI, driver |
 | Sensor audit | `sensor audit [<run>]` | Human, CI |
 | Workflow management | `workflow list`, `info`, `validate`, `render` | Human or principal agent |
-| Diagnostics | `doctor`, `work report` | All trusted operational callers |
+| Diagnostics | `doctor`, `doctor --live`, `model list`, `work report` | All trusted operational callers |
 
 `senawa browser [<run>]` is the user-facing console command. It creates a fresh
 high-entropy bootstrap capability, opens it through the configured system
@@ -304,8 +312,12 @@ alerts for hook latency and sensor drift.
 Each implementation slice should preserve these executable properties:
 
 * Invalid configuration fails before any model dispatch.
+* New work persists the selected canonical worker host and never falls back from
+	live execution to simulation.
 * A worker cannot resolve `bd` or mutate graph state directly.
 * A red gate prevents task closure and returns actionable findings.
+* A required no-op or out-of-scope task delta prevents task closure.
+* A failing or stale verification artifact prevents work completion.
 * Deleting the projection cache does not change resumed state.
 * A crash between intent and outcome reconciles without duplicate work.
 * Closed tasks survive additive plan revision.
@@ -320,13 +332,14 @@ Each implementation slice should preserve these executable properties:
 | Command hook timeout fails open | Keep policy hooks fast and instrument latency |
 | SDK has no stop hooks | Driver owns the explicit retry loop |
 | Model `Auto` overrides profile model | Pin a model for every dispatched session |
-| Some models reject reasoning effort | Resolve hints through a capability table |
+| Some models reject reasoning effort | Fail required effort; degrade only an explicit preference through the connected catalog |
 | Beads reads take hundreds of milliseconds | Cache reads and never call beads from hooks |
 | `bd list` hides closed work by default | Reconstruct with `--all` and filter events |
 | `bd batch` cannot write metadata | Keep metadata updates as explicit calls |
 | Worktrees share one beads database | Serialize graph writes through Senawa |
 | Session picker has no hidden-session flag | Use isolated `COPILOT_HOME` or `baseDirectory` |
 | Inferential output can vary | Start advisory and promote only for measured scopes |
+| Tmux worker terminals are unproven | Keep the existing worker-session question probing until Phase 8 measures it |
 
 ## Open decisions
 

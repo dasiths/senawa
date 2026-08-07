@@ -21,7 +21,7 @@ boundaries, bundles, sensor evidence, and the complete provenance report.
 Run the demo from the root of a clean, committed Senawa checkout with no active
 Senawa run and these commands on `PATH`:
 
-* Node.js 22 or later
+* Node.js 22.12 or later
 * pnpm
 * Git
 * Beads (`bd`)

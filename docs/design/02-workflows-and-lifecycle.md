@@ -80,6 +80,9 @@ spec:
         kind: agent
         role: planner
         resumeAcrossIterations: true
+        input:
+          definition: phases.define.output
+          research: phases.research.output
         output:
           path: artifacts/plan.json
           schema: ../schemas/plan.schema.json
@@ -100,6 +103,7 @@ spec:
         role: implementor
         selector:
           phase: implement
+        repositoryChanges: [required]
         concurrency: 1
         reentrant: true
       loop:
@@ -122,6 +126,11 @@ spec:
         kind: agent
         role: verifier
         resumeAcrossIterations: true
+        input:
+          definition: phases.define.output
+          research: phases.research.output
+          plan: phases.plan.output
+          implementation: evidence.implementation
         output:
           path: artifacts/verification.json
           schema: ../schemas/verification.schema.json
@@ -197,6 +206,14 @@ artifacts/
 Each phase iteration records the exact upstream versions it consumed. Session
 memory provides continuity, but the artifact remains the source of truth.
 
+`dependsOn` controls readiness. `executor.input` controls dataflow through the
+closed `phases.<phase>.output` and `evidence.implementation` reference grammar.
+Before dispatch, Senawa resolves each input to one manifest entry containing the
+logical name, owner, path, version, digest, schema kind, bounded summary, and
+content. The same manifest drives the prompt, dispatch recovery, artifact
+`consumed` provenance, verification context, and report. An accepted artifact
+never claims an available but undeclared input.
+
 ### Upstream changes
 
 | Policy | Behavior | Typical use |
@@ -234,11 +251,13 @@ scope:
       "title": "Split parse_batch into stages",
       "dependsOn": ["extract-reader"],
       "paths": ["src/ingest/parse.py"],
+      "repositoryChange": "required",
       "acceptance": ["parse_batch delegates to named stage functions"],
       "role": "implementor",
       "execution": {
-        "model": "claude-sonnet-4.6",
+        "model": "claude-sonnet-5",
         "effort": "high",
+        "effortMode": "preferred",
         "group": "ingest-adapters"
       }
     }
@@ -251,6 +270,7 @@ scope:
 | `key` | Stable identity across plan revisions |
 | `dependsOn` | Beads dependency edges |
 | `paths` | Enforced write scope |
+| `repositoryChange` | Required, optional, or forbidden trusted repository-delta policy |
 | `acceptance` | Task brief and completion contract |
 | `role` | Worker profile selection |
 | `execution` | Portable dispatch hints |
@@ -285,8 +305,9 @@ metadata:
   name: implementor
 spec:
   model:
-    id: claude-sonnet-4.6
+    id: claude-sonnet-5
     effort: high
+    effortMode: preferred
   tools:
     - repository.read
     - repository.edit
@@ -305,12 +326,22 @@ The filename stem must equal `metadata.name`. Unknown frontmatter fields and
 capabilities are invalid. Version 1 recognizes `repository.read`,
 `repository.edit`, `process.run`, `senawa.task.done`, `senawa.phase.submit`,
 `senawa.ask`, and `senawa.discover`. Model effort, when present, is `low`,
-`medium`, `high`, or `xhigh`.
+`medium`, `high`, or `xhigh`. `effortMode` is `required` or `preferred`.
+Unsupported required effort stops preflight; unsupported preferred effort may
+resolve to the catalog default and remains visible as requested versus resolved
+metadata.
 
 Startup validates every static workflow role. Plan import validates each dynamic
 task role before creating tasks. Missing roles fail closed. Task execution model
 and effort hints override profile defaults for that dispatch, but cannot alter
 capabilities.
+
+The repository currently requests Sonnet 5 and Opus 5 role IDs. These are
+configuration requests, not evidence of invocation. New work must confirm each
+exact ID and effort through the authenticated SDK catalog before the run is
+created. A connected `doctor --live` diagnostic resolved the configured IDs on
+2026-08-07 without invoking a model; invocation and role quality remain
+unvalidated until an explicitly approved paid workflow probe.
 
 Snapshot version 2 stores the parsed profile and exact source file. Its source
 digest contributes to the repository fingerprint, and each turn receives the
@@ -333,6 +364,13 @@ A phase may declare one of two approval channels:
 A sensor gate and a human approval are separate conditions. The sensor gate can
 be recomputed from readings. Approval is a durable event represented by a beads
 human gate. A crash between those conditions does not lose either result.
+
+The approval object is one immutable artifact identified by path, version, and
+digest. `senawa phase brief` returns that identity, an attributed bounded
+overview, deterministic structural counts, and the complete-artifact command.
+Approve and reject accept expected version and digest guards and refuse a stale
+decision. The [offline evidence](wip/probe-findings.md#live-default-and-evidence-contracts)
+covers exact input manifests, task provenance, and artifact-bound decisions.
 
 ## Exit and resume
 

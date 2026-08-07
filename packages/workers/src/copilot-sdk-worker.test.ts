@@ -269,16 +269,20 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     ).toMatchObject({ kind: "reject", feedback: expect.stringContaining("unbound") });
   });
 
-  it("discovers models and records unsupported effort as a negotiated degradation", async () => {
+  it("discovers models, degrades preferred effort, and refuses unsupported required effort", async () => {
     const { adapter, client } = fixture();
     const plan = await adapter.negotiate({
       requiredCapabilities: ["repository.read", "senawa.note"],
       preferredCapabilities: [],
       requireResume: true,
       requirePathEnforcement: true,
-      requestedModel: { id: "fake-model", effort: "xhigh" },
+      requestedModel: { id: "fake-model", effort: "xhigh", effortMode: "preferred" },
     });
-    expect(plan.resolvedModel).toEqual({ id: "fake-model", effort: "medium" });
+    expect(plan.resolvedModel).toEqual({
+      id: "fake-model",
+      effort: "medium",
+      effortMode: "preferred",
+    });
     expect(plan.unsupportedPreferences).toEqual(["reasoning-effort:xhigh"]);
     expect(plan.toolTransport).toBe("native");
     expect(plan.adapter.features).toMatchObject({
@@ -290,8 +294,16 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     });
     const executed = {
       ...turn,
-      requestedModel: { id: "fake-model", effort: "xhigh" as const },
-      resolvedModel: { id: "fake-model", effort: "xhigh" as const },
+      requestedModel: {
+        id: "fake-model",
+        effort: "xhigh" as const,
+        effortMode: "preferred" as const,
+      },
+      resolvedModel: {
+        id: "fake-model",
+        effort: "xhigh" as const,
+        effortMode: "preferred" as const,
+      },
     };
     await adapter.execute(executed);
     expect(client.createConfigs.at(-1)?.reasoningEffort).toBe("medium");
@@ -303,6 +315,22 @@ describe("Copilot SDK worker adapter offline conformance", () => {
         requestedModel: { id: "missing-model" },
       }),
     ).rejects.toThrow("model is unavailable");
+    await expect(
+      adapter.negotiate({
+        requiredCapabilities: ["repository.read"],
+        requireResume: false,
+        requirePathEnforcement: false,
+        requestedModel: { id: "fake-model", effort: "xhigh", effortMode: "required" },
+      }),
+    ).rejects.toThrow("does not support required effort xhigh");
+    expect(await adapter.listModels()).toEqual([
+      {
+        id: "fake-model",
+        name: "Fake model",
+        supportedEfforts: ["low", "medium", "high"],
+        defaultEffort: "medium",
+      },
+    ]);
   });
 
   it("maps explicit cancellation to abort and reports cancelled inspection", async () => {
