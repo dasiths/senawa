@@ -1,9 +1,11 @@
 import {
+  type BrowserRunCommand,
   type CommandActor,
   type GateEvaluation,
   type JournalEventName,
   type JsonObject,
   JsonObjectSchema,
+  type JsonValue,
   type PlanArtifact,
   PlanArtifactSchema,
   type RunSnapshot,
@@ -34,10 +36,50 @@ import type {
   WorkflowCatalogPort,
 } from "./ports.js";
 import { RuntimeRevisionConflictError } from "./ports.js";
-import { projectRunStatus, type RunStatusProjection } from "./projections.js";
+import {
+  type OpenWorkerQuestion,
+  projectOpenWorkerQuestions,
+  projectRunStatus,
+  type RunStatusProjection,
+} from "./projections.js";
 import { createPhasePrompt, createTaskPrompt } from "./prompts.js";
 
 const ansiEscapePattern = new RegExp(`${String.fromCodePoint(27)}\\[[0-?]*[ -/]*[@-~]`, "gu");
+const questionAnswerPollIntervalMs = 250;
+const questionAnswerTimeoutMs = 540_000;
+
+export interface ActiveQuestionTurn {
+  readonly sessionId: string;
+  readonly turnId: string;
+}
+
+export interface WorkerQuestionContext extends ActiveQuestionTurn {
+  readonly owner: { readonly kind: "phase" | "task"; readonly id: string };
+}
+
+export interface AnswerQuestionOptions {
+  readonly submissionId?: string;
+}
+
+export class QuestionUnavailableError extends Error {
+  constructor(readonly reason: "unknown" | "answered" | "stale") {
+    super(`Question is unavailable: ${reason}`);
+    this.name = "QuestionUnavailableError";
+  }
+}
+
+export class QuestionSubmissionConflictError extends Error {
+  constructor() {
+    super("Question answer submission conflicts with an existing submission");
+    this.name = "QuestionSubmissionConflictError";
+  }
+}
+
+export interface WaitForQuestionAnswerOptions {
+  readonly pollIntervalMs?: number;
+  readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
+}
 
 export interface StartRunInput {
   readonly actor: CommandActor;
@@ -140,13 +182,54 @@ export class RunCommandService implements RunDriver {
     return { runId, kind: "started" };
   }
 
+  async executeBrowserCommand(
+    runId: string,
+    command: BrowserRunCommand,
+  ): Promise<TransitionResult> {
+    const actor: CommandActor = { channel: "web" };
+    switch (command.command) {
+      case "approve": {
+        const state = await this.store.readRun(runId);
+        if (!hasCommandEvent(state, command.commandId, "phase.approved")) {
+          await this.approve(runId, command.phaseId, actor, command.note, command.commandId);
+        }
+        return this.resume(runId, actor, command.commandId);
+      }
+      case "reject": {
+        const state = await this.store.readRun(runId);
+        if (!hasCommandEvent(state, command.commandId, "phase.rejected")) {
+          await this.reject(runId, command.phaseId, command.reason, actor, command.commandId);
+        }
+        return this.resume(runId, actor, command.commandId);
+      }
+      case "steer": {
+        const state = await this.store.readRun(runId);
+        if (hasCommandEvent(state, command.commandId, "steering.recorded")) {
+          return { runId, kind: "idle", taskId: command.taskId };
+        }
+        return this.steer(runId, command.taskId, command.instruction, actor, command.commandId);
+      }
+      case "resume":
+        return this.resume(runId, actor, command.commandId);
+      case "end": {
+        const state = await this.store.readRun(runId);
+        if (hasCommandEvent(state, command.commandId, "work.ended")) {
+          return { runId, kind: "ended" };
+        }
+        return this.end(runId, command.reason, actor, {}, command.commandId);
+      }
+    }
+  }
+
   async approve(
     runId: string,
     phaseId: string,
     actor: CommandActor,
     note?: string,
+    commandId?: string,
   ): Promise<TransitionResult> {
     await this.store.updateRun(runId, (state) => {
+      if (commandId !== undefined && hasCommandEvent(state, commandId, "phase.approved")) return;
       assertMutable(state);
       const phase = requirePhase(state, phaseId);
       if (phase.status !== "awaiting_approval") {
@@ -157,6 +240,7 @@ export class RunCommandService implements RunDriver {
         phaseId,
         iteration: phase.iteration,
         ...(note === undefined ? {} : { note }),
+        ...(commandId === undefined ? {} : { commandId }),
       });
       if (workflowPhase(state, phaseId).actions?.some((action) => action.kind === "import-plan")) {
         importPlan(state, phase, actor, this.now());
@@ -171,8 +255,10 @@ export class RunCommandService implements RunDriver {
     phaseId: string,
     reason: string,
     actor: CommandActor,
+    commandId?: string,
   ): Promise<TransitionResult> {
     await this.store.updateRun(runId, (state) => {
+      if (commandId !== undefined && hasCommandEvent(state, commandId, "phase.rejected")) return;
       assertMutable(state);
       const phase = requirePhase(state, phaseId);
       const definition = workflowPhase(state, phaseId);
@@ -189,6 +275,7 @@ export class RunCommandService implements RunDriver {
         phaseId,
         iteration: phase.iteration,
         reason,
+        ...(commandId === undefined ? {} : { commandId }),
       });
     });
     return { runId, kind: "idle", phaseId };
@@ -199,28 +286,44 @@ export class RunCommandService implements RunDriver {
     taskId: string,
     instruction: string,
     actor: CommandActor,
+    commandId?: string,
   ): Promise<TransitionResult> {
     await this.store.updateRun(runId, (state) => {
+      if (commandId !== undefined && hasCommandEvent(state, commandId, "steering.recorded")) return;
       assertMutable(state);
       const task = state.tasks.find((candidate) => candidate.key === taskId);
       if (task === undefined || task.status === "closed" || task.status === "ended") {
         throw new Error(`Task ${taskId} cannot be steered`);
       }
       task.steering.push(instruction);
-      emit(state, "steering.recorded", actor, this.now(), { taskId, instruction });
+      if (task.status === "escalated") {
+        task.status = task.attempt === 0 ? "pending" : "rework";
+        task.dispatchFailures = 0;
+      }
+      emit(state, "steering.recorded", actor, this.now(), {
+        taskId,
+        instruction,
+        ...(commandId === undefined ? {} : { commandId }),
+      });
     });
     return { runId, kind: "idle", taskId };
   }
 
-  async resume(runId: string, actor: CommandActor): Promise<TransitionResult> {
-    await this.store.updateRun(runId, (state) => {
-      assertMutable(state);
-      if (state.status === "awaiting_approval") {
-        throw new Error("The run requires approval or rejection before it can resume");
-      }
-      state.status = "running";
-      emit(state, "work.resumed", actor, this.now(), {});
-    });
+  async resume(runId: string, actor: CommandActor, commandId?: string): Promise<TransitionResult> {
+    const current = await this.store.readRun(runId);
+    if (commandId === undefined || !hasCommandEvent(current, commandId, "work.resumed")) {
+      await this.store.updateRun(runId, (state) => {
+        if (commandId !== undefined && hasCommandEvent(state, commandId, "work.resumed")) return;
+        assertMutable(state);
+        if (state.status === "awaiting_approval") {
+          throw new Error("The run requires approval or rejection before it can resume");
+        }
+        state.status = "running";
+        emit(state, "work.resumed", actor, this.now(), {
+          ...(commandId === undefined ? {} : { commandId }),
+        });
+      });
+    }
     return this.drive(runId, actor);
   }
 
@@ -261,6 +364,7 @@ export class RunCommandService implements RunDriver {
       gateId,
       policy: state.snapshot.policy,
       ...(artifact === undefined ? {} : { artifact }),
+      onOutput: this.sensorOutput(runId, owner),
     });
     await this.store.updateRun(runId, (draft) => {
       assertMutable(draft);
@@ -269,29 +373,98 @@ export class RunCommandService implements RunDriver {
     return evaluation;
   }
 
-  async ask(runId: string, question: string, actor: CommandActor) {
+  async ask(
+    runId: string,
+    question: string,
+    actor: CommandActor,
+    workerContext?: WorkerQuestionContext,
+  ) {
     const questionId = `question-${this.identifiers.createId()}`;
     await this.store.updateRun(runId, (state) => {
       assertMutable(state);
+      if (actor.channel === "worker") {
+        if (workerContext === undefined || actor.sessionId !== workerContext.sessionId) {
+          throw new QuestionUnavailableError("stale");
+        }
+        const active = state.activeTurn;
+        if (
+          state.status !== "running" ||
+          active?.sessionId !== workerContext.sessionId ||
+          active.turnId !== workerContext.turnId ||
+          active.ownerKind !== workerContext.owner.kind ||
+          active.ownerId !== workerContext.owner.id
+        ) {
+          throw new QuestionUnavailableError("stale");
+        }
+        emit(state, "question.asked", actor, this.now(), {
+          questionId,
+          question,
+          sessionId: workerContext.sessionId,
+          turnId: workerContext.turnId,
+          ownerKind: workerContext.owner.kind,
+          ownerId: workerContext.owner.id,
+        });
+        return;
+      }
       emit(state, "question.asked", actor, this.now(), { questionId, question });
     });
     return { runId, questionId };
   }
 
-  async answer(runId: string, questionId: string, answer: string, actor: CommandActor) {
+  async answer(
+    runId: string,
+    questionId: string,
+    answer: string,
+    actor: CommandActor,
+    options: AnswerQuestionOptions = {},
+  ) {
     await this.store.updateRun(runId, (state) => {
+      const replay = state.journal.find((event) => {
+        return (
+          event.event === "question.answered" &&
+          options.submissionId !== undefined &&
+          Reflect.get(event.data, "submissionId") === options.submissionId
+        );
+      });
+      if (replay !== undefined) {
+        if (
+          Reflect.get(replay.data, "questionId") === questionId &&
+          Reflect.get(replay.data, "answer") === answer
+        ) {
+          return;
+        }
+        throw new QuestionSubmissionConflictError();
+      }
       assertMutable(state);
-      const asked = state.journal.some((event) => {
-        const { questionId: recordedQuestionId } = event.data;
-        return event.event === "question.asked" && recordedQuestionId === questionId;
+      const asked = state.journal.find((event) => {
+        return (
+          event.event === "question.asked" && Reflect.get(event.data, "questionId") === questionId
+        );
       });
-      if (!asked) throw new Error(`Unknown question ${questionId}`);
-      const answered = state.journal.some((event) => {
-        const { questionId: recordedQuestionId } = event.data;
-        return event.event === "question.answered" && recordedQuestionId === questionId;
+      if (asked === undefined) throw new QuestionUnavailableError("unknown");
+      const answered = state.journal.some(
+        (event) =>
+          event.event === "question.answered" &&
+          Reflect.get(event.data, "questionId") === questionId,
+      );
+      if (answered) throw new QuestionUnavailableError("answered");
+      if (asked.actor.channel === "worker") {
+        const active = state.activeTurn;
+        if (
+          state.status !== "running" ||
+          active?.sessionId !== Reflect.get(asked.data, "sessionId") ||
+          active.turnId !== Reflect.get(asked.data, "turnId") ||
+          active.ownerKind !== Reflect.get(asked.data, "ownerKind") ||
+          active.ownerId !== Reflect.get(asked.data, "ownerId")
+        ) {
+          throw new QuestionUnavailableError("stale");
+        }
+      }
+      emit(state, "question.answered", actor, this.now(), {
+        questionId,
+        answer,
+        ...(options.submissionId === undefined ? {} : { submissionId: options.submissionId }),
       });
-      if (answered) throw new Error(`Question ${questionId} is already answered`);
-      emit(state, "question.answered", actor, this.now(), { questionId, answer });
     });
     return { runId, questionId };
   }
@@ -352,6 +525,7 @@ export class RunCommandService implements RunDriver {
     reason: string,
     actor: CommandActor,
     options: EndRunOptions = {},
+    commandId?: string,
   ): Promise<TransitionResult> {
     const initial = await this.store.readRun(runId);
     assertMutable(initial);
@@ -385,6 +559,7 @@ export class RunCommandService implements RunDriver {
         : null;
     try {
       await this.store.updateRun(runId, (state) => {
+        if (commandId !== undefined && hasCommandEvent(state, commandId, "work.ended")) return;
         assertMutable(state);
         if (activeTurn !== null && state.activeTurn?.dispatchId === activeTurn.dispatchId) {
           const dispatch = requireDispatch(state, activeTurn.dispatchId);
@@ -426,7 +601,11 @@ export class RunCommandService implements RunDriver {
         state.activeTurn = null;
         state.status = "ended";
         state.endReason = reason;
-        emit(state, "work.ended", actor, this.now(), { reason, forced: options.force === true });
+        emit(state, "work.ended", actor, this.now(), {
+          reason,
+          forced: options.force === true,
+          ...(commandId === undefined ? {} : { commandId }),
+        });
       });
     } finally {
       if (takeover !== null) await this.store.releaseLease(runId, "driver", takeover);
@@ -534,34 +713,19 @@ export class RunCommandService implements RunDriver {
       });
       return { runId: state.identity.runId, kind: "idle", phaseId: phase.id };
     }
-    const priorFailure =
-      active?.ownerKind === "phase"
-        ? undefined
-        : [...state.dispatches]
-            .reverse()
-            .find(
-              (dispatch) =>
-                dispatch.ownerKind === "phase" &&
-                dispatch.ownerId === phase.id &&
-                dispatch.workAttempt === iteration &&
-                dispatch.status === "failed",
-            );
     const operation =
       active?.ownerKind === "phase"
         ? active.operation
-        : (priorFailure?.operation ?? (phase.sessionId === null ? "create" : "resume"));
+        : phase.sessionId === null
+          ? "create"
+          : "resume";
     const sessionId =
       active?.ownerKind === "phase"
         ? active.sessionId
-        : (priorFailure?.sessionId ?? phase.sessionId ?? this.identifiers.createId());
-    const turnId =
-      active?.ownerKind === "phase"
-        ? active.turnId
-        : (priorFailure?.turnId ?? this.identifiers.createId());
+        : (phase.sessionId ?? this.identifiers.createId());
+    const turnId = active?.ownerKind === "phase" ? active.turnId : this.identifiers.createId();
     const operationId =
-      active?.ownerKind === "phase"
-        ? active.operationId
-        : (priorFailure?.operationId ?? this.identifiers.createId());
+      active?.ownerKind === "phase" ? active.operationId : this.identifiers.createId();
     const dispatchId =
       active?.ownerKind === "phase" ? active.dispatchId : this.identifiers.createId();
     if (active?.ownerKind !== "phase") {
@@ -662,6 +826,7 @@ export class RunCommandService implements RunDriver {
       gateId: definition.exit?.gate ?? "none",
       policy: state.snapshot.policy,
       ...(result.artifact === undefined ? {} : { artifact: result.artifact }),
+      onOutput: this.sensorOutput(state.identity.runId, turn.owner),
     });
     await heartbeat.assertActive();
     let transition: TransitionResult = {
@@ -752,19 +917,10 @@ export class RunCommandService implements RunDriver {
     const task = await this.store.claimReadyTask(state.identity.runId);
     if (task === null) return { runId: state.identity.runId, kind: "idle", phaseId: phase.id };
     const attempt = task.attempt + 1;
-    const priorFailure = [...state.dispatches]
-      .reverse()
-      .find(
-        (dispatch) =>
-          dispatch.ownerKind === "task" &&
-          dispatch.ownerId === task.key &&
-          dispatch.workAttempt === attempt &&
-          dispatch.status === "failed",
-      );
-    const operation = priorFailure?.operation ?? (task.sessionId === null ? "create" : "resume");
-    const sessionId = priorFailure?.sessionId ?? task.sessionId ?? this.identifiers.createId();
-    const turnId = priorFailure?.turnId ?? this.identifiers.createId();
-    const operationId = priorFailure?.operationId ?? this.identifiers.createId();
+    const operation = task.sessionId === null ? "create" : "resume";
+    const sessionId = task.sessionId ?? this.identifiers.createId();
+    const turnId = this.identifiers.createId();
+    const operationId = this.identifiers.createId();
     const dispatchId = this.identifiers.createId();
     await this.store.updateRun(state.identity.runId, (draft) => {
       const currentPhase = requirePhase(draft, phase.id);
@@ -862,6 +1018,7 @@ export class RunCommandService implements RunDriver {
       attempt,
       gateId,
       policy: state.snapshot.policy,
+      onOutput: this.sensorOutput(state.identity.runId, turn.owner),
     });
     await heartbeat.assertActive();
     let transition: TransitionResult = {
@@ -968,6 +1125,7 @@ export class RunCommandService implements RunDriver {
         const current = requireTask(draft, task.key);
         current.dispatchFailures += 1;
         current.status = current.attempt === 0 ? "pending" : "rework";
+        current.sessionId = null;
         draft.activeTurn = null;
         emit(draft, "dispatch.failed", { channel: "driver" }, this.now(), {
           taskId: task.key,
@@ -1031,6 +1189,7 @@ export class RunCommandService implements RunDriver {
         const phase = requirePhase(draft, turn.owner.id);
         phase.status = "pending";
         phase.iteration = Math.max(0, turn.attempt - 1);
+        phase.sessionId = null;
         draft.activeTurn = null;
         if (observation.state === "missing") {
           emit(draft, "dispatch.failed", { channel: "driver" }, this.now(), {
@@ -1058,14 +1217,40 @@ export class RunCommandService implements RunDriver {
     };
   }
 
-  private inspectWorkerTurn(turn: WorkerTurn) {
-    return (
-      this.workerHost.inspect?.(turn) ??
-      Promise.resolve({
+  private async inspectWorkerTurn(turn: WorkerTurn) {
+    const observation =
+      (await this.workerHost.inspect?.(turn)) ??
+      ({
         state: "unknown" as const,
         detail: "Worker host does not support inspection",
-      })
+      } as const);
+    if (observation.state === "completed" || observation.state === "active") {
+      return observation;
+    }
+    const records = (await this.store.readWorkerEvents(turn.runId)).filter(
+      (record) =>
+        record.dispatchId === turn.dispatchId &&
+        record.operationId === turn.operationId &&
+        record.event.sessionId === turn.sessionId &&
+        record.event.turnId === turn.turnId,
     );
+    const terminal = records.findLast((record) => record.event.kind === "lifecycle");
+    if (terminal?.event.kind !== "lifecycle" || terminal.event.event !== "completed") {
+      return observation;
+    }
+    const artifact = records.findLast((record) => record.event.kind === "artifact")?.event;
+    return {
+      state: "completed" as const,
+      result: {
+        sessionId: turn.sessionId,
+        ...(artifact?.kind === "artifact" ? { artifact: artifact.artifact } : {}),
+        output: records.flatMap((record) =>
+          record.event.kind === "text" && record.event.delta !== true
+            ? [{ stream: record.event.stream, text: record.event.text }]
+            : [],
+        ),
+      },
+    };
   }
 
   private async executeWorkerSafely(turn: WorkerTurn): Promise<WorkerResult> {
@@ -1097,6 +1282,27 @@ export class RunCommandService implements RunDriver {
     }
   }
 
+  private sensorOutput(
+    runId: string,
+    owner: { readonly kind: "phase" | "task"; readonly id: string },
+  ) {
+    const evaluationId = this.identifiers.createId();
+    let sequence = 0;
+    return async (input: {
+      readonly sensorId: string;
+      readonly stream: "stdout" | "stderr" | "system";
+      readonly text: string;
+    }) => {
+      await this.store.appendLiveOutput({
+        runId,
+        owner,
+        entryId: `sensor-${evaluationId}-${sequence++}`,
+        stream: input.stream,
+        text: input.text,
+      });
+    };
+  }
+
   private now(): Date {
     return this.clock.now();
   }
@@ -1121,6 +1327,34 @@ class RuntimeCoordinator {
       runId: record.runId,
       entryId: record.event.eventId,
       record,
+    });
+  }
+
+  readWorkerEvents(runId: string): Promise<readonly WorkerEventRecord[]> {
+    return this.port.readWorkerEvents(runId);
+  }
+
+  async appendLiveOutput(input: {
+    readonly runId: string;
+    readonly owner: { readonly kind: "phase" | "task"; readonly id: string };
+    readonly entryId: string;
+    readonly stream: "stdout" | "stderr" | "system";
+    readonly text: string;
+  }): Promise<void> {
+    await this.port.appendOutput({
+      runId: input.runId,
+      ownerKind: input.owner.kind,
+      ownerId: input.owner.id,
+      entryId: input.entryId,
+      record: {
+        apiVersion: "senawa.dev/output/v1",
+        seq: 0,
+        ts: new Date().toISOString(),
+        runId: input.runId,
+        owner: input.owner,
+        stream: input.stream,
+        text: sanitizeOutput(input.text),
+      },
     });
   }
 
@@ -1259,6 +1493,14 @@ export class RunQueryService {
     store: RunPersistencePort,
     private readonly catalog?: WorkflowCatalogPort,
     private readonly reports?: ReportingPort,
+    private readonly clock: ClockPort = { now: () => new Date() },
+    private readonly scheduler: SchedulerPort = {
+      scheduleEvery(intervalMs, task) {
+        const timer = setInterval(task, intervalMs);
+        timer.unref();
+        return () => clearInterval(timer);
+      },
+    },
   ) {
     this.persistence = store;
     this.store = new RuntimeCoordinator(store);
@@ -1274,6 +1516,107 @@ export class RunQueryService {
     return projectRunStatus(await this.store.readRun(resolved));
   }
 
+  async openWorkerQuestions(runId: string): Promise<readonly OpenWorkerQuestion[]> {
+    return projectOpenWorkerQuestions(await this.store.readRun(runId));
+  }
+
+  waitForQuestionAnswer(
+    runId: string,
+    questionId: string,
+    expectedTurn: ActiveQuestionTurn,
+    options: WaitForQuestionAnswerOptions = {},
+  ): Promise<string> {
+    const pollIntervalMs = positiveDuration(
+      options.pollIntervalMs ?? questionAnswerPollIntervalMs,
+      "Question answer poll interval",
+    );
+    const timeoutMs = positiveDuration(
+      options.timeoutMs ?? questionAnswerTimeoutMs,
+      "Question answer timeout",
+    );
+    const deadline = this.clock.now().getTime() + timeoutMs;
+    const check = () => this.readQuestionAnswer(runId, questionId, expectedTurn);
+    if (options.signal?.aborted === true) return Promise.reject(questionWaitAborted(questionId));
+
+    return new Promise<string>((resolve, reject) => {
+      let settled = false;
+      let checking = false;
+      let cancelTimer: () => void = () => undefined;
+      const finish = (outcome: { readonly answer: string } | { readonly error: unknown }) => {
+        if (settled) return;
+        settled = true;
+        cancelTimer();
+        options.signal?.removeEventListener("abort", onAbort);
+        if ("answer" in outcome) resolve(outcome.answer);
+        else reject(outcome.error);
+      };
+      const onAbort = () => finish({ error: questionWaitAborted(questionId) });
+      const poll = () => {
+        if (settled) return;
+        if (this.clock.now().getTime() >= deadline) {
+          finish({ error: new Error(`Timed out waiting for answer to ${questionId}`) });
+          return;
+        }
+        if (checking) return;
+        checking = true;
+        void check()
+          .then((answer) => {
+            if (this.clock.now().getTime() >= deadline) {
+              finish({ error: new Error(`Timed out waiting for answer to ${questionId}`) });
+              return;
+            }
+            if (answer !== null) finish({ answer });
+          })
+          .catch((error: unknown) => finish({ error }))
+          .finally(() => {
+            checking = false;
+          });
+      };
+      cancelTimer = this.scheduler.scheduleEvery(pollIntervalMs, poll);
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      if (options.signal?.aborted === true) onAbort();
+      else poll();
+    });
+  }
+
+  private async readQuestionAnswer(
+    runId: string,
+    questionId: string,
+    expectedTurn: ActiveQuestionTurn,
+  ): Promise<string | null> {
+    const state = await this.store.readRun(runId);
+    const asked = state.journal.find(
+      (event) =>
+        event.event === "question.asked" && Reflect.get(event.data, "questionId") === questionId,
+    );
+    if (asked === undefined) throw new Error(`Unknown question ${questionId}`);
+    if (asked.actor.channel !== "worker" || asked.actor.sessionId !== expectedTurn.sessionId) {
+      throw new Error(
+        `Question ${questionId} does not belong to worker session ${expectedTurn.sessionId}`,
+      );
+    }
+    if (Reflect.get(asked.data, "turnId") !== expectedTurn.turnId) {
+      throw new Error(
+        `Question ${questionId} does not belong to worker turn ${expectedTurn.turnId}`,
+      );
+    }
+    if (
+      state.status !== "running" ||
+      state.activeTurn?.sessionId !== expectedTurn.sessionId ||
+      state.activeTurn.turnId !== expectedTurn.turnId
+    ) {
+      throw new Error(`Worker turn ${expectedTurn.turnId} is no longer active`);
+    }
+    const answered = state.journal.find(
+      (event) =>
+        event.event === "question.answered" && Reflect.get(event.data, "questionId") === questionId,
+    );
+    const answer = answered === undefined ? undefined : Reflect.get(answered.data, "answer");
+    if (answered === undefined) return null;
+    if (typeof answer !== "string") throw new Error(`Answer for ${questionId} is invalid`);
+    return answer;
+  }
+
   async journal(runId: string, after = 0, limit = 200) {
     return this.persistence.readJournal(runId, after, boundedLimit(limit));
   }
@@ -1286,6 +1629,22 @@ export class RunQueryService {
     limit = 200,
   ) {
     return this.persistence.readOutput(runId, ownerKind, ownerId, after, boundedLimit(limit));
+  }
+
+  async workerEvents(
+    runId: string,
+    ownerKind: "phase" | "task",
+    ownerId: string,
+    after = 0,
+    limit = 200,
+  ) {
+    const records = (await this.persistence.readWorkerEvents(runId)).filter(
+      (record) => record.owner.kind === ownerKind && record.owner.id === ownerId,
+    );
+    return records
+      .map((record, index) => ({ seq: index + 1, ...record }))
+      .filter((record) => record.seq > after)
+      .slice(0, boundedLimit(limit));
   }
 
   async artifact(
@@ -1601,6 +1960,18 @@ function appendArtifact(
   now: Date,
 ): RuntimeArtifact {
   const version = (phase.artifactVersion ?? 0) + 1;
+  const parsedContent = JsonObjectSchema.parse(content);
+  const existing = state.artifacts.find(
+    (artifact) => artifact.phaseId === phase.id && artifact.version === version,
+  );
+  if (existing !== undefined) {
+    if (!jsonValuesEqual(existing.content, parsedContent)) {
+      throw new Error(`Artifact ${existing.path} already exists with different content`);
+    }
+    phase.artifactVersion = version;
+    phase.rejectionReason = null;
+    return existing;
+  }
   const consumed = Object.fromEntries(
     state.phases
       .filter((candidate) => candidate.artifactVersion !== null)
@@ -1611,13 +1982,38 @@ function appendArtifact(
     version,
     path: `artifacts/${phase.id}/v${version}.json`,
     createdAt: now.toISOString(),
-    content: JsonObjectSchema.parse(content),
+    content: parsedContent,
     consumed,
   };
   state.artifacts.push(artifact);
   phase.artifactVersion = version;
   phase.rejectionReason = null;
   return artifact;
+}
+
+function jsonValuesEqual(left: JsonValue, right: JsonValue): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonValuesEqual(value, right[index] as JsonValue))
+    );
+  }
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") {
+    return false;
+  }
+  const leftKeys = Object.keys(left).toSorted();
+  const rightKeys = Object.keys(right).toSorted();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] &&
+        jsonValuesEqual(left[key] as JsonValue, right[key] as JsonValue),
+    )
+  );
 }
 
 function appendWorkerResult(
@@ -1753,6 +2149,13 @@ function emit(
   });
 }
 
+function hasCommandEvent(state: RuntimeState, commandId: string, event: JournalEventName): boolean {
+  return state.journal.some(
+    (candidate) =>
+      candidate.event === event && Reflect.get(candidate.data, "commandId") === commandId,
+  );
+}
+
 function assertMutable(state: RuntimeState): void {
   if (state.status === "finished" || state.status === "ended") {
     throw new Error(`Run ${state.identity.runId} is ${state.status}`);
@@ -1776,6 +2179,15 @@ function boundedLimit(value: number): number {
   if (!Number.isSafeInteger(value) || value < 1)
     throw new Error("Limit must be a positive integer");
   return Math.min(value, 500);
+}
+
+function positiveDuration(value: number, name: string): number {
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be positive`);
+  return Math.floor(value);
+}
+
+function questionWaitAborted(questionId: string): Error {
+  return new Error(`Waiting for answer to ${questionId} was cancelled`);
 }
 
 function errorMessage(error: unknown): string {

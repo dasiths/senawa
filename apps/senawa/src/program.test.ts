@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -22,6 +23,20 @@ beforeAll(async () => {
 });
 
 describe("Commander CLI", () => {
+  it("documents every registered leaf command", async () => {
+    const services = createTestServices(process.cwd());
+    const documentedPaths = new Set(
+      [
+        ...(await readFile(resolve(process.cwd(), "docs/reference/cli.md"), "utf8")).matchAll(
+          /^## senawa (.+)$/gmu,
+        ),
+      ].map((match) => match[1]),
+    );
+    const registeredLeaves = await collectLeafCommandPaths(services);
+
+    expect(registeredLeaves.filter((path) => !documentedPaths.has(path))).toEqual([]);
+  });
+
   it("supports repository diagnostics and workflow inspection", async () => {
     const services = createTestServices(process.cwd());
     const output: string[] = [];
@@ -213,14 +228,17 @@ describe("Commander CLI", () => {
       await pair(
         cliServices,
         webServices,
-        () =>
-          runCli(["reject", "define", "--reason", "Clarify boundaries"], {
+        async () => {
+          await runCli(["reject", "define", "--reason", "Clarify boundaries"], {
             services: cliServices,
             io,
-          }),
+          });
+          return runCli(["work", "resume"], { services: cliServices, io });
+        },
         () =>
           browser.command({
             apiVersion: "senawa.dev/browser-command/v1",
+            commandId: randomUUID(),
             command: "reject",
             phaseId: "define",
             reason: "Clarify boundaries",
@@ -229,16 +247,14 @@ describe("Commander CLI", () => {
       await pair(
         cliServices,
         webServices,
-        () => runCli(["work", "resume"], { services: cliServices, io }),
-        () => browser.command({ apiVersion: "senawa.dev/browser-command/v1", command: "resume" }),
-      );
-      await pair(
-        cliServices,
-        webServices,
-        () => runCli(["approve", "define"], { services: cliServices, io }),
+        async () => {
+          await runCli(["approve", "define"], { services: cliServices, io });
+          return runCli(["work", "resume"], { services: cliServices, io });
+        },
         () =>
           browser.command({
             apiVersion: "senawa.dev/browser-command/v1",
+            commandId: randomUUID(),
             command: "approve",
             phaseId: "define",
           }),
@@ -246,16 +262,14 @@ describe("Commander CLI", () => {
       await pair(
         cliServices,
         webServices,
-        () => runCli(["work", "resume"], { services: cliServices, io }),
-        () => browser.command({ apiVersion: "senawa.dev/browser-command/v1", command: "resume" }),
-      );
-      await pair(
-        cliServices,
-        webServices,
-        () => runCli(["approve", "research"], { services: cliServices, io }),
+        async () => {
+          await runCli(["approve", "research"], { services: cliServices, io });
+          return runCli(["work", "resume"], { services: cliServices, io });
+        },
         () =>
           browser.command({
             apiVersion: "senawa.dev/browser-command/v1",
+            commandId: randomUUID(),
             command: "approve",
             phaseId: "research",
           }),
@@ -263,37 +277,16 @@ describe("Commander CLI", () => {
       await pair(
         cliServices,
         webServices,
-        () => runCli(["work", "resume"], { services: cliServices, io }),
-        () => browser.command({ apiVersion: "senawa.dev/browser-command/v1", command: "resume" }),
-      );
-      await pair(
-        cliServices,
-        webServices,
-        () => runCli(["approve", "plan"], { services: cliServices, io }),
+        async () => {
+          await runCli(["approve", "plan"], { services: cliServices, io });
+          return runCli(["work", "resume"], { services: cliServices, io });
+        },
         () =>
           browser.command({
             apiVersion: "senawa.dev/browser-command/v1",
+            commandId: randomUUID(),
             command: "approve",
             phaseId: "plan",
-          }),
-      );
-
-      await cliServices.commands.advance("parity-run", driverActor);
-      await webServices.commands.advance("parity-run", driverActor);
-      await pair(
-        cliServices,
-        webServices,
-        () =>
-          runCli(["steer", "implement-change", "Preserve the graph boundary"], {
-            services: cliServices,
-            io,
-          }),
-        () =>
-          browser.command({
-            apiVersion: "senawa.dev/browser-command/v1",
-            command: "steer",
-            taskId: "implement-change",
-            instruction: "Preserve the graph boundary",
           }),
       );
       await pair(
@@ -303,6 +296,7 @@ describe("Commander CLI", () => {
         () =>
           browser.command({
             apiVersion: "senawa.dev/browser-command/v1",
+            commandId: randomUUID(),
             command: "end",
             reason: "Parity complete",
           }),
@@ -314,6 +308,33 @@ describe("Commander CLI", () => {
     }
   });
 });
+
+async function collectLeafCommandPaths(services: SenawaServices): Promise<string[]> {
+  const leaves: string[] = [];
+
+  async function visit(path: readonly string[]): Promise<void> {
+    const output: string[] = [];
+    const io = { stdout: (value: string) => output.push(value), stderr: () => undefined };
+    expect(await runCli([...path, "--help"], { services, io })).toBe(0);
+    const children = commandNames(output.join("\n"));
+    if (children.length === 0) {
+      leaves.push(path.join(" "));
+      return;
+    }
+    await Promise.all(children.map((child) => visit([...path, child])));
+  }
+
+  await visit([]);
+  return leaves.sort();
+}
+
+function commandNames(help: string): string[] {
+  const commands = help.match(/(?:^|\n)Commands:\n((?: {2}.+\n?)*)/u)?.[1];
+  if (commands === undefined) return [];
+  return [...commands.matchAll(/^ {2}([^\s[]+).*$/gmu)]
+    .map((match) => match[1])
+    .filter((name): name is string => name !== undefined && name !== "help");
+}
 
 async function createRun(runId: string): Promise<SenawaServices> {
   const root = await mkdtemp(join(tmpdir(), "senawa-parity-"));
@@ -359,6 +380,7 @@ async function pair(
 function normalizeJournal(events: Awaited<ReturnType<SenawaServices["queries"]["journal"]>>) {
   const nondeterministicFields = new Set([
     "dispatchId",
+    "commandId",
     "durationMs",
     "operationId",
     "sessionId",
@@ -384,8 +406,22 @@ async function browserSession(supervisor: WebSupervisor) {
         headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json" },
         body: JSON.stringify(command),
       });
-      expect(response.status).toBe(202);
-      return response.json();
+      const submitted = (await response.json()) as {
+        receipt: { commandId: string; status: string; error?: { message: string } };
+      };
+      expect(response.status, JSON.stringify(submitted)).toBe(202);
+      for (;;) {
+        const receiptResponse = await fetch(
+          `${origin}/api/v1/runs/${supervisor.runId}/commands/${submitted.receipt.commandId}`,
+          { headers: { Cookie: cookie } },
+        );
+        const current = (await receiptResponse.json()) as typeof submitted;
+        if (current.receipt.status === "completed") return current;
+        if (current.receipt.status === "refused") {
+          throw new Error(current.receipt.error?.message ?? "Browser command was refused");
+        }
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+      }
     },
   };
 }

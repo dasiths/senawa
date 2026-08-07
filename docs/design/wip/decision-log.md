@@ -43,6 +43,64 @@ Copy this section for each idea and update it in place as the idea matures.
 
 ## Decisions
 
+### 2026-08-06: Durable browser command receipts
+
+* Status: `accepted`
+* Owner: `docs/design/03-agents-and-interaction.md`
+* Question: Can the browser acknowledge a command after durable submission,
+    execute it independently of the initiating HTTP connection, recover it after
+    supervisor restart, and still leave every workflow transition under the
+    shared application command service and driver?
+* Context: Live portal approvals and rejections currently hold the HTTP request
+    open through Beads writes, worker execution, sensors, and the next decision
+    boundary. Browser reload or supervisor restart can lose command progress even
+    though the underlying workflow remains recoverable.
+* Options: Keep synchronous POSTs, use the orchestration journal as a queue, or
+    add a separate run-scoped durable command receipt queue with its own replay
+    cursor and SSE projection
+* Evidence obtained: Idempotent submission, changed-payload refusal, single-command
+    claiming, completion and refusal receipts, browser reload projection, and
+    supervisor restart recovery passed in the production HTTP path with file
+    runtime composition. A real-Beads contract separately proved cross-process
+    runtime freshness for a long-lived reader.
+* Evidence obtained: A no-credit production-composition contract durably queued
+    a receipt, killed the Beads-backed supervisor with `SIGKILL`, waited for its
+    persisted lease to expire, and completed the same receipt through a fresh
+    composition without duplicate approval or resume events. Receipt SSE replay,
+    live terminal updates, Last-Event-ID reconnect, independent-writer polling,
+    authentication, and backpressure passed focused tests.
+* Probe: `experiments/probes/orchestration/README.md#durable-browser-command-receipts`
+* Outcome: Browser commands use a separate run-scoped receipt queue. HTTP returns
+    after durable submission, the fenced web supervisor owns execution and
+    recovery, and receipt-local SSE projects progress without becoming workflow
+    authority.
+* Promotion: `docs/design/03-agents-and-interaction.md#browser-command-receipts`
+
+### 2026-08-06: Browser controls for worker questions
+
+* Status: `accepted`
+* Owner: `docs/design/03-agents-and-interaction.md`
+* Question: Can the portal project unanswered worker questions and submit a
+    correlated human answer without routing that answer through the single active
+    browser command receipt or granting the worker transition authority?
+* Context: Active SDK questions now block inside the original typed tool call,
+    but the human must leave the portal and use the CLI to answer. Sending the
+    answer through the receipt queue would deadlock when the receipt itself owns
+    the active worker turn.
+* Options: Keep CLI-only answers, route answers through command receipts, or add
+    a separate authenticated answer endpoint over durable journal questions
+* Evidence obtained: Unanswered and stale question projection, idempotent answer
+    submission, reload behavior, strict Origin and schema enforcement, DOM-safe
+    rendering, answer controls during an active command receipt, and delivery
+    through the original active SDK tool call passed application, binding, and
+    production browser tests.
+* Probe: `experiments/probes/orchestration/README.md#browser-worker-question-controls`
+* Outcome: The portal projects durable worker questions and uses a separate
+    authenticated answer endpoint. Active questions are answerable, stale ones
+    remain visible and disabled, and answers never enter the command receipt
+    queue or advance workflow state.
+* Promotion: `docs/design/03-agents-and-interaction.md#human-questions`
+
 ### 2026-08-05: Port-first production architecture migration
 
 * Status: `probing`

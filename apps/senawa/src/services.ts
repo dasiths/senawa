@@ -3,6 +3,8 @@ import { posix, resolve } from "node:path";
 import {
   RunCommandService as ApplicationRunCommandService,
   type ArtifactValidationPort,
+  type BrowserCommandReceiptStore,
+  DurableBrowserCommandService,
   type EndRunOptions,
   type GateEvaluationPort,
   type RunChangeNotificationPort,
@@ -37,6 +39,7 @@ import addFormats from "ajv-formats";
 export interface SenawaServices {
   readonly repositoryRoot: string;
   readonly commands: RunCommands;
+  readonly browserCommands: DurableBrowserCommandService;
   readonly queries: RunQueryService;
   readonly notifier: RunChangeNotificationPort;
   loadDefinitions(workflowName?: string): Promise<RepositoryDefinitions>;
@@ -47,6 +50,7 @@ export interface SenawaServices {
 
 export interface SenawaServiceOptions {
   readonly persistence: RunPersistencePort;
+  readonly receiptStore: BrowserCommandReceiptStore;
   readonly notifier: RunChangeNotificationPort;
   readonly runtimeBackend?: RuntimeBackend;
   readonly workerHost?: WorkerExecutionPort;
@@ -129,12 +133,23 @@ export class RunCommands {
     return this.application.checkGate(runId, gateId, owner, actor);
   }
 
-  ask(runId: string, question: string, actor: CommandActor) {
-    return this.application.ask(runId, question, actor);
+  ask(
+    runId: string,
+    question: string,
+    actor: CommandActor,
+    workerContext?: Parameters<ApplicationRunCommandService["ask"]>[3],
+  ) {
+    return this.application.ask(runId, question, actor, workerContext);
   }
 
-  answer(runId: string, questionId: string, answer: string, actor: CommandActor) {
-    return this.application.answer(runId, questionId, answer, actor);
+  answer(
+    runId: string,
+    questionId: string,
+    answer: string,
+    actor: CommandActor,
+    options?: Parameters<ApplicationRunCommandService["answer"]>[4],
+  ) {
+    return this.application.answer(runId, questionId, answer, actor, options);
   }
 
   discover(runId: string, title: string, actor: CommandActor) {
@@ -168,6 +183,13 @@ export class RunCommands {
   advance(runId: string, actor: CommandActor) {
     return this.application.advance(runId, actor);
   }
+
+  executeBrowserCommand(
+    runId: string,
+    command: Parameters<ApplicationRunCommandService["executeBrowserCommand"]>[1],
+  ) {
+    return this.application.executeBrowserCommand(runId, command);
+  }
 }
 
 export function createSenawaServices(
@@ -176,20 +198,30 @@ export function createSenawaServices(
 ): SenawaServices {
   const root = resolve(repositoryRoot);
   const reports = new RunReportService(new RunReportEvidenceReader(options.persistence));
+  const commands = new RunCommands(
+    options.persistence,
+    options.workerHost ?? new DeterministicWorkerHost(),
+    options.gateEvaluator ??
+      new CommandGateEvaluator(root, { evidenceStore: new FileSensorEvidenceStore(root) }),
+    options.now ?? (() => new Date()),
+    options.runtimeBackend ?? "file",
+  );
+  const scheduler = {
+    scheduleEvery(intervalMs: number, task: () => void) {
+      const timer = setInterval(task, intervalMs);
+      timer.unref();
+      return () => clearInterval(timer);
+    },
+  };
   return {
     repositoryRoot: root,
-    commands: new RunCommands(
-      options.persistence,
-      options.workerHost ?? new DeterministicWorkerHost(),
-      options.gateEvaluator ??
-        new CommandGateEvaluator(root, { evidenceStore: new FileSensorEvidenceStore(root) }),
-      options.now ?? (() => new Date()),
-      options.runtimeBackend ?? "file",
-    ),
+    commands,
+    browserCommands: new DurableBrowserCommandService(options.receiptStore, commands, scheduler),
     queries: new RunQueryService(
       options.persistence,
       new RepositoryWorkflowCatalogAdapter(root),
       reports,
+      { now: options.now ?? (() => new Date()) },
     ),
     notifier: options.notifier,
     loadDefinitions: (workflowName) => loadRepositoryDefinitions(root, workflowName),

@@ -76,6 +76,35 @@ runWorkerSessionConformance(
 );
 
 describe("worker adapter conformance", () => {
+  it("streams subprocess stdout and stderr before returning the result", async () => {
+    const root = await mkdtemp(join(tmpdir(), "senawa-worker-stream-"));
+    const executable = join(root, "stream-worker.mjs");
+    await writeFile(
+      executable,
+      '#!/usr/bin/env node\nprocess.stdout.write("out");process.stderr.write("err");\n',
+    );
+    await chmod(executable, 0o755);
+    const adapter = new SubprocessWorkerAdapter({
+      enabled: true,
+      repositoryRoot: root,
+      isolationRoot: root,
+      executable,
+      timeoutMs: 1_000,
+    });
+    const events: Array<{ kind: string; stream?: string; text?: string }> = [];
+
+    await adapter.execute(turn, async (event) => {
+      events.push(event);
+    });
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "text", stream: "stdout", text: "out" }),
+        expect.objectContaining({ kind: "text", stream: "stderr", text: "err" }),
+      ]),
+    );
+  });
+
   it.each([
     ["deterministic", () => new DeterministicWorkerAdapter()],
     ["recording", () => new RecordingWorkerAdapter()],
@@ -197,6 +226,7 @@ describe("worker adapter conformance", () => {
     expect(authorizeWorkerPaths(authorization, "write", [{ path: "../outside.ts" }]).allowed).toBe(
       false,
     );
+    expect(authorizeWorkerPaths(authorization, "read", [{ path: "." }]).allowed).toBe(true);
     expect(
       authorizeWorkerPaths(authorization, "write", [
         { path: "packages/workers/src/frozen/data.ts" },

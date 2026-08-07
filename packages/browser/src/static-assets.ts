@@ -46,23 +46,27 @@ export const indexHtml = `<!doctype html>
       <div id="terminal" class="terminal" role="log"></div>
     </section>
     <aside class="controls">
+      <section id="questions">
+        <small>OPEN QUESTIONS <span id="question-count">0</span></small>
+        <div id="question-list"></div>
+      </section>
       <small>SELECTED NODE</small>
       <h2 id="selected-name">None</h2>
       <p id="selected-detail">Choose a graph node.</p>
       <section id="approval" hidden>
         <textarea id="decision-note" placeholder="Decision note"></textarea>
-        <div><button id="approve">Approve</button><button id="reject" class="danger">Reject</button></div>
+        <div><button id="approve" class="run-command">Approve</button><button id="reject" class="danger run-command">Reject</button></div>
       </section>
       <section id="steering" hidden>
         <textarea id="instruction" placeholder="Steering instruction"></textarea>
-        <button id="steer">Send steer</button>
+        <button id="steer" class="run-command">Send steer</button>
       </section>
-      <section><button id="resume">Resume</button></section>
+      <section><button id="resume" class="run-command">Resume</button></section>
       <section id="ending">
         <textarea id="end-reason" placeholder="Reason required"></textarea>
-        <button id="end" class="danger">End run</button>
+        <button id="end" class="danger run-command">End run</button>
       </section>
-      <p id="last-command">No browser command sent.</p>
+      <p id="last-command" role="status" aria-live="polite">No browser command sent.</p>
     </aside>
   </main>
 </body>
@@ -82,7 +86,8 @@ dl{margin-top:30px}dl div{display:flex;justify-content:space-between;padding:10p
 .terminal{height:430px;overflow:auto;padding:14px 16px;color:#d9e4dc;background:var(--terminal);border-radius:4px;font:12px/1.6 monospace;white-space:pre-wrap;word-break:break-word}
 .line{display:grid;grid-template-columns:72px 52px minmax(0,1fr);gap:8px}.line .meta{color:#839089}.line.stderr .stream{color:#ff9aa4}
 .controls section{margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}textarea{width:100%;min-height:70px;padding:9px;resize:vertical}
-button{min-height:36px;margin-top:8px;padding:8px 12px;color:#fff;background:var(--green);border:0;border-radius:4px;font-weight:700;cursor:pointer}.danger{background:var(--red)}
+button{min-height:36px;margin-top:8px;padding:8px 12px;color:#fff;background:var(--green);border:0;border-radius:4px;font-weight:700;cursor:pointer}.danger{background:var(--red)}button:disabled{cursor:wait;opacity:.55}#last-command.busy{color:var(--blue);font-weight:700}#last-command.busy::before{content:"";display:inline-block;width:8px;height:8px;margin-right:7px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+#questions{margin-top:0;padding-top:0;border-top:0}#questions small{display:flex;justify-content:space-between}#question-list:empty::after{content:"None";display:block;margin-top:8px;color:#67716d;font-size:12px}.question{padding:12px 0;border-bottom:1px solid var(--line)}.question p{margin:6px 0;font-size:13px;line-height:1.4;overflow-wrap:anywhere}.question textarea{min-height:56px;font:12px/1.4 monospace}.question button{width:100%}.question .question-status{color:#67716d;font-size:11px}.question.stale textarea,.question.stale button{cursor:not-allowed}
 #approval div{display:grid;grid-template-columns:1fr 1fr;gap:8px}#steer,#resume,#end{width:100%}#last-command{color:#67716d;font:11px/1.5 monospace}
 @media(max-width:980px){.workspace{grid-template-columns:190px minmax(0,1fr)}.controls{grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}
 @media(max-width:680px){.workspace{display:block}.overview,.controls{border:0;border-bottom:1px solid var(--line)}.stage{padding:20px 12px}.graph{height:640px}.terminal{height:340px}}
@@ -94,15 +99,27 @@ const runId=location.pathname.split("/").filter(Boolean)[1];
 let state=null;
 let selected=null;
 let outputSource=null;
+let workerSource=null;
+let receiptSource=null;
 let records=[];
 let graph=null;
+let commandPending=false;
+let activeReceipt=null;
+let openQuestions=[];
+const questionDrafts=new Map();
+const questionSubmissions=new Map();
+const questionPending=new Set();
+let pendingCommand=null;
+let pendingPhaseId=null;
+let receiptCursor=0;
+let recordsRenderPending=false;
 
 cytoscape.use(cytoscapeDagre);
 
 async function api(path,options={}){
   const response=await fetch(path,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options});
   const body=await response.json();
-  if(!response.ok)throw new Error(body.error?.message||body.error||("HTTP "+response.status));
+  if(!response.ok){const error=new Error(body.error?.message||body.error||("HTTP "+response.status));error.code=body.error?.code;error.status=response.status;throw error}
   return body;
 }
 
@@ -127,13 +144,15 @@ function displayLabel(label,role,status){
 function graphElements(){
   const elements=[];
   const hasTasks=state.tasks.length>0;
+  const taskFrontier=state.phases.find((phase)=>phase.executorKind==="task-frontier");
+  const hasTaskFrontier=taskFrontier!==undefined;
   for(const phase of state.phases){
     elements.push({
       data:{id:"phase:"+phase.id,nodeId:phase.id,kind:"phase",label:displayLabel(phase.id,phase.role,phase.status),status:phase.status},
       classes:"phase status-"+phase.status+(phase.id===selected?" selected":""),
     });
     for(const dependency of phase.dependsOn||[]){
-      if(hasTasks&&(phase.id==="implement"||(phase.id==="verify"&&dependency==="implement")))continue;
+      if(hasTaskFrontier&&(phase.id===taskFrontier.id||dependency===taskFrontier.id))continue;
       elements.push({data:{id:"phase-edge:"+dependency+":"+phase.id,source:"phase:"+dependency,target:"phase:"+phase.id},classes:"phase-edge"});
     }
   }
@@ -147,18 +166,28 @@ function graphElements(){
       elements.push({data:{id:"task-edge:"+dependency+":"+task.key,source:"task:"+dependency,target:"task:"+task.key},classes:"task-edge"});
     }
   }
-  if(hasTasks){
-    const implementation=state.phases.find((phase)=>phase.id==="implement");
-    for(const root of state.tasks.filter((task)=>(task.dependsOn||[]).length===0)){
-      for(const dependency of implementation?.dependsOn||[]){
-        elements.push({data:{id:"implementation-entry:"+dependency+":"+root.key,source:"phase:"+dependency,target:"task:"+root.key},classes:"phase-entry"});
+  if(hasTaskFrontier){
+    const placeholderId="placeholder:"+taskFrontier.id+":tasks";
+    const completionId="boundary:"+taskFrontier.id+":complete";
+    for(const root of state.tasks.filter((task)=>task.parentPhaseId===taskFrontier.id&&(task.dependsOn||[]).length===0)){
+      for(const dependency of taskFrontier.dependsOn||[]){
+        elements.push({data:{id:"task-frontier-entry:"+taskFrontier.id+":"+dependency+":"+root.key,source:"phase:"+dependency,target:"task:"+root.key},classes:"phase-entry"});
       }
     }
-    elements.push({data:{id:"boundary:implementation-complete",nodeId:"implement",kind:"boundary",label:"Implementation complete",status:implementation?.status||"pending",parent:"phase:implement"},classes:"implementation-complete status-"+(implementation?.status||"pending")});
-    for(const leaf of state.tasks.filter((task)=>!dependedUpon.has(task.key))){
-      elements.push({data:{id:"implementation-complete:"+leaf.key,source:"task:"+leaf.key,target:"boundary:implementation-complete"},classes:"task-edge completion-edge"});
+    if(!hasTasks){
+      elements.push({data:{id:placeholderId,nodeId:taskFrontier.id,kind:"placeholder",label:"Tasks from approved plan\\nnot expanded",status:"pending",parent:"phase:"+taskFrontier.id},classes:"implementation-placeholder status-pending"});
+      for(const dependency of taskFrontier.dependsOn||[]){
+        elements.push({data:{id:"task-frontier-entry:"+taskFrontier.id+":"+dependency+":placeholder",source:"phase:"+dependency,target:placeholderId},classes:"phase-entry"});
+      }
     }
-    elements.push({data:{id:"verify-entry",source:"boundary:implementation-complete",target:"phase:verify"},classes:"phase-edge verify-entry"});
+    elements.push({data:{id:completionId,nodeId:taskFrontier.id,kind:"boundary",label:"Implementation complete",status:taskFrontier.status||"pending",parent:"phase:"+taskFrontier.id},classes:"implementation-complete status-"+(taskFrontier.status||"pending")});
+    const completionSources=hasTasks?state.tasks.filter((task)=>task.parentPhaseId===taskFrontier.id&&!dependedUpon.has(task.key)).map((task)=>"task:"+task.key):[placeholderId];
+    for(const source of completionSources){
+      elements.push({data:{id:"task-frontier-complete:"+taskFrontier.id+":"+source,source,target:completionId},classes:"task-edge completion-edge"});
+    }
+    for(const successor of state.phases.filter((phase)=>(phase.dependsOn||[]).includes(taskFrontier.id))){
+      elements.push({data:{id:"task-frontier-exit:"+taskFrontier.id+":"+successor.id,source:completionId,target:"phase:"+successor.id},classes:"phase-edge verify-entry"});
+    }
   }
   return elements;
 }
@@ -166,6 +195,7 @@ function graphElements(){
 const graphStyle=[
   {selector:"node",style:{label:"data(label)","font-family":"Trebuchet MS, Gill Sans, sans-serif","font-size":12,"font-weight":700,"text-wrap":"wrap","text-max-width":135,"text-valign":"center","text-halign":"center",color:"#18201d","background-color":"#fff","border-width":2,"border-color":"#98a29d",shape:"roundrectangle",width:160,height:78}},
   {selector:"node.task",style:{width:176,height:84,"font-size":11,"background-color":"#f8faf8"}},
+  {selector:"node.implementation-placeholder",style:{width:176,height:72,"font-size":11,"font-style":"italic","background-color":"#f2f4f3","border-style":"dashed"}},
   {selector:"node.implementation-complete",style:{shape:"diamond",width:90,height:90,"font-size":10,"text-max-width":72,"background-color":"#e4eefb","border-color":"#1f5ea8"}},
   {selector:"node:parent",style:{"background-opacity":.08,"background-color":"#1f5ea8","border-width":2,"border-style":"dashed","border-color":"#1f5ea8",padding:40,"text-valign":"top","text-margin-y":-14,"font-size":13}},
   {selector:".status-running, .status-in_progress",style:{"border-color":"#1f5ea8","background-color":"#e4eefb"}},
@@ -188,14 +218,15 @@ function calculatePositions(elements){
   const positions={};
   phaseGraph.nodes().forEach((node)=>{positions[node.id()]={...node.position()}});
 
-  const taskElements=elements.filter((element)=>element.data.kind==="task"||element.data.kind==="boundary"||element.classes?.includes("task-edge")).map((element)=>{
-    if(element.data.kind!=="task"&&element.data.kind!=="boundary")return element;
+  const taskElements=elements.filter((element)=>element.data.kind==="task"||element.data.kind==="boundary"||element.data.kind==="placeholder"||element.classes?.includes("task-edge")).map((element)=>{
+    if(element.data.kind!=="task"&&element.data.kind!=="boundary"&&element.data.kind!=="placeholder")return element;
     const data={...element.data};
     delete data.parent;
     return {...element,data};
   });
-  const implementPosition=positions["phase:implement"];
-  if(taskElements.some((element)=>element.data.kind==="task")&&implementPosition){
+  const taskFrontierPhase=state.phases.find((phase)=>phase.executorKind==="task-frontier");
+  const taskFrontierPosition=taskFrontierPhase===undefined?undefined:positions["phase:"+taskFrontierPhase.id];
+  if(taskElements.some((element)=>element.data.kind==="task"||element.data.kind==="placeholder")&&taskFrontierPosition){
     const taskGraph=cytoscape({headless:true,styleEnabled:true,elements:taskElements,style:graphStyle});
     taskGraph.layout({name:"dagre",rankDir:"TB",rankSep:38,nodeSep:30,edgeSep:12,padding:0,animate:false}).run();
     const taskBounds=taskGraph.nodes().boundingBox();
@@ -203,10 +234,10 @@ function calculatePositions(elements){
     const expansion=Math.max(0,taskBounds.h+110-78);
     const taskGroupShift=expansion/2+40;
     taskGraph.nodes().forEach((node)=>{
-      positions[node.id()]={x:implementPosition.x+node.position("x")-taskCenter.x,y:implementPosition.y+node.position("y")-taskCenter.y+taskGroupShift};
+      positions[node.id()]={x:taskFrontierPosition.x+node.position("x")-taskCenter.x,y:taskFrontierPosition.y+node.position("y")-taskCenter.y+taskGroupShift};
     });
     phaseGraph.nodes().forEach((node)=>{
-      if(node.position("y")>implementPosition.y){positions[node.id()].y+=expansion}
+      if(node.position("y")>taskFrontierPosition.y){positions[node.id()].y+=expansion}
     });
     taskGraph.destroy();
   }
@@ -246,6 +277,78 @@ function render(){
   q("#steering").hidden=node?.kind!=="task"||["closed","ended"].includes(node.status);
   q("#resume").hidden=["awaiting_approval","ended","finished"].includes(state.status);
   q("#ending").hidden=["ended","finished"].includes(state.status);
+  renderQuestions();
+  updateCommandProgress();
+}
+
+function renderQuestions(){
+  q("#question-count").textContent=String(openQuestions.length);
+  const list=q("#question-list");
+  list.replaceChildren();
+  for(const question of openQuestions){
+    const form=text("form","","question "+question.status);
+    const owner=text("small",question.ownerKind+" "+question.ownerId+" · "+new Date(question.askedAt).toLocaleTimeString([],{hour12:false}));
+    const prompt=text("p",question.question);
+    const answer=document.createElement("textarea");
+    answer.maxLength=4000;
+    answer.placeholder="Answer";
+    answer.value=questionDrafts.get(question.questionId)||"";
+    answer.addEventListener("input",()=>questionDrafts.set(question.questionId,answer.value));
+    const button=text("button","Answer");
+    button.type="submit";
+    const status=text("p",question.status==="stale"?"No longer awaiting this answer":"","question-status");
+    const locked=question.status!=="answerable"||questionPending.has(question.questionId);
+    answer.disabled=locked;
+    button.disabled=locked;
+    form.addEventListener("submit",(event)=>{event.preventDefault();void submitAnswer(question,answer,button,status)});
+    form.append(owner,prompt,answer,button,status);
+    list.append(form);
+  }
+}
+
+async function submitAnswer(question,answer,button,status){
+  if(questionPending.has(question.questionId)||question.status!=="answerable")return;
+  questionPending.add(question.questionId);
+  answer.disabled=true;
+  button.disabled=true;
+  status.textContent="Submitting…";
+  const submissionId=questionSubmissions.get(question.questionId)||crypto.randomUUID();
+  questionSubmissions.set(question.questionId,submissionId);
+  try{
+    await api("/api/v1/runs/"+encodeURIComponent(runId)+"/questions/"+encodeURIComponent(question.questionId)+"/answer",{method:"POST",body:JSON.stringify({apiVersion:"senawa.dev/question-answer/v1",submissionId,answer:answer.value})});
+    status.textContent="Answered";
+    questionDrafts.delete(question.questionId);
+    questionSubmissions.delete(question.questionId);
+    await refresh();
+  }catch(error){
+    status.textContent=error.status===409?"No longer awaiting this answer":error.message;
+    if(error.status===409)await refresh();
+  }finally{
+    questionPending.delete(question.questionId);
+    const current=openQuestions.find((candidate)=>candidate.questionId===question.questionId);
+    if(current?.status==="answerable"){answer.disabled=false;button.disabled=false}
+  }
+}
+
+function updateCommandProgress(){
+  if(activeReceipt===null||pendingCommand===null)return;
+  if(activeReceipt.status==="queued"){q("#last-command").textContent=pendingCommand+" queued";return}
+  if(activeReceipt.status==="refused"){q("#last-command").textContent="refused: "+activeReceipt.error.message;return}
+  if(activeReceipt.status==="completed"){q("#last-command").textContent=pendingCommand+" completed";return}
+  if(state===null){q("#last-command").textContent=pendingCommand+" in progress…";return}
+  if(state.status==="finished"){q("#last-command").textContent="run finished";return}
+  if(state.status==="ended"){q("#last-command").textContent="run ended";return}
+  const decidedPhase=pendingPhaseId===null?null:state.phases.find((phase)=>phase.id===pendingPhaseId);
+  if(decidedPhase?.status==="awaiting_approval"){
+    q("#last-command").textContent=pendingCommand+" in progress…";
+    return;
+  }
+  const activeTask=state.tasks.find((task)=>task.status==="in_progress"||task.status==="rework");
+  const activePhase=state.phases.find((phase)=>phase.status==="running");
+  if(activeTask){q("#last-command").textContent=activeTask.title+" · "+activeTask.status.replaceAll("_"," ")+"…";return}
+  if(activePhase){q("#last-command").textContent=activePhase.id+" · "+activePhase.status.replaceAll("_"," ")+"…";return}
+  if(state.needs?.phaseId){q("#last-command").textContent="awaiting "+state.needs.phaseId+" decision";return}
+  q("#last-command").textContent=pendingCommand+" accepted; continuing…";
 }
 
 function renderRecords(){
@@ -259,9 +362,35 @@ function renderRecords(){
   terminal.scrollTop=terminal.scrollHeight;
 }
 
+function scheduleRecordsRender(){
+  if(recordsRenderPending)return;
+  recordsRenderPending=true;
+  requestAnimationFrame(()=>{recordsRenderPending=false;renderRecords()});
+}
+
+function appendWorkerRecord(record){
+  const event=record.event;
+  if(event.kind==="text"){
+    const key="worker-text:"+event.turnId+":"+event.stream;
+    const existing=records.find((item)=>item.key===key);
+    if(existing){existing.text=event.delta?existing.text+event.text:event.text;existing.ts=event.ts}
+    else{records.push({key,seq:record.seq,ts:event.ts,stream:event.stream,text:event.text})}
+  }else if(event.kind==="tool"){
+    records.push({key:"worker:"+event.eventId,seq:record.seq,ts:event.ts,stream:event.state==="failed"||event.state==="denied"?"stderr":"system",text:"tool "+event.name+" "+event.state+(event.detail?": "+event.detail:"")});
+  }else if(event.kind==="lifecycle"){
+    records.push({key:"worker:"+event.eventId,seq:record.seq,ts:event.ts,stream:event.event==="failed"?"stderr":"system",text:"worker "+event.event+(event.detail?": "+event.detail:"")});
+  }else if(event.kind==="model"){
+    records.push({key:"worker:"+event.eventId,seq:record.seq,ts:event.ts,stream:"system",text:"model "+event.resolved});
+  }else if(event.kind==="usage"){
+    records.push({key:"worker:"+event.eventId,seq:record.seq,ts:event.ts,stream:"system",text:"usage "+event.cumulativeNanoAiu+" nano AIU"});
+  }
+  scheduleRecordsRender();
+}
+
 function select(id){
   selected=id;
   outputSource?.close();
+  workerSource?.close();
   records=[];
   render();
   renderRecords();
@@ -270,12 +399,69 @@ function select(id){
   outputSource=new EventSource("/api/v1/runs/"+encodeURIComponent(runId)+"/streams/"+encodeURIComponent((node?.kind||"phase")+":"+id)+"/events");
   outputSource.onmessage=(event)=>{
     const record=JSON.parse(event.data);
-    if(!records.some((item)=>item.seq===record.seq)){records.push(record);renderRecords()}
+    const key="output:"+record.seq;
+    if(!records.some((item)=>item.key===key)){records.push({...record,key});scheduleRecordsRender()}
   };
+  if(node?.kind==="phase"||node?.kind==="task"){
+    workerSource=new EventSource("/api/v1/runs/"+encodeURIComponent(runId)+"/streams/"+encodeURIComponent(node.kind+":"+id)+"/worker-events");
+    workerSource.onmessage=(event)=>appendWorkerRecord(JSON.parse(event.data));
+  }
 }
 
-async function refresh(){state=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/snapshot");render()}
-async function command(command,extra={}){try{await api("/api/v1/runs/"+encodeURIComponent(runId)+"/commands",{method:"POST",body:JSON.stringify({apiVersion:"senawa.dev/browser-command/v1",command,...extra})});q("#last-command").textContent=command+" accepted";await refresh()}catch(error){q("#last-command").textContent="refused: "+error.message}}
+async function refresh(){
+  const [snapshot,questions]=await Promise.all([
+    api("/api/v1/runs/"+encodeURIComponent(runId)+"/snapshot"),
+    api("/api/v1/runs/"+encodeURIComponent(runId)+"/questions/open"),
+  ]);
+  state=snapshot;
+  openQuestions=questions.questions;
+  render();
+}
+function receiptActive(){return activeReceipt!==null&&["queued","running"].includes(activeReceipt.status)}
+function updateControlsLocked(){
+  const locked=commandPending||receiptActive();
+  q("#last-command").setAttribute("aria-busy",String(locked));
+  for(const button of document.querySelectorAll(".run-command"))button.disabled=locked;
+  q("#last-command").classList.toggle("busy",locked);
+}
+function setCommandPending(command,pending,extra={}){
+  commandPending=pending;
+  if(pending){pendingCommand=command;pendingPhaseId=typeof extra.phaseId==="string"?extra.phaseId:null}
+  updateControlsLocked();
+  if(pending)q("#last-command").textContent=command+" submitting…";
+}
+function applyReceipt(receipt){
+  if(receipt.seq<=receiptCursor)return false;
+  receiptCursor=receipt.seq;
+  activeReceipt=receipt;
+  pendingCommand=receipt.payload.command;
+  pendingPhaseId=typeof receipt.payload.phaseId==="string"?receipt.payload.phaseId:null;
+  updateControlsLocked();
+  updateCommandProgress();
+  return true;
+}
+function startReceiptStream(){
+  receiptSource?.close();
+  receiptSource=new EventSource("/api/v1/runs/"+encodeURIComponent(runId)+"/commands/events");
+  receiptSource.onmessage=(event)=>{
+    const receipt=JSON.parse(event.data);
+    if(!applyReceipt(receipt))return;
+    if(["completed","refused"].includes(receipt.status))void refresh();
+  };
+}
+async function recoverActiveReceipt(){
+  const response=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/commands/active");
+  if(response.receipt!==null)applyReceipt(response.receipt);
+}
+async function command(command,extra={}){
+  if(commandPending)return;
+  setCommandPending(command,true,extra);
+  try{
+    const response=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/commands",{method:"POST",body:JSON.stringify({apiVersion:"senawa.dev/browser-command/v1",commandId:crypto.randomUUID(),command,...extra})});
+    applyReceipt(response.receipt);
+  }catch(error){q("#last-command").textContent="refused: "+error.message}
+  finally{setCommandPending(command,false,extra)}
+}
 
 q("#approve").addEventListener("click",()=>command("approve",{phaseId:selected,note:q("#decision-note").value||undefined}));
 q("#reject").addEventListener("click",()=>command("reject",{phaseId:selected,reason:q("#decision-note").value}));
@@ -284,5 +470,5 @@ q("#resume").addEventListener("click",()=>command("resume"));
 q("#end").addEventListener("click",()=>command("end",{reason:q("#end-reason").value}));
 addEventListener("resize",()=>{graph?.resize();graph?.fit(undefined,32)});
 
-refresh().then(()=>{select(selected);const events=new EventSource("/api/v1/runs/"+encodeURIComponent(runId)+"/events/stream");events.onopen=()=>q("#connection").textContent="Live";events.onmessage=refresh;events.onerror=()=>q("#connection").textContent="Reconnecting"}).catch((error)=>q("#connection").textContent=error.message);
+Promise.all([refresh(),recoverActiveReceipt()]).then(()=>{select(selected);startReceiptStream();const events=new EventSource("/api/v1/runs/"+encodeURIComponent(runId)+"/events/stream");events.onopen=()=>q("#connection").textContent="Live";events.onmessage=refresh;events.onerror=()=>q("#connection").textContent="Reconnecting"}).catch((error)=>q("#connection").textContent=error.message);
 `;

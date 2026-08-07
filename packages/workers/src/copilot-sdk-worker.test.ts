@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   ModelInfo,
   PermissionRequest,
@@ -13,6 +16,10 @@ import {
   type CopilotSdkClient,
   type CopilotSdkSession,
   CopilotSdkWorkerAdapter,
+  createCopilotSdkClientOptions,
+  LocalSessionFsProvider,
+  SDK_TURN_TIMEOUT_MS,
+  sdkToolName,
 } from "./copilot-sdk-worker.js";
 import { runWorkerSessionConformance } from "./worker-conformance.test-support.js";
 
@@ -73,6 +80,7 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     expect(client.created).toEqual([turn.sessionId]);
     expect(client.eventHandlerPresentAtCreate).toBe(true);
     expect(client.sessions[0]?.eventHandlerPresentAtSend).toBe(true);
+    expect(client.sessions[0]?.sendTimeout).toBe(SDK_TURN_TIMEOUT_MS);
     expect((await adapter.inspect(turn)).state).toBe("completed");
 
     const resumedTurn = { ...turn, operation: "resume" as const, turnId: "turn-sdk-two" };
@@ -94,6 +102,60 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     await adapter.release(turn.sessionId, "archive-delete");
     expect(client.deleted).toEqual([turn.sessionId]);
     expect((await adapter.inspect({ ...turn, turnId: "unknown" })).state).toBe("missing");
+  });
+
+  it("disconnects retained sessions and stops the SDK client on shutdown", async () => {
+    const { adapter, client } = fixture();
+    await (await adapter.create(turn)).result;
+
+    await adapter.shutdown();
+
+    expect(client.sessions[0]?.disconnected).toBe(true);
+    expect(client.stopCount).toBe(1);
+    expect(client.deleted).toEqual([]);
+  });
+
+  it("uses the logged-in runtime home while isolating only session state", () => {
+    const options = createCopilotSdkClientOptions({
+      repositoryRoot: "/workspace",
+      runtimePath: "/usr/local/bin/copilot",
+    });
+
+    expect(options).not.toHaveProperty("baseDirectory");
+    expect(options.useLoggedInUser).toBe(true);
+    expect(options.workingDirectory).toBe("/workspace");
+    expect(options.sessionFs).toEqual({
+      initialCwd: "/workspace",
+      sessionStatePath: "/state",
+      conventions: "posix",
+    });
+  });
+
+  it("contains SDK session files under the assigned session root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "senawa-sdk-fs-"));
+    const provider = new LocalSessionFsProvider(root);
+
+    await provider.writeFile("/state/events.jsonl", "one\n");
+    await provider.appendFile("/state/events.jsonl", "two\n");
+    expect(await provider.readFile("/state/events.jsonl")).toBe("one\ntwo\n");
+    expect(await provider.exists("/state/events.jsonl")).toBe(true);
+    expect(await provider.readdir("/state")).toEqual(["events.jsonl"]);
+    await expect(provider.writeFile("../../outside", "denied")).rejects.toThrow("escapes");
+  });
+
+  it("routes project files to the repository while isolating runtime state", async () => {
+    const root = await mkdtemp(join(tmpdir(), "senawa-sdk-repository-fs-"));
+    const repositoryRoot = join(root, "repository");
+    const sessionRoot = join(root, "session");
+    await mkdir(repositoryRoot, { recursive: true });
+    await writeFile(join(repositoryRoot, "README.md"), "repository\n");
+    const provider = new LocalSessionFsProvider(sessionRoot, repositoryRoot);
+
+    expect(await provider.readFile(join(repositoryRoot, "README.md"))).toBe("repository\n");
+    expect(await provider.readFile("README.md")).toBe("repository\n");
+    await provider.writeFile("/state/events.jsonl", "state\n");
+    expect(await readFile(join(sessionRoot, "state", "events.jsonl"), "utf8")).toBe("state\n");
+    expect(() => provider.readFile(join(root, "outside.md"))).toThrow("escapes its repository");
   });
 
   it("normalizes lifecycle, text, tool, model, usage, and artifact events", async () => {
@@ -154,16 +216,17 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     const { adapter, client } = fixture(calls);
     await (await adapter.create(turn)).result;
     const config = client.createConfigs[0];
-    expect(config?.tools?.map((tool) => tool.name)).toEqual(["senawa.task.done", "senawa.note"]);
+    expect(config?.tools?.map((tool) => tool.name)).toEqual(["senawa_task_done", "senawa_note"]);
+    expect(config?.tools?.every((tool) => /^[a-zA-Z0-9_-]+$/u.test(tool.name))).toBe(true);
     expect(config?.availableTools).not.toContain("builtin:bash");
-    expect(config?.tools?.find((tool) => tool.name === "senawa.note")?.parameters).toMatchObject({
+    expect(config?.tools?.find((tool) => tool.name === "senawa_note")?.parameters).toMatchObject({
       type: "object",
       properties: { note: { type: "string", minLength: 1 } },
       required: ["note"],
       additionalProperties: false,
     });
     await config?.tools
-      ?.find((tool) => tool.name === "senawa.note")
+      ?.find((tool) => tool.name === "senawa_note")
       ?.handler?.({ note: "kept" }, fakeInvocation());
     expect(calls.map((call) => call.name)).toContain("senawa.note");
 
@@ -198,7 +261,7 @@ describe("Copilot SDK worker adapter offline conformance", () => {
         {
           kind: "custom-tool",
           toolCallId: "unbound",
-          toolName: "senawa.unbound",
+          toolName: "senawa_unbound",
           toolDescription: "Unbound Senawa-looking tool",
         },
         { sessionId: turn.sessionId },
@@ -294,8 +357,14 @@ class FakeSdkClient implements CopilotSdkClient {
   eventHandlerPresentAtCreate = false;
   invokePhaseSubmission = false;
   blockSend = false;
+  stopCount = 0;
 
   async start(): Promise<void> {}
+
+  async stop(): Promise<readonly Error[]> {
+    this.stopCount += 1;
+    return [];
+  }
 
   async listModels(): Promise<ModelInfo[]> {
     return [
@@ -351,6 +420,7 @@ class FakeSdkSession implements CopilotSdkSession {
   disconnected = false;
   eventHandlerPresentAtSend = false;
   requestHeaders: Record<string, string> | undefined;
+  sendTimeout: number | undefined;
   private rejectBlocked: ((error: Error) => void) | undefined;
 
   constructor(
@@ -360,12 +430,16 @@ class FakeSdkSession implements CopilotSdkSession {
     private readonly shouldBlock: () => boolean,
   ) {}
 
-  async sendAndWait(options: {
-    readonly prompt: string;
-    readonly requestHeaders?: Record<string, string>;
-  }): Promise<{ readonly data: { readonly content: string } } | undefined> {
+  async sendAndWait(
+    options: {
+      readonly prompt: string;
+      readonly requestHeaders?: Record<string, string>;
+    },
+    timeout?: number,
+  ): Promise<{ readonly data: { readonly content: string } } | undefined> {
     this.eventHandlerPresentAtSend = this.config.onEvent !== undefined;
     this.requestHeaders = options.requestHeaders;
+    this.sendTimeout = timeout;
     if (this.shouldBlock()) {
       return new Promise((_resolve, reject) => {
         this.rejectBlocked = reject;
@@ -373,7 +447,7 @@ class FakeSdkSession implements CopilotSdkSession {
     }
     if (this.shouldSubmitArtifact()) {
       await this.config.tools
-        ?.find((tool) => tool.name === "senawa.phase.submit")
+        ?.find((tool) => tool.name === "senawa_phase_submit")
         ?.handler?.({ artifact: { verdict: "pass" } }, fakeInvocation());
     }
     for (const native of nativeEvents()) this.config.onEvent?.(native);
@@ -399,12 +473,12 @@ function nativeEvents(): SessionEvent[] {
     }),
     native("tool.execution_start", "tool-start", at, {
       toolCallId: "call",
-      toolName: "senawa.phase.submit",
+      toolName: "senawa_phase_submit",
     }),
     native("tool.execution_complete", "tool-complete", at, {
       toolCallId: "call",
       success: true,
-      toolDescription: { name: "senawa.phase.submit" },
+      toolDescription: { name: "senawa_phase_submit" },
     }),
     native("session.usage_checkpoint", "usage", at, { totalNanoAiu: 42 }),
     native("assistant.message", "message", at, {
@@ -451,7 +525,14 @@ function fakeInvocation() {
   return {
     sessionId: turn.sessionId,
     toolCallId: "tool-call",
-    toolName: "senawa.note",
+    toolName: "senawa_note",
     arguments: {},
   };
 }
+
+describe("SDK tool transport names", () => {
+  it("maps semantic names to provider-safe identifiers", () => {
+    expect(sdkToolName("senawa.phase.submit")).toBe("senawa_phase_submit");
+    expect(sdkToolName("senawa.task.done")).toBe("senawa_task_done");
+  });
+});

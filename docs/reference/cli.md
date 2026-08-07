@@ -320,6 +320,17 @@ Options:
   -h, --help     display help for command
 ```
 
+## senawa phase artifact
+
+```text
+Usage: senawa phase artifact [options] <id>
+
+Options:
+  --run <runId>
+  --version <version>
+  -h, --help           display help for command
+```
+
 ## senawa task
 
 ```text

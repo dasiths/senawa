@@ -105,7 +105,6 @@ interface TaskMetadata {
 
 export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
   private readonly client: BeadsClient;
-  private readonly cache = new Map<string, VersionedStoredRuntimeState>();
 
   constructor(
     repositoryRoot: string,
@@ -188,8 +187,6 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
   }
 
   async readRuntimeState(runId: string): Promise<VersionedStoredRuntimeState> {
-    const cached = this.cache.get(runId);
-    if (cached !== undefined) return structuredClone(cached);
     const issues = await this.listAll();
     const epic = findRunIssue(issues, runId);
     if (epic === undefined) throw new Error(`Run does not exist: ${runId}`);
@@ -216,7 +213,6 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
         dispatches: structuredClone([...run.dispatches]),
       },
     };
-    this.cache.set(runId, structuredClone(result));
     return result;
   }
 
@@ -332,7 +328,6 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
         taskMetadata(input.runId, desired, metadata.parent_phase_id, metadata.order),
       ),
     );
-    this.cache.delete(input.runId);
     const desiredState = (await this.readRuntimeState(input.runId)).state;
     const refreshedIssues = await this.listAll();
     const refreshedEpic = findRunIssue(refreshedIssues, input.runId);
@@ -360,10 +355,6 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
       }),
     );
     return desired;
-  }
-
-  deleteReadCache(): void {
-    this.cache.clear();
   }
 
   private async convergePhases(
@@ -529,7 +520,6 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
 
   private async readConverged(runId: string, digest: string): Promise<VersionedStoredRuntimeState> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      this.cache.delete(runId);
       const current = await this.readRuntimeState(runId);
       if (payloadDigest(current.state) === digest) return current;
     }
@@ -587,14 +577,11 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
   }
 
   private async writeJson<T = unknown>(arguments_: readonly string[]): Promise<T> {
-    const result = await this.client.json<T>(arguments_);
-    this.cache.clear();
-    return result;
+    return this.client.json<T>(arguments_);
   }
 
   private async writeRaw(arguments_: readonly string[]): Promise<void> {
     await this.client.raw(arguments_);
-    this.cache.clear();
   }
 
   private afterStep(step: TransitionStep, operationId: string, issueId: string): Promise<void> {

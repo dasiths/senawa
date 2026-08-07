@@ -90,9 +90,92 @@ describe("production SDK worker bindings", () => {
       ?.handle({ note: "Durable context" }, context);
 
     const actor = { channel: "worker", sessionId: turn.sessionId };
-    expect(ask).toHaveBeenCalledWith(turn.runId, "Which boundary?", actor);
+    expect(ask).toHaveBeenCalledWith(turn.runId, "Which boundary?", actor, {
+      owner: turn.owner,
+      sessionId: turn.sessionId,
+      turnId: turn.turnId,
+    });
     expect(discover).toHaveBeenCalledWith(turn.runId, "Follow-up work", actor);
     expect(note).toHaveBeenCalledWith(turn.runId, "Durable context", actor);
+  });
+
+  it("keeps ask pending until the correlated durable answer is available", async () => {
+    const answer = deferred<string>();
+    const ask = vi.fn(async () => ({ runId: turn.runId, questionId: "question-1" }));
+    const waitForQuestionAnswer = vi.fn(() => answer.promise);
+    const resume = vi.fn();
+    const drive = vi.fn();
+    const advance = vi.fn();
+    const finish = vi.fn();
+    const bindings = createSdkWorkerBindings(() =>
+      services({ ask, resume, drive, advance, finish }, waitForQuestionAnswer),
+    ).bindingsFor(turn, authorization);
+    let settled = false;
+
+    const result = bindings
+      .find((binding) => binding.name === "senawa.ask")
+      ?.handle({ question: "Which boundary?" }, context)
+      .finally(() => {
+        settled = true;
+      });
+    await flushMicrotasks();
+
+    expect(settled).toBe(false);
+    expect(waitForQuestionAnswer).toHaveBeenCalledWith(turn.runId, "question-1", {
+      sessionId: turn.sessionId,
+      turnId: turn.turnId,
+    });
+
+    answer.resolve("Keep it in application queries.");
+
+    await expect(result).resolves.toEqual({
+      accepted: true,
+      code: "question_answered",
+      message: "Question question-1 was answered by the human.",
+      data: { questionId: "question-1", answer: "Keep it in application queries." },
+    });
+    expect(resume).not.toHaveBeenCalled();
+    expect(drive).not.toHaveBeenCalled();
+    expect(advance).not.toHaveBeenCalled();
+    expect(finish).not.toHaveBeenCalled();
+  });
+
+  it("correlates concurrent asks when answers arrive in reverse order", async () => {
+    const answers = new Map([
+      ["question-1", deferred<string>()],
+      ["question-2", deferred<string>()],
+    ]);
+    const ask = vi.fn(async (_runId: string, question: string) => ({
+      runId: turn.runId,
+      questionId: question === "First?" ? "question-1" : "question-2",
+    }));
+    const waitForQuestionAnswer = vi.fn(
+      (_runId: string, questionId: string) => answers.get(questionId)?.promise ?? Promise.reject(),
+    );
+    const bindings = createSdkWorkerBindings(() =>
+      services({ ask }, waitForQuestionAnswer),
+    ).bindingsFor(turn, authorization);
+    const binding = bindings.find((candidate) => candidate.name === "senawa.ask");
+    if (binding === undefined) throw new Error("senawa.ask binding is missing");
+    let firstSettled = false;
+    const first = binding.handle({ question: "First?" }, context).finally(() => {
+      firstSettled = true;
+    });
+    const second = binding.handle({ question: "Second?" }, context);
+    await flushMicrotasks();
+
+    answers.get("question-2")?.resolve("Second answer");
+    await expect(second).resolves.toMatchObject({
+      code: "question_answered",
+      data: { questionId: "question-2", answer: "Second answer" },
+    });
+    expect(firstSettled).toBe(false);
+
+    answers.get("question-1")?.resolve("First answer");
+    await expect(first).resolves.toMatchObject({
+      code: "question_answered",
+      data: { questionId: "question-1", answer: "First answer" },
+    });
   });
 });
 
@@ -101,13 +184,35 @@ function services(
     ask?: ReturnType<typeof vi.fn>;
     discover?: ReturnType<typeof vi.fn>;
     note?: ReturnType<typeof vi.fn>;
+    resume?: ReturnType<typeof vi.fn>;
+    drive?: ReturnType<typeof vi.fn>;
+    advance?: ReturnType<typeof vi.fn>;
+    finish?: ReturnType<typeof vi.fn>;
   } = {},
+  waitForQuestionAnswer: ReturnType<typeof vi.fn> = vi.fn(async () => "Human answer"),
 ): SenawaServices {
   return {
     commands: {
       ask: commands.ask ?? vi.fn(),
       discover: commands.discover ?? vi.fn(),
       note: commands.note ?? vi.fn(),
+      resume: commands.resume ?? vi.fn(),
+      drive: commands.drive ?? vi.fn(),
+      advance: commands.advance ?? vi.fn(),
+      finish: commands.finish ?? vi.fn(),
     },
+    queries: { waitForQuestionAnswer },
   } as unknown as SenawaServices;
+}
+
+function deferred<T>() {
+  let resolvePromise: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 5; index += 1) await Promise.resolve();
 }

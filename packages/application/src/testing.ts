@@ -158,6 +158,36 @@ export class FakeRunPersistence implements RunPersistencePort {
     );
   }
 
+  appendOutput(input: {
+    readonly runId: string;
+    readonly ownerKind: "run" | "phase" | "task";
+    readonly ownerId: string;
+    readonly entryId: string;
+    readonly record: OutputRecord;
+  }): Promise<OutputRecord> {
+    const run = this.requireRun(input.runId);
+    const key = `${input.ownerKind}:${input.ownerId}`;
+    const records = run.outputs[key] ?? [];
+    const record = { ...input.record, seq: records.length + 1 };
+    run.outputs[key] = [...records, record];
+    return Promise.resolve(structuredClone(record));
+  }
+
+  outputHead(runId: string, ownerKind: "run" | "phase" | "task", ownerId: string): Promise<number> {
+    return Promise.resolve(this.requireRun(runId).outputs[`${ownerKind}:${ownerId}`]?.length ?? 0);
+  }
+
+  listOutputOwners(
+    runId: string,
+  ): Promise<readonly { readonly kind: "run" | "phase" | "task"; readonly id: string }[]> {
+    return Promise.resolve(
+      Object.keys(this.requireRun(runId).outputs).map((key) => {
+        const [kind, ...id] = key.split(":");
+        return { kind: kind as "run" | "phase" | "task", id: id.join(":") };
+      }),
+    );
+  }
+
   appendWorkerEvent(input: {
     readonly runId: string;
     readonly entryId: string;

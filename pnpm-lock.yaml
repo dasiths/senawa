@@ -226,6 +226,9 @@ importers:
       '@senawa/artifact-store':
         specifier: workspace:*
         version: link:../../packages/artifact-store
+      '@senawa/browser':
+        specifier: workspace:*
+        version: link:../../packages/browser
       '@senawa/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -238,6 +241,9 @@ importers:
       '@senawa/testing':
         specifier: workspace:*
         version: link:../../packages/testing
+      esbuild:
+        specifier: 0.25.12
+        version: 0.25.12
 
 packages:
 

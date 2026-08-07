@@ -32,6 +32,7 @@ sensors:
     config:
       command: pnpm test
       parser: raw
+      timeoutMs: 600000
 gates:
   - id: definition-accepted
     description: Definition artifact is present and schema-valid

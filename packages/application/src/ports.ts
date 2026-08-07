@@ -237,6 +237,11 @@ export interface GateEvaluationPort {
     readonly gateId: string;
     readonly policy: RunSnapshot["policy"];
     readonly artifact?: JsonObject;
+    readonly onOutput?: (input: {
+      readonly sensorId: string;
+      readonly stream: "stdout" | "stderr" | "system";
+      readonly text: string;
+    }) => Promise<void>;
   }): Promise<GateEvaluation>;
 }
 
@@ -291,6 +296,6 @@ export interface RunPersistencePort
     ActiveRunRegistry,
     RunDocumentStore,
     JournalPort,
-    OutputLogPort,
+    OutputLogStoragePort,
     WorkerEventStoragePort,
     LeaseStoragePort {}

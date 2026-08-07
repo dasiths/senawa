@@ -1,4 +1,80 @@
-import type { RuntimeDispatch, RuntimePhase, RuntimeState, RuntimeTask } from "@senawa/domain";
+import type {
+  JournalEvent,
+  RuntimeDispatch,
+  RuntimePhase,
+  RuntimeState,
+  RuntimeTask,
+} from "@senawa/domain";
+
+export interface OpenWorkerQuestion {
+  readonly questionId: string;
+  readonly question: string;
+  readonly askedAt: string;
+  readonly askedSeq: number;
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly ownerKind: "phase" | "task";
+  readonly ownerId: string;
+  readonly status: "answerable" | "stale";
+}
+
+export function projectOpenWorkerQuestions(state: RuntimeState): readonly OpenWorkerQuestion[] {
+  const answered = new Set(
+    state.journal
+      .filter((event) => event.event === "question.answered")
+      .map((event) => Reflect.get(event.data, "questionId"))
+      .filter((questionId): questionId is string => typeof questionId === "string"),
+  );
+  return state.journal
+    .filter((event) => event.event === "question.asked")
+    .flatMap((event) => projectOpenWorkerQuestion(state, event, answered));
+}
+
+function projectOpenWorkerQuestion(
+  state: RuntimeState,
+  event: JournalEvent,
+  answered: ReadonlySet<string>,
+): readonly OpenWorkerQuestion[] {
+  const questionId = Reflect.get(event.data, "questionId");
+  const question = Reflect.get(event.data, "question");
+  const sessionId = Reflect.get(event.data, "sessionId");
+  const turnId = Reflect.get(event.data, "turnId");
+  const ownerKind = Reflect.get(event.data, "ownerKind");
+  const ownerId = Reflect.get(event.data, "ownerId");
+  if (
+    event.actor.channel !== "worker" ||
+    typeof questionId !== "string" ||
+    typeof question !== "string" ||
+    typeof sessionId !== "string" ||
+    typeof turnId !== "string" ||
+    (ownerKind !== "phase" && ownerKind !== "task") ||
+    typeof ownerId !== "string" ||
+    answered.has(questionId)
+  ) {
+    return [];
+  }
+  const active = state.activeTurn;
+  return [
+    {
+      questionId,
+      question,
+      askedAt: event.ts,
+      askedSeq: event.seq,
+      sessionId,
+      turnId,
+      ownerKind,
+      ownerId,
+      status:
+        state.status === "running" &&
+        active?.sessionId === sessionId &&
+        active.turnId === turnId &&
+        active.ownerKind === ownerKind &&
+        active.ownerId === ownerId
+          ? "answerable"
+          : "stale",
+    },
+  ];
+}
 
 export interface RunStatusProjection {
   readonly runId: string;
@@ -14,6 +90,7 @@ export interface RunStatusProjection {
   readonly phases: ReadonlyArray<{
     readonly id: string;
     readonly role: string;
+    readonly executorKind: "agent" | "task-frontier" | "sensor-only" | "human" | "foreach";
     readonly dependsOn: readonly string[];
     readonly status: RuntimePhase["status"];
     readonly iteration: number;
@@ -97,6 +174,7 @@ export function projectRunStatus(state: RuntimeState): RunStatusProjection {
             : "role" in executor
               ? executor.role
               : executor.kind,
+        executorKind: executor.kind,
         dependsOn: definition.dependsOn,
         status: phase.status,
         iteration: phase.iteration,
@@ -107,7 +185,7 @@ export function projectRunStatus(state: RuntimeState): RunStatusProjection {
       key: task.key,
       title: truncate(task.title, 160),
       role: task.role,
-      parentPhaseId: "implement",
+      parentPhaseId: taskFrontierPhaseId(state, task),
       dependsOn: task.dependsOn,
       status: task.status,
       attempt: task.attempt,
@@ -141,6 +219,20 @@ function workflowPhase(state: RuntimeState, phaseId: string) {
   const phase = state.snapshot.workflow.spec.phases.find((candidate) => candidate.id === phaseId);
   if (phase === undefined) throw new Error(`Unknown workflow phase ${phaseId}`);
   return phase;
+}
+
+function taskFrontierPhaseId(state: RuntimeState, task: RuntimeTask): string {
+  const frontiers = state.snapshot.workflow.spec.phases.filter(
+    (phase) => phase.executor.kind === "task-frontier",
+  );
+  const matchingRole = frontiers.filter(
+    (phase) => phase.executor.kind === "task-frontier" && phase.executor.role === task.role,
+  );
+  const roleMatch = matchingRole[0];
+  if (matchingRole.length === 1 && roleMatch !== undefined) return roleMatch.id;
+  const onlyFrontier = frontiers[0];
+  if (frontiers.length === 1 && onlyFrontier !== undefined) return onlyFrontier.id;
+  throw new Error(`Task ${task.key} does not map to one task-frontier phase`);
 }
 
 function dispatchOperatorAction(dispatch: RuntimeDispatch): string {

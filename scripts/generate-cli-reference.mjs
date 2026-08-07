@@ -32,6 +32,7 @@ const groups = [
   ["phase"],
   ["phase", "show"],
   ["phase", "brief"],
+  ["phase", "artifact"],
   ["task"],
   ["task", "show"],
   ["plan"],

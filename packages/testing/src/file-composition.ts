@@ -7,6 +7,7 @@ import {
 } from "@senawa/observability";
 import {
   FileActiveRunRegistry,
+  FileBrowserCommandReceiptStore,
   FileLeaseStore,
   FileRunPersistence,
   FileRuntimeStateStore,
@@ -15,10 +16,16 @@ import {
 export function createFileTestComposition(
   repositoryRoot: string,
   now: () => Date = () => new Date(),
-): { readonly persistence: FileRunPersistence; readonly notifier: RunChangeNotifier } {
+): {
+  readonly persistence: FileRunPersistence;
+  readonly notifier: RunChangeNotifier;
+  readonly receiptStore: FileBrowserCommandReceiptStore;
+} {
   const notifier = new RunChangeNotifier();
+  const leases = new FileLeaseStore(repositoryRoot, now);
   return {
     notifier,
+    receiptStore: new FileBrowserCommandReceiptStore(repositoryRoot, leases, now, notifier),
     persistence: new FileRunPersistence(repositoryRoot, {
       runtime: new FileRuntimeStateStore(repositoryRoot),
       activeRuns: new FileActiveRunRegistry(repositoryRoot),
@@ -26,7 +33,7 @@ export function createFileTestComposition(
       journal: new FileJournalStore(repositoryRoot, notifier),
       output: new FileOutputLogStore(repositoryRoot, notifier),
       workerEvents: new FileWorkerEventStore(repositoryRoot),
-      leases: new FileLeaseStore(repositoryRoot, now),
+      leases,
       notifications: notifier,
     }),
   };

@@ -7,8 +7,14 @@ import { FileRunDocumentStore } from "@senawa/artifact-store";
 import type { RuntimeState, RuntimeTask } from "@senawa/domain";
 import { FileJournalStore, FileOutputLogStore, FileWorkerEventStore } from "@senawa/observability";
 import { BeadsClient, BeadsRuntimeStateStore } from "@senawa/runtime-beads";
-import { FileActiveRunRegistry, FileLeaseStore, FileRunPersistence } from "@senawa/runtime-file";
 import {
+  FileActiveRunRegistry,
+  FileLeaseStore,
+  FileRunPersistence,
+  type FileRunPersistenceOptions,
+} from "@senawa/runtime-file";
+import {
+  createJournalEvent,
   createRuntimeFixture,
   dispatchProjectionContract,
   leaseContract,
@@ -85,7 +91,6 @@ describe("Beads runtime state", () => {
       state: closed,
     });
 
-    runtime.deleteReadCache();
     const reopened = await persistence(root).readRun(state.identity.runId);
     expect(reopened.state.tasks.map((candidate) => [candidate.key, candidate.status])).toEqual([
       ["task-one", "closed"],
@@ -134,6 +139,40 @@ describe("Beads runtime state", () => {
     );
   });
 
+  it("refreshes a long-lived reader after an independent recovery commits", async () => {
+    const root = await beadsRoot();
+    const state = createRuntimeFixture("run-cross-instance-recovery");
+    const longLived = persistence(root);
+    await longLived.createRun(state, "start-cross-instance-recovery");
+    const primed = await longLived.readRun(state.identity.runId);
+    const next = structuredClone(primed.state);
+    requireFirstPhase(next).status = "running";
+    const event = createJournalEvent(state.identity.runId, 1, "runtime recovery committed");
+    next.journal.push(event);
+    const interrupted = persistence(root, new BeadsRuntimeStateStore(root), {
+      afterStep(step) {
+        if (step === "evidence") throw new Error("injected persistence crash");
+      },
+    });
+
+    await expect(
+      interrupted.commitRun({
+        runId: state.identity.runId,
+        expectedRevision: primed.revision,
+        operationId: "commit-cross-instance-recovery",
+        state: next,
+      }),
+    ).rejects.toThrow("injected persistence crash");
+    await expect(longLived.readJournal(state.identity.runId, 0, 10)).resolves.toEqual([event]);
+
+    const recovered = await persistence(root).readRun(state.identity.runId);
+    const refreshed = await longLived.readRun(state.identity.runId);
+    expect(refreshed.revision).toBe(recovered.revision);
+    expect(refreshed.revision).not.toBe(primed.revision);
+    expect(refreshed.state.phases[0]?.status).toBe("running");
+    expect(refreshed.state.journal).toEqual([event]);
+  });
+
   it("recovers each split transition step through the durable operation", async () => {
     for (const injectedStep of [
       "pending-metadata",
@@ -174,6 +213,7 @@ describe("Beads runtime state", () => {
 function persistence(
   root: string,
   runtime: BeadsRuntimeStateStore = new BeadsRuntimeStateStore(root),
+  options: FileRunPersistenceOptions = {},
 ): FileRunPersistence {
   return new FileRunPersistence(
     root,
@@ -186,7 +226,7 @@ function persistence(
       workerEvents: new FileWorkerEventStore(root),
       leases: new FileLeaseStore(root),
     },
-    { lockTimeoutMs: 120_000, staleLockMs: 300_000 },
+    { lockTimeoutMs: 120_000, staleLockMs: 300_000, ...options },
   );
 }
 

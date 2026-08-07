@@ -1,12 +1,23 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import {
+  BrowserCommandIdConflictError,
+  BrowserCommandInProgressError,
+  type DurableBrowserCommandService,
   LeaseConflictError,
+  QuestionSubmissionConflictError,
+  QuestionUnavailableError,
   type RunChangeNotificationPort,
   type RunCommandService,
   type RunQueryService,
 } from "@senawa/application";
-import { BrowserRunCommandSchema, type CommandActor, type RuntimeLease } from "@senawa/domain";
+import {
+  BrowserQuestionAnswerSchema,
+  BrowserRunCommandSchema,
+  IdentifierSchema,
+  type RuntimeLease,
+} from "@senawa/domain";
+import { beginSse } from "./sse.js";
 import {
   appJs,
   cytoscapeDagreJs,
@@ -16,14 +27,23 @@ import {
   stylesCss,
 } from "./static-assets.js";
 
-const actor: CommandActor = { channel: "web" };
 const cookieName = "senawa_session";
 
 export interface BrowserServices {
-  readonly commands: Pick<RunCommandService, "approve" | "reject" | "steer" | "resume" | "end">;
+  readonly commands: Pick<RunCommandService, "answer">;
+  readonly browserCommands: Pick<
+    DurableBrowserCommandService,
+    "submit" | "receipt" | "activeReceipt" | "receipts" | "processNext"
+  >;
   readonly queries: Pick<
     RunQueryService,
-    "activeRunId" | "status" | "journal" | "output" | "artifact"
+    | "activeRunId"
+    | "status"
+    | "openWorkerQuestions"
+    | "journal"
+    | "output"
+    | "workerEvents"
+    | "artifact"
   >;
   readonly notifier: RunChangeNotificationPort;
   acquireWebLease(runId: string, owner: string, ttlMs: number): Promise<RuntimeLease>;
@@ -61,6 +81,8 @@ export async function startWebSupervisor(
   const sessionToken = randomBytes(32).toString("base64url");
   let expectedHost = "";
   let expectedOrigin = "";
+  let stopping = false;
+  let draining: Promise<void> | null = null;
   let closing: Promise<void> | null = null;
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolvePromise) => {
@@ -91,10 +113,10 @@ export async function startWebSupervisor(
         sendJson(response, 401, { error: { code: "unauthorized", message: "Unauthorized" } });
         return;
       }
-      await route(request, response, url, runId, expectedOrigin, services);
+      await route(request, response, url, runId, expectedOrigin, services, () => void drain());
     } catch (error) {
       sendJson(response, statusForError(error), {
-        error: { code: "request_failed", message: errorMessage(error) },
+        error: { code: errorCode(error), message: errorMessage(error) },
       });
     }
   });
@@ -128,12 +150,33 @@ export async function startWebSupervisor(
     Math.max(1_000, Math.floor(leaseTtlMs / 3)),
   );
   heartbeat.unref();
+  void drain();
+
+  function drain(): Promise<void> {
+    if (stopping) return Promise.resolve();
+    if (draining !== null) return draining;
+    draining = (async () => {
+      while (
+        !stopping &&
+        (await services.browserCommands.processNext(runId, webLease, leaseTtlMs))
+      ) {
+        // Version 1 permits one nonterminal command, but loop after recovery for completeness.
+      }
+    })()
+      .catch(() => undefined)
+      .finally(() => {
+        draining = null;
+      });
+    return draining;
+  }
 
   async function close(): Promise<void> {
     if (closing !== null) return closing;
     closing = (async () => {
-      clearInterval(heartbeat);
+      stopping = true;
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+      await draining;
+      clearInterval(heartbeat);
       await services.releaseWebLease(runId, webLease).catch(() => undefined);
       resolveClosed();
     })();
@@ -156,6 +199,7 @@ async function route(
   runId: string,
   expectedOrigin: string,
   services: BrowserServices,
+  commandSubmitted: () => void,
 ): Promise<void> {
   if (request.method === "GET" && url.pathname === `/runs/${encodeURIComponent(runId)}`) {
     sendText(response, 200, indexHtml, "text/html; charset=utf-8");
@@ -196,14 +240,82 @@ async function route(
     return;
   }
   if (request.method === "GET" && url.pathname === `${prefix}/events/stream`) {
-    beginSse(request, response, runId, cursor(url, request), services, (after) =>
-      services.queries.journal(runId, after, 500),
-    );
+    beginSse(request, response, {
+      runId,
+      initialCursor: cursor(url, request),
+      notifier: services.notifier,
+      read: (after) => services.queries.journal(runId, after, 500),
+      prepareHeaders: (target) => securityHeaders(target, "text/event-stream; charset=utf-8"),
+    });
+    return;
+  }
+  if (request.method === "GET" && url.pathname === `${prefix}/questions/open`) {
+    sendJson(response, 200, {
+      apiVersion: "senawa.dev/open-worker-questions/v1",
+      questions: await services.queries.openWorkerQuestions(runId),
+    });
+    return;
+  }
+  const answerMatch = url.pathname.match(
+    new RegExp(`^${escapeRegex(prefix)}/questions/([^/]+)/answer$`, "u"),
+  );
+  if (request.method === "POST" && answerMatch !== null) {
+    if (request.headers.origin !== expectedOrigin) {
+      sendJson(response, 403, { error: { code: "origin_rejected", message: "Origin rejected" } });
+      return;
+    }
+    if (!isJsonContentType(request.headers["content-type"])) {
+      sendJson(response, 415, { error: { code: "content_type", message: "JSON required" } });
+      return;
+    }
+    const questionId = IdentifierSchema.parse(decodeURIComponent(answerMatch[1] ?? ""));
+    const input = BrowserQuestionAnswerSchema.parse(await readJsonBody(request));
+    await services.commands.answer(runId, questionId, input.answer, { channel: "web" }, input);
+    sendJson(response, 200, {
+      apiVersion: "senawa.dev/question-answer-result/v1",
+      questionId,
+      status: "answered",
+    });
+    return;
+  }
+  if (request.method === "GET" && url.pathname === `${prefix}/commands/active`) {
+    sendJson(response, 200, {
+      apiVersion: "senawa.dev/browser-command-receipt-result/v1",
+      receipt: await services.browserCommands.activeReceipt(runId),
+    });
+    return;
+  }
+  if (request.method === "GET" && url.pathname === `${prefix}/commands/events`) {
+    beginSse(request, response, {
+      runId,
+      initialCursor: cursor(url, request),
+      notifier: services.notifier,
+      read: (after) => services.browserCommands.receipts(runId, after, 500),
+      prepareHeaders: (target) => securityHeaders(target, "text/event-stream; charset=utf-8"),
+    });
+    return;
+  }
+  const receiptMatch = url.pathname.match(
+    new RegExp(
+      `^${escapeRegex(prefix)}/commands/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$`,
+      "u",
+    ),
+  );
+  if (request.method === "GET" && receiptMatch !== null) {
+    const receipt = await services.browserCommands.receipt(runId, receiptMatch[1] ?? "");
+    if (receipt === null) {
+      sendJson(response, 404, { error: { code: "not_found", message: "Receipt not found" } });
+    } else {
+      sendJson(response, 200, {
+        apiVersion: "senawa.dev/browser-command-receipt-result/v1",
+        receipt,
+      });
+    }
     return;
   }
 
   const streamMatch = url.pathname.match(
-    new RegExp(`^${escapeRegex(prefix)}/streams/([^/]+)/(records|events)$`, "u"),
+    new RegExp(`^${escapeRegex(prefix)}/streams/([^/]+)/(records|events|worker-events)$`, "u"),
   );
   if (request.method === "GET" && streamMatch !== null) {
     const owner = parseStream(decodeURIComponent(streamMatch[1] ?? ""));
@@ -214,10 +326,27 @@ async function route(
         200,
         await services.queries.output(runId, owner.kind, owner.id, after, limit(url)),
       );
+    } else if (streamMatch[2] === "events") {
+      beginSse(request, response, {
+        runId,
+        initialCursor: after,
+        notifier: services.notifier,
+        read: (next) => services.queries.output(runId, owner.kind, owner.id, next, 500),
+        prepareHeaders: (target) => securityHeaders(target, "text/event-stream; charset=utf-8"),
+      });
+    } else if (owner.kind === "run") {
+      sendJson(response, 400, {
+        error: { code: "invalid_stream", message: "Run owners have no worker event stream" },
+      });
     } else {
-      beginSse(request, response, runId, after, services, (next) =>
-        services.queries.output(runId, owner.kind, owner.id, next, 500),
-      );
+      const workerKind: "phase" | "task" = owner.kind === "phase" ? "phase" : "task";
+      beginSse(request, response, {
+        runId,
+        initialCursor: after,
+        notifier: services.notifier,
+        read: (next) => services.queries.workerEvents(runId, workerKind, owner.id, next, 500),
+        prepareHeaders: (target) => securityHeaders(target, "text/event-stream; charset=utf-8"),
+      });
     }
     return;
   }
@@ -244,93 +373,22 @@ async function route(
       sendJson(response, 403, { error: { code: "origin_rejected", message: "Origin rejected" } });
       return;
     }
-    if (!(request.headers["content-type"] ?? "").startsWith("application/json")) {
+    if (!isJsonContentType(request.headers["content-type"])) {
       sendJson(response, 415, { error: { code: "content_type", message: "JSON required" } });
       return;
     }
     const command = BrowserRunCommandSchema.parse(await readJsonBody(request));
-    const result = await executeBrowserCommand(command, runId, services);
+    const receipt = await services.browserCommands.submit(runId, command);
+    response.setHeader("Location", `${prefix}/commands/${encodeURIComponent(receipt.commandId)}`);
     sendJson(response, 202, {
-      apiVersion: "senawa.dev/browser-command-result/v1",
-      accepted: true,
-      result,
-      snapshot: await services.queries.status(runId),
+      apiVersion: "senawa.dev/browser-command-receipt-result/v1",
+      receipt,
     });
+    commandSubmitted();
     return;
   }
 
   sendJson(response, 404, { error: { code: "not_found", message: "Not found" } });
-}
-
-async function executeBrowserCommand(
-  command: ReturnType<typeof BrowserRunCommandSchema.parse>,
-  runId: string,
-  services: BrowserServices,
-) {
-  switch (command.command) {
-    case "approve":
-      return services.commands.approve(runId, command.phaseId, actor, command.note);
-    case "reject":
-      return services.commands.reject(runId, command.phaseId, command.reason, actor);
-    case "steer":
-      return services.commands.steer(runId, command.taskId, command.instruction, actor);
-    case "resume":
-      return services.commands.resume(runId, actor);
-    case "end":
-      return services.commands.end(runId, command.reason, actor);
-  }
-}
-
-function beginSse<T extends { seq: number }>(
-  request: IncomingMessage,
-  response: ServerResponse,
-  runId: string,
-  initialCursor: number,
-  services: BrowserServices,
-  read: (after: number) => Promise<readonly T[]>,
-): void {
-  securityHeaders(response, "text/event-stream; charset=utf-8");
-  response.setHeader("Connection", "keep-alive");
-  response.setHeader("X-Accel-Buffering", "no");
-  response.writeHead(200);
-  response.write("retry: 1000\n\n");
-  let current = initialCursor;
-  let flushing = false;
-  let pending = true;
-  const flush = async () => {
-    if (flushing) {
-      pending = true;
-      return;
-    }
-    flushing = true;
-    try {
-      do {
-        pending = false;
-        for (const record of await read(current)) {
-          if (record.seq <= current) continue;
-          response.write(`id: ${record.seq}\ndata: ${JSON.stringify(record)}\n\n`);
-          current = record.seq;
-        }
-      } while (pending);
-    } catch {
-      response.end();
-    } finally {
-      flushing = false;
-    }
-  };
-  const unsubscribe = services.notifier.subscribe((changedRunId) => {
-    if (changedRunId === runId) void flush();
-  });
-  void flush();
-  const durablePoll = setInterval(() => void flush(), 250);
-  durablePoll.unref();
-  const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 15_000);
-  heartbeat.unref();
-  request.once("close", () => {
-    clearInterval(durablePoll);
-    clearInterval(heartbeat);
-    unsubscribe();
-  });
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
@@ -349,6 +407,10 @@ function authorized(request: IncomingMessage, token: string): boolean {
     .some((part) => part === `${cookieName}=${token}`);
 }
 
+function isJsonContentType(value: string | undefined): boolean {
+  return value?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
+}
+
 function parseStream(value: string): { kind: "run" | "phase" | "task"; id: string } {
   const match = value.match(/^(run|phase|task):([a-z0-9]+(?:[._-][a-z0-9]+)*)$/u);
   if (match === null) throw new Error("Unknown output stream");
@@ -356,7 +418,7 @@ function parseStream(value: string): { kind: "run" | "phase" | "task"; id: strin
 }
 
 function cursor(url: URL, request: IncomingMessage): number {
-  const raw = url.searchParams.get("after") ?? request.headers["last-event-id"] ?? "0";
+  const raw = request.headers["last-event-id"] ?? url.searchParams.get("after") ?? "0";
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 0) throw new Error("Invalid replay cursor");
   return value;
@@ -401,15 +463,43 @@ class BodyTooLargeError extends Error {}
 
 function statusForError(error: unknown): number {
   if (error instanceof BodyTooLargeError) return 413;
-  if (error instanceof LeaseConflictError) return 409;
+  if (
+    error instanceof LeaseConflictError ||
+    error instanceof BrowserCommandIdConflictError ||
+    error instanceof BrowserCommandInProgressError ||
+    error instanceof QuestionUnavailableError ||
+    error instanceof QuestionSubmissionConflictError
+  ) {
+    return 409;
+  }
   if (error instanceof SyntaxError || (error instanceof Error && error.name === "ZodError")) {
     return 400;
   }
   return 409;
 }
 
+function errorCode(error: unknown): string {
+  if (error instanceof QuestionUnavailableError) return "question_unavailable";
+  if (error instanceof QuestionSubmissionConflictError) return "submission_conflict";
+  return "request_failed";
+}
+
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof QuestionUnavailableError) return "Question is no longer available";
+  if (error instanceof QuestionSubmissionConflictError)
+    return "Submission conflicts with an answer";
+  if (
+    error instanceof LeaseConflictError ||
+    error instanceof BrowserCommandIdConflictError ||
+    error instanceof BrowserCommandInProgressError
+  ) {
+    return error.message;
+  }
+  if (error instanceof BodyTooLargeError) return "Request body too large";
+  if (error instanceof SyntaxError || (error instanceof Error && error.name === "ZodError")) {
+    return "Invalid request";
+  }
+  return "Request failed";
 }
 
 function escapeRegex(value: string): string {

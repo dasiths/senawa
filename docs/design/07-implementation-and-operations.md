@@ -45,6 +45,11 @@ context, maps cancellation to `abort()`, and separates retain from irreversible
 delete. It reports session-only inspection and no replay because Senawa durable
 events, not experimental SDK cursors, own replay. No live Copilot subprocess or
 SDK transport was exercised.
+
+> **NOTE:** Offline conformance uses deterministic adapters, a bounded recording
+> fake executable, and an injected fake SDK client. Live SDK session execution is
+> unvalidated.
+
 The CLI selects this adapter explicitly with `--worker-host sdk`; constructing
 ordinary deterministic, browser, and diagnostic commands does not resolve or
 start the SDK runtime.
@@ -86,7 +91,15 @@ idempotency, lease fencing, mid-commit crash recovery, dispatch reconstruction,
 and status projections.
 Browser SSE rereads durable cursors on bounded polling; notifications only wake
 same-process readers sooner. `@senawa/browser` owns authenticated HTTP routes,
-strict command schemas, graph assets, and durable replay. `@senawa/reporting`
+strict command schemas, graph assets, durable replay, and asynchronous command
+receipt projection. Browser commands append to a run-scoped file receipt log,
+then execute under the fenced web-supervisor lease through the shared application
+service. Receipt-local SSE supports durable replay and live terminal updates;
+same-process notifications reduce latency and bounded server polling observes
+independent writers. Worker questions use a separate authenticated answer route
+to avoid deadlocking the active command receipt. Beads runtime reads reconstruct
+from fresh `bd list --all` output so a
+long-lived portal observes independent process commits. `@senawa/reporting`
 reads an application-owned evidence projection and escapes untrusted Markdown,
 HTML, control characters, and instruction-like tags with deterministic caps. It
 renders all eight documented process sections and aggregates cumulative AIU and
@@ -115,14 +128,14 @@ the documented `bd --json` contract with `BD_JSON_ENVELOPE=1`.
 | `@senawa/domain` | Pure schemas, identifiers, snapshots, state contracts, events, and transition invariants |
 | `@senawa/configuration` | Repository discovery, YAML and JSON loading, schema compilation, profiles, workflow catalog, doctor preflight, snapshots, and fingerprints |
 | `@senawa/application` | Commands, queries, driver, prompts, projections, and application-owned ports; imports domain only |
-| `@senawa/runtime-beads` | Beads 1.1.x runtime graph, atomic claims, gates, revisions, operation receipts, cache invalidation, and split-write reconciliation |
-| `@senawa/runtime-file` | Explicit development and test runtime state, active-run registry, fenced leases, and split-store recovery |
+| `@senawa/runtime-beads` | Beads 1.1.x runtime graph, atomic claims, gates, revisions, operation receipts, fresh reconstruction, and split-write reconciliation |
+| `@senawa/runtime-file` | Explicit development and test runtime state, active-run registry, fenced leases, browser command receipts, and split-store recovery |
 | `@senawa/artifact-store` | Immutable run identity, snapshot, and versioned artifact documents |
 | `@senawa/observability` | Append-only journal and output JSONL, stable cursors, notification hints, and future telemetry seams |
 | `@senawa/testing` | Shared adapter contracts and deterministic fixtures; production packages do not import it |
 | `@senawa/workers` | Deterministic, recording, subprocess, and Copilot SDK lifecycle adapters, capability negotiation, authorization, normalized events, native typed bindings, and fake-client conformance |
 | `@senawa/sensors` | Application gate port implementation, ordered built-in artifact or command execution, normalization, cache identity, and evidence spill seams; generic extension loading pending |
-| `@senawa/browser` | Authenticated loopback HTTP routes, strict command schemas, durable SSE replay, static graph assets, and application command/query consumption |
+| `@senawa/browser` | Authenticated loopback HTTP routes, strict command schemas, asynchronous receipt projection, durable SSE replay, static graph assets, and application command/query consumption |
 | `@senawa/reporting` | Report renderer and untrusted Markdown hygiene over application evidence projections |
 | `senawa` | Full command-line interface |
 | `senawa-hook` | Minimal hook entry point with no graph or heavy dependencies |
@@ -164,7 +177,8 @@ require failures do not escape the build.
 The current workspace exposes `pnpm bundle:check` for CLI and hook startup,
 `pnpm demo` for the isolated file-backed no-credit browser workflow,
 `pnpm demo:beads` for the equivalent real-Beads workflow, and `pnpm demo:live`
-for the guarded Copilot implementation-worker path. Each offline demo terminates
+for the guarded Copilot implementation-worker path using `--runtime file`. Each
+offline demo terminates
 its supervisor by default; `pnpm demo -- --keep-server` is the explicit
 inspection mode. Its temporary repository runs real command sensors: typecheck
 passes, while tests fail on attempt 1 and pass on attempt 2 to prove deterministic
@@ -204,15 +218,15 @@ The command surface is grouped by responsibility:
 
 | Group | Representative commands | Primary caller |
 |-------|-------------------------|----------------|
-| Run lifecycle | `work start`, `resume`, `show`, `log`, `wait`, `pause`, `end`, `finish`, `browser` | Human or principal agent |
+| Run lifecycle | `work start`, `resume`, `show`, `wait`, `pause`, `end`, `finish`, `browser`, `work web` | Human or principal agent |
 | Human decisions | `approve`, `reject`, `answer`, `steer`, `work end` | Human, sometimes relayed |
-| Phase inspection | `phase show`, `phase brief` | Human, principal agent, driver |
+| Phase inspection | `phase show`, `phase brief`, `phase artifact` | Human, principal agent, driver |
 | Durable run facts | `ask`, `answer`, `discover`, `note`, `plan revise` | Human or principal agent |
 | Driver diagnostics | `gate check` | Driver or debugging |
 | Sensor management | `sensor list`, `info` | Human, CI, driver |
 | Sensor audit | `sensor audit [<run>]` | Human, CI |
 | Workflow management | `workflow list`, `info`, `validate`, `render` | Human or principal agent |
-| Diagnostics | `doctor`, `prime`, `work report` | All trusted operational callers |
+| Diagnostics | `doctor`, `work report` | All trusted operational callers |
 
 `senawa browser [<run>]` is the user-facing console command. It creates a fresh
 high-entropy bootstrap capability, opens it through the configured system

@@ -54,7 +54,8 @@ is pinned to their own task, so a completion request cannot target another task.
 | `work start`, `resume`, `pause`, `end` | In-process operation | Yes | No | Relay on request |
 | `approve`, `reject`, `plan revise` | No | Yes | No | Relay explicit decision |
 | `steer`, `answer` | No | Yes | No | Draft and relay |
-| `ask`, `discover`, `note` | No | Yes | Future binding | Relay on request |
+| `ask`, `discover` | No | Yes | Recognized v1 capability keywords | Relay on request |
+| `note` | No | Yes | Future binding | Relay on request |
 | `work show`, `work report`, `workflow info`, `doctor` | Yes | Yes | No | Yes |
 
 The principal agent is the least contained caller because it runs in the human's
@@ -91,9 +92,35 @@ direct prompt would create a wait the driver cannot observe.
 
 `senawa ask "<question>"` records a durable question ID in the run journal.
 The human or principal agent relays
-`senawa answer <question-id> "<answer>"`. The current operation records the
-exchange across restart but does not yet create a blocking Beads gate or resume
-a worker session automatically.
+`senawa answer <question-id> "<answer>"`. For the SDK host, the original typed
+`senawa.ask` tool call remains pending while an application query watches durable
+state. It returns only the answer correlated to the same active session and turn.
+It fails when that turn becomes stale or terminal and does not resume, advance,
+or complete the workflow. Questions still do not create Beads gates.
+
+The portal projects every unanswered worker question with its owner and time.
+Questions matching the active session and turn provide an answer form; stale
+questions remain visible but disabled. Answer submission has its own UUID for
+exact replay and uses a separate authenticated endpoint, so it remains available
+while the browser command receipt is occupied by the worker that asked. Dynamic
+question and answer text is rendered through DOM text nodes.
+
+## Browser command receipts
+
+The loopback browser submits discrete commands to a run-scoped append-only
+receipt queue. HTTP `202` means the command was durably queued, not that its
+workflow transition completed. The active web supervisor claims one command at a
+time under its fenced lease and invokes the same application command service used
+by the CLI. Receipts record queued, running, completed, or refused state; they do
+not determine run completion.
+
+The browser recovers a nonterminal receipt after reload, then replays and tails
+receipt-local sequence numbers over SSE while run and worker state continue over
+their existing SSE streams. Command IDs make submission idempotent. Application
+journal events carry the same command ID so a restarted
+processor can replay approve, reject, steer, resume, or end without duplicating
+an already committed transition. A graceful supervisor shutdown retains its web
+claim until active command execution finishes.
 
 ## Role instructions and briefs
 
@@ -105,7 +132,7 @@ Instructions have two owners:
 | Brief scaffolding | Senawa | Scope, input references, output contract, rules, iteration context |
 | Enforcement | Senawa | Host capability ceiling, typed tools, permission callbacks, isolation, hooks, gates, and audit |
 
-`senawa task brief` and `senawa phase brief` compose those layers with current
+`senawa phase brief` composes those layers with current
 artifact paths and graph state. They pass paths rather than copying large
 artifacts into a prompt.
 

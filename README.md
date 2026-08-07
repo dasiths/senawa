@@ -140,18 +140,23 @@ fake SDK client. No validation command starts Copilot or spends AI credits.
 Live SDK session execution remains unvalidated.
 Select the SDK adapter explicitly with `--worker-host sdk`; ordinary commands
 remain deterministic unless another host is requested. The SDK launches the
-installed `copilot` runtime over stdio only when selected.
+installed `copilot` runtime over stdio only when selected. Senawa resolves the
+runtime to an absolute executable from `PATH`; set `SENAWA_COPILOT_CLI` to an
+absolute path when the CLI is installed outside `PATH`.
 
 The `senawa` app composes `@senawa/runtime-beads` by default and selects
 `@senawa/runtime-file` only for explicit `--runtime file` commands. Mutable runtime state,
 active-run ownership, fenced leases, immutable documents, journal JSONL, and
 session/turn output streams each have one file authority. Owner output replay is
-derived across those streams. A write-ahead transaction
+derived across those streams. Browser commands have a separate run-scoped,
+append-only receipt authority with fenced claims and restart recovery. A
+write-ahead transaction
 replays interrupted cross-store commits on reopen. Shared contracts cover
 restart, revisions, document conflicts, journal and output idempotency, lease
-fencing, mid-commit crash recovery, dispatch reconstruction, and projections. Browser SSE polls durable
-cursors as its correctness path, so independent process writes and supervisor
-restart do not depend on process-local notifications.
+fencing, mid-commit crash recovery, dispatch reconstruction, and projections.
+Run, output, worker, and receipt SSE streams reread durable cursors as their
+correctness path, so independent process writes and supervisor restart do not
+depend on process-local notifications.
 
 The loopback console now lives in `@senawa/browser`, and `@senawa/reporting`
 renders from an application evidence projection rather than a runtime adapter.
@@ -177,39 +182,36 @@ directions remain available in the non-authoritative design working record.
 
 ## Production demo
 
-Install dependencies, then run the no-credit demo:
+Install dependencies, then run the no-credit demo against the default Beads
+runtime:
 
 ```bash
 pnpm install
+pnpm demo:beads
+```
+
+This builds Senawa, creates an isolated temporary repository, and runs the
+standard workflow through the real CLI and loopback browser command path with
+deterministic workers. Mutable state is stored in a real Beads database. See
+[`examples/demos/beads-offline/README.md`](examples/demos/beads-offline/README.md)
+for full details and the `--keep-server` option.
+
+To run the file-backed variant instead (explicit development/test mode using
+`--runtime file`), use:
+
+```bash
 pnpm demo
 ```
 
-The command builds Senawa, creates an isolated temporary repository, runs
-`senawa --runtime file doctor`, starts the deterministic workflow and production web
-supervisor, exercises HTTP rejection and approvals, verifies SSE replay and live
-task output, and runs real command gates. It copies the repository's `.senawa`
-definitions and Copilot-facing Senawa skill into the temporary repository. The
-fixture typecheck passes; its tests fail on the first task attempt and pass on
-the second, proving rework before the run finishes and renders its report. The
-command then terminates the server. It does not invoke Copilot.
+See [`examples/demos/file-offline/README.md`](examples/demos/file-offline/README.md)
+for details.
 
-Run the equivalent default-Beads acceptance path with `pnpm demo:beads`. The
-complete generated command grammar is in the [CLI reference](docs/reference/cli.md).
+The complete generated command grammar is in the [CLI reference](docs/reference/cli.md).
 `senawa init`, individual `sensor run`, `task done`, and `task abort` remain
 deferred. Initialization lacks versioned scaffold assets; individual sensor
 execution lacks an instance-level expectation contract; task completion lacks
 an authenticated subprocess command bridge; and task abort lacks per-task
 driver coordination despite forced whole-run cancellation being available.
-
-Keep the completed browser console running only for explicit inspection:
-
-```bash
-pnpm demo -- --keep-server
-```
-
-The command prints the browser URL as soon as the supervisor starts. It prints
-the supervisor PID and retained temporary repository after the automated run
-finishes. Run `kill <PID>` when inspection is complete.
 
 Open the active run console directly:
 
@@ -232,7 +234,11 @@ The bootstrap capability remains valid only while that supervisor process is
 running. Keep it private: anyone who can reach the loopback or forwarded port
 and possesses the URL can obtain a browser session. Authentication remains
 necessary because the console can approve, reject, steer, resume, and end runs,
-and its output can contain source, prompts, paths, and process diagnostics.
+answer active worker questions, and display source, prompts, paths, and process
+diagnostics. Command POSTs return after durable receipt submission; the fenced
+supervisor executes and recovers the command while receipt-local SSE reports
+queued, running, completed, or refused state. Worker answers use a separate
+authenticated route so they remain available while a command receipt is active.
 
 The live-worker launcher is separate and guarded:
 
@@ -241,12 +247,12 @@ pnpm demo:live -- --confirm-cost --host sdk --goal "Implement the requested chan
 ```
 
 It prints an AI-credit warning before starting and selects `--worker-host sdk`.
-Pass `--host copilot` to use the subprocess adapter. Deterministic workers
-prepare phase artifacts; the selected live transport is reserved for
-implementation tasks. This path is opt-in and unvalidated in the production
-slice. Exit code `2` means the run reached a human decision, not that the start
-failed. Every later resume intended to use live implementation workers must
-retain the selected `--worker-host` value.
+Pass `--host copilot` to use the subprocess adapter. It uses `--runtime file`
+(the explicit development and test adapter) for all state storage; the selected
+live transport is reserved for implementation tasks. This path is opt-in and
+unvalidated in the production slice. Exit code `2` means the run reached a
+human decision, not that the start failed. Every later resume intended to use
+live implementation workers must retain the selected `--worker-host` value.
 
 ## How it fits together
 
@@ -336,12 +342,12 @@ packages/domain/             pure contracts, schemas, events, and transition inv
 packages/configuration/      repository definitions, snapshots, fingerprints, and diagnostics
 packages/application/        commands, queries, driver, prompts, projections, and ports
 packages/runtime-beads/      production Beads runtime graph and split-write reconciliation
-packages/runtime-file/       explicit development and test runtime, active-run, lease, and recovery adapter
+packages/runtime-file/       explicit dev/test runtime, active-run, lease, receipt, and recovery adapter
 packages/artifact-store/     immutable run identity, snapshot, and artifact documents
 packages/observability/      append-only journal, output streams, and notification hints
 packages/workers/            worker lifecycle, negotiation, authorization, events, and binding adapters
 packages/sensors/            ordered gate evaluation, command sensors, cache, and evidence seams
-packages/browser/            authenticated loopback HTTP, durable SSE replay, and graph console
+packages/browser/            authenticated HTTP, receipt and output SSE, questions, and graph console
 packages/reporting/          report rendering over application evidence projections
 packages/testing/            shared adapter contracts and deterministic fixtures
 tests/contract/              shared storage, recovery, fencing, dispatch, and projection suites

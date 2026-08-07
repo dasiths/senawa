@@ -1,6 +1,17 @@
-import { isAbsolute, relative } from "node:path";
+import {
+  appendFile,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
   CopilotClient,
+  type CopilotClientOptions,
   defineTool,
   type ModelInfo,
   type PermissionRequest,
@@ -9,6 +20,7 @@ import {
   RuntimeConnection,
   type SessionConfig,
   type SessionEvent,
+  type SessionFsProvider,
   type Tool,
 } from "@github/copilot-sdk";
 import type {
@@ -39,19 +51,24 @@ const sdkCapabilities: readonly WorkerCapability[] = [
   "senawa.discover",
   "senawa.note",
 ];
+export const SDK_TURN_TIMEOUT_MS = 600_000;
 
 export interface CopilotSdkSession {
   readonly sessionId: string;
-  sendAndWait(options: {
-    readonly prompt: string;
-    readonly requestHeaders?: Record<string, string>;
-  }): Promise<{ readonly data: { readonly content: string } } | undefined>;
+  sendAndWait(
+    options: {
+      readonly prompt: string;
+      readonly requestHeaders?: Record<string, string>;
+    },
+    timeout?: number,
+  ): Promise<{ readonly data: { readonly content: string } } | undefined>;
   abort(): Promise<void>;
   disconnect(): Promise<void>;
 }
 
 export interface CopilotSdkClient {
   start(): Promise<void>;
+  stop(): Promise<readonly Error[]>;
   listModels(): Promise<ModelInfo[]>;
   createSession(config: SessionConfig): Promise<CopilotSdkSession>;
   resumeSession(sessionId: string, config: ResumeSessionConfig): Promise<CopilotSdkSession>;
@@ -79,14 +96,11 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
   constructor(private readonly options: CopilotSdkWorkerOptions) {
     this.client =
       options.client ??
-      new CopilotClient({
-        connection: RuntimeConnection.forStdio({ path: options.runtimePath ?? "copilot" }),
-        mode: "empty",
-        baseDirectory: options.isolationRoot,
-        logLevel: "none",
-        onGetTraceContext: () =>
+      new CopilotClient(
+        createCopilotSdkClientOptions(options, () =>
           this.traceparent === undefined ? {} : { traceparent: this.traceparent },
-      });
+        ),
+      );
   }
 
   async describe(): Promise<WorkerAdapterDescriptor> {
@@ -248,6 +262,18 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     if (disposition === "archive-delete") await this.client.deleteSession(sessionId);
   }
 
+  async shutdown(): Promise<void> {
+    if (!this.started) return;
+    const sessions = new Set([...this.sessions.values(), ...this.active.values()]);
+    await Promise.all([...sessions].map((session) => session.disconnect()));
+    this.sessions.clear();
+    this.active.clear();
+    this.traceparent = undefined;
+    const errors = await this.client.stop();
+    this.started = false;
+    if (errors.length > 0) throw new AggregateError(errors, "Copilot SDK shutdown failed");
+  }
+
   private async startTurn(turn: WorkerTurn): Promise<WorkerTurnHandle> {
     await this.ensureStarted();
     this.traceparent = turn.traceparent;
@@ -255,8 +281,20 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     const output: WorkerOutput[] = [];
     let artifact: JsonObject | undefined;
     const authorization = workerAuthorization(turn);
-    const tools = this.options.bindings.bindingsFor(turn, authorization).map((binding) =>
-      defineTool(binding.name, {
+    const bindings = this.options.bindings.bindingsFor(turn, authorization);
+    const transportNames = new Map<string, string>();
+    for (const binding of bindings) {
+      const transportName = sdkToolName(binding.name);
+      const existing = transportNames.get(transportName);
+      if (existing !== undefined && existing !== binding.name) {
+        throw new Error(
+          `SDK tool name collision: ${existing} and ${binding.name} both map to ${transportName}`,
+        );
+      }
+      transportNames.set(transportName, binding.name);
+    }
+    const tools = bindings.map((binding) =>
+      defineTool(sdkToolName(binding.name), {
         description: binding.description,
         parameters: binding.inputSchema,
         defer: "never",
@@ -280,7 +318,7 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
       }),
     );
     const eventHandler = (event: SessionEvent) => {
-      for (const normalized of normalizeSdkEvent(turn, event)) {
+      for (const normalized of normalizeSdkEvent(turn, event, transportNames)) {
         queue.push(normalized);
         if (normalized.kind === "text" && !normalized.delta) {
           output.push({ stream: normalized.stream, text: normalized.text });
@@ -298,7 +336,7 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
       if (decision.kind === "reject") {
         queue.push(
           event(turn, `permission:${request.toolCallId ?? queue.size}`, "tool", {
-            name: toolName(request),
+            name: toolName(request, transportNames),
             state: "denied",
             detail: decision.feedback ?? "Senawa denied the request",
           }),
@@ -323,6 +361,11 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
       onPermissionRequest: permissionHandler,
       hooks: { onPreToolUse: () => ({}) },
       onEvent: eventHandler,
+      createSessionFsProvider: (session) =>
+        new LocalSessionFsProvider(
+          resolve(this.options.isolationRoot, "sessions", session.sessionId),
+          this.options.repositoryRoot,
+        ),
     } satisfies ResumeSessionConfig;
     const session =
       turn.operation === "create"
@@ -359,14 +402,17 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     );
     const startedAt = Date.now();
     const result = session
-      .sendAndWait({
-        prompt: turn.prompt,
-        requestHeaders: {
-          traceparent: turn.traceparent,
-          "x-senawa-dispatch-id": turn.dispatchId,
-          "x-senawa-operation-id": turn.operationId,
+      .sendAndWait(
+        {
+          prompt: turn.prompt,
+          requestHeaders: {
+            traceparent: turn.traceparent,
+            "x-senawa-dispatch-id": turn.dispatchId,
+            "x-senawa-operation-id": turn.operationId,
+          },
         },
-      })
+        SDK_TURN_TIMEOUT_MS,
+      )
       .then((response) => {
         if (response?.data.content !== undefined && output.length === 0) {
           output.push({ stream: "stdout", text: response.data.content });
@@ -422,6 +468,123 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     await this.sessions.get(sessionId)?.disconnect();
     return this.client.resumeSession(sessionId, { ...config, continuePendingWork: false });
   }
+}
+
+export function createCopilotSdkClientOptions(
+  options: Pick<CopilotSdkWorkerOptions, "repositoryRoot" | "runtimePath">,
+  onGetTraceContext: () => Record<string, string> = () => ({}),
+): CopilotClientOptions {
+  return {
+    connection: RuntimeConnection.forStdio({ path: options.runtimePath ?? "copilot" }),
+    mode: "empty",
+    workingDirectory: options.repositoryRoot,
+    useLoggedInUser: true,
+    logLevel: "none",
+    sessionFs: {
+      initialCwd: options.repositoryRoot,
+      sessionStatePath: "/state",
+      conventions: "posix",
+    },
+    onGetTraceContext,
+  };
+}
+
+export class LocalSessionFsProvider implements SessionFsProvider {
+  private readonly root: string;
+  private readonly repositoryRoot: string | undefined;
+
+  constructor(root: string, repositoryRoot?: string) {
+    this.root = resolve(root);
+    this.repositoryRoot = repositoryRoot === undefined ? undefined : resolve(repositoryRoot);
+  }
+
+  readFile(path: string): Promise<string> {
+    return readFile(this.path(path), "utf8");
+  }
+
+  async writeFile(path: string, content: string, mode?: number): Promise<void> {
+    const target = this.path(path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content, mode === undefined ? undefined : { mode });
+  }
+
+  async appendFile(path: string, content: string, mode?: number): Promise<void> {
+    const target = this.path(path);
+    await mkdir(dirname(target), { recursive: true });
+    await appendFile(target, content, mode === undefined ? undefined : { mode });
+  }
+
+  async exists(path: string): Promise<boolean> {
+    try {
+      await stat(this.path(path));
+      return true;
+    } catch (error) {
+      if (isNodeError(error, "ENOENT")) return false;
+      throw error;
+    }
+  }
+
+  async stat(path: string) {
+    const details = await stat(this.path(path));
+    return {
+      isFile: details.isFile(),
+      isDirectory: details.isDirectory(),
+      size: details.size,
+      mtime: details.mtime.toISOString(),
+      birthtime: details.birthtime.toISOString(),
+    };
+  }
+
+  async mkdir(path: string, recursive: boolean, mode?: number): Promise<void> {
+    await mkdir(this.path(path), { recursive, ...(mode === undefined ? {} : { mode }) });
+  }
+
+  readdir(path: string): Promise<string[]> {
+    return readdir(this.path(path));
+  }
+
+  async readdirWithTypes(path: string) {
+    const entries = await readdir(this.path(path), { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isFile() || entry.isDirectory())
+      .map((entry) => ({
+        name: entry.name,
+        type: entry.isDirectory() ? ("directory" as const) : ("file" as const),
+      }));
+  }
+
+  rm(path: string, recursive: boolean, force: boolean): Promise<void> {
+    return rm(this.path(path), { recursive, force });
+  }
+
+  async rename(source: string, destination: string): Promise<void> {
+    const target = this.path(destination);
+    await mkdir(dirname(target), { recursive: true });
+    await rename(this.path(source), target);
+  }
+
+  private path(path: string): string {
+    if (this.repositoryRoot !== undefined && path !== "/state" && !path.startsWith("/state/")) {
+      const target = isAbsolute(path) ? resolve(path) : resolve(this.repositoryRoot, path);
+      this.assertWithin(target, this.repositoryRoot, path, "repository");
+      return target;
+    }
+    const normalized = path.replaceAll("\\", "/").replace(/^\/+/, "");
+    const target = resolve(this.root, normalized);
+    this.assertWithin(target, this.root, path, "session root");
+    return target;
+  }
+
+  private assertWithin(target: string, root: string, path: string, boundary: string): void {
+    const rootPrefix = root.endsWith(sep) ? root : `${root}${sep}`;
+    if (target !== root && !target.startsWith(rootPrefix)) {
+      throw new Error(`Session filesystem path escapes its ${boundary}: ${path}`);
+    }
+  }
+}
+
+function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error && error.code === code;
 }
 
 function workerAuthorization(turn: WorkerTurn): WorkerAuthorization {
@@ -480,7 +643,7 @@ function authorizeSdkRequest(
 
 function policyPath(repositoryRoot: string, path: string): string {
   if (!isAbsolute(path)) return path;
-  return relative(repositoryRoot, path).replaceAll("\\", "/");
+  return relative(repositoryRoot, path).replaceAll("\\", "/") || ".";
 }
 
 function sdkAvailableTools(turn: WorkerTurn, tools: readonly Tool[]): string[] {
@@ -493,10 +656,10 @@ function sdkAvailableTools(turn: WorkerTurn, tools: readonly Tool[]): string[] {
   ];
 }
 
-function toolName(request: PermissionRequest): string {
+function toolName(request: PermissionRequest, transportNames: ReadonlyMap<string, string>): string {
   switch (request.kind) {
     case "custom-tool":
-      return request.toolName;
+      return transportNames.get(request.toolName) ?? request.toolName;
     case "mcp":
       return `${request.serverName}.${request.toolName}`;
     default:
@@ -504,7 +667,11 @@ function toolName(request: PermissionRequest): string {
   }
 }
 
-function normalizeSdkEvent(turn: WorkerTurn, native: SessionEvent): WorkerSessionEvent[] {
+function normalizeSdkEvent(
+  turn: WorkerTurn,
+  native: SessionEvent,
+  transportNames: ReadonlyMap<string, string>,
+): WorkerSessionEvent[] {
   switch (native.type) {
     case "assistant.message":
       return [
@@ -547,7 +714,10 @@ function normalizeSdkEvent(turn: WorkerTurn, native: SessionEvent): WorkerSessio
           turn,
           native.id,
           "tool",
-          { name: native.data.toolName, state: "started" },
+          {
+            name: transportNames.get(native.data.toolName) ?? native.data.toolName,
+            state: "started",
+          },
           native.timestamp,
         ),
       ];
@@ -558,7 +728,10 @@ function normalizeSdkEvent(turn: WorkerTurn, native: SessionEvent): WorkerSessio
           native.id,
           "tool",
           {
-            name: native.data.toolDescription?.name ?? native.data.toolCallId,
+            name:
+              transportNames.get(native.data.toolDescription?.name ?? "") ??
+              native.data.toolDescription?.name ??
+              native.data.toolCallId,
             state: native.data.success ? "completed" : "failed",
             ...(native.data.error?.message === undefined
               ? {}
@@ -580,6 +753,14 @@ function normalizeSdkEvent(turn: WorkerTurn, native: SessionEvent): WorkerSessio
     default:
       return [];
   }
+}
+
+export function sdkToolName(name: string): string {
+  const value = name.replaceAll(/[^a-zA-Z0-9_-]/gu, "_");
+  if (!/^[a-zA-Z0-9_-]+$/u.test(value)) {
+    throw new Error(`Unable to create an SDK-safe tool name for ${name}`);
+  }
+  return value;
 }
 
 type EventKind = WorkerSessionEvent["kind"];

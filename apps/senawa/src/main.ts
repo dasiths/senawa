@@ -6,6 +6,7 @@ import {
   DeterministicWorkerHost,
 } from "@senawa/workers";
 import { createRuntimeComposition, selectRuntime } from "./composition.js";
+import { resolveExecutable } from "./executable.js";
 import { runCli } from "./program.js";
 import { createSenawaServices, type SenawaServices } from "./services.js";
 import { createSdkWorkerBindings } from "./worker-bindings.js";
@@ -25,7 +26,11 @@ const sdkHost =
     ? new CopilotSdkWorkerAdapter({
         repositoryRoot,
         isolationRoot: join(repositoryRoot, ".agents", ".copilot-tracking", "copilot-sdk-home"),
-        runtimePath: "copilot",
+        runtimePath: resolveExecutable(
+          typeof Reflect.get(process.env, "SENAWA_COPILOT_CLI") === "string"
+            ? String(Reflect.get(process.env, "SENAWA_COPILOT_CLI"))
+            : "copilot",
+        ),
         bindings: createSdkWorkerBindings(() => {
           if (services === undefined) throw new Error("Senawa services are not initialized");
           return services;
@@ -35,10 +40,11 @@ const sdkHost =
 
 try {
   const runtime = selectRuntime(arguments_);
-  const { persistence, notifier } = createRuntimeComposition(repositoryRoot, runtime);
+  const { persistence, notifier, receiptStore } = createRuntimeComposition(repositoryRoot, runtime);
   services = createSenawaServices(repositoryRoot, {
     persistence,
     notifier,
+    receiptStore,
     runtimeBackend: runtime,
     ...(workerHost === "copilot"
       ? {
@@ -60,6 +66,8 @@ try {
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;
+} finally {
+  await sdkHost?.shutdown();
 }
 
 async function openBrowser(url: string): Promise<void> {

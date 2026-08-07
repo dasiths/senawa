@@ -1,5 +1,9 @@
 # Live Copilot Worker Demo
 
+> [!WARNING]
+> This demo spends GitHub Copilot AI credits and is not part of normal
+> production validation.
+
 This guarded example exercises the current Copilot subprocess worker path and
 may spend GitHub Copilot AI credits. It is not part of normal validation.
 
@@ -10,8 +14,9 @@ pnpm demo:live -- --confirm-cost --host sdk --goal "Implement the requested chan
 ```
 
 The launcher defaults to the SDK adapter. Pass `--host copilot` to select the
-subprocess adapter instead. It uses deterministic phase preparation and the
-selected live host for implementation workers. Every later resume must retain
-the same worker-host selection. Subprocess edit and process capabilities remain
-withheld until path-aware containment is proven, so this example is a bounded
-host check rather than a complete implementation workflow.
+subprocess adapter instead. It uses `--runtime file` (the explicit development
+and test adapter) for all state storage and the selected live host for
+implementation workers. Every later resume must retain the same worker-host
+selection. Subprocess edit and process capabilities remain withheld until
+path-aware containment is proven, so this example is a bounded host check
+rather than a complete implementation workflow.
