@@ -228,7 +228,7 @@ The command surface is grouped by responsibility:
 |-------|-------------------------|----------------|
 | Run lifecycle | `work start`, `resume`, `show`, `wait`, `pause`, `end`, `finish`, `browser`, `work web` | Human or principal agent |
 | Human decisions | `approve`, `reject`, `answer`, `steer`, `work end` | Human, sometimes relayed |
-| Phase inspection | `phase show`, `phase brief`, `phase artifact` | Human, principal agent, driver |
+| Phase and task inspection | `phase show`, `phase brief`, `phase artifact`, `task show` | Human, principal agent, driver |
 | Durable run facts | `ask`, `answer`, `discover`, `note`, `plan revise` | Human or principal agent |
 | Driver diagnostics | `gate check` | Driver or debugging |
 | Sensor management | `sensor list`, `info` | Human, CI, driver |

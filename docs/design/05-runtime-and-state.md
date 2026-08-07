@@ -90,8 +90,12 @@ Dispatch crosses a process or RPC boundary, so the journal records both sides:
 ```text
 task.dispatching { task, attempt, session_id, worker_host, dispatch_id }
     ... create or resume the session ...
-task.dispatched  { task, attempt, session_id, requested_model, resolved_model }
+task.dispatched  { task, attempt, session_id }
 ```
+
+Requested and resolved model identity are not carried on `task.dispatched`
+itself; they arrive as a separate normalized worker `model` event joined by
+dispatch ID, per the [journal contract](06-provenance-and-observability.md#journal-contract).
 
 An intent with no outcome signals reconciliation. `senawa work resume` checks the
 stable session identifier:

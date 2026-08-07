@@ -242,8 +242,10 @@ Useful operating metrics include:
 ## Report integrity
 
 `report.md` is derived and never hand-edited. Deleting it loses no source data.
-`senawa work finish` renders the final version after closing the epic and
-archiving session transcripts.
+`senawa work report` renders the current version from the journal, graph, and
+telemetry at any point, not only at the end. `senawa work finish` marks the run
+`finished`, which the Beads adapter reflects as the epic's closed coarse status;
+it does not itself render a report or archive session transcripts.
 
 Committing the report keeps process evidence beside the code under review. The
 open repository policy question is whether the full tracking directory also
