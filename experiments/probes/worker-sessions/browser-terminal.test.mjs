@@ -56,6 +56,25 @@ test("builds the residue finder from the redaction key list", () => {
   );
 });
 
+test("keeps a real newline in stdout/stderr intact instead of consuming it as a wrap continuation", () => {
+  const raw = "worker-alpha step=1 token=worker-alpha-secret\nworker-alpha step=2\nworker-alpha done";
+  const sanitized = sanitizeTerminalText(raw, "/tmp/unused-root");
+
+  assert.match(sanitized, /token=\[redacted\]/u);
+  assert.match(sanitized, /worker-alpha step=2/u);
+  assert.equal(sanitized.split("\n").length, 3);
+  assert.equal(findTerminalResidue(sanitized), null);
+});
+
+test("fully masks a secret wrapped mid-value in a pane capture", () => {
+  const wrapped = "token=worker-alpha\n-secret";
+  const sanitized = sanitizeTerminalText(wrapped, "/tmp/unused-root", terminalProjectionLimits, "paneCapture");
+
+  assert.equal(sanitized, "token=[redacted]");
+  assert.doesNotMatch(sanitized, /worker-alpha|-secret/u);
+  assert.equal(findTerminalResidue(sanitized), null);
+});
+
 function terminal(turnId, stdout) {
   return {
     apiVersion: "senawa.dev/browser-worker-terminal/v1",

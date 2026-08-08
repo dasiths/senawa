@@ -408,6 +408,43 @@ describe("CommandGateEvaluator", () => {
         expect.objectContaining({ code: "verification-findings-unresolved" }),
       ]),
     );
+    // The refusal must name the failing check, not just report that one exists.
+    expect(
+      evaluation.findings.find((finding) => finding.code === "verification-check-contradiction")
+        ?.message,
+    ).toContain("tests");
+  });
+
+  it("records a not-verifiable check without blocking work from finishing", async () => {
+    const evaluator = new CommandGateEvaluator(repositoryRoot);
+    const policy = verificationPolicy();
+    const evaluation = await evaluator.evaluate({
+      ...input(policy),
+      owner: { kind: "phase", id: "verify" },
+      artifact: {
+        ...passingVerificationArtifact(),
+        checks: [
+          { name: "unit", verdict: "pass", summary: "Suite is green" },
+          {
+            name: "probe",
+            verdict: "not-verifiable",
+            summary: "Needs bash run.sh, which this session cannot execute",
+          },
+        ],
+      },
+      inputManifest: verificationInputManifest(),
+    });
+
+    // A verifier that cannot run a command should declare the gap, not fail the work.
+    expect(evaluation.accepted).toBe(true);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "verification-check-not-verifiable",
+          severity: "warning",
+        }),
+      ]),
+    );
   });
 
   it("records a required no-op without blocking the gate", async () => {

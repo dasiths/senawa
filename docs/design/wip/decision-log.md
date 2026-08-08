@@ -128,8 +128,12 @@ Copy this section for each idea and update it in place as the idea matures.
 * Outcome: `measured-no-credit` for the tmux wrap-boundary secret leak. An
     80-column pane capture split `token=worker-alpha-secret` across a line
     boundary, and assignment-shaped redaction masked only the first fragment. The
-    residue matcher now detects it, so the no-credit probe fails rather than
-    passing quietly. The sanitizer is not fixed. See
+    residue matcher detected it, so the no-credit probe failed rather than
+    passing quietly. The sanitizer was then fixed by scoping the
+    wrap-continuation redaction clause to `capture-pane` output only, since only
+    tmux pane capture can hard-wrap a value; a subsequent `run-probe` attempt
+    measured `bash experiments/probes/worker-sessions/run.sh` passing under tmux
+    `3.3a` with the fix applied. See
     [Terminal wrap boundaries defeat assignment-shaped redaction](probe-findings.md#terminal-wrap-boundaries-defeat-assignment-shaped-redaction).
 * Outcome: `measured-from-live-run` for the four defects themselves. They were
     observed in `run-a15a4785`, not inferred from reading code. See

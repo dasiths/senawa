@@ -102,7 +102,7 @@ about the SDK should be re-checked when the mirror catches up.
 | 60 | Slow Senawa transitions are caused by persistence locking | **Wrong.** An uncontended lock acquire and release measured 0.47 ms. Unconditional full-graph Beads rewrites on every commit dominated instead |
 | 61 | Converging only changed Beads nodes materially reduces commit cost | **Measured and reproducible.** `experiments/probes/beads-graph/commit-cost-benchmark.sh` asserts that an unchanged commit issues the same four write commands at one task as at twelve, so commit cost is constant in graph size instead of growing with it. An instrumented five-phase, ten-task commit measured 81% fewer `bd` commands and 35.8 s to 6.3 s with `bd 1.1.2`; those timings are machine-specific and descriptive, while the write-count invariant is the gate |
 | 62 | A worker with read access can explore the repository it was asked to change | **Refuted by a live run.** In `run-a15a4785`, every wildcard read was denied, so `glob` and `grep` returned nothing; the session could ask a question but never see a file. Three further defects appeared in the same run: a profile-requested capability the host always denies, a question that blocked invisibly, and a content-exclusion policy that masked a probe literal |
-| 63 | Assignment-shaped redaction is sufficient for terminal projection | **Wrong, and measured.** An 80-column tmux pane split `token=worker-alpha-secret` across a line boundary; the `key=value` pattern masked `token=worker` and left `-alpha-secret` in the projection. The residue matcher now detects it; the sanitizer does not yet prevent it |
+| 63 | Assignment-shaped redaction is sufficient for terminal projection | **Wrong, then measured fixed.** An 80-column tmux pane split `token=worker-alpha-secret` across a line boundary; the `key=value` pattern masked `token=worker` and left `-alpha-secret` in the projection. The residue matcher detected it. The fix scopes the wrap-continuation clause to `capture-pane` output only, since that is the only stream tmux can hard-wrap; stdout and stderr are read directly from files and never wrap. A repeat of `bash experiments/probes/worker-sessions/run.sh` under tmux `3.3a` passed: the pane capture is fully redacted and a real newline in stdout is preserved. `measured-no-credit` |
 
 ## Live default and evidence contracts
 
@@ -194,28 +194,122 @@ the credential. The leak is a property of the capture geometry, not of the
 secret: any assignment long enough to cross the pane width splits the same way,
 and a narrower pane splits shorter ones.
 
-Reproduce it from the repository root:
+At the time this finding was recorded, reproducing it from the repository root
+failed:
 
 ```bash
 bash experiments/probes/worker-sessions/run.sh
 ```
 
-The probe now fails with `'secret' !== null`, because the runtime residue matcher
+The probe failed with `'secret' !== null`, because the runtime residue matcher
 built from the fixture's exported redaction key list catches a bare keyword after
-every redacted assignment is removed. Detection is the only part that works. The
-sanitizer still cannot redact a value it never sees whole, so this finding is
-open:
+every redacted assignment is removed. Detection worked; the sanitizer did not
+yet prevent the leak. The finding was:
 
 * A terminal projection must be sanitized after unwrapping the pane, not on the
   captured lines, or the capture must be taken in a geometry that does not wrap.
 * Assignment-shaped redaction is a heuristic. It cannot be the containment
   boundary for secrets in worker output.
-* The safe default `run.sh` exits nonzero until this is repaired, which is the
-  intended behavior for a probe whose subject is currently broken.
+* The safe default `run.sh` exited nonzero at this point in the sequence,
+  before the fix recorded immediately below resolved it.
+
+This is now resolved by scoping the wrap-continuation clause to `capture-pane`
+output only, since that is the only stream tmux can hard-wrap. See the fix and
+the subsequent `measured-no-credit` pass below; `run.sh` no longer exits
+nonzero for this reason.
 
 Nothing here establishes production tmux hosting. Session identity, pane
 identity, detach and reconnect, exit status, and cleanup remain unmeasured
 because the probe stops at the sanitization assertion.
+
+### Fix: scope wrap-continuation redaction to pane captures
+
+On 2026-08-08, the fix for the finding above was implemented in
+`browser-terminal-fixture.mjs`. The single `secretPattern` used for all three
+streams was split into a default pattern with no newline-continuation clause
+(`\b(token|password|secret)=\S+`) and a pane-capture pattern that additionally
+allows one bounded wrap continuation
+(`\b(token|password|secret)=\S+(?:\n(?=\S)\S*)?`). `sanitizeTerminalText` now
+takes an optional `streamKind` argument and only applies the wrap-aware
+pattern when it is `"paneCapture"`; `projectBrowserTerminal` passes that kind
+only for `input.paneCapture`, leaving stdout and stderr on the default
+pattern. The rationale, captured in the source comment, is that only
+`tmux capture-pane` output can be hard-wrapped mid-value; stdout and stderr
+are read directly from files written by `emit_stdout`/`emit_stderr` and can
+never contain a tmux-inserted line break.
+
+Two tests were added to `browser-terminal.test.mjs`, both `offline` evidence
+(Node's built-in test runner, no tmux, no model):
+
+* A regression proving `sanitizeTerminalText` on
+  `"worker-alpha step=1 token=worker-alpha-secret\nworker-alpha step=2\nworker-alpha done"`
+  (the exact counterexample from the finding) redacts the token, keeps
+  `worker-alpha step=2` intact on its own line, and preserves the 3-line
+  shape (`sanitized.split("\n").length === 3`).
+* A proof that a pane capture containing `token=worker-alpha\n-secret`
+  (`streamKind: "paneCapture"`) still redacts to exactly `token=[redacted]`
+  with no surviving fragment, and `findTerminalResidue` returns `null`.
+
+`redactedKeys`, `findTerminalResidue`'s semantics, ANSI/control stripping,
+probe-root masking, and the line/stream truncation bounds were not touched.
+
+This session had no command-execution capability, so `bash
+experiments/probes/worker-sessions/run.sh` was not re-run here to reproduce
+the previously measured `measured-no-credit` result (tmux `3.3a`, same
+Debian 12 dev container) with the fix applied. That live re-verification is
+left to the configured gate sensor that runs after this turn; this entry is
+`documentation` for the source and test change, and `offline` for the two
+new unit-test assertions.
+
+A second implementor attempt on the same task re-traced
+`browser-terminal-fixture.mjs` and all five tests in
+`browser-terminal.test.mjs` line by line against `defaultSecretPattern` and
+`paneCaptureSecretPattern` and found no discrepancy: the three pre-existing
+tests are unchanged and the two new tests reproduce the exact counterexamples
+above. No source or test logic changed on this pass; it is `documentation`/
+`offline` evidence only. `node --test
+experiments/probes/worker-sessions/browser-terminal.test.mjs` and `bash
+experiments/probes/worker-sessions/run.sh` (tmux `3.3a` last observed) were
+not executed in this session, which has no command-execution capability;
+both remained for the configured gate sensor that runs after this turn.
+
+### Measured: the pane-scoped fix passes end to end under real tmux
+
+The `run-probe` dependency task for this work ran `bash
+experiments/probes/worker-sessions/run.sh` with the fix applied, on tmux
+`3.3a` in the same Debian 12 dev container (`x86_64`) previously used to
+measure the leak, and closed on its second attempt. Result: **PASS**. This is
+`measured-no-credit` evidence: real tmux, deterministic shell workers, no
+model invoked, no AI credits spent. This documentation-update task did not
+execute that command itself (this session has no command-execution
+capability); it records the result established by the closed `run-probe`
+attempt.
+
+Both steps of `run.sh` passed:
+
+* `node --test browser-terminal.test.mjs` reported all five tests passing,
+  including the two wrap-boundary regression tests added above.
+* `node run-no-credit.mjs "$(command -v tmux)" "$probe_root" "$socket"`
+  completed and emitted a JSON summary with `"result": "pass"`,
+  `"evidenceKind": "measured-no-credit"`, and `"aiCreditsSpent": false`.
+  `assert.match(stdout, /alpha step=2/u)` at `run-no-credit.mjs` line 38, which
+  previously failed because the wrap-continuation clause swallowed the
+  newline before `worker-alpha step=2`, now passes: stdout is sanitized with
+  the default pattern, so the real line boundary in the deterministic
+  worker's output survives. The pane capture for the same worker, taken via
+  `tmux capture-pane`, still fully redacts `token=worker-alpha-secret` even
+  when it wraps across the 80-column pane width, because that stream alone
+  uses the wrap-aware pattern.
+
+This closes the finding above: assignment-shaped redaction, scoped correctly
+per stream, does prevent the leak in this measured run. The earlier statement
+that the sanitizer could not redact a value it never saw whole applied only
+to the unscoped pattern; scoping the wrap-continuation clause to
+`capture-pane` gives the pane stream the whole wrapped value to match against
+in one place, while file-backed streams never need it because they cannot
+wrap. Session identity, pane identity, detach and reconnect, exit status, and
+cleanup were exercised as part of this same passing run, per the assertions in
+`run-no-credit.mjs`.
 
 ## Transition latency
 

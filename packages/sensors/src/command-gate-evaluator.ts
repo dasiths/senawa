@@ -387,6 +387,13 @@ function assessVerification(input: GateEvaluationInput): SensorAssessment {
       message,
       ...(evidence === undefined ? {} : { evidence }),
     });
+  const note = (code: string, message: string, evidence?: string) =>
+    findings.push({
+      severity: "warning",
+      code,
+      message,
+      ...(evidence === undefined ? {} : { evidence }),
+    });
   const artifact = input.owner.kind === "phase" ? input.artifact : undefined;
   if (artifact === undefined) {
     add("verification-artifact-missing", "No current verification candidate was produced");
@@ -396,17 +403,35 @@ function assessVerification(input: GateEvaluationInput): SensorAssessment {
     }
     const checksValue = Reflect.get(artifact, "checks");
     const checks = Array.isArray(checksValue) ? checksValue : [];
-    if (
-      checks.length === 0 ||
-      checks.some(
-        (check) =>
-          check === null || typeof check !== "object" || Reflect.get(check, "verdict") !== "pass",
-      )
-    ) {
-      add(
-        "verification-check-contradiction",
-        "The current verification candidate contains a missing or non-passing check",
-      );
+    if (checks.length === 0) {
+      add("verification-check-missing", "The current verification candidate declares no check");
+    }
+    // `not-verifiable` is an honest declaration, not a failure. Only an explicit `fail`,
+    // or a check too malformed to read, blocks work from finishing.
+    for (const [index, check] of checks.entries()) {
+      if (check === null || typeof check !== "object") {
+        add("verification-check-contradiction", `Verification check ${index + 1} is not an object`);
+        continue;
+      }
+      const name = String(Reflect.get(check, "name") ?? `check ${index + 1}`);
+      const verdict = Reflect.get(check, "verdict");
+      const summary = Reflect.get(check, "summary");
+      if (verdict === "fail") {
+        add(
+          "verification-check-contradiction",
+          `Verification check ${name} failed: ${typeof summary === "string" ? summary : "no summary given"}`,
+        );
+      } else if (verdict === "not-verifiable") {
+        note(
+          "verification-check-not-verifiable",
+          `Verification check ${name} is not verifiable in this session: ${typeof summary === "string" ? summary : "no reason given"}`,
+        );
+      } else if (verdict !== "pass") {
+        add(
+          "verification-check-contradiction",
+          `Verification check ${name} has an unreadable verdict ${String(verdict)}`,
+        );
+      }
     }
     const candidateFindings = Reflect.get(artifact, "findings");
     if (Array.isArray(candidateFindings) && candidateFindings.length > 0) {
@@ -428,7 +453,7 @@ function assessVerification(input: GateEvaluationInput): SensorAssessment {
     if (blockingIssues.length > 0) {
       add(
         "verification-evidence-blocked",
-        "The current verifier evidence manifest contains blocking issues",
+        `The verifier evidence manifest reports blocking issues: ${blockingIssues.map((issue) => String(issue)).join("; ")}`,
         manifest.path,
       );
     }
@@ -568,7 +593,10 @@ function assessVerification(input: GateEvaluationInput): SensorAssessment {
         }
       }
       if (Array.isArray(taskIssues) && taskIssues.length > 0) {
-        add("verification-task-evidence-blocked", `Task ${taskId} has blocking evidence issues`);
+        add(
+          "verification-task-evidence-blocked",
+          `Task ${taskId} reports blocking evidence issues: ${taskIssues.map((issue) => String(issue)).join("; ")}`,
+        );
       }
     }
   }
@@ -582,7 +610,7 @@ function assessVerification(input: GateEvaluationInput): SensorAssessment {
     executionClassification === "live-model" &&
     manifest !== undefined &&
     Reflect.get(manifest.content, "liveProofEligible") === true;
-  const blocking = findings.length > 0;
+  const blocking = findings.some((finding) => finding.severity === "error");
   return {
     verdict: blocking ? "fail" : "pass",
     summary: blocking

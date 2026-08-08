@@ -16,14 +16,23 @@ const unsafeControlPattern = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu;
 export const redactedKeys = Object.freeze(["token", "password", "secret"]);
 const redactionMarker = "[redacted]";
 const keyAlternation = redactedKeys.join("|");
-// tmux wraps a long pane line at the pane width, so `key=value` can arrive
-// with a single hard newline inserted mid-value (no whitespace on either side
-// of the break). The value's first run of non-whitespace is followed by at
-// most one such wrap continuation: a bare `\n` immediately followed by more
-// non-whitespace. Bounding the continuation to one keeps a real line break
-// (followed by whitespace, another `\n`, or end of text) a hard stop, so an
-// unrelated line after the wrapped secret is never absorbed into the match.
-const secretPattern = new RegExp(`\\b(${keyAlternation})=\\S+(?:\\n(?=\\S)\\S*)?`, "giu");
+// Only tmux `capture-pane` output can hard-wrap: tmux inserts the wrap at the
+// pane width mid-value, with no whitespace on either side of the break.
+// stdout and stderr are read directly from files via emit_stdout/emit_stderr
+// and are never wrapped by tmux, so a bare `\n` there is always a genuine line
+// boundary and must remain a hard stop for the default pattern below.
+//
+// The pane-capture pattern additionally allows the value's first run of
+// non-whitespace to be followed by at most one such wrap continuation: a bare
+// `\n` immediately followed by more non-whitespace. Bounding the continuation
+// to one keeps a real line break (followed by whitespace, another `\n`, or
+// end of text) a hard stop, so an unrelated line after the wrapped secret is
+// never absorbed into the match.
+const defaultSecretPattern = new RegExp(`\\b(${keyAlternation})=\\S+`, "giu");
+const paneCaptureSecretPattern = new RegExp(
+  `\\b(${keyAlternation})=\\S+(?:\\n(?=\\S)\\S*)?`,
+  "giu",
+);
 const redactedAssignmentPattern = new RegExp(
   `\\b(?:${keyAlternation})=${redactionMarker.replaceAll(/[[\]]/gu, String.raw`\$&`)}`,
   "giu",
@@ -40,7 +49,17 @@ export function findTerminalResidue(text) {
   return residuePattern.exec(text.replace(redactedAssignmentPattern, ""))?.[0] ?? null;
 }
 
-export function sanitizeTerminalText(value, probeRoot, limits = terminalProjectionLimits) {
+// `streamKind` selects the secret pattern: only `"paneCapture"` (the only
+// stream tmux can hard-wrap) opts into the wrap-continuation clause. Every
+// other stream kind, including the default, uses the plain pattern so a real
+// newline in file-backed stdout/stderr is never treated as a continuation.
+export function sanitizeTerminalText(
+  value,
+  probeRoot,
+  limits = terminalProjectionLimits,
+  streamKind = "default",
+) {
+  const secretPattern = streamKind === "paneCapture" ? paneCaptureSecretPattern : defaultSecretPattern;
   const normalized = value
     .replaceAll("\r\n", "\n")
     .replaceAll("\r", "\n")
@@ -84,7 +103,7 @@ export async function projectBrowserTerminal(input) {
     streams: {
       stdout: sanitizeTerminalText(stdout, input.probeRoot),
       stderr: sanitizeTerminalText(stderr, input.probeRoot),
-      pane: sanitizeTerminalText(pane, input.probeRoot),
+      pane: sanitizeTerminalText(pane, input.probeRoot, terminalProjectionLimits, "paneCapture"),
     },
     lifecycle,
   };
