@@ -10,6 +10,7 @@
     "@senawa/runtime-beads": "workspace:*",
     "@senawa/runtime-file": "workspace:*",
     "@senawa/testing": "workspace:*",
+    "@senawa/workers": "workspace:*",
     "esbuild": "0.25.12"
   }
 }

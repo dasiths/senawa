@@ -32,6 +32,7 @@ interface SenawaIssueMetadata extends Record<string, unknown> {
   readonly kind?: unknown;
   readonly gate_id?: unknown;
   readonly node_id?: unknown;
+  readonly pending_operation?: unknown;
 }
 
 interface OperationReceipt {
@@ -152,7 +153,7 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
 
     const phaseIssues = new Map<string, BeadsIssue>();
     for (const [index, definition] of graph.phases.entries()) {
-      let issue = findNodeIssue(await this.listAll(), runId, "phase", definition.id);
+      let issue = findNodeIssue(issues, runId, "phase", definition.id);
       if (issue === undefined) {
         const phase = requirePhase(state, definition.id);
         issue = await this.writeJson<BeadsIssue>([
@@ -181,39 +182,13 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
         await this.ensureDependency(dependent.id, requireMapValue(phaseIssues, blockerId).id);
       }
     }
-    await this.convergeTasks(runId, epic.id, phaseIssues, state, operationId);
+    await this.convergeTasks(runId, epic.id, phaseIssues, state, operationId, issues);
     await this.finalizeRun(epic, state, operationId, digest, 1, {});
     return this.readConverged(runId, digest);
   }
 
   async readRuntimeState(runId: string): Promise<VersionedStoredRuntimeState> {
-    const issues = await this.listAll();
-    const epic = findRunIssue(issues, runId);
-    if (epic === undefined) throw new Error(`Run does not exist: ${runId}`);
-    const run = requireRunMetadata(epic, runId);
-    const phases = issues
-      .filter((issue) => nodeKind(issue, runId) === "phase")
-      .map((issue) => requirePhaseMetadata(issue, runId))
-      .toSorted((left, right) => left.order - right.order)
-      .map(runtimePhase);
-    const tasks = issues
-      .filter((issue) => nodeKind(issue, runId) === "task")
-      .map((issue) => ({ issue, metadata: requireTaskMetadata(issue, runId) }))
-      .toSorted((left, right) => left.metadata.order - right.metadata.order)
-      .map(({ issue, metadata }) => runtimeTask(metadata, issue.status));
-    const result: VersionedStoredRuntimeState = {
-      revision: String(run.revision),
-      state: {
-        apiVersion: run.api_version,
-        status: run.status,
-        endReason: run.end_reason,
-        phases,
-        tasks,
-        activeTurn: structuredClone(run.active_turn),
-        dispatches: structuredClone([...run.dispatches]),
-      },
-    };
-    return result;
+    return projectRuntimeState(await this.listAll(), runId);
   }
 
   async commitRuntimeState(input: {
@@ -239,7 +214,7 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
     }
     if (
       isTerminal(current.status) &&
-      payloadDigest((await this.readRuntimeState(input.runId)).state) !== digest
+      payloadDigest(projectRuntimeState(issues, input.runId).state) !== digest
     ) {
       throw new Error(`Run ${input.runId} is terminal and cannot be mutated`);
     }
@@ -261,14 +236,20 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
       await this.afterStep("pending-metadata", input.operationId, epic.id);
     }
 
-    const refreshed = await this.listAll();
     const phaseIssues = new Map(
-      refreshed
+      issues
         .filter((issue) => nodeKind(issue, input.runId) === "phase")
         .map((issue) => [requirePhaseMetadata(issue, input.runId).node_id, issue]),
     );
     await this.convergePhases(input.runId, phaseIssues, input.state, input.operationId);
-    await this.convergeTasks(input.runId, epic.id, phaseIssues, input.state, input.operationId);
+    await this.convergeTasks(
+      input.runId,
+      epic.id,
+      phaseIssues,
+      input.state,
+      input.operationId,
+      issues,
+    );
     await this.transitionIssue(epic, input.state.status, input.operationId, async () =>
       indexMetadata(input.runId, "run", {
         ...runMetadata(
@@ -328,8 +309,8 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
         taskMetadata(input.runId, desired, metadata.parent_phase_id, metadata.order),
       ),
     );
-    const desiredState = (await this.readRuntimeState(input.runId)).state;
     const refreshedIssues = await this.listAll();
+    const desiredState = projectRuntimeState(refreshedIssues, input.runId).state;
     const refreshedEpic = findRunIssue(refreshedIssues, input.runId);
     if (refreshedEpic === undefined) throw new Error(`Run does not exist: ${input.runId}`);
     const refreshedRun = requireRunMetadata(refreshedEpic, input.runId);
@@ -382,6 +363,7 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
     phaseIssues: ReadonlyMap<string, BeadsIssue>,
     state: StoredRuntimeState,
     operationId: string,
+    issues: readonly BeadsIssue[],
   ): Promise<void> {
     const frontier = [...phaseIssues.values()].find(
       (issue) => requirePhaseMetadata(issue, runId).executor_kind === "task-frontier",
@@ -390,7 +372,7 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
       throw new Error(`Run ${runId} has tasks but no task-frontier phase`);
     }
     const taskIssues = new Map(
-      (await this.listAll())
+      issues
         .filter((issue) => nodeKind(issue, runId) === "task")
         .map((issue) => [requireTaskMetadata(issue, runId).node_id, issue]),
     );
@@ -451,6 +433,17 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
     const supportsTaskClaim = currentSenawa.kind === "task";
     const existingGateId = stringOrNull(currentSenawa.gate_id);
     const final = await finalMetadata(existingGateId);
+    if (
+      isConverged(issue, {
+        desiredState,
+        existingGateId,
+        final,
+        supportsHumanGate,
+        supportsTaskClaim,
+      })
+    ) {
+      return;
+    }
     const { senawa } = final;
     const pendingMetadata = {
       ...final,
@@ -587,6 +580,65 @@ export class BeadsRuntimeStateStore implements RuntimeStateStoragePort {
   private afterStep(step: TransitionStep, operationId: string, issueId: string): Promise<void> {
     return Promise.resolve(this.options.afterTransitionStep?.(step, { operationId, issueId }));
   }
+}
+
+function projectRuntimeState(
+  issues: readonly BeadsIssue[],
+  runId: string,
+): VersionedStoredRuntimeState {
+  const epic = findRunIssue(issues, runId);
+  if (epic === undefined) throw new Error(`Run does not exist: ${runId}`);
+  const run = requireRunMetadata(epic, runId);
+  const phases = issues
+    .filter((issue) => nodeKind(issue, runId) === "phase")
+    .map((issue) => requirePhaseMetadata(issue, runId))
+    .toSorted((left, right) => left.order - right.order)
+    .map(runtimePhase);
+  const tasks = issues
+    .filter((issue) => nodeKind(issue, runId) === "task")
+    .map((issue) => ({ issue, metadata: requireTaskMetadata(issue, runId) }))
+    .toSorted((left, right) => left.metadata.order - right.metadata.order)
+    .map(({ issue, metadata }) => runtimeTask(metadata, issue.status));
+  return {
+    revision: String(run.revision),
+    state: {
+      apiVersion: run.api_version,
+      status: run.status,
+      endReason: run.end_reason,
+      phases,
+      tasks,
+      activeTurn: structuredClone(run.active_turn),
+      dispatches: structuredClone([...run.dispatches]),
+    },
+  };
+}
+
+/**
+ * A converged node needs no `bd` writes: the durable final metadata write is the last step of
+ * {@link BeadsRuntimeStateStore.transitionIssue}, so metadata equality with no pending operation
+ * also proves the coarse status and state label of the previous transition were written.
+ */
+function isConverged(
+  issue: BeadsIssue,
+  desired: {
+    readonly desiredState: string;
+    readonly existingGateId: string | null;
+    readonly final: Record<string, unknown>;
+    readonly supportsHumanGate: boolean;
+    readonly supportsTaskClaim: boolean;
+  },
+): boolean {
+  if (requireSenawa(issue).pending_operation !== undefined) return false;
+  const awaitingApproval = desired.desiredState === "awaiting_approval";
+  if (desired.existingGateId !== null && !awaitingApproval) return false;
+  if (desired.supportsHumanGate && awaitingApproval && desired.existingGateId === null)
+    return false;
+  const desiredStatus = coarseStatus(desired.desiredState);
+  if (issue.status !== desiredStatus) return false;
+  if (desired.supportsTaskClaim && desiredStatus === "open" && (issue.assignee ?? "") !== "") {
+    return false;
+  }
+  return payloadDigest(issue.metadata ?? {}) === payloadDigest(desired.final);
 }
 
 function runMetadata(

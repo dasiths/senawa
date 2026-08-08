@@ -208,6 +208,36 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     expect(events.every((event) => event.eventId.includes(phaseTurn.turnId))).toBe(true);
   });
 
+  it("normalizes a task completion submission into a durable worker event", async () => {
+    const calls: Array<{
+      readonly name: Parameters<typeof recordingBindingHandlers>[0][number]["name"];
+      readonly input: JsonObject;
+    }> = [];
+    const { adapter, client } = fixture(calls);
+    const handle = await adapter.create(turn);
+    const submission = {
+      summary: "Implemented",
+      criteria: [
+        {
+          id: "ac-one",
+          outcome: "satisfied",
+          evidence: [
+            { kind: "file", path: "packages/workers/src/bindings.ts", relationship: "modified" },
+          ],
+        },
+      ],
+    };
+    await client.createConfigs[0]?.tools
+      ?.find((tool) => tool.name === "senawa_task_done")
+      ?.handler?.(submission, fakeInvocation());
+    const events = [];
+    for await (const event of handle.events) events.push(event);
+    await handle.result;
+
+    expect(events.find((event) => event.kind === "completion")).toMatchObject({ submission });
+    expect(calls.map((call) => call.name)).toContain("senawa.task.done");
+  });
+
   it("uses native bindings and canonical permission policy without a hook allow", async () => {
     const calls: Array<{
       readonly name: Parameters<typeof recordingBindingHandlers>[0][number]["name"];
@@ -269,16 +299,41 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     ).toMatchObject({ kind: "reject", feedback: expect.stringContaining("unbound") });
   });
 
-  it("discovers models and records unsupported effort as a negotiated degradation", async () => {
+  it("approves glob-shaped reads and still refuses reads outside the repository", async () => {
+    const { adapter, client } = fixture();
+    await (await adapter.create(turn)).result;
+    const config = client.createConfigs[0];
+    for (const path of ["experiments/**/*.mjs", "**/*.mjs", "*.md", "/workspace/**/*.mjs"]) {
+      expect(
+        await config?.onPermissionRequest?.(readRequest(path), { sessionId: turn.sessionId }),
+      ).toEqual({ kind: "approve-once" });
+    }
+    expect(
+      await config?.onPermissionRequest?.(readRequest("../outside/**"), {
+        sessionId: turn.sessionId,
+      }),
+    ).toMatchObject({ kind: "reject", feedback: expect.stringContaining("repository-relative") });
+    expect(
+      await config?.onPermissionRequest?.(writeRequest("packages/workers/src/*.ts"), {
+        sessionId: turn.sessionId,
+      }),
+    ).toMatchObject({ kind: "reject", feedback: expect.stringContaining("concrete") });
+  });
+
+  it("discovers models, degrades preferred effort, and refuses unsupported required effort", async () => {
     const { adapter, client } = fixture();
     const plan = await adapter.negotiate({
       requiredCapabilities: ["repository.read", "senawa.note"],
       preferredCapabilities: [],
       requireResume: true,
       requirePathEnforcement: true,
-      requestedModel: { id: "fake-model", effort: "xhigh" },
+      requestedModel: { id: "fake-model", effort: "xhigh", effortMode: "preferred" },
     });
-    expect(plan.resolvedModel).toEqual({ id: "fake-model", effort: "medium" });
+    expect(plan.resolvedModel).toEqual({
+      id: "fake-model",
+      effort: "medium",
+      effortMode: "preferred",
+    });
     expect(plan.unsupportedPreferences).toEqual(["reasoning-effort:xhigh"]);
     expect(plan.toolTransport).toBe("native");
     expect(plan.adapter.features).toMatchObject({
@@ -290,8 +345,16 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     });
     const executed = {
       ...turn,
-      requestedModel: { id: "fake-model", effort: "xhigh" as const },
-      resolvedModel: { id: "fake-model", effort: "xhigh" as const },
+      requestedModel: {
+        id: "fake-model",
+        effort: "xhigh" as const,
+        effortMode: "preferred" as const,
+      },
+      resolvedModel: {
+        id: "fake-model",
+        effort: "xhigh" as const,
+        effortMode: "preferred" as const,
+      },
     };
     await adapter.execute(executed);
     expect(client.createConfigs.at(-1)?.reasoningEffort).toBe("medium");
@@ -303,6 +366,22 @@ describe("Copilot SDK worker adapter offline conformance", () => {
         requestedModel: { id: "missing-model" },
       }),
     ).rejects.toThrow("model is unavailable");
+    await expect(
+      adapter.negotiate({
+        requiredCapabilities: ["repository.read"],
+        requireResume: false,
+        requirePathEnforcement: false,
+        requestedModel: { id: "fake-model", effort: "xhigh", effortMode: "required" },
+      }),
+    ).rejects.toThrow("does not support required effort xhigh");
+    expect(await adapter.listModels()).toEqual([
+      {
+        id: "fake-model",
+        name: "Fake model",
+        supportedEfforts: ["low", "medium", "high"],
+        defaultEffort: "medium",
+      },
+    ]);
   });
 
   it("maps explicit cancellation to abort and reports cancelled inspection", async () => {
@@ -506,6 +585,10 @@ function writeRequest(fileName: string): PermissionRequest {
     intention: "test write",
     canOfferSessionApproval: false,
   };
+}
+
+function readRequest(path: string): PermissionRequest {
+  return { kind: "read", path, intention: "test read" };
 }
 
 function shellRequest(): PermissionRequest {

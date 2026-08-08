@@ -31,6 +31,11 @@ does not ask agents to summarize their own compliance.
       v1.json
       v2.json
       current -> v2.json
+  evidence/
+    implementation/v2.json
+    repository/tasks/<task>/attempt-<n>/<dispatch>/
+      baseline.json
+      delta.json
   decisions.md
   questions.jsonl
   sensors/
@@ -75,7 +80,7 @@ rewrites:
   "actor": {
     "role": "implementor",
     "session_id": "0cb916db-26aa-40f2-86b5-1ba81b225fd2",
-    "model": "claude-sonnet-4.6",
+    "model": "claude-sonnet-5",
     "effort": "high"
   },
   "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
@@ -91,11 +96,19 @@ The event vocabulary is small and versioned. It covers work, phase, plan, task,
 dispatch, sensor, gate, question, steering, approval, and lifecycle transitions.
 
 Normalized worker events carry stable event, operation, dispatch, session,
-turn, owner, attempt, and trace joins. Replayed event IDs are idempotent and a
+turn, owner, attempt, trace, worker-host, adapter, and configured-model joins.
+Model events distinguish requested and resolved model and effort. Reports mark
+an invoked model only for a non-simulated host with model evidence. Replayed event IDs are idempotent and a
 conflicting replay fails. The event stream is fully durable before final worker
 output enters the aggregate commit that wakes browser readers. Task text events
 materialize a capped, neutralized transcript; every task also receives either a
 reported patch or explicit no-diff evidence.
+
+Resolved input manifests record each consumer's logical reference, owner, path,
+version, digest, and schema kind. Repository baselines and deltas record trusted
+task-change evidence separately from worker claims. The verifier consumes a
+Senawa-owned manifest that joins accepted artifacts, task outcomes, repository
+deltas, deterministic gate evidence, and typed read paths.
 
 ### Journal rules
 
@@ -120,25 +133,56 @@ load the unbounded report into its own context.
 
 ## Report structure
 
-The report renders eight sections:
+The report renders these sections:
 
 1. Request and outcome
 2. Work decomposition graph
-3. Role, model, effort, attempts, duration, and AIU per task
+3. Host, adapter, execution classification, evidence kind, configured,
+   requested, resolved, and invoked model and effort, attempts, duration, usage,
+   and cost per dispatch
 4. Gate refusals and the changes that followed
 5. Human phase rejection and iteration history
 6. Human questions, answers, and approvals
 7. Work discovered during execution
-8. Cost by role and model
+8. Usage and cost by role, execution classification, and invoked model
+9. Exact consumed input manifests
+10. Trusted task-delta references
+11. Per-criterion acceptance outcomes, verdicts, and resolved evidence
+12. Evidence inventory
 
 The Phase 9 renderer implements these sections from the full graph, journal,
 output, and normalized worker-event projection. Usage checkpoints are cumulative
 per dispatch, so report aggregation takes the latest checkpoint once rather
-than summing repeated cumulative values.
+than summing repeated cumulative values. Aggregate usage and cost are nullable:
+a role whose dispatches reported no usage renders `unreported`, because a
+zero total would claim a measurement that never arrived.
+
+The acceptance section renders each criterion with its required flag, the
+outcome the worker claimed, the verdict the driver authored, and every resolved
+reference with its resolution and source. Advisory references stay labelled as
+advisory. The contract that produces them belongs to
+[Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md#acceptance-evidence).
 
 The decomposition diagram is built from graph nodes and parent-child edges. A
 plain beads dependency tree is insufficient because sibling children with no
 dependency between them disappear from that view.
+
+## Evidence classification
+
+Reports and findings use evidence labels as claims about provenance, not quality:
+
+| Label | Meaning |
+|-------|---------|
+| `measured` | Senawa measured repository or substrate state through a trusted adapter |
+| `offline` | A production contract passed without an authenticated model invocation |
+| `simulated` | The explicit no-model worker adapter exercised lifecycle behavior |
+| `live-model` | A non-simulated host emitted model execution evidence |
+| `documentation` | A claim is based on documentation or declarations only |
+| `unreported` | Durable evidence cannot support a stronger classification |
+
+A configured model never proves invocation. The current report and exact
+evidence contracts are [confirmed offline](wip/probe-findings.md#live-default-and-evidence-contracts).
+Authenticated role-model quality and live trace delivery remain unvalidated.
 
 ## Rendering boundary
 
@@ -207,8 +251,10 @@ Useful operating metrics include:
 ## Report integrity
 
 `report.md` is derived and never hand-edited. Deleting it loses no source data.
-`senawa work finish` renders the final version after closing the epic and
-archiving session transcripts.
+`senawa work report` renders the current version from the journal, graph, and
+telemetry at any point, not only at the end. `senawa work finish` marks the run
+`finished`, which the Beads adapter reflects as the epic's closed coarse status;
+it does not itself render a report or archive session transcripts.
 
 Committing the report keeps process evidence beside the code under review. The
 open repository policy question is whether the full tracking directory also

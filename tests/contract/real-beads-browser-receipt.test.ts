@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { startWebSupervisor, type WebSupervisor } from "@senawa/browser";
 import { BeadsClient } from "@senawa/runtime-beads";
 import { createRuntimeFixture } from "@senawa/testing";
+import { SimulatedWorkerAdapter } from "@senawa/workers";
 import { build } from "esbuild";
 import { describe, expect, it } from "vitest";
 import { createRuntimeComposition } from "../../apps/senawa/src/composition.js";
@@ -28,13 +29,16 @@ describe("real Beads browser receipt recovery", () => {
     "recovers one durably acknowledged command after supervisor SIGKILL",
     async () => {
       const root = await mkdtemp(join(tmpdir(), "senawa-beads-browser-receipt-"));
+      const bundleRoot = await mkdtemp(
+        join(fileURLToPath(new URL(".", import.meta.url)), ".senawa-contract-bundle-"),
+      );
       let crashChild: ChildProcess | undefined;
       let crashChildExit: ReturnType<typeof waitForExit> | undefined;
       let restartedSupervisor: WebSupervisor | undefined;
       try {
         await initializeRepository(root);
         await seedAwaitingApproval(root);
-        const childBundle = await buildCrashChild(root);
+        const childBundle = await buildCrashChild(bundleRoot);
         crashChild = fork(childBundle, [root, runId, String(leaseTtlMs)], {
           stdio: ["ignore", "pipe", "pipe", "ipc"],
         });
@@ -81,6 +85,12 @@ describe("real Beads browser receipt recovery", () => {
         const restartedServices = createSenawaServices(root, {
           ...restartedComposition,
           runtimeBackend: "beads",
+          workerHost: new SimulatedWorkerAdapter(),
+          workerHostIdentity: {
+            kind: "simulated",
+            adapter: "simulated-worker",
+            adapterVersion: "1",
+          },
         });
         restartedSupervisor = await startWebSupervisor(restartedServices, {
           runId,
@@ -137,6 +147,7 @@ describe("real Beads browser receipt recovery", () => {
           await crashChildExit;
         }
         await rm(root, { recursive: true, force: true });
+        await rm(bundleRoot, { recursive: true, force: true });
       }
     },
   );
@@ -156,11 +167,21 @@ async function seedAwaitingApproval(root: string): Promise<void> {
   const phase = state.phases[0];
   if (phase === undefined) throw new Error("Runtime fixture has no phase");
   phase.status = "awaiting_approval";
+  phase.iteration = 1;
+  phase.artifactVersion = 1;
+  state.artifacts.push({
+    phaseId: phase.id,
+    version: 1,
+    path: `artifacts/${phase.id}/v1.json`,
+    createdAt: state.identity.createdAt,
+    content: { summary: "Seeded approval artifact" },
+    consumed: {},
+  });
   await createRuntimeComposition(root, "beads").persistence.createRun(state, "seed-awaiting");
 }
 
-async function buildCrashChild(root: string): Promise<string> {
-  const outfile = join(root, "real-beads-browser-receipt-crash-child.mjs");
+async function buildCrashChild(bundleRoot: string): Promise<string> {
+  const outfile = join(bundleRoot, "real-beads-browser-receipt-crash-child.mjs");
   await build({
     entryPoints: [
       fileURLToPath(

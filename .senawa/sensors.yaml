@@ -2,7 +2,27 @@ version: 1
 extensions:
   - package: "@senawa/sensor-artifact"
   - package: "@senawa/sensor-command"
+  - package: "@senawa/sensor-task-change"
+  - package: "@senawa/sensor-task-acceptance"
 sensors:
+  - id: task-change
+    extension: "@senawa/sensor-task-change"
+    kind: deterministic
+    description: Confirm that measured task changes satisfy scope and intent
+    cost: cheap
+    trust: blocking
+    scope: []
+    config:
+      evidenceKind: repository-delta
+  - id: task-acceptance
+    extension: "@senawa/sensor-task-acceptance"
+    kind: deterministic
+    description: Confirm that every required acceptance criterion has resolving completion evidence
+    cost: cheap
+    trust: blocking
+    scope: []
+    config:
+      evidenceKind: task-assessment
   - id: artifact-present
     extension: "@senawa/sensor-artifact"
     kind: deterministic
@@ -12,6 +32,24 @@ sensors:
     scope: []
     config:
       artifactKind: phase-output
+  - id: artifact-integrity
+    extension: "@senawa/sensor-artifact"
+    kind: deterministic
+    description: Confirm that a definition or research artifact is internally consistent
+    cost: cheap
+    trust: blocking
+    scope: []
+    config:
+      artifactKind: cross-reference
+  - id: verification-current
+    extension: "@senawa/sensor-artifact"
+    kind: deterministic
+    description: Confirm that current verification passed with resolvable evidence
+    cost: cheap
+    trust: blocking
+    scope: []
+    config:
+      artifactKind: verification-output
   - id: typecheck
     extension: "@senawa/sensor-command"
     kind: deterministic
@@ -39,12 +77,16 @@ gates:
     checks:
       - sensor: artifact-present
         expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: artifact-integrity
+        expect: { path: /verdict, operator: equals, value: pass }
     onFail: block
     escalateOnExhaustion: true
   - id: research-accepted
     description: Research artifact is present and schema-valid
     checks:
       - sensor: artifact-present
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: artifact-integrity
         expect: { path: /verdict, operator: equals, value: pass }
     onFail: block
     escalateOnExhaustion: true
@@ -56,8 +98,12 @@ gates:
     onFail: block
     escalateOnExhaustion: true
   - id: task-done
-    description: Implementation satisfies workspace type-check and test policy
+    description: Completion evidence resolves and the workspace satisfies type-check and test policy
     checks:
+      - sensor: task-change
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: task-acceptance
+        expect: { path: /verdict, operator: equals, value: pass }
       - sensor: typecheck
         expect: { path: /verdict, operator: equals, value: pass }
       - sensor: unit-tests
@@ -66,9 +112,11 @@ gates:
     maxRework: 3
     escalateOnExhaustion: true
   - id: work-done
-    description: Verification artifact is present and schema-valid
+    description: Current verification passes with resolvable, non-contradictory evidence
     checks:
       - sensor: artifact-present
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: verification-current
         expect: { path: /verdict, operator: equals, value: pass }
     onFail: block
     escalateOnExhaustion: true

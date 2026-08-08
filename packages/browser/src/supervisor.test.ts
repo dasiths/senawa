@@ -6,9 +6,10 @@ import { DurableBrowserCommandService, LeaseConflictError } from "@senawa/applic
 import { loadRepositoryDefinitions } from "@senawa/configuration";
 import type { CommandActor } from "@senawa/domain";
 import { createFileTestComposition } from "@senawa/testing";
+import { SimulatedWorkerAdapter } from "@senawa/workers";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createSenawaServices } from "../../../apps/senawa/src/services.js";
-import { appJs } from "./static-assets.js";
+import { appJs, indexHtml, stylesCss } from "./static-assets.js";
 import { startWebSupervisor, type WebSupervisor } from "./supervisor.js";
 
 const actor: CommandActor = { channel: "direct-cli" };
@@ -283,6 +284,21 @@ describe("loopback web supervisor", () => {
     expect(appJs).not.toContain("innerHTML");
     expect(appJs).toContain("textContent");
     expect(appJs).toContain("document.createElement");
+    expect(indexHtml.indexOf('id="artifact-identity"')).toBeLessThan(
+      indexHtml.indexOf('id="decision-controls"'),
+    );
+    expect(indexHtml.indexOf('id="artifact-content"')).toBeLessThan(
+      indexHtml.indexOf('id="decision-controls"'),
+    );
+    expect(appJs).toContain("async function renderApproval(phaseId)");
+    expect(appJs).toContain('q("#decision-controls").hidden=true');
+    expect(appJs).toContain(
+      'renderJson(q("#artifact-content"),artifact.content,"Artifact content")',
+    );
+    expect(appJs).toContain('declared.attribution+" "+declaredKind+": "+declared.value');
+    expect(appJs).toContain('q("#decision-controls").hidden=false');
+    expect(appJs).toContain("expectedVersion:approvalArtifact.version");
+    expect(appJs).toContain("expectedDigest:approvalArtifact.digest");
     expect(appJs).toContain("cytoscape({");
     expect(appJs).toContain("globalThis.__senawaGraph=graph");
     expect(appJs).toContain('name:"dagre"');
@@ -333,6 +349,290 @@ describe("loopback web supervisor", () => {
     expect(appJs).toContain('textContent="run finished"');
     expect(appJs).toContain('/worker-events");');
     expect(appJs).toContain("appendWorkerRecord(JSON.parse(event.data))");
+  });
+
+  it("resizes, collapses, and persists the console rails", () => {
+    expect(() => new Function(appJs)).not.toThrow();
+    expect(appJs).not.toContain("innerHTML");
+    expect(indexHtml).toContain('id="splitter-left" class="splitter" role="separator"');
+    expect(indexHtml).toContain('id="splitter-right" class="splitter" role="separator"');
+    expect(indexHtml).toContain('aria-orientation="vertical"');
+    expect(indexHtml).toContain('aria-controls="overview"');
+    expect(indexHtml).toContain('aria-controls="inspector"');
+    expect(indexHtml).toContain('aria-valuemin="180"');
+    expect(indexHtml).toContain('aria-valuemax="640"');
+    expect(indexHtml).toContain('aria-valuenow="220"');
+    expect(indexHtml).toContain('aria-valuenow="320"');
+    expect(indexHtml).toContain('id="overview-toggle" class="rail-toggle" type="button"');
+    expect(indexHtml).toContain('id="inspector-toggle" class="rail-toggle" type="button"');
+    expect(indexHtml).toContain('aria-controls="overview-body"');
+    expect(indexHtml).toContain('aria-controls="inspector-body"');
+    expect(indexHtml).toContain('id="decision-badge" class="rail-badge" role="status" hidden');
+    expect(stylesCss).toContain("grid-template-columns:var(--rail-left,220px)");
+    expect(stylesCss).toContain('.workspace[data-left="collapsed"]{--rail-left:40px}');
+    expect(stylesCss).toContain('.workspace[data-right="collapsed"]{--rail-right:40px}');
+    expect(stylesCss).toContain(
+      '.workspace[data-left="collapsed"] .overview .rail-spine,.workspace[data-right="collapsed"] .controls .rail-spine{display:block}',
+    );
+    expect(stylesCss).toContain('html[data-dragging="true"]{cursor:col-resize;user-select:none}');
+    expect(appJs).toContain('const LAYOUT_KEY="senawa.console.layout.v1"');
+    expect(appJs).toContain('localStorage.getItem(LAYOUT_KEY)||"null"');
+    expect(appJs).toContain("localStorage.setItem(LAYOUT_KEY,JSON.stringify(layout))");
+    expect(appJs).toContain('root.style.setProperty("--rail-left",layout.left+"px")');
+    expect(appJs).toContain('root.style.setProperty("--rail-right",layout.right+"px")');
+    expect(appJs).toContain('workspace.dataset.left=layout.leftCollapsed?"collapsed":"expanded"');
+    expect(appJs).toContain('setAttribute("aria-valuenow"');
+    expect(appJs).toContain('toggle.setAttribute("aria-expanded",String(!collapsed))');
+    expect(appJs).toContain("setPointerCapture(event.pointerId)");
+    expect(appJs).toContain("releasePointerCapture(dragState.pointerId)");
+    expect(appJs).toContain('event.key==="ArrowLeft"');
+    expect(appJs).toContain('event.key==="ArrowRight"');
+    expect(appJs).toContain('event.key==="Home"');
+    expect(appJs).toContain('event.key==="End"');
+    expect(appJs).toContain("function toggleRail(side,collapsed)");
+    expect(appJs).toContain("function updateDecisionBadge()");
+    expect(appJs).toContain("badge.hidden=!pending");
+    expect(appJs).toContain(
+      'if(typeof ResizeObserver==="function")new ResizeObserver(()=>{if(dragState===null)scheduleGraphFit()}).observe(q("#graph"))',
+    );
+    expect(appJs).toContain("readLayout();\napplyLayout();");
+  });
+
+  it("renders artifact payloads through a bounded escaped JSON viewer", () => {
+    expect(() => new Function(appJs)).not.toThrow();
+    expect(appJs).not.toContain("innerHTML");
+    expect(appJs).not.toContain("outerHTML");
+    expect(appJs).not.toContain("insertAdjacentHTML");
+    expect(appJs).not.toContain("document.write");
+    expect(appJs).not.toContain("new RegExp");
+    expect(indexHtml).toContain('<div id="artifact-content" class="jsonview"');
+    expect(indexHtml).toContain('<div id="artifact-inputs" class="jsonview"');
+    expect(indexHtml).not.toContain('<pre id="artifact-content"');
+    expect(indexHtml.indexOf('id="artifact-identity"')).toBeLessThan(
+      indexHtml.indexOf('id="decision-controls"'),
+    );
+    expect(indexHtml.indexOf('id="artifact-content"')).toBeLessThan(
+      indexHtml.indexOf('id="decision-controls"'),
+    );
+    expect(appJs).toContain("function renderJson(host,value,label)");
+    expect(appJs).toContain('tree.setAttribute("role","tree")');
+    expect(appJs).toContain('item.setAttribute("role","treeitem")');
+    expect(appJs).toContain('group.setAttribute("role","group")');
+    expect(appJs).toContain('item.setAttribute("aria-expanded",String(expanded))');
+    expect(appJs).toContain("const JSON_RAW_LIMIT=1000000");
+    expect(appJs).toContain("const JSON_ROW_BUDGET=2000");
+    expect(appJs).toContain("const JSON_CHUNK=100");
+    expect(appJs).toContain("const JSON_STRING_CAP=512");
+    expect(appJs).toContain("const JSON_DEFAULT_DEPTH=2");
+    expect(appJs).toContain("if(view.rows>=JSON_ROW_BUDGET)");
+    expect(appJs).toContain('"Show next "+Math.min(JSON_CHUNK,entries.length-end)');
+    expect(appJs).toContain('"… "+(raw.length-JSON_STRING_CAP)+" more characters"');
+    expect(appJs).toContain("raw.length>JSON_RAW_LIMIT");
+    expect(appJs).toContain('text("pre",raw.slice(0,JSON_RAW_LIMIT),"jsonraw")');
+    expect(appJs).toContain("function buildJsonChildren(view,item)");
+    expect(appJs).toContain('search.type="search"');
+    expect(appJs).toContain("const needle=query.trim().toLowerCase()");
+    expect(appJs).toContain('(item.dataset.search||"").includes(needle)');
+    expect(appJs).toContain('text("button","Expand all","jsonview-expand")');
+    expect(appJs).toContain('text("button","Collapse all","jsonview-collapse")');
+    expect(appJs).toContain('text("button","Copy JSON","jsonview-copy")');
+    expect(appJs).toContain("function copyJson(view,value)");
+    expect(appJs).toContain("navigator.clipboard?.writeText");
+    expect(appJs).toContain('copy.setAttribute("aria-label","Copy "+(key===null?"payload":key))');
+    expect(appJs).toContain(
+      'renderJson(q("#artifact-inputs"),artifact.consumed,"Consumed inputs")',
+    );
+    expect(stylesCss).toContain(".jsontree{max-height:360px");
+    expect(stylesCss).toContain(".jsonraw{max-height:360px");
+    expect(stylesCss).not.toContain("#artifact-content{max-height:280px");
+  });
+
+  it("shows artifact JSON for any phase that has an artifact version", () => {
+    expect(appJs).toContain(
+      'const artifactKey=phase?.artifactVersion==null?null:phase.id+":"+phase.artifactVersion',
+    );
+    expect(appJs).toContain('q("#approval").hidden=artifactKey===null');
+    expect(appJs).toContain("if(artifactKey!==null)void renderApproval(phase.id)");
+    expect(appJs).not.toContain('q("#approval").hidden=!awaitingApproval');
+    expect(appJs).toContain("function updateDecision()");
+    expect(appJs).toContain('node?.kind==="phase"&&node.status==="awaiting_approval"');
+    expect(appJs).toContain('q("#decision-controls").hidden=false');
+  });
+
+  it("separates routine progression from destructive actions", () => {
+    expect(() => new Function(appJs)).not.toThrow();
+    expect(appJs).not.toContain("innerHTML");
+    expect(indexHtml).toContain('<div class="runbar">');
+    expect(indexHtml.indexOf('id="resume"')).toBeLessThan(indexHtml.indexOf('id="workspace"'));
+    expect(indexHtml.indexOf('id="last-command"')).toBeLessThan(
+      indexHtml.indexOf('id="workspace"'),
+    );
+    expect(indexHtml).toContain(
+      '<button id="resume" class="run-command icon-button" type="button">',
+    );
+    expect(indexHtml).toContain('<details id="danger-zone" class="danger-zone">');
+    expect(indexHtml).toContain("<summary>Danger zone</summary>");
+    expect(indexHtml).toContain(
+      '<button id="end" class="danger run-command icon-button" type="button" aria-describedby="end-hint">',
+    );
+    expect(indexHtml).toContain('id="end-hint" class="hint" role="status" aria-live="polite"');
+    expect(indexHtml).toContain('<textarea id="end-reason" required maxlength="1000"');
+    expect(indexHtml.indexOf('id="danger-zone"')).toBeGreaterThan(
+      indexHtml.indexOf('id="decision-controls"'),
+    );
+    expect(appJs).toContain("function requestEnd()");
+    expect(appJs).toContain("function disarmEnd()");
+    expect(appJs).toContain(
+      'q("#end-hint").textContent="A reason is required before this run can end."',
+    );
+    expect(appJs).toContain('q("#end-label").textContent="Confirm end run"');
+    expect(appJs).toContain("const END_ARM_MS=5000");
+    expect(appJs).toContain('q("#end").addEventListener("click",requestEnd)');
+    expect(appJs).toContain('q("#danger-zone").hidden=q("#ending").hidden');
+    expect(appJs).not.toContain("window.confirm");
+    expect(appJs).not.toContain('command("end",{reason:q("#end-reason").value})');
+    expect(appJs).toContain('q("#resume").hidden=["awaiting_approval","ended","finished"]');
+    expect(appJs).toContain('document.querySelectorAll(".run-command")');
+    expect(stylesCss).toContain("#end.armed{");
+    expect(stylesCss).toContain(".danger-zone[hidden]{display:none}");
+  });
+
+  it("builds icon buttons and a selected-node toolbar without HTML injection", () => {
+    expect(() => new Function(appJs)).not.toThrow();
+    expect(appJs).not.toContain("innerHTML");
+    expect(appJs).not.toContain("new RegExp");
+    expect(indexHtml).toContain('<svg class="sprite" aria-hidden="true" focusable="false">');
+    expect(indexHtml).toContain('<symbol id="icon-steer" viewBox="0 0 16 16">');
+    expect(indexHtml).toContain('<symbol id="icon-resume" viewBox="0 0 16 16">');
+    expect(indexHtml).toContain('<symbol id="icon-end" viewBox="0 0 16 16">');
+    expect(indexHtml).toContain('<symbol id="icon-view" viewBox="0 0 16 16">');
+    expect(indexHtml).toContain(
+      '<div id="node-toolbar" class="node-toolbar" role="toolbar" aria-label="Selected node actions"',
+    );
+    expect(indexHtml.indexOf('id="node-toolbar"')).toBeLessThan(
+      indexHtml.indexOf('id="artifact-identity"'),
+    );
+    expect(indexHtml).not.toContain("data:image");
+    expect(indexHtml).not.toContain("<img");
+    expect(appJs).toContain('const SVG_NS="http://www.w3.org/2000/svg"');
+    expect(appJs).toContain('document.createElementNS(SVG_NS,"svg")');
+    expect(appJs).toContain('document.createElementNS(SVG_NS,"use")');
+    expect(appJs).toContain('use.setAttribute("href","#icon-"+name)');
+    expect(appJs).toContain('svg.setAttribute("class","icon icon-"+name)');
+    expect(appJs).not.toContain("svg.className=");
+    expect(appJs).not.toContain("xlink:href");
+    expect(appJs).not.toContain("data:image/svg");
+    expect(appJs).toContain("function iconButton(id,name,label,className)");
+    expect(appJs).toContain('button.setAttribute("aria-label",label)');
+    expect(appJs).toContain("function renderNodeToolbar()");
+    expect(appJs).toContain("function toolbarKeydown(event)");
+    expect(appJs).toContain("buttons[next].tabIndex=0");
+    expect(appJs).toContain("toolbar.hidden=node===undefined");
+    expect(appJs).not.toContain('event.key==="Tab"');
+    expect(stylesCss).toContain(".sprite{position:absolute;width:0;height:0;overflow:hidden}");
+    expect(stylesCss).toContain(".icon{width:14px;height:14px");
+    expect(stylesCss).toContain(".node-toolbar[hidden]{display:none}");
+  });
+
+  it("raises a pending question above the collapsible rails", () => {
+    expect(() => new Function(appJs)).not.toThrow();
+    expect(appJs).not.toContain("innerHTML");
+    expect(indexHtml).toContain(
+      '<section id="question-banner" class="question-banner" aria-labelledby="question-banner-title" hidden>',
+    );
+    expect(indexHtml.indexOf('id="question-banner"')).toBeLessThan(
+      indexHtml.indexOf('id="workspace"'),
+    );
+    expect(indexHtml).toContain('<p id="question-alert" class="visually-hidden" role="alert">');
+    expect(indexHtml).toContain('id="question-banner-answer" maxlength="4000"');
+    expect(indexHtml).toContain(
+      'id="question-banner-status" class="question-status" role="status" aria-live="polite"',
+    );
+    expect(indexHtml).not.toContain('id="question-banner-submit" class="run-command"');
+    expect(appJs).toContain("function renderQuestionBanner()");
+    expect(appJs).toContain("function updateQuestionElapsed()");
+    expect(appJs).toContain("const QUESTION_OVERDUE_MS=60000");
+    expect(appJs).toContain('elapsed.classList.toggle("overdue",waited>=QUESTION_OVERDUE_MS)');
+    expect(appJs).toContain('openQuestions.some((question)=>question.status==="answerable")');
+    expect(appJs).toContain('q("#run-status").textContent=awaitingAnswer?"waiting for answer"');
+    expect(appJs).toContain('q("#last-command").textContent="waiting for your answer"');
+    expect(appJs).toContain(
+      'document.title=(awaitingAnswer?"● Answer needed — ":"")+"Senawa Run Console"',
+    );
+    expect(appJs).toContain('badge.textContent=questionPendingNow?"?"');
+    expect(appJs).toContain("badge.hidden=!pending");
+    expect(appJs).toContain(
+      'const signature=openQuestions.map((question)=>question.questionId+":"+question.status).join("|")',
+    );
+    expect(appJs).toContain("if(signature===questionsSignature)return");
+    expect(appJs).toContain("document.activeElement!==answer");
+    expect(appJs).toContain('event.key==="Enter"&&(event.ctrlKey||event.metaKey)');
+    expect(appJs).toContain('questions/"+encodeURIComponent(question.questionId)+"/answer');
+    expect(appJs).toContain('prompt=text("p",question.question)');
+    expect(stylesCss).toContain(".visually-hidden{position:absolute");
+    expect(stylesCss).toContain(".question-banner-elapsed.overdue");
+  });
+
+  it("opens an asset full screen through a modal dialog", () => {
+    expect(() => new Function(appJs)).not.toThrow();
+    expect(appJs).not.toContain("innerHTML");
+    expect(indexHtml).toContain(
+      '<dialog id="asset-overlay" class="assetview" aria-labelledby="asset-title">',
+    );
+    expect(indexHtml).toContain(
+      '<div id="asset-body" class="jsonview" aria-label="Asset payload">',
+    );
+    expect(indexHtml).toContain(
+      'id="asset-close" class="assetview-close" type="button" aria-label="Close asset viewer"',
+    );
+    expect(indexHtml.indexOf('id="asset-overlay"')).toBeGreaterThan(
+      indexHtml.indexOf('id="decision-controls"'),
+    );
+    expect(appJs).toContain("function renderJson(host,value,label)");
+    expect(appJs).toContain("function openAsset(value,label,source)");
+    expect(appJs).toContain("overlay.showModal()");
+    expect(appJs).toContain('if(host.id!=="asset-body")toolbar.append(expandFull)');
+    expect(appJs).toContain('renderJson(q("#asset-body"),value,label)');
+    expect(appJs).toContain('document.documentElement.dataset.modal="true"');
+    expect(appJs).toContain("delete document.documentElement.dataset.modal");
+    expect(appJs).toContain("assetReturnFocus.focus()");
+    expect(appJs).toContain('q("#asset-overlay").addEventListener("close",releaseAsset)');
+    expect(appJs).toContain('if(event.key==="Escape"){event.preventDefault();closeAsset()}');
+    expect(stylesCss).toContain('html[data-modal="true"]{overflow:hidden}');
+    expect(stylesCss).toContain("dialog::backdrop");
+    expect(stylesCss).toContain(".assetview .jsontree,.assetview .jsonraw{max-height:none");
+    expect(stylesCss).toContain(".jsontree{max-height:360px");
+    expect(stylesCss).toContain(".jsonraw{max-height:360px");
+  });
+
+  it("keeps output scrolling pinned to the reader", () => {
+    expect(() => new Function(appJs)).not.toThrow();
+    expect(appJs).not.toContain("innerHTML");
+    expect(indexHtml).toContain('<div class="stage-output">');
+    expect(indexHtml).toContain(
+      '<div id="terminal" class="terminal" role="log" tabindex="0" aria-label="Agent output">',
+    );
+    expect(indexHtml).toContain(
+      '<button id="output-jump" class="output-jump" type="button" hidden>Jump to latest</button>',
+    );
+    expect(appJs).toContain("const OUTPUT_PIN_SLACK=24");
+    expect(appJs).toContain("function outputAtBottom(terminal)");
+    expect(appJs).toContain(
+      "terminal.scrollHeight-terminal.clientHeight-terminal.scrollTop<=OUTPUT_PIN_SLACK",
+    );
+    expect(appJs).toContain("if(outputPinned)terminal.scrollTop=terminal.scrollHeight");
+    expect(appJs).toContain("else terminal.scrollTop=previousTop");
+    expect(appJs).toContain("function updateOutputJump()");
+    expect(appJs).toContain("function jumpToLatest()");
+    expect(appJs).toContain("jump.hidden=outputPinned");
+    expect(appJs).toContain("if(!outputPinned)outputUnseen+=1");
+    expect(appJs).toContain('"Jump to latest ("+outputUnseen+" new)"');
+    expect(appJs).toContain("{passive:true}");
+    expect(appJs).toContain('event.key==="End"&&!event.shiftKey');
+    expect(appJs).toContain("outputPinned=true;\n  outputUnseen=0;");
+    expect(stylesCss).toContain(".stage-output{position:relative}");
+    expect(stylesCss).toContain("overflow-anchor:none");
+    expect(stylesCss).toContain(".output-jump[hidden]{display:none}");
   });
 
   it("projects and answers durable worker questions through the authenticated API", async () => {
@@ -531,7 +831,10 @@ describe("loopback web supervisor", () => {
         `/api/v1/runs/async-command-run/commands/${commandId}`,
       );
       expect(submitted.body.receipt).toMatchObject({ commandId, status: "queued", seq: 1 });
-      expect((await services.queries.status("async-command-run"))?.needs?.phaseId).toBe("define");
+      expect((await services.queries.status("async-command-run"))?.needs).toMatchObject({
+        action: "approve-or-reject",
+        phaseId: "define",
+      });
 
       const active = await browser.active();
       expect(active.receipt).toMatchObject({ commandId, status: "queued" });
@@ -600,11 +903,15 @@ describe("loopback web supervisor", () => {
 
   it("recovers queued and stale-running receipts after supervisor startup", async () => {
     const queuedServices = await createRun("queued-recovery-run");
+    const queuedBrief = await queuedServices.queries.phaseBrief("queued-recovery-run", "define");
+    if (queuedBrief.artifact === null) throw new Error("definition artifact is missing");
     const queuedCommand = {
       apiVersion: "senawa.dev/browser-command/v1",
       commandId: "44444444-4444-4444-8444-444444444444",
       command: "reject",
       phaseId: "define",
+      expectedVersion: queuedBrief.artifact.version,
+      expectedDigest: queuedBrief.artifact.digest,
       reason: "Recover queued command",
     } as const;
     await queuedServices.browserCommands.submit("queued-recovery-run", queuedCommand);
@@ -613,6 +920,10 @@ describe("loopback web supervisor", () => {
       const browser = await rawBrowserSession(queuedSupervisor);
       expect(await browser.terminal(queuedCommand.commandId)).toMatchObject({
         status: "completed",
+        payload: {
+          expectedVersion: queuedBrief.artifact.version,
+          expectedDigest: queuedBrief.artifact.digest,
+        },
       });
     } finally {
       await queuedSupervisor.close();
@@ -722,7 +1033,10 @@ describe("loopback web supervisor", () => {
       await approve(browser, "define");
       await approve(browser, "research");
       await approve(browser, "plan");
-      expect((await services.queries.status("production-demo-run"))?.needs?.phaseId).toBe("verify");
+      expect((await services.queries.status("production-demo-run"))?.needs).toMatchObject({
+        action: "approve-or-reject",
+        phaseId: "verify",
+      });
       await approve(browser, "verify");
 
       expect((await services.queries.status("production-demo-run"))?.status).toBe("finished");
@@ -753,6 +1067,65 @@ function servicesForRoot(root: string) {
   return {
     ...createSenawaServices(root, {
       ...composition,
+      workerHost: new SimulatedWorkerAdapter(),
+      workerHostIdentity: {
+        kind: "simulated",
+        adapter: "simulated-worker",
+        adapterVersion: "1",
+      },
+      repositoryEvidence: {
+        async captureBaseline(input) {
+          return {
+            version: 1,
+            kind: "repository-baseline",
+            runId: input.runId,
+            taskId: input.taskId,
+            attempt: input.attempt,
+            dispatchId: input.dispatchId,
+            turnId: input.turnId,
+            expectation: input.expectation,
+            authorizedPaths: input.authorizedPaths,
+            frozenPaths: input.frozenPaths,
+            head: "simulated-browser-head",
+            entries: [],
+            capturedAt: input.capturedAt,
+            uncertainty: [],
+            digest: "b".repeat(64),
+            evidencePath: "evidence/repository/browser-baseline.json",
+          };
+        },
+        async captureDelta(input) {
+          return {
+            version: 1,
+            kind: "repository-delta",
+            runId: input.baseline.runId,
+            taskId: input.baseline.taskId,
+            attempt: input.baseline.attempt,
+            dispatchId: input.baseline.dispatchId,
+            turnId: input.baseline.turnId,
+            expectation: input.baseline.expectation,
+            baselineDigest: input.baseline.digest,
+            headBefore: input.baseline.head,
+            headAfter: input.baseline.head,
+            preExistingChanges: [],
+            changedPaths: [
+              { path: "packages/browser-fixture.ts", status: " M", digest: "c".repeat(64) },
+            ],
+            inScopeChanges: ["packages/browser-fixture.ts"],
+            outOfScopeChanges: [],
+            frozenChanges: [],
+            uncertainty: [],
+            workerClaim: {
+              reported: input.workerClaim.reported,
+              changed: input.workerClaim.changed,
+              agreement: "disagree",
+            },
+            capturedAt: input.capturedAt,
+            digest: "d".repeat(64),
+            evidencePath: "evidence/repository/browser-delta.json",
+          };
+        },
+      },
       gateEvaluator: {
         async evaluate(input) {
           return { gateId: input.gateId, accepted: true, readings: [], findings: [] };

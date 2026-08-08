@@ -44,6 +44,9 @@ spec:
         kind: agent
         role: planner
         resumeAcrossIterations: true
+        input:
+          definition: phases.define.output
+          research: phases.research.output
         output:
           path: artifacts/plan.json
           schema: ../schemas/plan.schema.json
@@ -63,6 +66,7 @@ spec:
         role: implementor
         selector:
           phase: implement
+        repositoryChanges: [required, optional]
         concurrency: 1
         reentrant: true
       loop:
@@ -84,6 +88,11 @@ spec:
         kind: agent
         role: verifier
         resumeAcrossIterations: true
+        input:
+          definition: phases.define.output
+          research: phases.research.output
+          plan: phases.plan.output
+          implementation: evidence.implementation
         output:
           path: artifacts/verification.json
           schema: ../schemas/verification.schema.json

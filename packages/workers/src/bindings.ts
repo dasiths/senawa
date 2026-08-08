@@ -7,6 +7,7 @@ import type {
   WorkerTurn,
 } from "@senawa/application";
 import type { JsonObject, WorkerCapability } from "@senawa/domain";
+import { TASK_COMPLETION_SUBMISSION_JSON_SCHEMA } from "@senawa/domain";
 
 export type WorkerBindingHandler = (
   input: JsonObject,
@@ -20,12 +21,18 @@ const bindingDefinitions: readonly {
   readonly capability: WorkerCapability;
   readonly description: string;
   readonly properties: Readonly<Record<string, JsonObject>>;
+  readonly required?: readonly string[];
 }[] = [
   {
     name: "senawa.task.done",
     capability: "senawa.task.done",
-    description: "Submit task completion",
-    properties: { summary: { type: "string", minLength: 1 } },
+    description:
+      "Submit task completion with an outcome and evidence for every acceptance criterion",
+    properties: {
+      summary: TASK_COMPLETION_SUBMISSION_JSON_SCHEMA.properties.summary as unknown as JsonObject,
+      criteria: TASK_COMPLETION_SUBMISSION_JSON_SCHEMA.properties.criteria as unknown as JsonObject,
+    },
+    required: ["summary"],
   },
   {
     name: "senawa.phase.submit",
@@ -66,7 +73,7 @@ export class DeterministicWorkerBindingRegistry {
         inputSchema: {
           type: "object",
           properties: definition.properties,
-          required: Object.keys(definition.properties),
+          required: [...(definition.required ?? Object.keys(definition.properties))],
           additionalProperties: false,
         },
         handle: async (input, context) => {
@@ -81,7 +88,7 @@ export class DeterministicWorkerBindingRegistry {
               message: "Binding context is outside the authorized owner",
             };
           }
-          for (const property of Object.keys(definition.properties)) {
+          for (const property of definition.required ?? Object.keys(definition.properties)) {
             if (!(property in input)) {
               return {
                 accepted: false,

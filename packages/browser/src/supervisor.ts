@@ -43,6 +43,7 @@ export interface BrowserServices {
     | "journal"
     | "output"
     | "workerEvents"
+    | "phaseBrief"
     | "artifact"
   >;
   readonly notifier: RunChangeNotificationPort;
@@ -354,6 +355,13 @@ async function route(
   const artifactMatch = url.pathname.match(
     new RegExp(`^${escapeRegex(prefix)}/phases/([a-z0-9._-]+)/artifacts/([1-9][0-9]*)$`, "u"),
   );
+  const briefMatch = url.pathname.match(
+    new RegExp(`^${escapeRegex(prefix)}/phases/([a-z0-9._-]+)/brief$`, "u"),
+  );
+  if (request.method === "GET" && briefMatch !== null) {
+    sendJson(response, 200, await services.queries.phaseBrief(runId, briefMatch[1] ?? ""));
+    return;
+  }
   if (request.method === "GET" && artifactMatch !== null) {
     const artifact = await services.queries.artifact(
       runId,
@@ -412,7 +420,7 @@ function isJsonContentType(value: string | undefined): boolean {
 }
 
 function parseStream(value: string): { kind: "run" | "phase" | "task"; id: string } {
-  const match = value.match(/^(run|phase|task):([a-z0-9]+(?:[._-][a-z0-9]+)*)$/u);
+  const match = value.match(/^(run|phase|task):([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/u);
   if (match === null) throw new Error("Unknown output stream");
   return { kind: match[1] as "run" | "phase" | "task", id: match[2] ?? "" };
 }

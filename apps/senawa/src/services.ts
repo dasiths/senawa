@@ -2,17 +2,21 @@ import { randomUUID } from "node:crypto";
 import { posix, resolve } from "node:path";
 import {
   RunCommandService as ApplicationRunCommandService,
+  type ArtifactDecisionExpectation,
   type ArtifactValidationPort,
   type BrowserCommandReceiptStore,
   DurableBrowserCommandService,
   type EndRunOptions,
   type GateEvaluationPort,
+  type RepositoryEvidencePort,
   type RunChangeNotificationPort,
   type RunPersistencePort,
   RunQueryService,
   RunReportEvidenceReader,
+  type TaskAssessmentPort,
   type TransitionResult,
   type WorkerExecutionPort,
+  type WorkerHostResolverPort,
   type WorkflowCatalogPort,
 } from "@senawa/application";
 import {
@@ -27,12 +31,12 @@ import type {
   RunSnapshot,
   RuntimeBackend,
   RuntimeLease,
+  WorkerHostIdentity,
   WorkRequest,
 } from "@senawa/domain";
-import { FileSensorEvidenceStore } from "@senawa/observability";
+import { FileSensorEvidenceStore, FileTaskAssessmentStore } from "@senawa/observability";
 import { RunReportService } from "@senawa/reporting";
 import { CommandGateEvaluator } from "@senawa/sensors";
-import { DeterministicWorkerHost } from "@senawa/workers";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 
@@ -54,6 +58,10 @@ export interface SenawaServiceOptions {
   readonly notifier: RunChangeNotificationPort;
   readonly runtimeBackend?: RuntimeBackend;
   readonly workerHost?: WorkerExecutionPort;
+  readonly workerHostResolver?: WorkerHostResolverPort;
+  readonly workerHostIdentity?: WorkerHostIdentity;
+  readonly repositoryEvidence: RepositoryEvidencePort;
+  readonly taskAssessments?: TaskAssessmentPort;
   readonly gateEvaluator?: GateEvaluationPort;
   readonly now?: () => Date;
 }
@@ -70,10 +78,13 @@ export class RunCommands {
 
   constructor(
     store: RunPersistencePort,
-    workerHost: WorkerExecutionPort,
+    workerHost: WorkerExecutionPort | WorkerHostResolverPort,
     gateEvaluator: GateEvaluationPort,
     private readonly now: () => Date,
     backend: RuntimeBackend,
+    workerHostIdentity: WorkerHostIdentity,
+    repositoryEvidence: RepositoryEvidencePort,
+    taskAssessments: TaskAssessmentPort,
   ) {
     this.application = new ApplicationRunCommandService(
       store,
@@ -91,6 +102,9 @@ export class RunCommands {
       },
       30_000,
       backend,
+      workerHostIdentity,
+      repositoryEvidence,
+      taskAssessments,
     );
   }
 
@@ -104,20 +118,32 @@ export class RunCommands {
     });
   }
 
-  approve(runId: string, phaseId: string, actor: CommandActor, note?: string) {
-    return this.application.approve(runId, phaseId, actor, note);
+  approve(
+    runId: string,
+    phaseId: string,
+    actor: CommandActor,
+    note?: string,
+    expectation?: ArtifactDecisionExpectation,
+  ) {
+    return this.application.approve(runId, phaseId, actor, note, undefined, expectation);
   }
 
-  reject(runId: string, phaseId: string, reason: string, actor: CommandActor) {
-    return this.application.reject(runId, phaseId, reason, actor);
+  reject(
+    runId: string,
+    phaseId: string,
+    reason: string,
+    actor: CommandActor,
+    expectation?: ArtifactDecisionExpectation,
+  ) {
+    return this.application.reject(runId, phaseId, reason, actor, undefined, expectation);
   }
 
   steer(runId: string, taskId: string, instruction: string, actor: CommandActor) {
     return this.application.steer(runId, taskId, instruction, actor);
   }
 
-  resume(runId: string, actor: CommandActor) {
-    return this.application.resume(runId, actor);
+  resume(runId: string, actor: CommandActor, expectedWorkerHost?: WorkerHostIdentity["kind"]) {
+    return this.application.resume(runId, actor, undefined, expectedWorkerHost);
   }
 
   pause(runId: string, actor: CommandActor) {
@@ -184,6 +210,15 @@ export class RunCommands {
     return this.application.advance(runId, actor);
   }
 
+  listModels() {
+    return this.application.listModels();
+  }
+
+  liveReadiness(definitions: RepositoryDefinitions) {
+    const runId = `readiness-${randomUUID()}`;
+    return this.application.liveReadiness(createRunSnapshot(runId, definitions, this.now()));
+  }
+
   executeBrowserCommand(
     runId: string,
     command: Parameters<ApplicationRunCommandService["executeBrowserCommand"]>[1],
@@ -198,13 +233,25 @@ export function createSenawaServices(
 ): SenawaServices {
   const root = resolve(repositoryRoot);
   const reports = new RunReportService(new RunReportEvidenceReader(options.persistence));
+  const workerHostIdentity = options.workerHostIdentity ?? {
+    kind: "copilot-sdk",
+    adapter: "copilot-sdk",
+    adapterVersion: "1.0.7",
+  };
+  const workerHost = options.workerHostResolver ?? options.workerHost;
+  if (workerHost === undefined) {
+    throw new Error("Senawa service composition requires an explicit worker host resolver");
+  }
   const commands = new RunCommands(
     options.persistence,
-    options.workerHost ?? new DeterministicWorkerHost(),
+    workerHost,
     options.gateEvaluator ??
       new CommandGateEvaluator(root, { evidenceStore: new FileSensorEvidenceStore(root) }),
     options.now ?? (() => new Date()),
     options.runtimeBackend ?? "file",
+    workerHostIdentity,
+    options.repositoryEvidence,
+    options.taskAssessments ?? new FileTaskAssessmentStore(root),
   );
   const scheduler = {
     scheduleEvery(intervalMs: number, task: () => void) {

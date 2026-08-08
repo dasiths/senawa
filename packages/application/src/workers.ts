@@ -1,4 +1,10 @@
-import type { JsonObject, JsonValue, WorkerCapability, WorkerProfile } from "@senawa/domain";
+import type {
+  JsonObject,
+  JsonValue,
+  WorkerCapability,
+  WorkerHostIdentity,
+  WorkerProfile,
+} from "@senawa/domain";
 
 export type WorkerOwner = { readonly kind: "phase" | "task"; readonly id: string };
 
@@ -47,6 +53,7 @@ export interface WorkerOutput {
 export interface WorkerResult {
   readonly sessionId: string;
   readonly artifact?: JsonObject;
+  readonly completion?: JsonObject;
   readonly output: readonly WorkerOutput[];
 }
 
@@ -95,6 +102,52 @@ export interface WorkerSessionPlan {
   readonly unsupportedPreferences: readonly string[];
 }
 
+export interface WorkerModelCatalogEntry {
+  readonly id: string;
+  readonly name: string;
+  readonly supportedEfforts: readonly string[];
+  readonly defaultEffort?: string;
+}
+
+export interface WorkerModelCatalogPort {
+  listModels(): Promise<readonly WorkerModelCatalogEntry[]>;
+}
+
+export interface WorkerPreflightRequest extends WorkerSessionRequirements {
+  readonly role: string;
+}
+
+export interface WorkerHostResolverPort {
+  resolve(identity: WorkerHostIdentity): Promise<WorkerExecutionPort>;
+  preflight(
+    identity: WorkerHostIdentity,
+    requests: readonly WorkerPreflightRequest[],
+  ): Promise<readonly WorkerSessionPlan[]>;
+  listModels(identity: WorkerHostIdentity): Promise<readonly WorkerModelCatalogEntry[]>;
+}
+
+export function fixedWorkerHostResolver(workerHost: WorkerExecutionPort): WorkerHostResolverPort {
+  const candidate = workerHost as WorkerExecutionPort &
+    Partial<WorkerSessionPort> &
+    Partial<WorkerModelCatalogPort>;
+  return {
+    async resolve() {
+      return workerHost;
+    },
+    async preflight(_identity, requests) {
+      const negotiate = candidate.negotiate?.bind(candidate);
+      if (negotiate === undefined) return [];
+      return Promise.all(requests.map(({ role: _role, ...request }) => negotiate(request)));
+    },
+    async listModels() {
+      if (candidate.listModels === undefined) {
+        throw new Error("The selected worker host does not provide a model catalog");
+      }
+      return candidate.listModels();
+    },
+  };
+}
+
 export type WorkerSessionEvent = {
   readonly apiVersion: "senawa.dev/worker-event/v1";
   readonly eventId: string;
@@ -141,6 +194,7 @@ export type WorkerSessionEvent = {
       readonly reason?: string;
     }
   | { readonly kind: "artifact"; readonly artifact: JsonObject }
+  | { readonly kind: "completion"; readonly submission: JsonObject }
 );
 
 export interface WorkerTurnHandle {

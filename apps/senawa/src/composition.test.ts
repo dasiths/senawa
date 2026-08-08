@@ -1,9 +1,11 @@
 import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { loadRepositoryDefinitions } from "@senawa/configuration";
 import type { RuntimeState } from "@senawa/domain";
 import { BeadsClient } from "@senawa/runtime-beads";
 import { createRuntimeFixture } from "@senawa/testing";
+import { sdkCapabilities } from "@senawa/workers";
 import { describe, expect, it } from "vitest";
 import { createRuntimeComposition, selectRuntime } from "./composition.js";
 
@@ -40,6 +42,18 @@ describe("runtime composition", () => {
     ).resolves.toMatchObject({
       value: { runId: state.identity.runId, backend: "beads" },
     });
+  });
+
+  it("keeps every repository worker profile inside the SDK host capability set", async () => {
+    const definitions = await loadRepositoryDefinitions(process.cwd());
+    const supported = new Set(sdkCapabilities);
+    const requested = Object.entries(definitions.workerProfiles).map(([role, profile]) => [
+      role,
+      profile.spec.tools.filter((capability) => !supported.has(capability)),
+    ]);
+    expect(Object.fromEntries(requested)).toEqual(
+      Object.fromEntries(Object.keys(definitions.workerProfiles).map((role) => [role, []])),
+    );
   });
 });
 

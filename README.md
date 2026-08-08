@@ -23,7 +23,7 @@ actionable failures. The driver remains authoritative even when a worker ends a
 turn without making the request. This is the backpressure model described in
 [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/).
 
-Because everything routes through that one seam, the harness can also write down what happened. Every orchestration event lands in an append-only journal that no agent can author, and `senawa work report` renders it into a document you can read or attach to a pull request: which role did which task, on which model, how many times the harness sent the work back and why, what you decided, and what it cost.
+Because everything routes through that one seam, the harness can also write down what happened. Every orchestration event lands in an append-only journal that no agent can author, and `senawa work report` renders it into a document you can read or attach to a pull request: which host and adapter handled each turn, which models and efforts were configured, requested, resolved, and invoked, what evidence was consumed, how many times the harness sent the work back and why, what you decided, and what it cost.
 
 ## Three loops, and where you sit
 
@@ -60,18 +60,25 @@ you   Add Entity Framework support for the persistence layer
 PA    [senawa workflow list] I can run standard-delivery or hotfix. Which?
 you   standard-delivery
 PA    [senawa work start "<goal>" --workflow standard-delivery] Define is ready.
-PA    [senawa work wait --timeout 300] Define is ready: artifacts/define/v1.json
+PA    [senawa phase brief define] Define is ready: artifacts/define/v1.json, version 1, digest <digest>
+PA    [senawa phase artifact define --version 1] <complete definition artifact>
 you   looks right, go on
-PA    [senawa approve define] [senawa work resume]
+PA    [senawa --caller principal-agent approve define --expected-version 1 --expected-digest <digest>] [senawa work resume]
 PA    [senawa work wait --timeout 300] Research is ready: v1
+PA    [senawa phase brief research] Research artifact: artifacts/research/v1.json, version 1, digest <digest>
+PA    [senawa phase artifact research --version 1] <complete research artifact>
 you   approve
-PA    [senawa approve research] [senawa work resume]
+PA    [senawa --caller principal-agent approve research --expected-version 1 --expected-digest <digest>] [senawa work resume]
 PA    [senawa work wait --timeout 300] Plan is ready: v1, 6 tasks
+PA    [senawa phase brief plan] Plan artifact: artifacts/plan/v1.json, version 1, digest <digest>
+PA    [senawa phase artifact plan --version 1] <complete plan artifact>
 you   no error handling on the adapter boundary
-PA    [senawa reject plan --reason "<reason>"] [senawa work resume]
+PA    [senawa --caller principal-agent reject plan --reason "<reason>" --expected-version 1 --expected-digest <digest>] [senawa work resume]
 PA    [senawa work wait --timeout 300] Plan v2 adds two tasks for it
+PA    [senawa phase brief plan] Plan artifact: artifacts/plan/v2.json, version 2, digest <digest>
+PA    [senawa phase artifact plan --version 2] <complete plan artifact>
 you   approve
-PA    [senawa approve plan] [senawa work resume] Implementing.
+PA    [senawa --caller principal-agent approve plan --expected-version 2 --expected-digest <digest>] [senawa work resume] Implementing.
 you   how is it going?
 PA    [senawa work show] 4 of 6 closed.
       bd-a1b2 was refused once on unit-tests and passed on its second attempt.
@@ -79,8 +86,10 @@ PA    [senawa work wait --timeout 300] Verify is ready: v1
 you   add the tasks in extra-tasks.json
 PA    [senawa plan revise --add extra-tasks.json] [senawa work resume]
 PA    [senawa work wait --timeout 300] Done, verify re-ran: v2
+PA    [senawa phase brief verify] Verification artifact: artifacts/verify/v2.json, version 2, digest <digest>
+PA    [senawa phase artifact verify --version 2] <complete verification artifact>
 you   accept
-PA    [senawa approve verify] [senawa work resume]
+PA    [senawa --caller principal-agent approve verify --expected-version 2 --expected-digest <digest>] [senawa work resume]
 PA    [senawa work wait --timeout 300] Run accepted. Report at report.md
 ```
 
@@ -123,7 +132,7 @@ gate evaluator. `senawa sensor audit [<run>]` derives verdict agreement, drift
 transitions, and latency from recorded readings. Hook latency remains an
 explicit unreported metric until the hook writes measurements.
 
-`@senawa/workers` owns deterministic, recording, subprocess, and Copilot SDK
+`@senawa/workers` owns simulated, recording, Copilot subprocess, and Copilot SDK
 lifecycle adapters, capability negotiation, authorization, normalized events,
 and explicit create, resume, inspect, cancel, and release operations. The SDK
 adapter is pinned to `@github/copilot-sdk` 1.0.7 and uses caller-chosen session
@@ -134,15 +143,18 @@ typed binding contracts cover task completion, phase submission, questions,
 discoveries, and notes. Normalized lifecycle, model, trace, text, artifact,
 task-diff, duration, usage, AIU, and cost events are durably deduplicated before
 output can fan out to the browser. Task transcripts and explicit no-diff
-evidence are materialized in the work directory. Offline conformance uses
-deterministic adapters, a bounded recording fake executable, and an injected
+evidence are materialized in the work directory. Offline conformance uses the
+simulated adapter, a bounded recording fake executable, and an injected
 fake SDK client. No validation command starts Copilot or spends AI credits.
 Live SDK session execution remains unvalidated.
-Select the SDK adapter explicitly with `--worker-host sdk`; ordinary commands
-remain deterministic unless another host is requested. The SDK launches the
-installed `copilot` runtime over stdio only when selected. Senawa resolves the
-runtime to an absolute executable from `PATH`; set `SENAWA_COPILOT_CLI` to an
-absolute path when the CLI is installed outside `PATH`.
+New worker-producing runs default to canonical `--worker-host copilot-sdk` and
+persist that choice. Select `--worker-host simulated` explicitly for tests,
+offline demos, and no-credit probes. Read-only status, report, browser, workflow,
+and ordinary doctor commands do not start Copilot. The SDK launches the installed
+`copilot` runtime over stdio only for connected diagnostics or worker dispatch.
+Senawa resolves the runtime to an absolute executable from `PATH`; set
+`SENAWA_COPILOT_CLI` to an absolute path when the CLI is installed outside
+`PATH`. A failed live host never falls back to simulation.
 
 The `senawa` app composes `@senawa/runtime-beads` by default and selects
 `@senawa/runtime-file` only for explicit `--runtime file` commands. Mutable runtime state,
@@ -163,9 +175,8 @@ renders from an application evidence projection rather than a runtime adapter.
 The report renderer neutralizes control characters, instruction-like tags, raw
 HTML, and Markdown syntax in capped untrusted fields. It renders request and
 outcome, decomposition, worker execution, gate and human history, discoveries,
-notes, and cost by role and model. `@senawa/web` and
-`@senawa/report` have been removed with the other internal compatibility
-packages. The `senawa` app wires target adapters directly.
+notes, exact consumed manifests, measured task evidence, and usage by role and
+invoked model. The `senawa` app wires target adapters directly.
 
 Run identity and the active-run pointer record the selected backend. Status and
 reports expose it, and reopening through another backend is rejected. Beads
@@ -192,7 +203,7 @@ pnpm demo:beads
 
 This builds Senawa, creates an isolated temporary repository, and runs the
 standard workflow through the real CLI and loopback browser command path with
-deterministic workers. Mutable state is stored in a real Beads database. See
+explicit simulated workers. Mutable state is stored in a real Beads database. See
 [`examples/demos/beads-offline/README.md`](examples/demos/beads-offline/README.md)
 for full details and the `--keep-server` option.
 
@@ -243,16 +254,17 @@ authenticated route so they remain available while a command receipt is active.
 The live-worker launcher is separate and guarded:
 
 ```bash
-pnpm demo:live -- --confirm-cost --host sdk --goal "Implement the requested change"
+pnpm demo:live -- --confirm-cost --host copilot-sdk --goal "Implement the requested change"
 ```
 
-It prints an AI-credit warning before starting and selects `--worker-host sdk`.
-Pass `--host copilot` to use the subprocess adapter. It uses `--runtime file`
-(the explicit development and test adapter) for all state storage; the selected
-live transport is reserved for implementation tasks. This path is opt-in and
-unvalidated in the production slice. Exit code `2` means the run reached a
-human decision, not that the start failed. Every later resume intended to use
-live implementation workers must retain the selected `--worker-host` value.
+It prints an AI-credit warning before starting and selects
+`--worker-host copilot-sdk`. Pass `--host copilot-subprocess` to exercise the
+experimental subprocess adapter. It uses `--runtime file` (the explicit
+development and test adapter) for state storage. This path is opt-in and does
+not establish authenticated Sonnet 5 or Opus 5 availability, live workflow
+quality, or tmux behavior. Exit code `2` means the run reached a human decision,
+not that the start failed. Resume uses the host persisted by start and refuses
+an explicit mismatch.
 
 ## How it fits together
 
@@ -302,10 +314,11 @@ headless with no principal agent at all.
 
 ## Prerequisites
 
-The offline vertical slice requires Node.js 22 or later, pnpm 10 or later, Git,
+The offline vertical slice requires Node.js 22.12 or later, pnpm 10 or later, Git,
 and `bd` 1.1.x for ordinary commands. Explicit `--runtime file` development and
-test commands do not require `bd`. The opt-in live-worker path also requires
-GitHub Copilot CLI with an active Copilot subscription.
+test commands do not require `bd`. Worker-producing commands use the Copilot SDK
+host by default and require GitHub Copilot CLI with an active Copilot
+subscription. Offline work must select `--worker-host simulated` explicitly.
 
 A repository running Senawa must provide `.senawa/sensors.yaml`, workflows,
 schemas, and worker profiles under `.senawa/`. It must also provide
@@ -335,7 +348,7 @@ The tree below shows the repository definition and runtime ownership boundaries.
 docs/design/                 numbered current-state guides and their reading index
 docs/design/wip/             proposed decisions, evidence, rejected ideas, and the historical monolith
 apps/                        deployable Senawa CLI and hook composition roots
-examples/demos/              supported deterministic and guarded live demonstrations
+examples/demos/              supported simulated and guarded live demonstrations
 experiments/probes/          bounded experiments that measured substrate behavior
 packages/                    reusable runtime, sensor, browser, and reporting components
 packages/domain/             pure contracts, schemas, events, and transition invariants
@@ -349,7 +362,7 @@ packages/workers/            worker lifecycle, negotiation, authorization, event
 packages/sensors/            ordered gate evaluation, command sensors, cache, and evidence seams
 packages/browser/            authenticated HTTP, receipt and output SSE, questions, and graph console
 packages/reporting/          report rendering over application evidence projections
-packages/testing/            shared adapter contracts and deterministic fixtures
+packages/testing/            shared adapter contracts and simulated fixtures
 tests/contract/              shared storage, recovery, fencing, dispatch, and projection suites
 apps/senawa-hook/            embedded subprocess hook policy
 .senawa/agents/              strict worker profiles with model, capability requests, and prompts

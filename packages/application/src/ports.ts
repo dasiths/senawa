@@ -3,12 +3,20 @@ import type {
   JournalEvent,
   JsonObject,
   OutputRecord,
+  RepositoryBaselineEvidence,
+  RepositoryChangeExpectation,
+  RepositoryDeltaEvidence,
+  ResolvedInputManifest,
   RunIdentity,
   RunSnapshot,
   RuntimeArtifact,
   RuntimeLease,
   RuntimeState,
   RuntimeTask,
+  TaskCompletionAssessment,
+  TaskCompletionAssessmentEvidence,
+  WorkerHostIdentity,
+  WorkerProfile,
   Workflow,
 } from "@senawa/domain";
 
@@ -22,7 +30,11 @@ export type {
   WorkerBindingResult,
   WorkerCancelResult,
   WorkerExecutionPort,
+  WorkerHostResolverPort,
+  WorkerModelCatalogEntry,
+  WorkerModelCatalogPort,
   WorkerOutput,
+  WorkerPreflightRequest,
   WorkerResult,
   WorkerSessionEvent,
   WorkerSessionPlan,
@@ -193,6 +205,8 @@ export interface WorkerEventRecord {
   readonly operationId: string;
   readonly role: string;
   readonly attempt: number;
+  readonly workerHost?: WorkerHostIdentity;
+  readonly configuredModel?: WorkerProfile["spec"]["model"];
   readonly event: WorkerSessionEvent;
 }
 
@@ -237,12 +251,45 @@ export interface GateEvaluationPort {
     readonly gateId: string;
     readonly policy: RunSnapshot["policy"];
     readonly artifact?: JsonObject;
+    readonly inputManifest?: ResolvedInputManifest;
+    readonly repositoryChange?: RepositoryChangeExpectation;
+    readonly repositoryEvidence?: RepositoryDeltaEvidence;
+    readonly taskAssessment?: TaskCompletionAssessment;
     readonly onOutput?: (input: {
       readonly sensorId: string;
       readonly stream: "stdout" | "stderr" | "system";
       readonly text: string;
     }) => Promise<void>;
   }): Promise<GateEvaluation>;
+}
+
+export interface RepositoryEvidencePort {
+  captureBaseline(input: {
+    readonly runId: string;
+    readonly taskId: string;
+    readonly attempt: number;
+    readonly dispatchId: string;
+    readonly turnId: string;
+    readonly expectation: RepositoryChangeExpectation;
+    readonly authorizedPaths: readonly string[];
+    readonly frozenPaths: readonly string[];
+    readonly recovered: boolean;
+    readonly capturedAt: string;
+  }): Promise<RepositoryBaselineEvidence>;
+  captureDelta(input: {
+    readonly baseline: RepositoryBaselineEvidence;
+    readonly workerClaim: {
+      readonly reported: boolean;
+      readonly changed: boolean | null;
+      readonly patch?: string;
+    };
+    readonly recovered: boolean;
+    readonly capturedAt: string;
+  }): Promise<RepositoryDeltaEvidence>;
+}
+
+export interface TaskAssessmentPort {
+  persist(assessment: TaskCompletionAssessment): Promise<TaskCompletionAssessmentEvidence>;
 }
 
 export interface ArtifactValidationPort {

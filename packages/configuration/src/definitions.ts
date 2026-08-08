@@ -18,7 +18,15 @@ import { SENAWA_DIRECTORY, SENAWA_SKILL_PATH } from "./repository-paths.js";
 
 const artifactExtension = "@senawa/sensor-artifact";
 const commandExtension = "@senawa/sensor-command";
-const ArtifactSensorConfigSchema = z.object({ artifactKind: z.literal("phase-output") }).strict();
+const taskChangeExtension = "@senawa/sensor-task-change";
+const ArtifactSensorConfigSchema = z
+  .object({
+    artifactKind: z.enum(["phase-output", "verification-output", "cross-reference"]),
+  })
+  .strict();
+const TaskChangeSensorConfigSchema = z
+  .object({ evidenceKind: z.literal("repository-delta") })
+  .strict();
 const CommandSensorConfigSchema = z
   .object({
     command: z.string().trim().min(1),
@@ -107,7 +115,9 @@ function validatePolicyPreflight(policy: RepositoryPolicy): void {
         ? ArtifactSensorConfigSchema
         : sensor.extension === commandExtension
           ? CommandSensorConfigSchema
-          : undefined;
+          : sensor.extension === taskChangeExtension
+            ? TaskChangeSensorConfigSchema
+            : undefined;
     if (configSchema !== undefined && !configSchema.safeParse(sensor.config).success) {
       throw new Error(`Sensor ${sensor.id} has invalid ${sensor.extension} configuration`);
     }

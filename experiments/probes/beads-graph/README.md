@@ -142,6 +142,29 @@ wrong counts, stale reads, and list-command count mismatches fail the run.
 * A universal service-level objective or safe tool-hook latency
 * Event-heavy database scaling
 
+## Commit cost
+
+A commit used to rewrite every phase and every task through the full four-write
+transition sequence, so commit cost grew with graph size even when nothing about
+those nodes had changed. `commit-cost-benchmark.ts` measures a commit that
+changes one task against commits that change nothing, at two graph sizes.
+
+Measured on 2026-08-07 with `bd 1.1.2`, Node 22.17.0, Debian 12 dev container:
+
+| Sample | `bd` commands | Write commands | Duration |
+|--------|---------------|----------------|----------|
+| Changed commit, 12 tasks | 12 | 8 | 5,778 ms |
+| Unchanged commit, 12 tasks | 8 | 4 | 3,274 ms |
+| Unchanged commit, 1 task | 8 | 4 | 3,082 ms |
+| Unchanged commit, 12 tasks | 8 | 4 | 3,127 ms |
+
+The probe asserts the property rather than a timing: an unchanged commit issues
+the same number of writes at one task as at twelve, so commit cost is constant
+in graph size. The four remaining writes are the run epic recording its new
+revision and operation receipt, which every commit must do.
+
+Timings are machine-specific and descriptive. The write counts are the gate.
+
 ## Layout
 
 | Path | Role |
@@ -150,6 +173,8 @@ wrong counts, stale reads, and list-command count mismatches fail the run.
 | `concurrency.sh` | Six concurrent claimants and six concurrent writers against one database |
 | `fresh-read-benchmark.ts` | Builds fixtures, enforces correctness, captures samples, and emits JSON and text summaries |
 | `fresh-read-benchmark.sh` | Bundles the runner and enforces profile-specific time limits |
+| `commit-cost-benchmark.ts` | Measures commit cost and asserts it does not grow with graph size |
+| `commit-cost-benchmark.sh` | Bundles and runs the commit-cost measurement |
 | `run.sh` | Runs both contracts and the bounded fresh-read smoke profile |
 
 ## Running
@@ -174,6 +199,14 @@ bash experiments/probes/beads-graph/fresh-read-benchmark.sh \
   --output /tmp/senawa-beads-fresh-read-full.json
 ```
 
+Measure commit cost and assert it stays constant as the graph grows:
+
+```bash
+bash experiments/probes/beads-graph/commit-cost-benchmark.sh \
+  --tasks 12 \
+  --output /tmp/senawa-beads-commit-cost.json
+```
+
 All commands are offline and spend no AI credits. The smoke wrapper has a
 120-second limit. The full wrapper has a 30-minute limit and should run manually
 or on a dedicated scheduled runner, not as a timing gate in ordinary CI.
@@ -186,3 +219,4 @@ or on a dedicated scheduled runner, not as a timing gate in ordinary CI.
 | 2026-08-02 | Merged `02-beads-contract` and `03-beads-concurrency` into one folder, since both describe the same adapter contract. Scripts kept intact as `contract.sh` and `concurrency.sh`. |
 | 2026-08-05 | Cleared ambient `BD_JSON_ENVELOPE` before legacy-shape controls so the probe remains independent of the caller environment. Kept unsupported batch metadata diagnostics raw because that error is not a JSON envelope. |
 | 2026-08-06 | Added smoke and full fresh-read profiles with isolated canonical fixtures, correctness and freshness guards, complete JSON evidence, environment capture, interleaved raw samples, and non-gating summary statistics. |
+| 2026-08-07 | Added the commit-cost benchmark after unconditional full-graph convergence was identified as the dominant transition cost. The probe asserts that unchanged-commit write count is constant in graph size and records descriptive timings. |

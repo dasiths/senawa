@@ -16,6 +16,7 @@ import type {
 } from "@senawa/application";
 import {
   DefinitionArtifactSchema,
+  type JsonObject,
   JsonObjectSchema,
   PlanArtifactSchema,
   ResearchArtifactSchema,
@@ -24,7 +25,7 @@ import {
 } from "@senawa/domain";
 import { resolveWorkerPolicy } from "./authorization.js";
 
-const deterministicCapabilities: readonly WorkerCapability[] = [
+const simulatedCapabilities: readonly WorkerCapability[] = [
   "repository.read",
   "repository.edit",
   "process.run",
@@ -35,14 +36,16 @@ const deterministicCapabilities: readonly WorkerCapability[] = [
   "senawa.note",
 ];
 const subprocessCapabilities: readonly WorkerCapability[] = ["repository.read"];
+export const SIMULATED_WORKER_ADAPTER_VERSION = "1";
+export const COPILOT_SUBPROCESS_WORKER_ADAPTER_VERSION = "1";
 
-export class DeterministicWorkerAdapter implements WorkerSessionPort, WorkerExecutionPort {
+export class SimulatedWorkerAdapter implements WorkerSessionPort, WorkerExecutionPort {
   protected readonly sessions = new Set<string>();
   protected readonly completed = new Map<string, WorkerResult>();
   protected readonly cancelled = new Map<string, string>();
 
   async describe(): Promise<WorkerAdapterDescriptor> {
-    return descriptor("deterministic", deterministicCapabilities, {
+    return descriptor("simulated-worker", SIMULATED_WORKER_ADAPTER_VERSION, simulatedCapabilities, {
       inspect: "exact",
       replay: true,
       streaming: true,
@@ -104,7 +107,7 @@ export class DeterministicWorkerAdapter implements WorkerSessionPort, WorkerExec
 
   protected start(turn: WorkerTurn): WorkerTurnHandle {
     const result = Promise.resolve().then(() => {
-      const value = deterministicResult(turn);
+      const value = simulatedResult(turn);
       this.completed.set(turn.turnId, value);
       return value;
     });
@@ -112,7 +115,7 @@ export class DeterministicWorkerAdapter implements WorkerSessionPort, WorkerExec
   }
 }
 
-export class RecordingWorkerAdapter extends DeterministicWorkerAdapter {
+export class RecordingWorkerAdapter extends SimulatedWorkerAdapter {
   readonly operations: Array<{
     readonly operation: WorkerTurn["operation"];
     readonly turn: WorkerTurn;
@@ -146,19 +149,24 @@ export class SubprocessWorkerAdapter implements WorkerSessionPort, WorkerExecuti
   constructor(private readonly options: SubprocessWorkerOptions) {}
 
   async describe(): Promise<WorkerAdapterDescriptor> {
-    return descriptor("copilot-subprocess", subprocessCapabilities, {
-      inspect: "session-only",
-      replay: false,
-      streaming: true,
-      cancellation: true,
-      nativeTypedTools: false,
-      commandBridge: false,
-      pathEnforcement: "none",
-      usageCheckpoints: false,
-      permissionFeedback: false,
-      modelDiscovery: false,
-      traceInjection: true,
-    });
+    return descriptor(
+      "copilot-subprocess",
+      COPILOT_SUBPROCESS_WORKER_ADAPTER_VERSION,
+      subprocessCapabilities,
+      {
+        inspect: "session-only",
+        replay: false,
+        streaming: true,
+        cancellation: true,
+        nativeTypedTools: false,
+        commandBridge: false,
+        pathEnforcement: "none",
+        usageCheckpoints: false,
+        permissionFeedback: false,
+        modelDiscovery: false,
+        traceInjection: true,
+      },
+    );
   }
 
   async negotiate(requirements: WorkerSessionRequirements): Promise<WorkerSessionPlan> {
@@ -260,7 +268,17 @@ export class SubprocessWorkerAdapter implements WorkerSessionPort, WorkerExecuti
       kind: "model",
       requested: turn.requestedModel?.id ?? turn.resolvedModel.id,
       resolved: turn.resolvedModel.id,
-      reason: "exact",
+      ...(turn.requestedModel?.effort === undefined
+        ? {}
+        : { requestedEffort: turn.requestedModel.effort }),
+      ...(turn.resolvedModel.effort === undefined
+        ? {}
+        : { resolvedEffort: turn.resolvedModel.effort }),
+      reason:
+        (turn.requestedModel?.id ?? turn.resolvedModel.id) === turn.resolvedModel.id &&
+        (turn.requestedModel?.effort ?? turn.resolvedModel.effort) === turn.resolvedModel.effort
+          ? "exact"
+          : "degraded",
     });
     const startedAt = Date.now();
     return new Promise((resolveResult, rejectResult) => {
@@ -367,10 +385,6 @@ export class SubprocessWorkerAdapter implements WorkerSessionPort, WorkerExecuti
   }
 }
 
-export const CopilotSubprocessHost = SubprocessWorkerAdapter;
-export const DeterministicWorkerHost = DeterministicWorkerAdapter;
-export type CopilotSubprocessHostOptions = SubprocessWorkerOptions;
-
 export function buildCopilotArguments(turn: WorkerTurn): string[] {
   const policy = resolveWorkerPolicy(turn, subprocessCapabilities);
   const arguments_ =
@@ -401,12 +415,13 @@ export function buildCopilotArguments(turn: WorkerTurn): string[] {
 
 function descriptor(
   name: string,
+  version: string,
   capabilities: readonly WorkerCapability[],
   features: Omit<WorkerAdapterDescriptor["features"], "callerChosenIdentity" | "resume">,
 ): WorkerAdapterDescriptor {
   return {
     name,
-    version: "1",
+    version,
     capabilities,
     features: { callerChosenIdentity: true, resume: true, ...features },
   };
@@ -528,6 +543,16 @@ function createHandle(
             patch: "",
             reason: "Worker adapter reported no task diff",
           });
+          const submission = simulatedCompletion(turn);
+          if (submission !== null) {
+            yield event({
+              apiVersion: "senawa.dev/worker-event/v1",
+              sessionId: turn.sessionId,
+              turnId: turn.turnId,
+              kind: "completion",
+              submission,
+            });
+          }
         }
         if (usage !== undefined) {
           yield event({
@@ -592,7 +617,41 @@ function outputs(stdout: string, stderr: string): WorkerOutput[] {
   ];
 }
 
-function deterministicResult(turn: WorkerTurn): WorkerResult {
+/** The simulated worker changes nothing, so it claims the measured empty delta. */
+function simulatedCompletion(turn: WorkerTurn): JsonObject | null {
+  const criteria = acceptanceCriteriaFromPrompt(turn.prompt);
+  if (criteria.length === 0) return null;
+  return {
+    summary: `Simulated completion for ${turn.owner.id} attempt ${turn.attempt}`,
+    criteria: criteria.map((id) => ({
+      id,
+      outcome: "satisfied",
+      summary: "The simulated worker reported this criterion as satisfied",
+      evidence: [{ kind: "repository-delta", scope: "none" }],
+    })),
+  };
+}
+
+function acceptanceCriteriaFromPrompt(prompt: string): readonly string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(prompt);
+  } catch {
+    return [];
+  }
+  if (parsed === null || typeof parsed !== "object") return [];
+  const criteria = Reflect.get(parsed, "acceptanceCriteria");
+  if (!Array.isArray(criteria)) return [];
+  return criteria.flatMap((criterion) => {
+    const id =
+      criterion !== null && typeof criterion === "object"
+        ? Reflect.get(criterion, "id")
+        : undefined;
+    return typeof id === "string" ? [id] : [];
+  });
+}
+
+function simulatedResult(turn: WorkerTurn): WorkerResult {
   const policy = resolveWorkerPolicy(turn);
   const output: WorkerOutput[] = [
     {
@@ -603,7 +662,7 @@ function deterministicResult(turn: WorkerTurn): WorkerResult {
       stream: "system",
       text: `${policy.profileName} profile ${turn.profileDigest} loaded for ${policy.model.id} with capabilities ${policy.effectiveCapabilities.join(",")}`,
     },
-    { stream: "stdout", text: `completed deterministic ${policy.profileName} turn` },
+    { stream: "stdout", text: `completed simulated ${policy.profileName} turn` },
   ];
   return turn.owner.kind === "task"
     ? { sessionId: turn.sessionId, output }
@@ -621,7 +680,7 @@ function artifactForPhase(phaseId: string, turn: WorkerTurn): unknown {
         summary: `Define ${turn.goal}`,
         inScope: [turn.goal],
         outOfScope: [],
-        acceptanceCriteria: ["The requested change is implemented and verified"],
+        acceptanceCriteria: [{ description: "The requested change is implemented and verified" }],
         constraints: [],
         openQuestions: [],
       });
@@ -630,13 +689,13 @@ function artifactForPhase(phaseId: string, turn: WorkerTurn): unknown {
         summary: `Research for ${turn.goal}`,
         findings: [
           {
-            claim: "The deterministic adapter provides simulated lifecycle evidence",
-            source: "deterministic-worker",
+            claim: "The simulated adapter provides simulated lifecycle evidence",
+            source: "simulated-worker",
             evidenceKind: "simulated",
           },
         ],
         constraints: [],
-        recommendations: ["Implement the bounded plan"],
+        recommendations: [{ statement: "Implement the bounded plan" }],
       });
     case "plan":
       return PlanArtifactSchema.parse({
@@ -647,15 +706,8 @@ function artifactForPhase(phaseId: string, turn: WorkerTurn): unknown {
             title: "Implement the requested change",
             dependsOn: [],
             paths: ["packages"],
-            acceptance: ["The requested behavior is implemented"],
-            role: "implementor",
-          },
-          {
-            key: "validate-change",
-            title: "Validate the requested change",
-            dependsOn: ["implement-change"],
-            paths: ["packages"],
-            acceptance: ["Focused validation passes"],
+            repositoryChange: "required",
+            acceptance: [{ description: "The requested behavior is implemented" }],
             role: "implementor",
           },
         ],
@@ -664,7 +716,7 @@ function artifactForPhase(phaseId: string, turn: WorkerTurn): unknown {
       return VerificationArtifactSchema.parse({
         verdict: "pass",
         summary: `Verified ${turn.goal}`,
-        checks: [{ name: "deterministic-check", verdict: "pass", summary: "Validation passed" }],
+        checks: [{ name: "simulated-check", verdict: "pass", summary: "Validation passed" }],
         findings: [],
       });
     default:

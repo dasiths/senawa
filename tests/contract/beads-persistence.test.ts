@@ -284,7 +284,7 @@ function task(key: string, dependsOn: string[] = []): RuntimeTask {
     title: key,
     dependsOn,
     paths: [`src/${key}.ts`],
-    acceptance: [`${key} passes`],
+    acceptance: [{ description: `${key} passes` }],
     role: "worker",
     status: "pending",
     attempt: 0,

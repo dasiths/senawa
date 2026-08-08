@@ -89,29 +89,29 @@ export function authorizeWorkerPaths(
       reason: `Missing ${capability} capability`,
     };
   }
+  const allowPatterns = operation === "read";
   for (const request of requests) {
-    const requested = tryNormalizeRepositoryPath(request.path);
+    const requested = tryNormalizeRequestPath(request.path, allowPatterns);
     if (requested === null) {
-      return { allowed: false, path: request.path, reason: "Path is not repository-relative" };
+      return {
+        allowed: false,
+        path: request.path,
+        reason:
+          !allowPatterns && tryNormalizeRequestPath(request.path, true) !== null
+            ? "Write path must be a concrete repository-relative file"
+            : "Path is not repository-relative",
+      };
     }
     const resolved =
       request.resolvedPath === undefined
         ? requested
-        : tryNormalizeRepositoryPath(request.resolvedPath);
+        : tryNormalizeRequestPath(request.resolvedPath, allowPatterns);
     if (resolved === null) {
       return { allowed: false, path: request.path, reason: "Resolved path escapes the repository" };
     }
     if (operation === "write") {
-      if (!authorization.taskPaths.some((scope) => isWithinScope(requested, scope))) {
-        return { allowed: false, path: request.path, reason: "Path is outside the task scope" };
-      }
-      if (!authorization.taskPaths.some((scope) => isWithinScope(resolved, scope))) {
-        return {
-          allowed: false,
-          path: request.path,
-          reason: "Resolved path escapes the task scope",
-        };
-      }
+      // Task paths are a suggestion, not a boundary. Only the frozen set, which protects the
+      // definitions a worker is judged against, refuses a write.
       if (authorization.frozenPaths.some((scope) => matchesFrozenPath(requested, scope))) {
         return { allowed: false, path: request.path, reason: "Path is frozen" };
       }
@@ -168,20 +168,36 @@ function normalizePolicyPaths(paths: readonly string[]): string[] {
 }
 
 function normalizeRepositoryPath(path: string): string {
-  const normalized = tryNormalizeRepositoryPath(path);
+  const normalized = tryNormalizePolicyPath(path);
   if (normalized === null) throw new Error(`Invalid repository-relative policy path: ${path}`);
   return normalized;
 }
 
-function tryNormalizeRepositoryPath(path: string): string | null {
+// Scope paths are prefixes, so a wildcard is only meaningful as a trailing `**`.
+function tryNormalizePolicyPath(path: string): string | null {
+  return normalizeSegments(path, (part, index, segments) => {
+    if (part.includes("*") && part !== "**") return false;
+    return !(part === "**" && index !== segments.length - 1);
+  });
+}
+
+// Request paths are concrete for writes; reads may be glob or grep patterns.
+function tryNormalizeRequestPath(path: string, allowPatterns: boolean): string | null {
+  return normalizeSegments(path, (part) => allowPatterns || !part.includes("*"));
+}
+
+function normalizeSegments(
+  path: string,
+  acceptSegment: (part: string, index: number, segments: readonly string[]) => boolean,
+): string | null {
   const candidate = path.trim().replaceAll("\\", "/");
   if (candidate === "" || candidate.startsWith("/") || /^[a-z]:\//iu.test(candidate)) return null;
   const segments = candidate.split("/");
   const parts: string[] = [];
   for (const [index, part] of segments.entries()) {
     if (part === "" || part === ".") continue;
-    if (part === ".." || (part.includes("*") && part !== "**")) return null;
-    if (part === "**" && index !== segments.length - 1) return null;
+    if (part.startsWith("..")) return null;
+    if (!acceptSegment(part, index, segments)) return null;
     parts.push(part);
   }
   return parts.length === 0 ? "." : parts.join("/");
