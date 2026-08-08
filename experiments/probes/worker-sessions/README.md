@@ -102,6 +102,50 @@ tmux session, pane, capture, reconnect, exit, or cleanup behavior. No live
 script was executed, no model was invoked, and no cost or live evidence is
 claimed.
 
+## External worker staged path
+
+Running workers as separate non-hosted processes with live browser terminals is
+unimplemented and stays probe-gated. Each stage answers one falsifiable question,
+and a stage begins only after the previous one has recorded evidence. Nothing
+before Stage 4 spends AI credits.
+
+| Stage | Question it must answer | Method |
+|-------|-------------------------|--------|
+| 0 | Does tmux behave as hypothesised in this environment at all? | Install tmux and run the existing no-credit probe, then record session and pane identity stability, bounded capture, detach and reconnect, exit status, pane disappearance, cleanup, and `capture-pane` and `pipe-pane` timing |
+| 1 | Can a fresh Senawa process prove a detached turn is active, completed with an exit code, or genuinely unknown? | Extend the no-credit probe so a new process reconstructs turn observation from durable state alone, across a restart, without entering the pane |
+| 2 | Can a per-turn command bridge admit only its own turn's bindings? | Isolated probe of a per-turn Unix domain socket at mode `0600` with the path passed through the environment and a deterministic shell client; assert that another turn's client, a stale turn, and a removed socket are all refused. No tmux and no model |
+| 3 | Can read-only terminal streaming stay bounded, sanitized, and correct across reconnect? | Reuse the existing sanitization fixture, add a byte-cursor stream frame and a bounded scrollback ring behind the existing loopback authentication, and assert independent panes, bounded replay, and no input path |
+| 4 | Does a live worker behave the same way under a terminal host? | One clearly labelled live run in the style of `run-live.sh`, with an explicit opt-in and the cost disclosed before execution |
+
+Stage 0 is the prerequisite for everything below it. The entire proposal
+currently rests on zero tmux measurements.
+
+Three things stay outside this sequence and need their own decision entries:
+terminal input, several concurrent workers in one working tree, and promoting
+tmux to a production runtime dependency.
+
+### Human terminal input is not an authority channel
+
+Read-only terminal projection is compatible with the design. Human keyboard
+input into a worker terminal is not, and this is a finding rather than a
+preference.
+
+A typed instruction produces no journal event, no actor attribution, no version
+binding, and no receipt. Senawa records the actor and channel on every steering,
+answer, approval, and rejection, and binds approval to an exact artifact version
+and digest. Keyboard bytes bypass all four properties at once, so a human could
+redirect a run invisibly to the audit trail, and a worker could treat typed text
+as authorization to complete work that no gate accepted.
+
+If a writable terminal is ever wanted, it must be a distinct and explicitly
+labelled capability rather than a substitute for `senawa steer` and
+`senawa answer`. Every byte would have to be journalled with actor, time, run,
+owner, session, and turn; it would have to be refused while a gate is evaluating
+a turn and while a phase awaits approval; it must not become a path to `bd` or to
+another task's completion; and repository delta evidence for that turn would
+have to carry an explicit uncertainty marker. Until those conditions are proven,
+terminal projection stays read-only.
+
 ## What it proves
 
 Session identity is durable and caller-chosen. `--session-id <uuid>` creates a
@@ -174,3 +218,4 @@ SENAWA_LIVE_PROBE_APPROVED=1 bash experiments/probes/worker-sessions/run-live.sh
 | 2026-08-02 | Merged `05-session-resume` and `10-session-isolation` into one folder covering the worker session lifecycle. Corrected the earlier claim that this probe demonstrated cross-session tracing; it does not. |
 | 2026-08-07 | Added the unanswered tmux and browser-terminal question plus the planned no-credit substrate and separately cost-labeled live split. No tmux behavior was measured. |
 | 2026-08-07 | Implemented the isolated no-credit tmux runner, deterministic shell workers, bounded sanitized browser projection, independent per-turn test, and guarded live wrapper. The browser fixture passed two offline tests; tmux was unavailable, so the substrate run skipped and the production question remains probing. |
+| 2026-08-07 | Recorded the staged external-worker path from tmux substrate to one labelled live run, and the finding that human terminal input cannot serve as an authority channel. No new measurement was taken; tmux remains unavailable. |

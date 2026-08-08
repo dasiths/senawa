@@ -13,6 +13,8 @@ import type {
   RuntimeLease,
   RuntimeState,
   RuntimeTask,
+  TaskCompletionAssessment,
+  TaskCompletionAssessmentEvidence,
   WorkerHostIdentity,
   WorkerProfile,
   Workflow,
@@ -252,6 +254,7 @@ export interface GateEvaluationPort {
     readonly inputManifest?: ResolvedInputManifest;
     readonly repositoryChange?: RepositoryChangeExpectation;
     readonly repositoryEvidence?: RepositoryDeltaEvidence;
+    readonly taskAssessment?: TaskCompletionAssessment;
     readonly onOutput?: (input: {
       readonly sensorId: string;
       readonly stream: "stdout" | "stderr" | "system";
@@ -283,6 +286,10 @@ export interface RepositoryEvidencePort {
     readonly recovered: boolean;
     readonly capturedAt: string;
   }): Promise<RepositoryDeltaEvidence>;
+}
+
+export interface TaskAssessmentPort {
+  persist(assessment: TaskCompletionAssessment): Promise<TaskCompletionAssessmentEvidence>;
 }
 
 export interface ArtifactValidationPort {

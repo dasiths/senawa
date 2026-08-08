@@ -193,14 +193,52 @@ They cannot return a gate verdict. `RunCommandService` invokes the injected
 `GateEvaluator` after every phase or task turn, journals sensor and gate evidence,
 and uses only that evaluation to accept, close, rework, or pause work.
 
+## Acceptance evidence
+
+A worker reports completion against the
+[acceptance criteria](02-workflows-and-lifecycle.md#acceptance-criteria) of its
+task. The submission carries a summary and, for each criterion, its ID, an
+outcome of `satisfied`, `blocked`, or `not-applicable`, and evidence references.
+A reference names a file with a relationship, a gate sensor, a configured gate
+command, or the repository delta.
+
+The submission is a claim. The driver authors the verdict. Senawa resolves every
+reference against evidence it measured itself:
+
+| Relationship or kind | Resolution rule |
+|----------------------|-----------------|
+| `created`, `modified`, `deleted` | Resolves only against the measured in-scope repository delta for this attempt |
+| `validated` | Resolves only against a blocking gate sensor whose scope covers the path |
+| `reviewed`, `referenced` | Advisory. Senawa checks that the path is in scope and records the reference, but never claims a worker read a file |
+| `sensor`, `command` | Resolves only against a reading from this attempt's gate |
+| `repository-delta` | Resolves against the measured delta for this attempt |
+
+A path outside the authorized paths, or inside the frozen set, contradicts the
+criterion. Unresolvable references, `blocked`, and `not-applicable` never satisfy
+a required criterion. A claim naming a criterion the task does not define is
+refused. A missing or schema-invalid submission leaves every required criterion
+unmet rather than passing silently.
+
+The result is a driver-authored assessment addressed by run, task, attempt, and
+dispatch, and stored beside the worker submission rather than replacing it. The
+deterministic `task-acceptance` sensor reads that assessment, so acceptance is
+evaluated as a cheap check ahead of type-check and test commands and a refusal
+names the failing criterion, the reason, and the evidence path.
+
+Because criterion evidence carries the verdict, an audit or validation task can
+close without editing the repository, while an implementation criterion still
+needs a resolvable change. The report renders the per-criterion outcome and the
+resolved references; see
+[Provenance and Observability](06-provenance-and-observability.md#report-structure).
+
 ## Trusted task-change evidence
 
-Every imported task carries a `repositoryChange` expectation. The standard task
-frontier permits only `required`, so a model-authored plan cannot weaken the
-contract. Senawa captures a path-limited baseline before worker execution and a
-post-turn delta before gate evaluation. The delta separates pre-existing,
-in-scope, out-of-scope, frozen, and uncertain changes and binds the measurement
-to run, task, attempt, dispatch, and turn identifiers.
+Every imported task resolves a `repositoryChange` expectation, either from the
+task or from the frontier ceiling that owns it. A plan may narrow that ceiling
+and never widen it. Senawa captures a path-limited baseline before worker
+execution and a post-turn delta before gate evaluation. The delta separates
+pre-existing, in-scope, out-of-scope, frozen, and uncertain changes and binds the
+measurement to run, task, attempt, dispatch, and turn identifiers.
 
 The worker's reported patch is advisory. The deterministic `task-change` sensor
 uses the trusted delta and reports disagreement. A required no-op, an

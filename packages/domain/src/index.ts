@@ -6,5 +6,6 @@ export * from "./output.js";
 export * from "./run-snapshot.js";
 export * from "./runtime.js";
 export * from "./sensors.js";
+export * from "./task-completion.js";
 export * from "./worker-profile.js";
 export * from "./workflow.js";

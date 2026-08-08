@@ -3,6 +3,7 @@ import type { JsonObject } from "./common.js";
 import type { JournalEvent } from "./events.js";
 import type { OutputRecord } from "./output.js";
 import type { RunSnapshot } from "./run-snapshot.js";
+import type { CriterionVerdict, TaskCompletionAssessmentEvidence } from "./task-completion.js";
 
 export type RunStatus = "running" | "awaiting_approval" | "paused" | "finished" | "ended";
 export type PhaseStatus = "pending" | "running" | "awaiting_approval" | "accepted" | "ended";
@@ -96,6 +97,12 @@ export interface RuntimeGateFeedback {
   }>;
   readonly findings: readonly string[];
   readonly evidencePaths: readonly string[];
+  readonly criteria?: ReadonlyArray<{
+    readonly id: string;
+    readonly verdict: CriterionVerdict;
+    readonly reason: string;
+    readonly evidencePath: string | null;
+  }>;
   readonly nextPrompt: string;
 }
 
@@ -239,6 +246,7 @@ export interface RuntimeDispatch {
   readonly inputManifest?: ResolvedInputManifest;
   readonly repositoryBaseline?: RepositoryBaselineEvidence;
   repositoryDelta?: RepositoryDeltaEvidence;
+  taskAssessment?: TaskCompletionAssessmentEvidence;
   readonly createdAt: string;
   status: RuntimeDispatchStatus;
   updatedAt: string;

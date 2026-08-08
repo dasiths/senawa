@@ -6,6 +6,7 @@ import {
   RepositoryPolicySchema,
   type ResolvedInputManifest,
   type SensorResult,
+  type TaskCompletionAssessment,
 } from "@senawa/domain";
 import { describe, expect, it } from "vitest";
 import {
@@ -169,6 +170,46 @@ describe("CommandGateEvaluator", () => {
 
     expect(evaluation.accepted).toBe(true);
     expect(evaluation.readings[0]).toMatchObject({ advisory: true, matched: false });
+  });
+
+  it("names the sensor and the exact command in a command failure finding", async () => {
+    const evaluator = new CommandGateEvaluator(repositoryRoot, {
+      runner: runnerReturning({ exitCode: 1, stdout: "", stderr: "tsc: type error" }),
+    });
+    const policy = commandPolicy([commandSensor("typecheck", "pnpm typecheck", "cheap")]);
+
+    const evaluation = await evaluator.evaluate(input(policy));
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([
+        {
+          severity: "error",
+          code: "command-failed",
+          message: "typecheck command failed with exit 1: pnpm typecheck",
+          evidence: "tsc: type error",
+        },
+      ]),
+    );
+  });
+
+  it("falls back to bounded stdout evidence when a failing command wrote nothing to stderr", async () => {
+    const evaluator = new CommandGateEvaluator(repositoryRoot, {
+      runner: runnerReturning({
+        exitCode: 2,
+        stdout: `FAIL packages/domain\u001b[0m${"y".repeat(SENSOR_OUTPUT_LIMIT + 100)}`,
+        stderr: "",
+      }),
+    });
+    const policy = commandPolicy([commandSensor("unit-tests", "pnpm test", "expensive")]);
+
+    const evaluation = await evaluator.evaluate(input(policy));
+    const finding = evaluation.findings.find((candidate) => candidate.code === "command-failed");
+
+    expect(finding?.message).toBe("unit-tests command failed with exit 2: pnpm test");
+    expect(finding?.evidence).toContain("FAIL packages/domain");
+    expect(finding?.evidence).not.toContain(String.fromCodePoint(27));
+    expect(finding?.evidence?.length).toBeLessThanOrEqual(SENSOR_OUTPUT_LIMIT);
   });
 
   it("sanitizes and caps command evidence", async () => {
@@ -468,7 +509,149 @@ describe("CommandGateEvaluator", () => {
       "check",
     ]);
   });
+
+  it("closes an audit task with no repository change when its criteria resolve", async () => {
+    const evaluator = new CommandGateEvaluator(repositoryRoot, {
+      runner: runnerReturning({ exitCode: 0, stdout: "ok", stderr: "" }),
+    });
+
+    const evaluation = await evaluator.evaluate({
+      ...input(taskAcceptancePolicy()),
+      repositoryChange: "optional",
+      repositoryEvidence: repositoryDelta(),
+      taskAssessment: taskAssessment("pass"),
+    });
+
+    expect(evaluation.accepted).toBe(true);
+    expect(evaluation.readings.map((reading) => reading.sensorId)).toEqual([
+      "task-acceptance",
+      "check",
+    ]);
+  });
+
+  it("refuses an implementation task without resolving evidence before running commands", async () => {
+    const calls: string[] = [];
+    const evaluator = new CommandGateEvaluator(repositoryRoot, {
+      runner: {
+        async execute(command) {
+          calls.push(command);
+          return { exitCode: 0, stdout: "ok", stderr: "" };
+        },
+      },
+    });
+
+    const evaluation = await evaluator.evaluate({
+      ...input(taskAcceptancePolicy()),
+      repositoryChange: "optional",
+      repositoryEvidence: repositoryDelta(),
+      taskAssessment: taskAssessment("fail"),
+    });
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "acceptance-evidence-unresolved" })]),
+    );
+    expect(evaluation.readings[0]?.result).toMatchObject({
+      summary: expect.stringContaining("ac-one"),
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses a task gate that received no acceptance assessment", async () => {
+    const evaluator = new CommandGateEvaluator(repositoryRoot, {
+      runner: runnerReturning({ exitCode: 0, stdout: "ok", stderr: "" }),
+    });
+
+    const evaluation = await evaluator.evaluate({
+      ...input(taskAcceptancePolicy()),
+      repositoryChange: "optional",
+      repositoryEvidence: repositoryDelta(),
+    });
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "acceptance-assessment-missing" })]),
+    );
+  });
 });
+
+function taskAssessment(verdict: "pass" | "fail"): TaskCompletionAssessment {
+  return {
+    version: 1,
+    kind: "task-completion-assessment",
+    runId: "run",
+    taskId: "task",
+    attempt: 1,
+    dispatchId: "dispatch",
+    turnId: "turn",
+    stage: "pre-gate",
+    gateId: "task-gate",
+    submission: { present: true, valid: true, duplicateCount: 1 },
+    criteria: [
+      {
+        id: "ac-one",
+        description: "The audit is recorded",
+        required: true,
+        claimed: "satisfied",
+        verdict: verdict === "pass" ? "satisfied" : "unresolved",
+        evidence: [],
+      },
+    ],
+    unmatchedClaims: [],
+    repositoryDeltaDigest: "c".repeat(64),
+    verdict,
+    findings:
+      verdict === "pass"
+        ? []
+        : [
+            {
+              severity: "error",
+              code: "acceptance-evidence-unresolved",
+              message: "Acceptance criterion ac-one has no resolving evidence",
+            },
+          ],
+    uncertainty: [],
+    assessedAt: "2026-08-07T00:00:00.000Z",
+  };
+}
+
+function taskAcceptancePolicy(): RepositoryPolicy {
+  return RepositoryPolicySchema.parse({
+    version: 1,
+    extensions: [
+      { package: "@senawa/sensor-task-acceptance" },
+      { package: "@senawa/sensor-command" },
+    ],
+    sensors: [
+      {
+        id: "task-acceptance",
+        extension: "@senawa/sensor-task-acceptance",
+        kind: "deterministic",
+        description: "Resolved acceptance evidence",
+        cost: "cheap",
+        trust: "blocking",
+        scope: [],
+        config: { evidenceKind: "task-assessment" },
+      },
+      commandSensor("check", "focused-check", "standard"),
+    ],
+    gates: [
+      {
+        id: "task-gate",
+        description: "Task gate",
+        checks: [
+          {
+            sensor: "task-acceptance",
+            expect: { path: "/verdict", operator: "equals", value: "pass" },
+          },
+          { sensor: "check", expect: { path: "/verdict", operator: "equals", value: "pass" } },
+        ],
+        onFail: "rework",
+      },
+    ],
+    frozen: [".senawa/**"],
+  });
+}
 
 function taskChangePolicy(): RepositoryPolicy {
   return RepositoryPolicySchema.parse({

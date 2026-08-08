@@ -99,6 +99,8 @@ about the SDK should be re-checked when the mirror catches up.
 | 57 | Reports can distinguish simulated configuration from invocation and retain exact evidence references | **Confirmed offline.** Reports include canonical host and adapter, execution and evidence classification, configured, requested, resolved, and invoked model and effort, usage, exact consumed manifests, and measured task-delta references; simulated turns report no invoked model |
 | 58 | One browser projection can retain an independently updating terminal per worker turn | **Confirmed offline for the deterministic fixture.** Two per-turn projections remained independently keyed, and bounded ANSI, control, path, line, stream, lifecycle, and secret sanitization tests passed. Tmux was unavailable, so no session, pane, reconnect, exit, or cleanup behavior was measured |
 | 59 | The authenticated SDK catalog exposes the configured Sonnet 5 and Opus 5 role models | **Measured through a connected no-invocation diagnostic on 2026-08-07.** `senawa doctor --live` resolved `claude-opus-5` for definer, planner, and verifier and `claude-sonnet-5` for researcher and implementor; preferred implementor effort `high` also resolved exactly. This proves catalog availability for this authenticated environment, not model invocation, quality, telemetry, cost, or future availability |
+| 60 | Slow Senawa transitions are caused by persistence locking | **Wrong.** An uncontended lock acquire and release measured 0.47 ms. Unconditional full-graph Beads rewrites on every commit dominated instead |
+| 61 | Converging only changed Beads nodes materially reduces commit cost | **Measured and reproducible.** `experiments/probes/beads-graph/commit-cost-benchmark.sh` asserts that an unchanged commit issues the same four write commands at one task as at twelve, so commit cost is constant in graph size instead of growing with it. An instrumented five-phase, ten-task commit measured 81% fewer `bd` commands and 35.8 s to 6.3 s with `bd 1.1.2`; those timings are machine-specific and descriptive, while the write-count invariant is the gate |
 
 ## Live default and evidence contracts
 
@@ -142,6 +144,52 @@ failures. It confirmed offline that one immutable projection per turn can update
 without changing another turn and that output is sanitized and bounded before
 projection. No live wrapper ran, no model was invoked, and no AI cost was
 incurred. The result supports no production tmux-hosting claim.
+
+## Transition latency
+
+On 2026-08-07, per-command latency was measured in the workspace dev container
+on Node.js `v22.17.0`, Debian GNU/Linux 12, and `bd 1.1.2`. The CLI bundle was
+2,046,168 bytes and the workspace `.beads` directory held 325 MB. Beads write
+timings ran against a throwaway database under `/tmp` with its own `BEADS_DIR`;
+the workspace database was never mutated.
+
+| Component | Measured | Note |
+|-----------|----------|------|
+| Bare `node -e ''` | 20 ms to 25 ms | Process start only |
+| `senawa --help` | 142 ms to 150 ms | Bundle evaluation adds about 125 ms before argument parsing |
+| `senawa doctor`, `senawa workflow validate` | 283 ms to 294 ms | `loadRepositoryDefinitions` adds about 135 ms |
+| One `bd` invocation | 300 ms to 800 ms | The reads and writes a commit performs measured 450 ms to 700 ms; `bd list --all` cost 448 ms to 511 ms even on an empty database |
+| Persistence lock acquire and release, uncontended | 0.47 ms | One repository-wide lock file |
+| Evidence append with `fsync` | 6.75 ms | Each append also re-reads the stream it appends to |
+| `git rev-parse` and `git status --porcelain` | 5 ms to 10 ms each | Repository evidence is not a latency source |
+| `pnpm typecheck` | 5,024 ms | One `tsc --noEmit` pass |
+
+Locking is not the cause of slow transitions. The measured uncontended lock
+cycle is under half a millisecond. What the lock does contribute is scope: one
+repository-wide exclusive lock also serializes reads, so a status command or a
+portal refresh blocks for the whole duration of an in-flight commit and appears
+frozen exactly when work is happening.
+
+The dominant reducible cost was the Beads commit. Convergence rewrote every
+phase and every task on every commit, at three or four `bd` writes per node,
+whether or not that node changed. Converging only changed nodes removed that
+cost: on a five-phase, ten-task graph with `bd 1.1.2`, one commit issued 81%
+fewer `bd` commands and fell from 35.8 s to 6.3 s.
+
+Evidence classification for this section:
+
+* Every row in the table and the commit-write reduction are `measured` on one
+    dev container and are machine-specific and version-specific.
+* `pnpm test` was not re-measured in this session. The operator reports about
+    360 s; the runs recorded later in this document measured 220 s to 229 s,
+    with the real-Beads contract file consuming most of it.
+* End-to-end per-transition totals remain **unmeasured**. The published budget
+    estimates were derived arithmetically from the per-call measurements above,
+    not from an instrumented run.
+* Read amplification, evidence-append growth, and lock contention under a real
+    concurrent reader remain unmeasured.
+* Tmux, PTY streaming, and live terminal behavior remain unmeasured, because
+    tmux is still absent from this environment.
 
 ## Simulated false-success baseline
 

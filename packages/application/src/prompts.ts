@@ -1,9 +1,12 @@
-import type {
-  ResolvedInputManifest,
-  RuntimePhase,
-  RuntimeState,
-  RuntimeTask,
+import {
+  normalizeAcceptance,
+  type ResolvedInputManifest,
+  type RuntimePhase,
+  type RuntimeState,
+  type RuntimeTask,
+  TASK_COMPLETION_SUBMISSION_JSON_SCHEMA,
 } from "@senawa/domain";
+import { effectiveRepositoryChange } from "./repository-change.js";
 
 export function createPhasePrompt(
   state: Pick<RuntimeState, "artifacts" | "identity" | "phases" | "snapshot">,
@@ -103,8 +106,28 @@ export function createTaskPrompt(
     constraints: state.identity.request.constraints,
     role: task.role,
     paths: task.paths,
-    repositoryChange: task.repositoryChange,
-    acceptance: task.acceptance,
+    repositoryChange: effectiveRepositoryChange(state, task),
+    acceptanceCriteria: normalizeAcceptance(task.acceptance),
+    completion: {
+      tool: "senawa.task.done",
+      instruction:
+        "Before ending the turn, report an outcome and resolving evidence for every required acceptance criterion, addressed by its id.",
+      evidenceKinds: {
+        file: "A repository-relative path with a relationship of created, modified, deleted, reviewed, validated, or referenced.",
+        sensor: "A gate sensor id that ran for this attempt.",
+        command: "A command that exactly matches a configured gate sensor command.",
+        "repository-delta":
+          "scope in-scope when this attempt changed authorized files, or none when it changed nothing.",
+      },
+      resolutionRules: [
+        "created, modified, and deleted resolve only against the measured in-scope repository delta for this attempt.",
+        "reviewed and referenced are advisory: Senawa records them but never accepts them as proof on their own.",
+        "validated resolves only against a blocking gate sensor that covers the path.",
+        "Any path outside the authorized paths, or inside a frozen path, refuses the criterion.",
+        "blocked and not-applicable never satisfy a required criterion.",
+      ],
+      submissionSchema: TASK_COMPLETION_SUBMISSION_JSON_SCHEMA,
+    },
     sourcePlan: task.sourcePlan ?? null,
     inputManifest,
     dependencyOutcomes,

@@ -107,6 +107,72 @@ describe("renderRunReport", () => {
             digest: "e".repeat(64),
             evidencePath: "evidence/repository/tasks/validate/attempt-2/dispatch-1/delta.json",
           },
+          taskAssessment: {
+            version: 1,
+            kind: "task-completion-assessment",
+            runId: "run-report",
+            taskId: "validate",
+            attempt: 2,
+            dispatchId: "dispatch-1",
+            turnId: "turn-1",
+            stage: "final",
+            gateId: "task-done",
+            submission: { present: true, valid: true, duplicateCount: 0 },
+            criteria: [
+              {
+                id: "ac-tests",
+                description: "Tests pass | **strict**",
+                required: true,
+                claimed: "satisfied",
+                verdict: "satisfied",
+                evidence: [
+                  {
+                    claim: {
+                      kind: "file",
+                      path: "packages/reporting/src/run-report.ts",
+                      relationship: "modified",
+                    },
+                    resolution: "resolved",
+                    source: "repository-delta",
+                    detail: "The path appears in the measured in-scope delta",
+                  },
+                  {
+                    claim: { kind: "sensor", sensorId: "unit-tests" },
+                    resolution: "resolved",
+                    source: "gate-sensor",
+                    detail: "A gate reading for this attempt matched",
+                  },
+                ],
+              },
+              {
+                id: "ac-review",
+                description: "Reviewed the owning guide",
+                required: false,
+                claimed: "not-applicable",
+                verdict: "waived",
+                evidence: [
+                  {
+                    claim: {
+                      kind: "file",
+                      path: "docs/design/06-provenance-and-observability.md",
+                      relationship: "reviewed",
+                    },
+                    resolution: "advisory",
+                    source: "authorized-paths",
+                    detail: "Existence only; Senawa never claims a file was read",
+                  },
+                ],
+              },
+            ],
+            unmatchedClaims: ["ac-ghost"],
+            repositoryDeltaDigest: "e".repeat(64),
+            verdict: "pass",
+            findings: [],
+            uncertainty: [],
+            assessedAt: "2026-08-04T10:01:02.000Z",
+            digest: "f".repeat(64),
+            evidencePath: "evidence/acceptance/tasks/validate/attempt-2/dispatch-1/assessment.json",
+          },
         },
       ],
       artifactCount: 1,
@@ -232,6 +298,18 @@ describe("renderRunReport", () => {
     expect(report).toContain("## Usage by Role and Invoked Model");
     expect(report).toContain("## Consumed Inputs");
     expect(report).toContain("## Trusted Task Evidence");
+    expect(report).toContain("## Task Acceptance Assessments");
+    expect(report).toContain(
+      "evidence/acceptance/tasks/validate/attempt\\-2/dispatch\\-1/assessment.json",
+    );
+    expect(report).toContain(
+      "| ac\\-tests | yes | satisfied | satisfied | packages/reporting/src/run\\-report.ts \\(modified\\): resolved via repository\\-delta; sensor unit\\-tests: resolved via gate\\-sensor |",
+    );
+    expect(report).toContain("| ac\\-review | no | not\\-applicable | waived |");
+    expect(report).toContain(
+      "docs/design/06\\-provenance\\-and\\-observability.md \\(reviewed\\): advisory via authorized\\-paths",
+    );
+    expect(report).toContain("unmatched claims ac\\-ghost");
     expect(report).toContain("artifacts/define/v1.json");
     expect(report).toContain("phases.define.output");
     expect(report).toContain("phase\\-artifact");
@@ -249,7 +327,9 @@ describe("renderRunReport", () => {
     expect(report).toContain(
       "| implementor&lt;script&gt; | simulated | none | 2.500 | $0.125000 |",
     );
-    expect(report).toContain("| verifier | live\\-model | claude\\-opus\\-5 | 0.000 | $0.000000 |");
+    expect(report).toContain(
+      "| verifier | live\\-model | claude\\-opus\\-5 | unreported | unreported |",
+    );
     expect(report).toContain("2.500");
     expect(report).toContain("$0.125000");
     expect(report).toContain("Validate \\| \\*\\*output\\*\\*");
@@ -260,4 +340,97 @@ describe("renderRunReport", () => {
     expect(report).not.toContain(String.fromCodePoint(0));
     expect(report).not.toContain("```md");
   });
+
+  it("sums reported usage per role and never reports missing usage as zero", () => {
+    const run = {
+      ...emptyRun(),
+      workerEvents: [
+        usageEvent("dispatch-a", "implementor", 1_000_000_000, 40_000),
+        usageEvent("dispatch-b", "implementor", 500_000_000, 10_000),
+        usageEvent("dispatch-c", "verifier", null, null),
+      ],
+    } satisfies ReportRun;
+
+    const report = renderRunReport(run);
+
+    expect(report).toContain("| implementor | simulated | none | 1.500 | $0.050000 |");
+    expect(report).toContain("| verifier | simulated | none | unreported | unreported |");
+    expect(report).not.toContain("| verifier | simulated | none | 0.000 | $0.000000 |");
+  });
+
+  it("reports no acceptance assessments when no dispatch carries one", () => {
+    const report = renderRunReport(emptyRun());
+
+    expect(report).toContain("## Task Acceptance Assessments");
+    expect(report).toContain(
+      "| None | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |",
+    );
+  });
 });
+
+function emptyRun(): ReportRun {
+  return {
+    identity: {
+      runId: "run-empty",
+      backend: "file",
+      workflow: "standard-delivery",
+      request: { goal: "Aggregate usage", constraints: [] },
+      createdAt: "2026-08-07T10:00:00.000Z",
+      fingerprint: "a".repeat(64),
+      workerHost: {
+        kind: "simulated",
+        adapter: "simulated-worker",
+        adapterVersion: "1",
+        legacy: false,
+      },
+    },
+    status: "finished",
+    endReason: null,
+    phases: [],
+    tasks: [],
+    artifacts: [],
+    dispatches: [],
+    artifactCount: 0,
+    decomposition: [],
+    journal: [],
+    outputs: [],
+    workerEvents: [],
+  };
+}
+
+function usageEvent(
+  dispatchId: string,
+  role: string,
+  cumulativeNanoAiu: number | null,
+  cumulativeCostUsdMicros: number | null,
+): ReportRun["workerEvents"][number] {
+  return {
+    runId: "run-empty",
+    owner: { kind: "task", id: `task-${dispatchId}` },
+    dispatchId,
+    operationId: `operation-${dispatchId}`,
+    role,
+    attempt: 1,
+    event:
+      cumulativeNanoAiu === null
+        ? {
+            apiVersion: "senawa.dev/worker-event/v1",
+            eventId: `${dispatchId}-lifecycle`,
+            sessionId: `${dispatchId}-session`,
+            turnId: `${dispatchId}-turn`,
+            ts: "2026-08-07T10:01:00.000Z",
+            kind: "lifecycle",
+            event: "completed",
+          }
+        : {
+            apiVersion: "senawa.dev/worker-event/v1",
+            eventId: `${dispatchId}-usage`,
+            sessionId: `${dispatchId}-session`,
+            turnId: `${dispatchId}-turn`,
+            ts: "2026-08-07T10:01:00.000Z",
+            kind: "usage",
+            cumulativeNanoAiu,
+            ...(cumulativeCostUsdMicros === null ? {} : { cumulativeCostUsdMicros }),
+          },
+  };
+}

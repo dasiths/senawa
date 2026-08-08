@@ -7,6 +7,10 @@ import type {
 export type ReportRun = RunReportProjection;
 type JournalEvent = ReportRun["journal"][number];
 type JsonObject = JournalEvent["data"];
+type ReportDispatch = ReportRun["dispatches"][number];
+type TaskAssessment = NonNullable<ReportDispatch["taskAssessment"]>;
+type AssessedCriterion = TaskAssessment["criteria"][number];
+type ResolvedEvidence = AssessedCriterion["evidence"][number];
 
 const fieldLimit = 2_000;
 
@@ -149,6 +153,8 @@ export function renderRunReport(run: ReportRun): string {
     }
   }
   lines.push("");
+
+  renderTaskAcceptance(lines, run.dispatches);
 
   lines.push(
     "## Evidence Inventory",
@@ -314,6 +320,72 @@ function renderDiscoveries(lines: string[], journal: readonly JournalEvent[]): v
   lines.push("");
 }
 
+function renderTaskAcceptance(lines: string[], dispatches: readonly ReportDispatch[]): void {
+  lines.push(
+    "## Task Acceptance Assessments",
+    "",
+    "| Task | Attempt | Stage | Assessment | Submission | Criterion | Required | Claimed | Verdict | Resolved Evidence | Assessment Path |",
+    "|------|---------|-------|------------|------------|-----------|----------|---------|---------|-------------------|-----------------|",
+  );
+  const assessments = dispatches.flatMap((dispatch) =>
+    dispatch.ownerKind === "task" && dispatch.taskAssessment !== undefined
+      ? [{ dispatch, assessment: dispatch.taskAssessment }]
+      : [],
+  );
+  if (assessments.length === 0) {
+    lines.push("| None | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |", "");
+    return;
+  }
+  for (const { dispatch, assessment } of assessments) {
+    const lead = `| ${escapeCell(dispatch.ownerId)} | ${dispatch.workAttempt} | ${escapeCell(assessment.stage)} | ${escapeCell(assessment.verdict)} | ${escapeCell(submissionState(assessment))}`;
+    const trail = `| ${escapeCell(assessment.evidencePath)} |`;
+    if (assessment.criteria.length === 0) {
+      lines.push(`${lead} | none | n/a | n/a | n/a | none ${trail}`);
+      continue;
+    }
+    for (const criterion of assessment.criteria) {
+      lines.push(
+        `${lead} | ${escapeCell(criterion.id)} | ${criterion.required ? "yes" : "no"} | ${escapeCell(criterion.claimed)} | ${escapeCell(criterion.verdict)} | ${escapeCell(evidenceCell(criterion.evidence))} ${trail}`,
+      );
+    }
+  }
+  lines.push("");
+  for (const { dispatch, assessment } of assessments) {
+    if (assessment.unmatchedClaims.length === 0 && assessment.uncertainty.length === 0) continue;
+    lines.push(
+      `* ${escapeMarkdown(dispatch.ownerId)} attempt ${dispatch.workAttempt}: unmatched claims ${escapeMarkdown(listOrNone(assessment.unmatchedClaims))}. Uncertainty ${escapeMarkdown(listOrNone(assessment.uncertainty))}.`,
+    );
+  }
+  lines.push("");
+}
+
+function submissionState(assessment: TaskAssessment): string {
+  if (!assessment.submission.present) return "missing";
+  return assessment.submission.valid ? "valid" : "invalid";
+}
+
+function evidenceCell(evidence: readonly ResolvedEvidence[]): string {
+  if (evidence.length === 0) return "none";
+  return evidence.map(evidenceLabel).join("; ");
+}
+
+function evidenceLabel(reference: ResolvedEvidence): string {
+  const claim = reference.claim;
+  const subject =
+    claim.kind === "file"
+      ? `${claim.path} (${claim.relationship})`
+      : claim.kind === "sensor"
+        ? `sensor ${claim.sensorId}`
+        : claim.kind === "command"
+          ? `command ${claim.command}`
+          : `repository-delta ${claim.scope}`;
+  return `${subject}: ${reference.resolution} via ${reference.source}`;
+}
+
+function listOrNone(values: readonly string[]): string {
+  return values.length === 0 ? "none" : values.join(", ");
+}
+
 function renderCost(lines: string[], executions: readonly ExecutionSummary[]): void {
   lines.push(
     "## Usage by Role and Invoked Model",
@@ -323,7 +395,13 @@ function renderCost(lines: string[], executions: readonly ExecutionSummary[]): v
   );
   const totals = new Map<
     string,
-    { role: string; classification: string; model: string; nanoAiu: number; cost: number }
+    {
+      role: string;
+      classification: string;
+      model: string;
+      nanoAiu: number | null;
+      cost: number | null;
+    }
   >();
   for (const execution of executions) {
     const key = `${execution.role}\u0000${execution.executionClassification}\u0000${execution.invokedModel}`;
@@ -331,11 +409,11 @@ function renderCost(lines: string[], executions: readonly ExecutionSummary[]): v
       role: execution.role,
       classification: execution.executionClassification,
       model: execution.invokedModel,
-      nanoAiu: 0,
-      cost: 0,
+      nanoAiu: null,
+      cost: null,
     };
-    total.nanoAiu += execution.nanoAiu ?? 0;
-    total.cost += execution.costUsdMicros ?? 0;
+    total.nanoAiu = addReported(total.nanoAiu, execution.nanoAiu);
+    total.cost = addReported(total.cost, execution.costUsdMicros);
     totals.set(key, total);
   }
   if (totals.size === 0) lines.push("| None | unreported | none | n/a | n/a |");
@@ -349,6 +427,10 @@ function renderCost(lines: string[], executions: readonly ExecutionSummary[]): v
 
 function eventSummary(event: JournalEvent): string {
   return truncate(JSON.stringify(event.data), fieldLimit);
+}
+
+function addReported(total: number | null, value: number | null): number | null {
+  return value === null ? total : (total ?? 0) + value;
 }
 
 function stringField(data: JsonObject, key: string): string {

@@ -9,7 +9,7 @@ import { createFileTestComposition } from "@senawa/testing";
 import { SimulatedWorkerHost } from "@senawa/workers";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createSenawaServices } from "../../../apps/senawa/src/services.js";
-import { appJs, indexHtml } from "./static-assets.js";
+import { appJs, indexHtml, stylesCss } from "./static-assets.js";
 import { startWebSupervisor, type WebSupervisor } from "./supervisor.js";
 
 const actor: CommandActor = { channel: "direct-cli" };
@@ -292,7 +292,9 @@ describe("loopback web supervisor", () => {
     );
     expect(appJs).toContain("async function renderApproval(phaseId)");
     expect(appJs).toContain('q("#decision-controls").hidden=true');
-    expect(appJs).toContain('q("#artifact-content").textContent=JSON.stringify(artifact,null,2)');
+    expect(appJs).toContain(
+      'renderJson(q("#artifact-content"),artifact.content,"Artifact content")',
+    );
     expect(appJs).toContain('declared.attribution+" "+declaredKind+": "+declared.value');
     expect(appJs).toContain('q("#decision-controls").hidden=false');
     expect(appJs).toContain("expectedVersion:approvalArtifact.version");
@@ -347,6 +349,114 @@ describe("loopback web supervisor", () => {
     expect(appJs).toContain('textContent="run finished"');
     expect(appJs).toContain('/worker-events");');
     expect(appJs).toContain("appendWorkerRecord(JSON.parse(event.data))");
+  });
+
+  it("resizes, collapses, and persists the console rails", () => {
+    expect(() => new Function(appJs)).not.toThrow();
+    expect(appJs).not.toContain("innerHTML");
+    expect(indexHtml).toContain('id="splitter-left" class="splitter" role="separator"');
+    expect(indexHtml).toContain('id="splitter-right" class="splitter" role="separator"');
+    expect(indexHtml).toContain('aria-orientation="vertical"');
+    expect(indexHtml).toContain('aria-controls="overview"');
+    expect(indexHtml).toContain('aria-controls="inspector"');
+    expect(indexHtml).toContain('aria-valuemin="180"');
+    expect(indexHtml).toContain('aria-valuemax="640"');
+    expect(indexHtml).toContain('aria-valuenow="220"');
+    expect(indexHtml).toContain('aria-valuenow="320"');
+    expect(indexHtml).toContain('id="overview-toggle" class="rail-toggle" type="button"');
+    expect(indexHtml).toContain('id="inspector-toggle" class="rail-toggle" type="button"');
+    expect(indexHtml).toContain('aria-controls="overview-body"');
+    expect(indexHtml).toContain('aria-controls="inspector-body"');
+    expect(indexHtml).toContain('id="decision-badge" class="rail-badge" role="status" hidden');
+    expect(stylesCss).toContain("grid-template-columns:var(--rail-left,220px)");
+    expect(stylesCss).toContain('.workspace[data-left="collapsed"]{--rail-left:40px}');
+    expect(stylesCss).toContain('.workspace[data-right="collapsed"]{--rail-right:40px}');
+    expect(stylesCss).toContain(
+      '.workspace[data-left="collapsed"] .overview .rail-spine,.workspace[data-right="collapsed"] .controls .rail-spine{display:block}',
+    );
+    expect(stylesCss).toContain('html[data-dragging="true"]{cursor:col-resize;user-select:none}');
+    expect(appJs).toContain('const LAYOUT_KEY="senawa.console.layout.v1"');
+    expect(appJs).toContain('localStorage.getItem(LAYOUT_KEY)||"null"');
+    expect(appJs).toContain("localStorage.setItem(LAYOUT_KEY,JSON.stringify(layout))");
+    expect(appJs).toContain('root.style.setProperty("--rail-left",layout.left+"px")');
+    expect(appJs).toContain('root.style.setProperty("--rail-right",layout.right+"px")');
+    expect(appJs).toContain('workspace.dataset.left=layout.leftCollapsed?"collapsed":"expanded"');
+    expect(appJs).toContain('setAttribute("aria-valuenow"');
+    expect(appJs).toContain('toggle.setAttribute("aria-expanded",String(!collapsed))');
+    expect(appJs).toContain("setPointerCapture(event.pointerId)");
+    expect(appJs).toContain("releasePointerCapture(dragState.pointerId)");
+    expect(appJs).toContain('event.key==="ArrowLeft"');
+    expect(appJs).toContain('event.key==="ArrowRight"');
+    expect(appJs).toContain('event.key==="Home"');
+    expect(appJs).toContain('event.key==="End"');
+    expect(appJs).toContain("function toggleRail(side,collapsed)");
+    expect(appJs).toContain("function updateDecisionBadge()");
+    expect(appJs).toContain("badge.hidden=!pending");
+    expect(appJs).toContain(
+      'if(typeof ResizeObserver==="function")new ResizeObserver(()=>{if(dragState===null)scheduleGraphFit()}).observe(q("#graph"))',
+    );
+    expect(appJs).toContain("readLayout();\napplyLayout();");
+  });
+
+  it("renders artifact payloads through a bounded escaped JSON viewer", () => {
+    expect(() => new Function(appJs)).not.toThrow();
+    expect(appJs).not.toContain("innerHTML");
+    expect(appJs).not.toContain("outerHTML");
+    expect(appJs).not.toContain("insertAdjacentHTML");
+    expect(appJs).not.toContain("document.write");
+    expect(appJs).not.toContain("new RegExp");
+    expect(indexHtml).toContain('<div id="artifact-content" class="jsonview"');
+    expect(indexHtml).toContain('<div id="artifact-inputs" class="jsonview"');
+    expect(indexHtml).not.toContain('<pre id="artifact-content"');
+    expect(indexHtml.indexOf('id="artifact-identity"')).toBeLessThan(
+      indexHtml.indexOf('id="decision-controls"'),
+    );
+    expect(indexHtml.indexOf('id="artifact-content"')).toBeLessThan(
+      indexHtml.indexOf('id="decision-controls"'),
+    );
+    expect(appJs).toContain("function renderJson(host,value,label)");
+    expect(appJs).toContain('tree.setAttribute("role","tree")');
+    expect(appJs).toContain('item.setAttribute("role","treeitem")');
+    expect(appJs).toContain('group.setAttribute("role","group")');
+    expect(appJs).toContain('item.setAttribute("aria-expanded",String(expanded))');
+    expect(appJs).toContain("const JSON_RAW_LIMIT=1000000");
+    expect(appJs).toContain("const JSON_ROW_BUDGET=2000");
+    expect(appJs).toContain("const JSON_CHUNK=100");
+    expect(appJs).toContain("const JSON_STRING_CAP=512");
+    expect(appJs).toContain("const JSON_DEFAULT_DEPTH=2");
+    expect(appJs).toContain("if(view.rows>=JSON_ROW_BUDGET)");
+    expect(appJs).toContain('"Show next "+Math.min(JSON_CHUNK,entries.length-end)');
+    expect(appJs).toContain('"… "+(raw.length-JSON_STRING_CAP)+" more characters"');
+    expect(appJs).toContain("raw.length>JSON_RAW_LIMIT");
+    expect(appJs).toContain('text("pre",raw.slice(0,JSON_RAW_LIMIT),"jsonraw")');
+    expect(appJs).toContain("function buildJsonChildren(view,item)");
+    expect(appJs).toContain('search.type="search"');
+    expect(appJs).toContain("const needle=query.trim().toLowerCase()");
+    expect(appJs).toContain('(item.dataset.search||"").includes(needle)');
+    expect(appJs).toContain('text("button","Expand all","jsonview-expand")');
+    expect(appJs).toContain('text("button","Collapse all","jsonview-collapse")');
+    expect(appJs).toContain('text("button","Copy JSON","jsonview-copy")');
+    expect(appJs).toContain("function copyJson(view,value)");
+    expect(appJs).toContain("navigator.clipboard?.writeText");
+    expect(appJs).toContain('copy.setAttribute("aria-label","Copy "+(key===null?"payload":key))');
+    expect(appJs).toContain(
+      'renderJson(q("#artifact-inputs"),artifact.consumed,"Consumed inputs")',
+    );
+    expect(stylesCss).toContain(".jsontree{max-height:360px");
+    expect(stylesCss).toContain(".jsonraw{max-height:360px");
+    expect(stylesCss).not.toContain("#artifact-content{max-height:280px");
+  });
+
+  it("shows artifact JSON for any phase that has an artifact version", () => {
+    expect(appJs).toContain(
+      'const artifactKey=phase?.artifactVersion==null?null:phase.id+":"+phase.artifactVersion',
+    );
+    expect(appJs).toContain('q("#approval").hidden=artifactKey===null');
+    expect(appJs).toContain("if(artifactKey!==null)void renderApproval(phase.id)");
+    expect(appJs).not.toContain('q("#approval").hidden=!awaitingApproval');
+    expect(appJs).toContain("function updateDecision()");
+    expect(appJs).toContain('node?.kind==="phase"&&node.status==="awaiting_approval"');
+    expect(appJs).toContain('q("#decision-controls").hidden=false');
   });
 
   it("projects and answers durable worker questions through the authenticated API", async () => {

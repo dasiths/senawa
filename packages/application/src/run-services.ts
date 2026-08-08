@@ -1,13 +1,17 @@
 import {
+  assessTaskCompletion,
   type BrowserRunCommand,
   type CommandActor,
   type GateEvaluation,
+  type GateSensorDescriptor,
   type JournalEventName,
   type JsonObject,
   JsonObjectSchema,
   type JsonValue,
+  normalizeAcceptance,
   type PlanArtifact,
   PlanArtifactSchema,
+  type RepositoryPolicy,
   type RunSnapshot,
   type RuntimeArtifact,
   type RuntimeBackend,
@@ -17,6 +21,9 @@ import {
   type RuntimeState,
   type RuntimeTask,
   type SensorReading,
+  type TaskCompletionAssessment,
+  type TaskCompletionSubmission,
+  TaskCompletionSubmissionSchema,
   type WorkerHostIdentity,
   type WorkerProfile,
   type WorkRequest,
@@ -37,6 +44,7 @@ import type {
   RepositoryEvidencePort,
   RunPersistencePort,
   SchedulerPort,
+  TaskAssessmentPort,
   WorkerEventRecord,
   WorkerExecutionPort,
   WorkerHostResolverPort,
@@ -54,6 +62,7 @@ import {
   type RunStatusProjection,
 } from "./projections.js";
 import { createPhasePrompt, createTaskPrompt } from "./prompts.js";
+import { effectiveRepositoryChange } from "./repository-change.js";
 import { UnconfiguredRepositoryEvidencePort } from "./repository-evidence.js";
 import { fixedWorkerHostResolver } from "./workers.js";
 
@@ -154,6 +163,7 @@ export class RunCommandService implements RunDriver {
       legacy: false,
     },
     private readonly repositoryEvidence: RepositoryEvidencePort = new UnconfiguredRepositoryEvidencePort(),
+    private readonly taskAssessments: TaskAssessmentPort | null = null,
   ) {
     this.store = new RuntimeCoordinator(store, identifiers);
     this.workerHosts = isWorkerHostResolver(workerHost)
@@ -645,11 +655,12 @@ export class RunCommandService implements RunDriver {
     );
     for (const task of tasks) {
       if (
+        task.repositoryChange !== undefined &&
         frontiers.length > 0 &&
         !frontiers.every(
           (phase) =>
             phase.executor.kind === "task-frontier" &&
-            phase.executor.repositoryChanges.includes(task.repositoryChange),
+            phase.executor.repositoryChanges.includes(task.repositoryChange ?? "required"),
         )
       ) {
         throw new Error(
@@ -1104,7 +1115,7 @@ export class RunCommandService implements RunDriver {
       authorization: { taskPaths: task.paths, frozenPaths: state.snapshot.policy.frozen },
     };
     await this.preflightTurn(state.identity, turn);
-    const repositoryBaseline = await this.captureTaskBaseline(task, turn, false);
+    const repositoryBaseline = await this.captureTaskBaseline(state, task, turn, false);
     await this.store.updateRun(state.identity.runId, (draft) => {
       const currentPhase = requirePhase(draft, phase.id);
       if (currentPhase.status === "pending") {
@@ -1183,16 +1194,44 @@ export class RunCommandService implements RunDriver {
   ): Promise<TransitionResult> {
     const attempt = turn.attempt;
     const repositoryDelta = await this.ensureTaskDelta(turn, recovered);
+    const completion = await this.readTaskCompletion(turn);
+    const assessmentBase = {
+      runId: state.identity.runId,
+      taskId: task.key,
+      attempt,
+      dispatchId: turn.dispatchId,
+      turnId: turn.turnId,
+      gateId,
+      criteria: normalizeAcceptance(task.acceptance),
+      submission: completion.submission,
+      submissionPresent: completion.present,
+      duplicateCount: completion.duplicateCount,
+      repositoryDelta,
+      authorizedPaths: turn.authorization.taskPaths,
+      frozenPaths: turn.authorization.frozenPaths,
+      gateSensors: gateSensorDescriptors(state.snapshot.policy, gateId),
+      recovered,
+      assessedAt: this.now().toISOString(),
+    } as const;
+    const preGateAssessment = assessTaskCompletion({
+      ...assessmentBase,
+      stage: "pre-gate",
+      readings: [],
+    });
     const gate = await this.gateEvaluator.evaluate({
       runId: state.identity.runId,
       owner: turn.owner,
       attempt,
       gateId,
       policy: state.snapshot.policy,
-      repositoryChange: task.repositoryChange,
+      repositoryChange: effectiveRepositoryChange(state, task),
       repositoryEvidence: repositoryDelta,
+      taskAssessment: preGateAssessment,
       onOutput: this.sensorOutput(state.identity.runId, turn.owner),
     });
+    const assessment = await this.persistTaskAssessment(
+      assessTaskCompletion({ ...assessmentBase, stage: "final", readings: gate.readings }),
+    );
     await heartbeat.assertActive();
     let transition: TransitionResult = {
       runId: state.identity.runId,
@@ -1208,6 +1247,10 @@ export class RunCommandService implements RunDriver {
       current.sessionId = result.sessionId;
       draft.activeTurn = null;
       completeDispatch(draft, turn.dispatchId, this.now());
+      if (assessment !== null) {
+        const dispatch = requireDispatch(draft, turn.dispatchId);
+        if (dispatch.taskAssessment === undefined) dispatch.taskAssessment = assessment;
+      }
       emit(draft, "task.dispatched", { channel: "driver" }, this.now(), {
         taskId: task.key,
         attempt,
@@ -1245,6 +1288,12 @@ export class RunCommandService implements RunDriver {
           })),
         findings: current.reworkFindings,
         evidencePaths: gate.readings.flatMap((reading) => reading.evidencePaths).slice(0, 20),
+        criteria: [
+          ...unsatisfiedCriteria(
+            assessment === null ? preGateAssessment : assessment,
+            repositoryDelta.evidencePath,
+          ),
+        ],
         nextPrompt: "Address every failed reading and finding, then request completion again.",
       };
       if (attempt >= maxReworkAttempts) {
@@ -1419,11 +1468,13 @@ export class RunCommandService implements RunDriver {
       return observation;
     }
     const artifact = records.findLast((record) => record.event.kind === "artifact")?.event;
+    const completion = records.findLast((record) => record.event.kind === "completion")?.event;
     return {
       state: "completed" as const,
       result: {
         sessionId: turn.sessionId,
         ...(artifact?.kind === "artifact" ? { artifact: artifact.artifact } : {}),
+        ...(completion?.kind === "completion" ? { completion: completion.submission } : {}),
         output: records.flatMap((record) =>
           record.event.kind === "text" && record.event.delta !== true
             ? [{ stream: record.event.stream, text: record.event.text }]
@@ -1474,14 +1525,19 @@ export class RunCommandService implements RunDriver {
     ]);
   }
 
-  private captureTaskBaseline(task: RuntimeTask, turn: WorkerTurn, recovered: boolean) {
+  private captureTaskBaseline(
+    state: Pick<RuntimeState, "snapshot">,
+    task: RuntimeTask,
+    turn: WorkerTurn,
+    recovered: boolean,
+  ) {
     return this.repositoryEvidence.captureBaseline({
       runId: turn.runId,
       taskId: task.key,
       attempt: turn.attempt,
       dispatchId: turn.dispatchId,
       turnId: turn.turnId,
-      expectation: task.repositoryChange,
+      expectation: effectiveRepositoryChange(state, task),
       authorizedPaths: turn.authorization.taskPaths,
       frozenPaths: turn.authorization.frozenPaths,
       recovered,
@@ -1497,7 +1553,7 @@ export class RunCommandService implements RunDriver {
   ): Promise<void> {
     const dispatch = requireDispatch(state, turn.dispatchId);
     if (dispatch.repositoryBaseline !== undefined) return;
-    const repositoryBaseline = await this.captureTaskBaseline(task, turn, recovered);
+    const repositoryBaseline = await this.captureTaskBaseline(state, task, turn, recovered);
     await this.store.updateRun(turn.runId, (draft) => {
       const current = requireDispatch(draft, turn.dispatchId);
       if (current.repositoryBaseline === undefined) {
@@ -1540,6 +1596,35 @@ export class RunCommandService implements RunDriver {
       }
     });
     return persisted;
+  }
+
+  private async readTaskCompletion(turn: WorkerTurn): Promise<{
+    readonly present: boolean;
+    readonly duplicateCount: number;
+    readonly submission: TaskCompletionSubmission | null;
+  }> {
+    const submissions = (await this.store.readWorkerEvents(turn.runId))
+      .filter(
+        (record) => record.dispatchId === turn.dispatchId && record.event.kind === "completion",
+      )
+      .map((record) => record.event);
+    const last = submissions.at(-1);
+    if (last?.kind !== "completion") {
+      return { present: false, duplicateCount: 0, submission: null };
+    }
+    const parsed = TaskCompletionSubmissionSchema.safeParse(last.submission);
+    return {
+      present: true,
+      duplicateCount: submissions.length,
+      submission: parsed.success ? parsed.data : null,
+    };
+  }
+
+  private async persistTaskAssessment(
+    assessment: TaskCompletionAssessment,
+  ): Promise<import("@senawa/domain").TaskCompletionAssessmentEvidence | null> {
+    if (this.taskAssessments === null) return null;
+    return this.taskAssessments.persist(assessment);
   }
 
   private sensorOutput(
@@ -2141,6 +2226,56 @@ function requireDispatch(state: RuntimeState, dispatchId: string): RuntimeDispat
   const dispatch = state.dispatches.find((candidate) => candidate.dispatchId === dispatchId);
   if (dispatch === undefined) throw new Error(`Unknown dispatch ${dispatchId}`);
   return dispatch;
+}
+
+function gateSensorDescriptors(
+  policy: RepositoryPolicy,
+  gateId: string,
+): readonly GateSensorDescriptor[] {
+  const gate = policy.gates.find((candidate) => candidate.id === gateId);
+  if (gate === undefined) return [];
+  return gate.checks.flatMap((check) => {
+    const sensor = policy.sensors.find((candidate) => candidate.id === check.sensor);
+    if (sensor === undefined) return [];
+    const command = Reflect.get(sensor.config, "command");
+    return [
+      {
+        sensorId: sensor.id,
+        command: typeof command === "string" ? command.trim() : null,
+        scope: [...sensor.scope],
+        advisory: check.advisory || sensor.trust === "advisory",
+      },
+    ];
+  });
+}
+
+function unsatisfiedCriteria(
+  assessment: TaskCompletionAssessment,
+  evidencePath: string,
+): ReadonlyArray<{
+  readonly id: string;
+  readonly verdict: TaskCompletionAssessment["criteria"][number]["verdict"];
+  readonly reason: string;
+  readonly evidencePath: string | null;
+}> {
+  return assessment.criteria
+    .filter((criterion) => criterion.verdict !== "satisfied" && criterion.verdict !== "waived")
+    .slice(0, 20)
+    .map((criterion) => ({
+      id: criterion.id,
+      verdict: criterion.verdict,
+      reason: truncate(
+        criterion.evidence.find((entry) => entry.resolution === "contradicted")?.detail ??
+          criterion.evidence.find((entry) => entry.resolution === "unresolved")?.detail ??
+          (criterion.claimed === "unreported"
+            ? `No outcome was reported for ${criterion.description}`
+            : `No resolving evidence was reported for ${criterion.description}`),
+        500,
+      ),
+      evidencePath: criterion.evidence.some((entry) => entry.claim.kind !== "sensor")
+        ? evidencePath
+        : null,
+    }));
 }
 
 function createDispatch(

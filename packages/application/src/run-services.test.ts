@@ -1,6 +1,7 @@
 import { createRunSnapshot, loadRepositoryDefinitions } from "@senawa/configuration";
 import {
   DefinitionArtifactSchema,
+  deriveAcceptanceCriterionId,
   JsonObjectSchema,
   PlanArtifactSchema,
   ResearchArtifactSchema,
@@ -10,7 +11,11 @@ import {
 } from "@senawa/domain";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { artifactDigest, resolvePhaseInputManifest } from "./input-manifests.js";
-import { RuntimeRevisionConflictError, type WorkerTurn } from "./ports.js";
+import {
+  type RepositoryEvidencePort,
+  RuntimeRevisionConflictError,
+  type WorkerTurn,
+} from "./ports.js";
 import { projectPhaseBrief, projectRunStatus } from "./projections.js";
 import { RunCommandService, RunQueryService } from "./run-services.js";
 import { FakeClock, FakeRunPersistence, SequenceIdentifiers } from "./testing.js";
@@ -964,6 +969,21 @@ describe("application run use cases", () => {
       },
       dependencyOutcomes: [],
     });
+    expect(taskPrompt).toMatchObject({
+      acceptanceCriteria: [
+        {
+          id: deriveAcceptanceCriterionId("Task provenance is durable"),
+          description: "Task provenance is durable",
+          required: true,
+        },
+      ],
+      completion: {
+        tool: "senawa.task.done",
+        evidenceKinds: expect.objectContaining({ file: expect.any(String) }),
+        submissionSchema: expect.objectContaining({ required: ["summary", "criteria"] }),
+      },
+    });
+    expect(taskPrompt).not.toHaveProperty("acceptance");
   });
 
   it("persists repository baseline before execution and delta before task gates", async () => {
@@ -1103,7 +1123,297 @@ describe("application run use cases", () => {
     expect(order).toEqual(["baseline", "execute", "delta", "gate"]);
   });
 
-  it("does not let a plan weaken the standard required-change frontier", async () => {
+  it.each([
+    [
+      "resolves an in-scope completion claim and persists the driver assessment",
+      { path: "packages/application/src/run.ts", relationship: "modified" } as const,
+      "satisfied",
+      "pass",
+    ],
+    [
+      "refuses a fabricated completion claim",
+      { path: "packages/application/src/invented.ts", relationship: "modified" } as const,
+      "unresolved",
+      "fail",
+    ],
+    [
+      "refuses a completion claim outside the authorized task paths",
+      { path: "README.md", relationship: "modified" } as const,
+      "contradicted",
+      "fail",
+    ],
+  ])("%s", async (_name, file, verdict, assessmentVerdict) => {
+    const persistence = new FakeRunPersistence();
+    const runId = `task-acceptance-${verdict}`;
+    const gateInputs: Array<{ readonly stage: string; readonly verdict: string }> = [];
+    const persisted: string[] = [];
+    const criterionId = deriveAcceptanceCriterionId("The change is implemented");
+    const commands = new RunCommandService(
+      persistence,
+      {
+        async execute(turn, onEvent) {
+          await onEvent?.({
+            apiVersion: "senawa.dev/worker-event/v1",
+            eventId: "worker-completion",
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+            ts: clock.now().toISOString(),
+            kind: "completion",
+            submission: {
+              summary: "Implemented",
+              criteria: [
+                { id: criterionId, outcome: "satisfied", evidence: [{ kind: "file", ...file }] },
+              ],
+            },
+          });
+          return { sessionId: turn.sessionId, output: [] };
+        },
+      },
+      {
+        async evaluate(input) {
+          if (input.taskAssessment !== undefined) {
+            gateInputs.push({
+              stage: input.taskAssessment.stage,
+              verdict: input.taskAssessment.verdict,
+            });
+          }
+          return {
+            gateId: input.gateId,
+            accepted: input.taskAssessment?.verdict !== "fail",
+            readings: [],
+            findings: [],
+          };
+        },
+      },
+      { validatePhaseArtifact: () => undefined },
+      clock,
+      new SequenceIdentifiers(runId),
+      { scheduleEvery: () => () => undefined },
+      30_000,
+      "file",
+      { kind: "simulated", adapter: "simulated-worker", adapterVersion: "1", legacy: false },
+      taskDeltaEvidence(),
+      {
+        async persist(assessment) {
+          persisted.push(assessment.stage);
+          return {
+            ...assessment,
+            digest: "e".repeat(64),
+            evidencePath: "evidence/assessment.json",
+          };
+        },
+      },
+    );
+    await commands.start({
+      actor: { channel: "direct-cli" },
+      request: { goal: "Resolve completion evidence", constraints: [] },
+      runId,
+      snapshot: createRunSnapshot(runId, definitions, clock.now()),
+    });
+    await seedTaskFrontier(persistence, runId, {
+      key: "measured-task",
+      title: "Measure task",
+      dependsOn: [],
+      paths: ["packages/application"],
+      acceptance: ["The change is implemented"],
+      role: "implementor",
+      status: "pending",
+      attempt: 0,
+      dispatchFailures: 0,
+      sessionId: null,
+      steering: [],
+    });
+
+    const transition = await commands.advance(runId, { channel: "driver" });
+    const state = (await persistence.readRun(runId)).state;
+    const dispatch = state.dispatches.at(-1);
+
+    expect(gateInputs).toEqual([{ stage: "pre-gate", verdict: assessmentVerdict }]);
+    expect(persisted).toEqual(["final"]);
+    expect(dispatch?.taskAssessment).toMatchObject({
+      stage: "final",
+      verdict: assessmentVerdict,
+      submission: { present: true, valid: true, duplicateCount: 1 },
+      criteria: [{ id: criterionId, verdict }],
+      evidencePath: "evidence/assessment.json",
+    });
+    expect(transition.kind).toBe(assessmentVerdict === "pass" ? "task-closed" : "task-rework");
+    if (assessmentVerdict === "fail") {
+      expect(state.tasks[0]?.reworkFeedback?.criteria).toEqual([
+        {
+          id: criterionId,
+          verdict,
+          reason: expect.any(String),
+          evidencePath: "evidence/repository/delta.json",
+        },
+      ]);
+    }
+  });
+
+  it("leaves every required criterion unmet when the worker submits no completion", async () => {
+    const persistence = new FakeRunPersistence();
+    const runId = "task-acceptance-missing";
+    let assessment: unknown;
+    const commands = new RunCommandService(
+      persistence,
+      { execute: async (turn) => ({ sessionId: turn.sessionId, output: [] }) },
+      {
+        async evaluate(input) {
+          if (input.taskAssessment !== undefined) assessment = input.taskAssessment;
+          return {
+            gateId: input.gateId,
+            accepted: input.taskAssessment?.verdict !== "fail",
+            readings: [],
+            findings: [],
+          };
+        },
+      },
+      { validatePhaseArtifact: () => undefined },
+      clock,
+      new SequenceIdentifiers(runId),
+      { scheduleEvery: () => () => undefined },
+      30_000,
+      "file",
+      { kind: "simulated", adapter: "simulated-worker", adapterVersion: "1", legacy: false },
+      taskDeltaEvidence(),
+    );
+    await commands.start({
+      actor: { channel: "direct-cli" },
+      request: { goal: "Refuse silent completion", constraints: [] },
+      runId,
+      snapshot: createRunSnapshot(runId, definitions, clock.now()),
+    });
+    await seedTaskFrontier(persistence, runId, {
+      key: "silent-task",
+      title: "Silent task",
+      dependsOn: [],
+      paths: ["packages/application"],
+      acceptance: ["The change is implemented"],
+      role: "implementor",
+      status: "pending",
+      attempt: 0,
+      dispatchFailures: 0,
+      sessionId: null,
+      steering: [],
+    });
+
+    await expect(commands.advance(runId, { channel: "driver" })).resolves.toMatchObject({
+      kind: "task-rework",
+    });
+    expect(assessment).toMatchObject({
+      verdict: "fail",
+      submission: { present: false, valid: false },
+      criteria: [{ claimed: "unreported", verdict: "unclaimed" }],
+    });
+  });
+
+  it("replays a persisted completion submission when the worker host cannot inspect", async () => {
+    const persistence = new FakeRunPersistence();
+    const runId = "task-acceptance-recovery";
+    const criterionId = deriveAcceptanceCriterionId("The change is implemented");
+    let executions = 0;
+    const commands = new RunCommandService(
+      persistence,
+      {
+        async execute(turn, onEvent) {
+          executions += 1;
+          for (const event of [
+            {
+              eventId: "worker-completion",
+              kind: "completion" as const,
+              submission: {
+                summary: "Implemented",
+                criteria: [
+                  {
+                    id: criterionId,
+                    outcome: "satisfied",
+                    evidence: [
+                      {
+                        kind: "file",
+                        path: "packages/application/src/run.ts",
+                        relationship: "modified",
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+            {
+              eventId: "worker-lifecycle",
+              kind: "lifecycle" as const,
+              event: "completed" as const,
+            },
+          ]) {
+            await onEvent?.({
+              apiVersion: "senawa.dev/worker-event/v1",
+              sessionId: turn.sessionId,
+              turnId: turn.turnId,
+              ts: clock.now().toISOString(),
+              ...event,
+            });
+          }
+          throw new Error("Driver interrupted after the worker reported completion");
+        },
+        async inspect() {
+          return { state: "unknown", detail: "Worker host cannot inspect" };
+        },
+      },
+      {
+        evaluate: async (input) => ({
+          gateId: input.gateId,
+          accepted: input.taskAssessment?.verdict !== "fail",
+          readings: [],
+          findings: [],
+        }),
+      },
+      { validatePhaseArtifact: () => undefined },
+      clock,
+      new SequenceIdentifiers(runId),
+      { scheduleEvery: () => () => undefined },
+      30_000,
+      "file",
+      { kind: "simulated", adapter: "simulated-worker", adapterVersion: "1", legacy: false },
+      taskDeltaEvidence(),
+    );
+    await commands.start({
+      actor: { channel: "direct-cli" },
+      request: { goal: "Replay completion after recovery", constraints: [] },
+      runId,
+      snapshot: createRunSnapshot(runId, definitions, clock.now()),
+    });
+    await seedTaskFrontier(persistence, runId, {
+      key: "recovered-task",
+      title: "Recovered task",
+      dependsOn: [],
+      paths: ["packages/application"],
+      acceptance: ["The change is implemented"],
+      role: "implementor",
+      status: "pending",
+      attempt: 0,
+      dispatchFailures: 0,
+      sessionId: null,
+      steering: [],
+    });
+
+    await expect(commands.advance(runId, { channel: "driver" })).rejects.toThrow(
+      "Driver interrupted",
+    );
+    const interrupted = await persistence.readRun(runId);
+    interrupted.state.status = "running";
+    await persistence.commitRun({
+      runId,
+      expectedRevision: interrupted.revision,
+      operationId: "resume-after-interrupt",
+      state: interrupted.state,
+    });
+
+    await expect(commands.advance(runId, { channel: "driver" })).resolves.toMatchObject({
+      kind: "task-closed",
+    });
+    expect(executions).toBe(1);
+  });
+
+  it("does not let a plan weaken the standard change frontier ceiling", async () => {
     const persistence = new FakeRunPersistence();
     const commands = new RunCommandService(
       persistence,
@@ -1140,7 +1450,7 @@ describe("application run use cases", () => {
               title: "Weakened task",
               dependsOn: [],
               paths: ["packages/application"],
-              repositoryChange: "optional",
+              repositoryChange: "forbidden",
               acceptance: ["No evidence required"],
               role: "implementor",
             },
@@ -1148,7 +1458,7 @@ describe("application run use cases", () => {
         },
         { channel: "direct-cli" },
       ),
-    ).rejects.toThrow("repositoryChange optional");
+    ).rejects.toThrow("repositoryChange forbidden");
   });
 
   it("preserves one repository attribution across interrupted task recovery", async () => {
@@ -1824,6 +2134,69 @@ describe("application run use cases", () => {
     expect(await harness.queries.openWorkerQuestions(harness.runId)).toEqual([]);
   });
 });
+
+async function seedTaskFrontier(
+  persistence: FakeRunPersistence,
+  runId: string,
+  task: RuntimeState["tasks"][number],
+): Promise<void> {
+  const current = await persistence.readRun(runId);
+  for (const phase of current.state.phases) {
+    phase.status =
+      phase.id === "implement" ? "pending" : phase.id === "verify" ? "ended" : "accepted";
+  }
+  current.state.tasks = [task];
+  await persistence.commitRun({
+    runId,
+    expectedRevision: current.revision,
+    operationId: `seed-${runId}`,
+    state: current.state,
+  });
+}
+
+function taskDeltaEvidence(): RepositoryEvidencePort {
+  return {
+    async captureBaseline(input) {
+      return {
+        version: 1,
+        kind: "repository-baseline",
+        ...input,
+        head: "head",
+        entries: [],
+        uncertainty: [],
+        digest: "b".repeat(64),
+        evidencePath: "evidence/repository/baseline.json",
+      };
+    },
+    async captureDelta(input) {
+      return {
+        version: 1,
+        kind: "repository-delta",
+        runId: input.baseline.runId,
+        taskId: input.baseline.taskId,
+        attempt: input.baseline.attempt,
+        dispatchId: input.baseline.dispatchId,
+        turnId: input.baseline.turnId,
+        expectation: input.baseline.expectation,
+        baselineDigest: input.baseline.digest,
+        headBefore: input.baseline.head,
+        headAfter: input.baseline.head,
+        preExistingChanges: [],
+        changedPaths: [
+          { path: "packages/application/src/run.ts", status: " M", digest: "c".repeat(64) },
+        ],
+        inScopeChanges: ["packages/application/src/run.ts"],
+        outOfScopeChanges: [],
+        frozenChanges: [],
+        uncertainty: [],
+        workerClaim: { reported: false, changed: null, agreement: "unreported" },
+        capturedAt: input.capturedAt,
+        digest: "d".repeat(64),
+        evidencePath: "evidence/repository/delta.json",
+      };
+    },
+  };
+}
 
 async function createQuestionHarness(runId: string) {
   const persistence = new FakeRunPersistence();

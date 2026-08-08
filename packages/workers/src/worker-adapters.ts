@@ -16,6 +16,7 @@ import type {
 } from "@senawa/application";
 import {
   DefinitionArtifactSchema,
+  type JsonObject,
   JsonObjectSchema,
   PlanArtifactSchema,
   ResearchArtifactSchema,
@@ -550,6 +551,16 @@ function createHandle(
             patch: "",
             reason: "Worker adapter reported no task diff",
           });
+          const submission = simulatedCompletion(turn);
+          if (submission !== null) {
+            yield event({
+              apiVersion: "senawa.dev/worker-event/v1",
+              sessionId: turn.sessionId,
+              turnId: turn.turnId,
+              kind: "completion",
+              submission,
+            });
+          }
         }
         if (usage !== undefined) {
           yield event({
@@ -612,6 +623,40 @@ function outputs(stdout: string, stderr: string): WorkerOutput[] {
     ...(stdout.trim() === "" ? [] : [{ stream: "stdout" as const, text: stdout.trim() }]),
     ...(stderr.trim() === "" ? [] : [{ stream: "stderr" as const, text: stderr.trim() }]),
   ];
+}
+
+/** The simulated worker changes nothing, so it claims the measured empty delta. */
+function simulatedCompletion(turn: WorkerTurn): JsonObject | null {
+  const criteria = acceptanceCriteriaFromPrompt(turn.prompt);
+  if (criteria.length === 0) return null;
+  return {
+    summary: `Simulated completion for ${turn.owner.id} attempt ${turn.attempt}`,
+    criteria: criteria.map((id) => ({
+      id,
+      outcome: "satisfied",
+      summary: "The simulated worker reported this criterion as satisfied",
+      evidence: [{ kind: "repository-delta", scope: "none" }],
+    })),
+  };
+}
+
+function acceptanceCriteriaFromPrompt(prompt: string): readonly string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(prompt);
+  } catch {
+    return [];
+  }
+  if (parsed === null || typeof parsed !== "object") return [];
+  const criteria = Reflect.get(parsed, "acceptanceCriteria");
+  if (!Array.isArray(criteria)) return [];
+  return criteria.flatMap((criterion) => {
+    const id =
+      criterion !== null && typeof criterion === "object"
+        ? Reflect.get(criterion, "id")
+        : undefined;
+    return typeof id === "string" ? [id] : [];
+  });
 }
 
 function simulatedResult(turn: WorkerTurn): WorkerResult {

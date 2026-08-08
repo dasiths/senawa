@@ -37,14 +37,26 @@ export const ResearchArtifactSchema = z
   })
   .strict();
 
+export const RepositoryChangeExpectationSchema = z.enum(["required", "optional", "forbidden"]);
+
+export const AcceptanceCriterionSchema = z
+  .object({
+    id: IdentifierSchema.optional(),
+    description: NonEmptyStringSchema.max(500),
+    required: z.boolean().default(true),
+  })
+  .strict();
+
+export const AcceptanceEntrySchema = z.union([NonEmptyStringSchema, AcceptanceCriterionSchema]);
+
 export const PlanTaskSchema = z
   .object({
     key: IdentifierSchema,
     title: NonEmptyStringSchema,
     dependsOn: z.array(IdentifierSchema).default([]),
     paths: z.array(RelativePathSchema).min(1),
-    repositoryChange: z.enum(["required", "optional", "forbidden"]).default("required"),
-    acceptance: z.array(NonEmptyStringSchema).min(1),
+    repositoryChange: RepositoryChangeExpectationSchema.optional(),
+    acceptance: z.array(AcceptanceEntrySchema).min(1).max(50),
     role: IdentifierSchema,
     execution: z
       .object({
@@ -87,6 +99,17 @@ export const PlanArtifactSchema = z
           });
         }
       }
+      const criterionIds = new Set<string>();
+      for (const [position, criterion] of normalizeAcceptance(task.acceptance).entries()) {
+        if (criterionIds.has(criterion.id)) {
+          context.addIssue({
+            code: "custom",
+            message: `Duplicate acceptance criterion id: ${criterion.id}`,
+            path: ["tasks", index, "acceptance", position],
+          });
+        }
+        criterionIds.add(criterion.id);
+      }
     }
   });
 
@@ -112,5 +135,40 @@ export type WorkRequest = z.infer<typeof WorkRequestSchema>;
 export type DefinitionArtifact = z.infer<typeof DefinitionArtifactSchema>;
 export type ResearchArtifact = z.infer<typeof ResearchArtifactSchema>;
 export type PlanArtifact = z.infer<typeof PlanArtifactSchema>;
-export type RepositoryChangeExpectation = z.infer<typeof PlanTaskSchema>["repositoryChange"];
+export type RepositoryChangeExpectation = z.infer<typeof RepositoryChangeExpectationSchema>;
+export type AcceptanceEntry = z.infer<typeof AcceptanceEntrySchema>;
 export type VerificationArtifact = z.infer<typeof VerificationArtifactSchema>;
+
+export interface AcceptanceCriterion {
+  readonly id: string;
+  readonly description: string;
+  readonly required: boolean;
+}
+
+/** Content-addressed so a criterion keeps its identity when a plan reorders criteria. */
+export function deriveAcceptanceCriterionId(description: string): string {
+  const prime = 0x100000001b3n;
+  const mask = 0xffffffffffffffffn;
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(description.trim())) {
+    hash = ((hash ^ BigInt(byte)) * prime) & mask;
+  }
+  return `ac-${hash.toString(16).padStart(16, "0")}`;
+}
+
+export function normalizeAcceptance(
+  acceptance: readonly (
+    | string
+    | { id?: string | undefined; description: string; required?: boolean | undefined }
+  )[],
+): readonly AcceptanceCriterion[] {
+  return acceptance.map((entry) =>
+    typeof entry === "string"
+      ? { id: deriveAcceptanceCriterionId(entry), description: entry, required: true }
+      : {
+          id: entry.id ?? deriveAcceptanceCriterionId(entry.description),
+          description: entry.description,
+          required: entry.required ?? true,
+        },
+  );
+}

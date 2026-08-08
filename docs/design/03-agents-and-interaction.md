@@ -125,6 +125,32 @@ processor can replay approve, reject, steer, resume, or end without duplicating
 an already committed transition. A graceful supervisor shutdown retains its web
 claim until active command execution finishes.
 
+## Run console presentation
+
+The run console is one workspace with an overview rail, a graph stage, and an
+inspector rail. Both rails collapse to a narrow strip and resize by dragging the
+separator between them and the stage. Each separator is a `role="separator"`
+control with arrow, `Home`, and `End` keys and a live `aria-valuenow`, so the
+layout is reachable without a pointer. Rail widths and collapse state persist in
+browser storage and restore on load, and the graph refits after the stage
+resizes. A collapsed inspector still shows a pending-decision badge, so
+collapsing a rail cannot hide a phase waiting on a human.
+
+Artifacts, consumed input manifests, and evidence render through a bounded JSON
+tree rather than a wall of preformatted text. The tree scrolls inside a fixed
+maximum height, expands and collapses per node, supports case-insensitive
+substring search, and copies either the whole payload or one subtree. Rows are
+budgeted, oversized payloads fall back to bounded raw text, and every node is
+built as a DOM text node. The console constructs no HTML from run content and
+compiles no user-supplied regular expressions, which keeps the rendering
+boundary in [Provenance and Observability](06-provenance-and-observability.md#rendering-boundary)
+intact.
+
+Artifact JSON is readable for any phase that has an artifact, not only while a
+phase awaits approval, because reading an accepted or rejected artifact is
+observation. Decision controls remain bound to the exact version and digest of a
+phase that is awaiting approval, so wider reading grants no wider authority.
+
 ## Role instructions and briefs
 
 Instructions have two owners:
@@ -158,8 +184,11 @@ broader semantic capability.
 Instructions do not enforce policy. Capability removal, typed tools, hooks, and
 the gate own enforcement. A worker ending its turn without submitting the typed
 completion request cannot bypass the driver, because the driver evaluates the
-gate after the turn and remains authoritative. A public `task done` CLI command
-remains deferred until it can authenticate and bind the worker turn.
+gate after the turn and remains authoritative. The typed submission is a claim
+about acceptance criteria, and the driver resolves it against measured evidence;
+[Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md#acceptance-evidence)
+owns that contract. A public `task done` CLI command remains deferred until it
+can authenticate and bind the worker turn.
 
 The deterministic binding registry proves owner-bound task completion offline,
 but the subprocess adapter has no authenticated command bridge. Public

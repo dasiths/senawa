@@ -36,3 +36,14 @@ export const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 export const TimestampSchema = z.string().datetime({ offset: true });
 
 export type JsonObject = z.infer<typeof JsonObjectSchema>;
+
+export function matchesPathPattern(path: string, pattern: string): boolean {
+  const normalized = pattern.replaceAll("\\", "/").replace(/^\.\//u, "");
+  if (!normalized.includes("*")) return path === normalized || path.startsWith(`${normalized}/`);
+  const expression = normalized
+    .replace(/[.+?^${}()|[\]\\]/gu, "\\$&")
+    .replaceAll("**", "\u0000")
+    .replaceAll("*", "[^/]*")
+    .replaceAll("\u0000", ".*");
+  return new RegExp(`^${expression}$`, "u").test(path);
+}

@@ -278,4 +278,53 @@ describe("worker adapter conformance", () => {
     });
     expect(calls).toHaveLength(1);
   });
+
+  it("exposes the per-criterion completion contract on the task completion binding", () => {
+    const authorization: WorkerAuthorization = {
+      runId: turn.runId,
+      owner: turn.owner,
+      profileDigest: turn.profileDigest,
+      semanticCapabilities: ["senawa.task.done"],
+      readablePaths: [],
+      writablePaths: ["packages/workers"],
+      frozenPaths: [],
+      allowedCommands: [],
+    };
+    const binding = new DeterministicWorkerBindingRegistry(
+      recordingBindingHandlers([]),
+    ).bindingsFor(turn, authorization)[0];
+
+    expect(binding?.inputSchema).toMatchObject({
+      required: ["summary"],
+      additionalProperties: false,
+      properties: {
+        criteria: {
+          type: "array",
+          items: {
+            required: ["id", "outcome"],
+            properties: {
+              outcome: { enum: ["satisfied", "blocked", "not-applicable"] },
+              evidence: {
+                items: {
+                  properties: {
+                    kind: { enum: ["file", "sensor", "command", "repository-delta"] },
+                    relationship: {
+                      enum: [
+                        "created",
+                        "modified",
+                        "deleted",
+                        "reviewed",
+                        "validated",
+                        "referenced",
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+  });
 });

@@ -315,6 +315,7 @@ export class CopilotSdkWorkerAdapter
     const queue = new EventQueue<WorkerSessionEvent>();
     const output: WorkerOutput[] = [];
     let artifact: JsonObject | undefined;
+    let completion: JsonObject | undefined;
     const authorization = workerAuthorization(turn);
     const bindings = this.options.bindings.bindingsFor(turn, authorization);
     const transportNames = new Map<string, string>();
@@ -347,6 +348,12 @@ export class CopilotSdkWorkerAdapter
           if (binding.name === "senawa.phase.submit" && result.accepted) {
             artifact = JsonObjectSchema.parse(Reflect.get(input, "artifact"));
             queue.push(event(turn, `artifact:${binding.name}`, "artifact", { artifact }));
+          }
+          if (binding.name === "senawa.task.done" && result.accepted) {
+            completion = input;
+            queue.push(
+              event(turn, `completion:${binding.name}`, "completion", { submission: input }),
+            );
           }
           return result;
         },
@@ -461,6 +468,7 @@ export class CopilotSdkWorkerAdapter
         const value: WorkerResult = {
           sessionId: turn.sessionId,
           ...(artifact === undefined ? {} : { artifact }),
+          ...(completion === undefined ? {} : { completion }),
           output,
         };
         this.completed.set(turn.turnId, value);

@@ -43,6 +43,81 @@ Copy this section for each idea and update it in place as the idea matures.
 
 ## Decisions
 
+### 2026-08-07: Completion evidence, console usability, commit writes, and external workers
+
+* Status: `probing`
+* Owner: `docs/design/02-workflows-and-lifecycle.md`,
+    `docs/design/03-agents-and-interaction.md`,
+    `docs/design/04-sensors-gates-and-enforcement.md`,
+    `docs/design/05-runtime-and-state.md`, and
+    `docs/design/06-provenance-and-observability.md`
+* Question: Can per-criterion completion evidence replace the blanket per-task
+    repository-change requirement, can the run console stay usable for large
+    payloads and small viewports, can Beads commits stop rewriting unchanged
+    nodes, and can workers run as external tmux-hosted processes with live
+    browser terminals?
+* Context: `repositoryChange: required` forced every task to edit files, so an
+    audit or validation task could only close by manufacturing an edit, and a
+    closed task recorded no link between an acceptance item and the files that
+    satisfied it. The console rendered artifacts as one unbounded block with no
+    way to reclaim horizontal space. Beads commits rewrote every phase and task
+    on every transition. Long-lived external workers with interactive terminals
+    were proposed as an alternative execution model.
+* Options: Keep the blanket change requirement, or make completion a
+    per-criterion claim that the driver resolves against measured evidence.
+    Keep one fixed console layout, or add collapsible and resizable rails with a
+    bounded JSON viewer. Keep unconditional convergence, or diff before writing.
+    Keep in-process workers, or host them externally with a live terminal.
+* Evidence needed: For completion evidence, an audit-style task must close
+    without a repository change while an implementation task must still fail
+    without resolvable change evidence, and fabricated, out-of-scope, frozen, or
+    unmatched claims must be refused.
+* Evidence needed: For the console, string-contract tests over the production
+    assets must show collapse, resize, persistence, keyboard control, a pending
+    decision badge, bounded JSON rendering, and no HTML construction from run
+    content.
+* Evidence needed: For commit writes, a converge run must issue zero node writes
+    when nothing changed, still converge changed nodes and unresolved pending
+    operations, and show a measured reduction in `bd` invocations and wall time.
+* Evidence needed: For external workers, tmux substrate behavior, detached
+    reattachment across a Senawa restart, an authenticated per-turn command
+    bridge, and read-only terminal streaming must each be measured before any
+    live run.
+* Probe: `experiments/probes/worker-sessions/README.md` for the external-worker
+    and terminal stages, and `experiments/probes/beads-graph/README.md` for
+    Beads latency
+* Outcome: `accepted offline` for the completion-evidence contract. Structured
+    acceptance criteria with derived IDs, the typed per-criterion submission,
+    driver-authored assessment, advisory `reviewed` and `referenced`
+    relationships, refusal of unmatched, unresolvable, out-of-scope, and frozen
+    references, and the `task-acceptance` gate sensor passed offline tests. No
+    live model produced or defended a submission.
+* Outcome: `accepted offline` for the console layout and JSON viewer. Collapsible
+    and resizable rails, keyboard separators, persisted layout, the pending
+    decision badge, the bounded searchable tree, and artifact access for any
+    phase that has an artifact passed offline string-contract tests in the
+    production browser assets. No usability study or browser-automation run was
+    performed.
+* Outcome: `measured` for the Beads commit-write reduction. On a five-phase,
+    ten-task graph with `bd 1.1.2`, converging only changed nodes issued 81%
+    fewer `bd` commands and reduced one commit from 35.8 s to 6.3 s. See
+    [Transition latency](probe-findings.md#transition-latency).
+* Outcome: `probing` for external tmux-hosted workers and live browser
+    terminals. Nothing is implemented. Tmux remains absent from the recorded
+    environment, so no session, pane, reattachment, or streaming behavior has
+    been measured. Human terminal input is recorded as incompatible as an
+    authority channel and is excluded from the staged path.
+* Promotion: Completion evidence is promoted to
+    [Acceptance criteria](../02-workflows-and-lifecycle.md#acceptance-criteria) and
+    [Acceptance evidence](../04-sensors-gates-and-enforcement.md#acceptance-evidence);
+    console behavior to
+    [Run console presentation](../03-agents-and-interaction.md#run-console-presentation);
+    report rendering to
+    [Report structure](../06-provenance-and-observability.md#report-structure);
+    commit convergence to
+    [Runtime and State](../05-runtime-and-state.md). External workers and live
+    terminals remain unpromoted.
+
 ### 2026-08-07: Live execution, exact evidence, approval presentation, and tmux
 
 * Status: `probing`

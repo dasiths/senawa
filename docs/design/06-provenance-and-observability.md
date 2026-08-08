@@ -147,12 +147,21 @@ The report renders these sections:
 8. Usage and cost by role, execution classification, and invoked model
 9. Exact consumed input manifests
 10. Trusted task-delta references
-11. Evidence inventory
+11. Per-criterion acceptance outcomes, verdicts, and resolved evidence
+12. Evidence inventory
 
 The Phase 9 renderer implements these sections from the full graph, journal,
 output, and normalized worker-event projection. Usage checkpoints are cumulative
 per dispatch, so report aggregation takes the latest checkpoint once rather
-than summing repeated cumulative values.
+than summing repeated cumulative values. Aggregate usage and cost are nullable:
+a role whose dispatches reported no usage renders `unreported`, because a
+zero total would claim a measurement that never arrived.
+
+The acceptance section renders each criterion with its required flag, the
+outcome the worker claimed, the verdict the driver authored, and every resolved
+reference with its resolution and source. Advisory references stay labelled as
+advisory. The contract that produces them belongs to
+[Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md#acceptance-evidence).
 
 The decomposition diagram is built from graph nodes and parent-child edges. A
 plain beads dependency tree is insufficient because sibling children with no

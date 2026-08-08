@@ -193,6 +193,15 @@ issue metadata. Immutable identity, snapshots, and artifacts remain owned by
 `@senawa/observability`; active-run ownership and fenced leases remain local
 file authorities.
 
+A commit converges only the nodes whose desired state changed. A node is skipped
+when its coarse status, state label, and metadata digest already match the
+desired state, no pending operation is unresolved, and no gate transition is
+required for it. Any other node runs the full transition sequence, so split-write
+recovery, gate creation and resolution, and operation receipts behave exactly as
+before. The saving is proportional to graph size, because every unchanged phase
+and task previously paid three or four `bd` writes on every commit. See the
+[measured commit-write reduction](wip/probe-findings.md#transition-latency).
+
 Run identity and the repository active-run pointer also store `backend` as
 `beads` or `file`. The selected composition validates both records before
 reading or mutating a run. Status and reports expose the backend. A process

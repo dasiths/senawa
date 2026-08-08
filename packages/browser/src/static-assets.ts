@@ -28,16 +28,23 @@ export const indexHtml = `<!doctype html>
     <div><strong>SENAWA</strong><span>Run console</span></div>
     <div><span id="connection">Connecting</span><b id="run-status">Loading</b></div>
   </header>
-  <main class="workspace">
-    <aside class="overview">
-      <small>ACTIVE WORKFLOW</small>
-      <h1 id="workflow-name">Loading run</h1>
-      <dl>
-        <div><dt>Phases</dt><dd id="phase-progress">-</dd></div>
-        <div><dt>Active</dt><dd id="active-phase">-</dd></div>
-        <div><dt>Cursor</dt><dd id="event-cursor">0</dd></div>
-      </dl>
+  <main class="workspace" id="workspace" data-left="expanded" data-right="expanded">
+    <aside class="overview rail" id="overview">
+      <div class="rail-head">
+        <button id="overview-toggle" class="rail-toggle" type="button" aria-expanded="true" aria-controls="overview-body" aria-label="Collapse overview rail">&lsaquo;</button>
+        <span class="rail-spine" aria-hidden="true">OVERVIEW</span>
+      </div>
+      <div class="rail-body" id="overview-body">
+        <small>ACTIVE WORKFLOW</small>
+        <h1 id="workflow-name">Loading run</h1>
+        <dl>
+          <div><dt>Phases</dt><dd id="phase-progress">-</dd></div>
+          <div><dt>Active</dt><dd id="active-phase">-</dd></div>
+          <div><dt>Cursor</dt><dd id="event-cursor">0</dd></div>
+        </dl>
+      </div>
     </aside>
+    <div id="splitter-left" class="splitter" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="overview" aria-label="Resize overview rail" aria-valuemin="180" aria-valuemax="640" aria-valuenow="220"></div>
     <section class="stage">
       <header><small>WORKFLOW GRAPH</small><h2>Execution path</h2></header>
       <div id="graph" class="graph" aria-label="Workflow dependency graph"></div>
@@ -45,7 +52,14 @@ export const indexHtml = `<!doctype html>
       <header><small>AGENT OUTPUT</small><h2 id="console-title">Select a node</h2></header>
       <div id="terminal" class="terminal" role="log"></div>
     </section>
-    <aside class="controls">
+    <div id="splitter-right" class="splitter" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="inspector" aria-label="Resize inspector rail" aria-valuemin="180" aria-valuemax="640" aria-valuenow="320"></div>
+    <aside class="controls rail" id="inspector">
+      <div class="rail-head">
+        <button id="inspector-toggle" class="rail-toggle" type="button" aria-expanded="true" aria-controls="inspector-body" aria-label="Collapse inspector rail">&rsaquo;</button>
+        <span class="rail-spine" aria-hidden="true">INSPECTOR</span>
+        <span id="decision-badge" class="rail-badge" role="status" hidden></span>
+      </div>
+      <div class="rail-body" id="inspector-body">
       <section id="questions">
         <small>OPEN QUESTIONS <span id="question-count">0</span></small>
         <div id="question-list"></div>
@@ -54,7 +68,7 @@ export const indexHtml = `<!doctype html>
       <h2 id="selected-name">None</h2>
       <p id="selected-detail">Choose a graph node.</p>
       <section id="approval" hidden>
-        <small>APPROVAL ARTIFACT</small>
+        <small>PHASE ARTIFACT</small>
         <dl id="artifact-identity">
           <div><dt>Path</dt><dd id="artifact-path">-</dd></div>
           <div><dt>Version</dt><dd id="artifact-version">-</dd></div>
@@ -65,7 +79,9 @@ export const indexHtml = `<!doctype html>
         <p id="artifact-declared"></p>
         <ul id="artifact-counts"></ul>
         <p><code id="artifact-command"></code></p>
-        <pre id="artifact-content" aria-label="Complete approval artifact"></pre>
+        <div id="artifact-content" class="jsonview" aria-label="Artifact content"></div>
+        <small>CONSUMED INPUTS</small>
+        <div id="artifact-inputs" class="jsonview" aria-label="Consumed input manifest"></div>
         <div id="decision-controls" hidden>
           <textarea id="decision-note" placeholder="Decision note"></textarea>
           <div><button id="approve" class="run-command">Approve</button><button id="reject" class="danger run-command">Reject</button></div>
@@ -81,6 +97,7 @@ export const indexHtml = `<!doctype html>
         <button id="end" class="danger run-command">End run</button>
       </section>
       <p id="last-command" role="status" aria-live="polite">No browser command sent.</p>
+      </div>
     </aside>
   </main>
 </body>
@@ -92,8 +109,21 @@ export const stylesCss = `
 body{margin:0;min-width:320px;color:var(--ink);background-color:var(--paper);background-image:linear-gradient(rgba(24,32,29,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(24,32,29,.035) 1px,transparent 1px);background-size:24px 24px;font-family:"Trebuchet MS","Gill Sans",sans-serif;letter-spacing:0}
 .topbar{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;color:#fff;background:#1c2924;border-bottom:3px solid #d4a72c}
 .topbar>div{display:flex;align-items:center;gap:12px}.topbar span{color:#bdc8c1}.topbar b{padding:5px 9px;color:#1c2924;background:#fff;border-radius:3px}
-.workspace{min-height:calc(100vh - 56px);display:grid;grid-template-columns:220px minmax(520px,1fr)260px}
+.workspace{min-height:calc(100vh - 56px);display:grid;grid-template-columns:var(--rail-left,220px) 6px minmax(320px,1fr) 6px var(--rail-right,320px)}
+.workspace[data-left="collapsed"]{--rail-left:40px}
+.workspace[data-right="collapsed"]{--rail-right:40px}
 .overview,.controls{padding:24px 18px;background:rgba(255,255,255,.9)}.overview{border-right:1px solid var(--line)}.controls{border-left:1px solid var(--line)}.stage{min-width:0;padding:24px}
+.rail{min-width:0;overflow:hidden}
+.rail-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.rail-toggle{min-height:22px;margin:0;padding:1px 7px;color:#1c2924;background:transparent;border:1px solid var(--line);border-radius:3px;font:12px/1 monospace;font-weight:400}
+.rail-spine{display:none;color:#67716d;font-size:10px;font-weight:700;letter-spacing:1px;writing-mode:vertical-rl}
+.rail-badge{display:inline-block;padding:1px 7px;color:#fff;background:var(--amber);border-radius:9px;font-size:10px;font-weight:700}.rail-badge[hidden]{display:none}
+.workspace[data-left="collapsed"] .overview,.workspace[data-right="collapsed"] .controls{padding:14px 5px}
+.workspace[data-left="collapsed"] #overview-body,.workspace[data-right="collapsed"] #inspector-body{display:none}
+.workspace[data-left="collapsed"] .overview .rail-head,.workspace[data-right="collapsed"] .controls .rail-head{flex-direction:column;gap:10px}
+.workspace[data-left="collapsed"] .overview .rail-spine,.workspace[data-right="collapsed"] .controls .rail-spine{display:block}
+.splitter{width:6px;background:var(--line);cursor:col-resize;touch-action:none}.splitter:hover,.splitter:focus-visible{background:var(--blue);outline:none}
+html[data-dragging="true"]{cursor:col-resize;user-select:none}
 small{color:#67716d;font-size:11px;font-weight:700}h1{font-size:23px}h2{font-size:17px}h1,h2{margin:6px 0 18px}
 dl{margin-top:30px}dl div{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)}dd{margin:0;font-family:monospace}
 .graph{position:relative;width:100%;height:700px;min-height:480px;overflow:hidden;border:1px solid var(--line);border-radius:4px;background:rgba(255,255,255,.72)}
@@ -102,8 +132,22 @@ dl{margin-top:30px}dl div{display:flex;justify-content:space-between;padding:10p
 .controls section{margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}textarea{width:100%;min-height:70px;padding:9px;resize:vertical}
 button{min-height:36px;margin-top:8px;padding:8px 12px;color:#fff;background:var(--green);border:0;border-radius:4px;font-weight:700;cursor:pointer}.danger{background:var(--red)}button:disabled{cursor:wait;opacity:.55}#last-command.busy{color:var(--blue);font-weight:700}#last-command.busy::before{content:"";display:inline-block;width:8px;height:8px;margin-right:7px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 #questions{margin-top:0;padding-top:0;border-top:0}#questions small{display:flex;justify-content:space-between}#question-list:empty::after{content:"None";display:block;margin-top:8px;color:#67716d;font-size:12px}.question{padding:12px 0;border-bottom:1px solid var(--line)}.question p{margin:6px 0;font-size:13px;line-height:1.4;overflow-wrap:anywhere}.question textarea{min-height:56px;font:12px/1.4 monospace}.question button{width:100%}.question .question-status{color:#67716d;font-size:11px}.question.stale textarea,.question.stale button{cursor:not-allowed}
-#artifact-identity{margin:10px 0}#artifact-identity div{display:block;padding:6px 0}#artifact-identity dd{margin-top:3px;overflow-wrap:anywhere;font-size:11px}#artifact-declared{font-size:13px;line-height:1.4}#artifact-counts{padding-left:18px;font:11px/1.5 monospace}#artifact-command{display:block;overflow-wrap:anywhere;font-size:11px}#artifact-content{max-height:280px;overflow:auto;padding:10px;color:#d9e4dc;background:var(--terminal);border-radius:4px;font:11px/1.45 monospace;white-space:pre-wrap;word-break:break-word}#decision-controls>div{display:grid;grid-template-columns:1fr 1fr;gap:8px}#steer,#resume,#end{width:100%}#last-command{color:#67716d;font:11px/1.5 monospace}
-@media(max-width:980px){.workspace{grid-template-columns:190px minmax(0,1fr)}.controls{grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}
+#artifact-identity{margin:10px 0}#artifact-identity div{display:block;padding:6px 0}#artifact-identity dd{margin-top:3px;overflow-wrap:anywhere;font-size:11px}#artifact-declared{font-size:13px;line-height:1.4}#artifact-counts{padding-left:18px;font:11px/1.5 monospace}#artifact-command{display:block;overflow-wrap:anywhere;font-size:11px}#decision-controls>div{display:grid;grid-template-columns:1fr 1fr;gap:8px}#steer,#resume,#end{width:100%}#last-command{color:#67716d;font:11px/1.5 monospace}
+.jsonview{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+.jsonview-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.jsonview-toolbar input{flex:1 1 88px;min-width:0;padding:4px 6px;border:1px solid var(--line);border-radius:3px;font:11px/1.4 monospace}
+.jsonview-toolbar button{min-height:22px;margin:0;padding:3px 7px;font-size:11px}
+.jsonview-note,.jsonview-status{flex:1 1 100%;color:#67716d;font:10px/1.4 monospace}
+.jsontree{max-height:360px;min-height:0;overflow:auto;margin:0;padding:8px;color:#d9e4dc;background:var(--terminal);border-radius:4px;font:11px/1.5 monospace;scrollbar-gutter:stable;list-style:none}
+.jsontree ul{margin:0;padding-left:14px;list-style:none}
+.jsonrow{display:flex;align-items:baseline;gap:4px;overflow-wrap:anywhere}.jsonrow.jmatch{background:rgba(246,193,119,.22);border-radius:2px}
+.jtwisty{width:14px;min-height:14px;margin:0;padding:0;color:#9fb0a6;background:transparent;border:0;font:11px/1 monospace}.jtwisty:disabled{opacity:.35;cursor:default}
+.jkey{color:#8fc7f0}.jstring{color:#c3e88d}.jnum{color:#f6c177}.jbool{color:#e5a3ff}.jnull{color:#9aa5a0}.jpunct{color:#7d8a84}.jpreview{color:#9aa5a0}
+.jcopy{margin:0;padding:0 4px;color:#55635c;background:transparent;border:0;font:10px/1 monospace}.jsonrow:hover .jcopy,.jcopy:focus-visible{color:#d9e4dc}
+.jsonmore,.jsonbudget{margin:0;padding:1px 6px;color:#8fc7f0;background:transparent;border:1px dashed #46524c;border-radius:3px;font:10px/1.5 monospace;font-weight:400}
+.jsonbudget{display:inline-block;color:#f6c177}
+.jsonraw{max-height:360px;overflow:auto;margin:0;padding:8px;color:#d9e4dc;background:var(--terminal);border-radius:4px;font:11px/1.45 monospace;white-space:pre-wrap;word-break:break-word}
+@media(max-width:980px){.workspace{grid-template-columns:190px minmax(0,1fr)}.splitter{display:none}.controls{grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}
 @media(max-width:680px){.workspace{display:block}.overview,.controls{border:0;border-bottom:1px solid var(--line)}.stage{padding:20px 12px}.graph{height:640px}.terminal{height:340px}}
 `;
 
@@ -129,6 +173,26 @@ let receiptCursor=0;
 let recordsRenderPending=false;
 let approvalArtifact=null;
 let approvalLoad=0;
+let approvalKey=null;
+
+const LAYOUT_KEY="senawa.console.layout.v1";
+const RAIL_MIN=180;
+const RAIL_MAX=640;
+const RAIL_STEP=16;
+const RAIL_LARGE_STEP=64;
+const RAIL_LEFT_DEFAULT=220;
+const RAIL_RIGHT_DEFAULT=320;
+const layout={left:RAIL_LEFT_DEFAULT,right:RAIL_RIGHT_DEFAULT,leftCollapsed:false,rightCollapsed:false};
+let dragState=null;
+let layoutFramePending=false;
+let graphFitPending=false;
+
+const JSON_RAW_LIMIT=1000000;
+const JSON_ROW_BUDGET=2000;
+const JSON_CHUNK=100;
+const JSON_STRING_CAP=512;
+const JSON_DEFAULT_DEPTH=2;
+const jsonNodeValues=new WeakMap();
 
 cytoscape.use(cytoscapeDagre);
 
@@ -144,6 +208,344 @@ function text(tag,value,className){
   node.textContent=value;
   if(className)node.className=className;
   return node;
+}
+
+function clampRail(width){return Math.min(RAIL_MAX,Math.max(RAIL_MIN,Math.round(width)))}
+
+function readLayout(){
+  try{
+    const stored=JSON.parse(localStorage.getItem(LAYOUT_KEY)||"null");
+    if(stored===null||typeof stored!=="object")return;
+    if(Number.isFinite(stored.left))layout.left=clampRail(stored.left);
+    if(Number.isFinite(stored.right))layout.right=clampRail(stored.right);
+    layout.leftCollapsed=stored.leftCollapsed===true;
+    layout.rightCollapsed=stored.rightCollapsed===true;
+  }catch{}
+}
+
+function saveLayout(){
+  try{localStorage.setItem(LAYOUT_KEY,JSON.stringify(layout))}catch{}
+}
+
+function applyLayout(){
+  const root=document.documentElement;
+  root.style.setProperty("--rail-left",layout.left+"px");
+  root.style.setProperty("--rail-right",layout.right+"px");
+  const workspace=q("#workspace");
+  workspace.dataset.left=layout.leftCollapsed?"collapsed":"expanded";
+  workspace.dataset.right=layout.rightCollapsed?"collapsed":"expanded";
+  applyRailToggle(q("#overview-toggle"),layout.leftCollapsed,"overview",layout.leftCollapsed?"›":"‹");
+  applyRailToggle(q("#inspector-toggle"),layout.rightCollapsed,"inspector",layout.rightCollapsed?"‹":"›");
+  q("#splitter-left").setAttribute("aria-valuenow",String(layout.leftCollapsed?RAIL_MIN:layout.left));
+  q("#splitter-right").setAttribute("aria-valuenow",String(layout.rightCollapsed?RAIL_MIN:layout.right));
+  scheduleGraphFit();
+}
+
+function applyRailToggle(toggle,collapsed,name,glyph){
+  toggle.setAttribute("aria-expanded",String(!collapsed));
+  toggle.setAttribute("aria-label",(collapsed?"Expand ":"Collapse ")+name+" rail");
+  toggle.textContent=glyph;
+}
+
+function scheduleLayoutFrame(){
+  if(layoutFramePending)return;
+  layoutFramePending=true;
+  requestAnimationFrame(()=>{layoutFramePending=false;applyLayout()});
+}
+
+function setRail(side,width){
+  if(side==="left"){layout.left=clampRail(width);layout.leftCollapsed=false}
+  else{layout.right=clampRail(width);layout.rightCollapsed=false}
+  applyLayout();
+  saveLayout();
+}
+
+function toggleRail(side,collapsed){
+  const current=side==="left"?layout.leftCollapsed:layout.rightCollapsed;
+  const next=collapsed===undefined?!current:collapsed;
+  if(side==="left")layout.leftCollapsed=next;else layout.rightCollapsed=next;
+  applyLayout();
+  saveLayout();
+}
+
+function beginDrag(event,side){
+  dragState={side,pointerId:event.pointerId,startX:event.clientX,startWidth:side==="left"?layout.left:layout.right};
+  try{event.currentTarget.setPointerCapture(event.pointerId)}catch{}
+  document.documentElement.dataset.dragging="true";
+  event.preventDefault();
+}
+
+function moveDrag(event){
+  if(dragState===null||event.pointerId!==dragState.pointerId)return;
+  const delta=event.clientX-dragState.startX;
+  const width=clampRail(dragState.startWidth+(dragState.side==="left"?delta:-delta));
+  if(dragState.side==="left"){layout.left=width;layout.leftCollapsed=false}
+  else{layout.right=width;layout.rightCollapsed=false}
+  scheduleLayoutFrame();
+}
+
+function endDrag(event){
+  if(dragState===null)return;
+  try{event.currentTarget.releasePointerCapture(dragState.pointerId)}catch{}
+  dragState=null;
+  delete document.documentElement.dataset.dragging;
+  applyLayout();
+  saveLayout();
+}
+
+function splitterKeydown(event,side){
+  const step=event.shiftKey?RAIL_LARGE_STEP:RAIL_STEP;
+  const width=side==="left"?layout.left:layout.right;
+  if(event.key==="ArrowLeft")setRail(side,width+(side==="left"?-step:step));
+  else if(event.key==="ArrowRight")setRail(side,width+(side==="left"?step:-step));
+  else if(event.key==="Home")setRail(side,RAIL_MIN);
+  else if(event.key==="End")setRail(side,RAIL_MAX);
+  else if(event.key==="Enter"||event.key===" ")toggleRail(side);
+  else return;
+  event.preventDefault();
+}
+
+function bindSplitter(selector,side){
+  const splitter=q(selector);
+  splitter.addEventListener("pointerdown",(event)=>beginDrag(event,side));
+  splitter.addEventListener("pointermove",moveDrag);
+  splitter.addEventListener("pointerup",endDrag);
+  splitter.addEventListener("pointercancel",endDrag);
+  splitter.addEventListener("lostpointercapture",endDrag);
+  splitter.addEventListener("keydown",(event)=>splitterKeydown(event,side));
+  splitter.addEventListener("dblclick",()=>setRail(side,side==="left"?RAIL_LEFT_DEFAULT:RAIL_RIGHT_DEFAULT));
+}
+
+function scheduleGraphFit(){
+  if(graph===null||graphFitPending)return;
+  graphFitPending=true;
+  requestAnimationFrame(()=>{graphFitPending=false;graph?.resize();graph?.fit(undefined,32)});
+}
+
+function updateDecisionBadge(){
+  const pending=state!==null&&state.phases.some((phase)=>phase.status==="awaiting_approval");
+  const badge=q("#decision-badge");
+  badge.textContent=pending?"!":"";
+  badge.title=pending?"A phase decision is pending":"";
+  badge.hidden=!pending;
+}
+
+function jsonKind(value){
+  if(value===null)return "null";
+  if(Array.isArray(value))return "array";
+  return typeof value;
+}
+
+function jsonContainer(value){
+  const kind=jsonKind(value);
+  return kind==="array"||kind==="object";
+}
+
+function jsonEntries(value){
+  return Array.isArray(value)?value.map((item,index)=>[String(index),item]):Object.entries(value);
+}
+
+function jsonPreview(value){
+  if(Array.isArray(value))return value.length===1?"[1 item]":"["+value.length+" items]";
+  const size=Object.keys(value).length;
+  return size===1?"{1 key}":"{"+size+" keys}";
+}
+
+function jsonValueClass(value){
+  const kind=jsonKind(value);
+  if(kind==="string")return "jstring";
+  if(kind==="number"||kind==="bigint")return "jnum";
+  if(kind==="boolean")return "jbool";
+  return "jnull";
+}
+
+function jsonText(value){
+  return typeof value==="string"?value:String(value);
+}
+
+function jsonRow(view,key,value){
+  const item=document.createElement("li");
+  item.setAttribute("role","treeitem");
+  const row=text("div","","jsonrow");
+  const container=jsonContainer(value);
+  const twisty=text("button",container?"▸":"·","jtwisty");
+  twisty.type="button";
+  twisty.disabled=!container;
+  twisty.setAttribute("aria-hidden","true");
+  twisty.tabIndex=-1;
+  row.append(twisty);
+  if(key!==null)row.append(text("span",key,"jkey"),text("span",":","jpunct"));
+  let searchText=key===null?"":key;
+  if(container){
+    item.setAttribute("aria-expanded","false");
+    row.append(text("span",jsonPreview(value),"jpreview"));
+  }else{
+    const raw=jsonText(value);
+    const quoted=jsonKind(value)==="string";
+    const shown=raw.length>JSON_STRING_CAP?raw.slice(0,JSON_STRING_CAP):raw;
+    const valueNode=text("span",quoted?JSON.stringify(shown):shown,jsonValueClass(value));
+    row.append(valueNode);
+    if(raw.length>JSON_STRING_CAP){
+      const more=text("button","… "+(raw.length-JSON_STRING_CAP)+" more characters","jsonmore");
+      more.type="button";
+      more.addEventListener("click",()=>{valueNode.textContent=quoted?JSON.stringify(raw):raw;more.remove()});
+      row.append(more);
+    }
+    searchText+=" "+raw;
+  }
+  const copy=text("button","⧉","jcopy");
+  copy.type="button";
+  copy.setAttribute("aria-label","Copy "+(key===null?"payload":key));
+  copy.addEventListener("click",()=>copyJson(view,value));
+  row.append(copy);
+  item.append(row);
+  item.dataset.search=searchText.toLowerCase();
+  jsonNodeValues.set(item,value);
+  if(container){
+    const group=document.createElement("ul");
+    group.setAttribute("role","group");
+    group.hidden=true;
+    item.append(group);
+    row.addEventListener("click",(event)=>{if(event.target===copy)return;toggleJsonNode(view,item)});
+  }
+  return item;
+}
+
+function appendJsonEntries(view,group,entries,start,end){
+  for(let index=start;index<end;index+=1){
+    if(view.rows>=JSON_ROW_BUDGET){
+      group.append(text("li","Row budget of "+JSON_ROW_BUDGET+" rows reached; copy the payload to inspect the rest.","jsonbudget"));
+      return;
+    }
+    view.rows+=1;
+    group.append(jsonRow(view,entries[index][0],entries[index][1]));
+  }
+  if(end<entries.length){
+    const holder=document.createElement("li");
+    const next=text("button","Show next "+Math.min(JSON_CHUNK,entries.length-end)+" of "+entries.length,"jsonmore");
+    next.type="button";
+    next.addEventListener("click",()=>{holder.remove();appendJsonEntries(view,group,entries,end,Math.min(entries.length,end+JSON_CHUNK))});
+    holder.append(next);
+    group.append(holder);
+  }
+}
+
+function buildJsonChildren(view,item){
+  const group=item.lastElementChild;
+  if(group.dataset.built==="true")return;
+  group.dataset.built="true";
+  const entries=jsonEntries(jsonNodeValues.get(item));
+  appendJsonEntries(view,group,entries,0,Math.min(entries.length,JSON_CHUNK));
+}
+
+function toggleJsonNode(view,item,force){
+  const expanded=force===undefined?item.getAttribute("aria-expanded")!=="true":force;
+  if(expanded)buildJsonChildren(view,item);
+  item.setAttribute("aria-expanded",String(expanded));
+  item.lastElementChild.hidden=!expanded;
+  const twisty=item.querySelector(".jtwisty");
+  if(twisty!==null)twisty.textContent=expanded?"▾":"▸";
+}
+
+function expandJsonToDepth(view,scope,depth){
+  if(depth<=0||view.rows>=JSON_ROW_BUDGET)return;
+  for(const item of scope.children){
+    if(item.tagName!=="LI"||!jsonContainer(jsonNodeValues.get(item)))continue;
+    toggleJsonNode(view,item,true);
+    expandJsonToDepth(view,item.lastElementChild,depth-1);
+  }
+}
+
+function collapseJsonTree(view){
+  for(const item of view.tree.querySelectorAll('[aria-expanded="true"]'))toggleJsonNode(view,item,false);
+}
+
+function applyJsonFilter(scope,needle){
+  let total=0;
+  for(const item of scope.children){
+    if(item.tagName!=="LI")continue;
+    const own=needle!==""&&(item.dataset.search||"").includes(needle);
+    const row=item.firstElementChild;
+    if(row!==null&&row.classList.contains("jsonrow"))row.classList.toggle("jmatch",own);
+    const group=item.lastElementChild;
+    const nested=group!==null&&group.tagName==="UL"?applyJsonFilter(group,needle):0;
+    item.hidden=needle!==""&&!own&&nested===0;
+    total+=(own?1:0)+nested;
+  }
+  return total;
+}
+
+function filterJson(view,query){
+  const needle=query.trim().toLowerCase();
+  if(needle!=="")expandJsonToDepth(view,view.tree,64);
+  const matches=applyJsonFilter(view.tree,needle);
+  view.status.textContent=needle===""?"":matches===1?"1 match":matches+" matches";
+}
+
+async function writeClipboard(payload){
+  try{
+    if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(payload);return true}
+  }catch{}
+  try{
+    const holder=document.createElement("textarea");
+    holder.value=payload;
+    holder.setAttribute("aria-hidden","true");
+    holder.style.position="fixed";
+    holder.style.opacity="0";
+    document.body.append(holder);
+    holder.select();
+    const copied=document.execCommand("copy");
+    holder.remove();
+    return copied;
+  }catch{return false}
+}
+
+function copyJson(view,value){
+  const payload=typeof value==="string"?value:JSON.stringify(value,null,2)??"undefined";
+  void writeClipboard(payload).then((copied)=>{
+    view.status.textContent=copied?"Copied "+payload.length+" characters":"Copy blocked; select the text instead";
+  });
+}
+
+function renderJson(host,value,label){
+  host.replaceChildren();
+  const status=text("span","","jsonview-status");
+  status.setAttribute("role","status");
+  const toolbar=text("div","","jsonview-toolbar");
+  const raw=JSON.stringify(value===undefined?null:value,null,2)??"null";
+  const view={tree:null,status,rows:1,timer:null};
+  const copyAll=text("button","Copy JSON","jsonview-copy");
+  copyAll.type="button";
+  copyAll.addEventListener("click",()=>copyJson(view,value));
+  if(raw.length>JSON_RAW_LIMIT){
+    toolbar.append(copyAll,text("span",label+" is "+Math.round(raw.length/1024)+" KB; showing bounded raw text.","jsonview-note"),status);
+    host.append(toolbar,text("pre",raw.slice(0,JSON_RAW_LIMIT),"jsonraw"));
+    return;
+  }
+  const tree=document.createElement("ul");
+  tree.className="jsontree";
+  tree.setAttribute("role","tree");
+  tree.setAttribute("aria-label",label);
+  view.tree=tree;
+  const search=document.createElement("input");
+  search.type="search";
+  search.className="jsonview-search";
+  search.placeholder="Filter";
+  search.setAttribute("aria-label","Filter "+label);
+  search.addEventListener("input",()=>{
+    if(view.timer!==null)clearTimeout(view.timer);
+    view.timer=setTimeout(()=>{view.timer=null;filterJson(view,search.value)},120);
+  });
+  const expand=text("button","Expand all","jsonview-expand");
+  expand.type="button";
+  expand.addEventListener("click",()=>{expandJsonToDepth(view,tree,64);filterJson(view,search.value)});
+  const collapse=text("button","Collapse all","jsonview-collapse");
+  collapse.type="button";
+  collapse.addEventListener("click",()=>collapseJsonTree(view));
+  toolbar.append(search,expand,collapse,copyAll,status);
+  tree.append(jsonRow(view,null,value));
+  host.append(toolbar,tree);
+  expandJsonToDepth(view,tree,JSON_DEFAULT_DEPTH);
 }
 
 function nodes(){
@@ -289,14 +691,29 @@ function render(){
   const node=nodes().find((item)=>item.id===selected);
   q("#selected-name").textContent=node?.label||"None";
   q("#selected-detail").textContent=node?(node.role+" · "+node.status+" · attempt "+node.attempt):"Choose a graph node.";
-  const awaitingApproval=node?.kind==="phase"&&node.status==="awaiting_approval";
-  q("#approval").hidden=!awaitingApproval;
-  if(awaitingApproval)void renderApproval(node.id);
+  const phase=node?.kind==="phase"?state.phases.find((item)=>item.id===node.id):undefined;
+  const artifactKey=phase?.artifactVersion==null?null:phase.id+":"+phase.artifactVersion;
+  q("#approval").hidden=artifactKey===null;
+  if(artifactKey!==approvalKey){
+    approvalKey=artifactKey;
+    approvalArtifact=null;
+    if(artifactKey!==null)void renderApproval(phase.id);
+  }
+  updateDecision();
   q("#steering").hidden=node?.kind!=="task"||["closed","ended"].includes(node.status);
   q("#resume").hidden=["awaiting_approval","ended","finished"].includes(state.status);
   q("#ending").hidden=["ended","finished"].includes(state.status);
+  updateDecisionBadge();
   renderQuestions();
   updateCommandProgress();
+}
+
+function updateDecision(){
+  const node=nodes().find((item)=>item.id===selected);
+  const decidable=node?.kind==="phase"&&node.status==="awaiting_approval"&&approvalArtifact!==null;
+  if(decidable)q("#decision-controls").hidden=false;
+  else q("#decision-controls").hidden=true;
+  updateControlsLocked();
 }
 
 async function renderApproval(phaseId){
@@ -321,9 +738,9 @@ async function renderApproval(phaseId){
     q("#artifact-declared").textContent=declared?declared.attribution+" "+declaredKind+": "+declared.value:"No artifact-declared summary or verdict";
     q("#artifact-counts").replaceChildren(...overview.counts.map((count)=>text("li",count.name+": "+count.count)));
     q("#artifact-command").textContent=overview.fullArtifactCommand;
-    q("#artifact-content").textContent=JSON.stringify(artifact,null,2);
-    q("#decision-controls").hidden=false;
-    updateControlsLocked();
+    renderJson(q("#artifact-content"),artifact.content,"Artifact content");
+    renderJson(q("#artifact-inputs"),artifact.consumed,"Consumed inputs");
+    updateDecision();
   }catch(error){if(load===approvalLoad)q("#artifact-path").textContent="Unavailable: "+error.message}
 }
 
@@ -514,6 +931,13 @@ q("#reject").addEventListener("click",()=>approvalArtifact&&command("reject",{ph
 q("#steer").addEventListener("click",()=>command("steer",{taskId:selected,instruction:q("#instruction").value}));
 q("#resume").addEventListener("click",()=>command("resume"));
 q("#end").addEventListener("click",()=>command("end",{reason:q("#end-reason").value}));
+bindSplitter("#splitter-left","left");
+bindSplitter("#splitter-right","right");
+q("#overview-toggle").addEventListener("click",()=>toggleRail("left"));
+q("#inspector-toggle").addEventListener("click",()=>toggleRail("right"));
+readLayout();
+applyLayout();
+if(typeof ResizeObserver==="function")new ResizeObserver(()=>{if(dragState===null)scheduleGraphFit()}).observe(q("#graph"));
 addEventListener("resize",()=>{graph?.resize();graph?.fit(undefined,32)});
 
 Promise.all([refresh(),recoverActiveReceipt()]).then(()=>{select(selected);startReceiptStream();const events=new EventSource("/api/v1/runs/"+encodeURIComponent(runId)+"/events/stream");events.onopen=()=>q("#connection").textContent="Live";events.onmessage=refresh;events.onerror=()=>q("#connection").textContent="Reconnecting"}).catch((error)=>q("#connection").textContent=error.message);

@@ -13,6 +13,7 @@ import {
   type RunPersistencePort,
   RunQueryService,
   RunReportEvidenceReader,
+  type TaskAssessmentPort,
   type TransitionResult,
   type WorkerExecutionPort,
   type WorkerHostResolverPort,
@@ -33,7 +34,7 @@ import type {
   WorkerHostIdentity,
   WorkRequest,
 } from "@senawa/domain";
-import { FileSensorEvidenceStore } from "@senawa/observability";
+import { FileSensorEvidenceStore, FileTaskAssessmentStore } from "@senawa/observability";
 import { RunReportService } from "@senawa/reporting";
 import { CommandGateEvaluator } from "@senawa/sensors";
 import Ajv2020 from "ajv/dist/2020.js";
@@ -60,6 +61,7 @@ export interface SenawaServiceOptions {
   readonly workerHostResolver?: WorkerHostResolverPort;
   readonly workerHostIdentity?: WorkerHostIdentity;
   readonly repositoryEvidence: RepositoryEvidencePort;
+  readonly taskAssessments?: TaskAssessmentPort;
   readonly gateEvaluator?: GateEvaluationPort;
   readonly now?: () => Date;
 }
@@ -82,6 +84,7 @@ export class RunCommands {
     backend: RuntimeBackend,
     workerHostIdentity: WorkerHostIdentity,
     repositoryEvidence: RepositoryEvidencePort,
+    taskAssessments: TaskAssessmentPort,
   ) {
     this.application = new ApplicationRunCommandService(
       store,
@@ -101,6 +104,7 @@ export class RunCommands {
       backend,
       workerHostIdentity,
       repositoryEvidence,
+      taskAssessments,
     );
   }
 
@@ -248,6 +252,7 @@ export function createSenawaServices(
     options.runtimeBackend ?? "file",
     workerHostIdentity,
     options.repositoryEvidence,
+    options.taskAssessments ?? new FileTaskAssessmentStore(root),
   );
   const scheduler = {
     scheduleEvery(intervalMs: number, task: () => void) {

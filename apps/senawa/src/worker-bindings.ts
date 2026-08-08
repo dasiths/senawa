@@ -1,4 +1,5 @@
 import type { WorkerBindingContext } from "@senawa/application";
+import { TaskCompletionSubmissionSchema } from "@senawa/domain";
 import type { WorkerBindingHandlers } from "@senawa/workers";
 import { DeterministicWorkerBindingRegistry } from "@senawa/workers";
 import type { SenawaServices } from "./services.js";
@@ -7,11 +8,30 @@ export function createSdkWorkerBindings(
   getServices: () => SenawaServices,
 ): DeterministicWorkerBindingRegistry {
   const handlers: WorkerBindingHandlers = {
-    "senawa.task.done": async () => ({
-      accepted: true,
-      code: "completion_requested",
-      message: "Task completion will be evaluated by the Senawa driver after this turn.",
-    }),
+    "senawa.task.done": async (input) => {
+      const submission = TaskCompletionSubmissionSchema.safeParse(input);
+      if (!submission.success) {
+        return {
+          accepted: false,
+          code: "invalid_input",
+          message:
+            "Report a summary and, for every acceptance criterion, an id, an outcome, and resolving evidence.",
+        };
+      }
+      return {
+        accepted: true,
+        code: "completion_requested",
+        message:
+          "The Senawa driver will resolve every claimed evidence reference against measured evidence after this turn.",
+        data: {
+          criteria: submission.data.criteria.map((criterion) => ({
+            id: criterion.id,
+            outcome: criterion.outcome,
+            evidence: criterion.evidence.length,
+          })),
+        },
+      };
+    },
     "senawa.phase.submit": async () => ({
       accepted: true,
       code: "artifact_received",

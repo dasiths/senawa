@@ -66,7 +66,7 @@ spec:
         role: implementor
         selector:
           phase: implement
-        repositoryChanges: [required]
+        repositoryChanges: [required, optional]
         concurrency: 1
         reentrant: true
       loop:

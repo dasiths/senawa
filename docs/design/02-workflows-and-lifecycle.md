@@ -103,7 +103,7 @@ spec:
         role: implementor
         selector:
           phase: implement
-        repositoryChanges: [required]
+        repositoryChanges: [required, optional]
         concurrency: 1
         reentrant: true
       loop:
@@ -252,7 +252,10 @@ scope:
       "dependsOn": ["extract-reader"],
       "paths": ["src/ingest/parse.py"],
       "repositoryChange": "required",
-      "acceptance": ["parse_batch delegates to named stage functions"],
+      "acceptance": [
+        "parse_batch delegates to named stage functions",
+        { "id": "ac-stage-tests", "description": "Each stage has a unit test", "required": true }
+      ],
       "role": "implementor",
       "execution": {
         "model": "claude-sonnet-5",
@@ -270,13 +273,38 @@ scope:
 | `key` | Stable identity across plan revisions |
 | `dependsOn` | Beads dependency edges |
 | `paths` | Enforced write scope |
-| `repositoryChange` | Required, optional, or forbidden trusted repository-delta policy |
-| `acceptance` | Task brief and completion contract |
+| `repositoryChange` | Optional trusted repository-delta policy for one task |
+| `acceptance` | Ordered acceptance criteria and completion contract |
 | `role` | Worker profile selection |
 | `execution` | Portable dispatch hints |
 
 A repository may extend a Senawa-owned schema with `allOf`; it may not redefine
 the shape consumed by the importer.
+
+## Acceptance criteria
+
+An acceptance entry is either a string or an object carrying `id`,
+`description`, and `required`. Both forms normalize to the same criterion, so
+existing plans keep working:
+
+| Property | Rule |
+|----------|------|
+| `id` | Author-optional. Senawa derives a content-addressed `ac-<hash>` from the description when it is absent, so reordering a plan preserves identity |
+| `description` | The criterion text a worker must satisfy |
+| `required` | Defaults to true. A required criterion must be satisfied before the task can close |
+
+Duplicate criterion IDs within one task are rejected at plan import. Task briefs
+list every criterion with its ID, because completion is reported against those
+IDs. [Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md#acceptance-evidence)
+owns how a claim becomes a verdict.
+
+`repositoryChange` is optional per task. The task-frontier `repositoryChanges`
+list is the human-authored ceiling. Plan import refuses a task that requests an
+expectation the frontier does not allow, so a model-authored plan can narrow the
+contract but never widen it. When a task omits the field, Senawa derives the
+expectation from the frontier: a frontier that allows exactly one value supplies
+that value, and a frontier that allows several resolves to `optional` so
+criterion evidence, rather than a blanket edit requirement, decides the outcome.
 
 ## Phase briefs
 

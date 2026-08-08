@@ -61,13 +61,41 @@ describe("production SDK worker bindings", () => {
     const bindings = createSdkWorkerBindings(() => services()).bindingsFor(turn, authorization);
     const result = await bindings
       .find((binding) => binding.name === "senawa.task.done")
-      ?.handle({ summary: "done" }, context);
+      ?.handle(
+        {
+          summary: "done",
+          criteria: [
+            {
+              id: "ac-one",
+              outcome: "satisfied",
+              evidence: [
+                {
+                  kind: "file",
+                  path: "packages/workers/src/bindings.ts",
+                  relationship: "modified",
+                },
+              ],
+            },
+          ],
+        },
+        context,
+      );
 
     expect(result).toMatchObject({
       accepted: true,
       code: "completion_requested",
-      message: expect.stringContaining("evaluated by the Senawa driver"),
+      message: expect.stringContaining("Senawa driver"),
+      data: { criteria: [{ id: "ac-one", outcome: "satisfied", evidence: 1 }] },
     });
+  });
+
+  it("refuses a completion submission without per-criterion evidence", async () => {
+    const bindings = createSdkWorkerBindings(() => services()).bindingsFor(turn, authorization);
+    const result = await bindings
+      .find((binding) => binding.name === "senawa.task.done")
+      ?.handle({ summary: "done" }, context);
+
+    expect(result).toMatchObject({ accepted: false, code: "invalid_input" });
   });
 
   it("routes ask, discover, and note through worker-attributed application commands", async () => {

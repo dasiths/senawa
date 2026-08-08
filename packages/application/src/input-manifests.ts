@@ -11,6 +11,7 @@ import type {
   RuntimeTask,
   WorkflowInputReference,
 } from "@senawa/domain";
+import { effectiveRepositoryChange } from "./repository-change.js";
 
 export function resolvePhaseInputManifest(
   state: RuntimeState,
@@ -149,7 +150,7 @@ function resolveInput(
         key: task.key,
         title: task.title,
         outcome: { status: task.status, attempt: task.attempt },
-        repositoryChange: task.repositoryChange,
+        repositoryChange: effectiveRepositoryChange(state, task),
         repositoryEvidence:
           evidence === undefined
             ? null
@@ -302,7 +303,7 @@ function taskEvidenceIssues(
       evidence.attempt !== task.attempt ||
       evidence.dispatchId !== dispatch?.dispatchId ||
       evidence.turnId !== dispatch.turnId ||
-      evidence.expectation !== task.repositoryChange
+      evidence.expectation !== effectiveRepositoryChange(state, task)
     ) {
       add("repository-evidence-mismatch", "Task delta identity does not match the current task");
     }

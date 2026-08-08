@@ -208,6 +208,36 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     expect(events.every((event) => event.eventId.includes(phaseTurn.turnId))).toBe(true);
   });
 
+  it("normalizes a task completion submission into a durable worker event", async () => {
+    const calls: Array<{
+      readonly name: Parameters<typeof recordingBindingHandlers>[0][number]["name"];
+      readonly input: JsonObject;
+    }> = [];
+    const { adapter, client } = fixture(calls);
+    const handle = await adapter.create(turn);
+    const submission = {
+      summary: "Implemented",
+      criteria: [
+        {
+          id: "ac-one",
+          outcome: "satisfied",
+          evidence: [
+            { kind: "file", path: "packages/workers/src/bindings.ts", relationship: "modified" },
+          ],
+        },
+      ],
+    };
+    await client.createConfigs[0]?.tools
+      ?.find((tool) => tool.name === "senawa_task_done")
+      ?.handler?.(submission, fakeInvocation());
+    const events = [];
+    for await (const event of handle.events) events.push(event);
+    await handle.result;
+
+    expect(events.find((event) => event.kind === "completion")).toMatchObject({ submission });
+    expect(calls.map((call) => call.name)).toContain("senawa.task.done");
+  });
+
   it("uses native bindings and canonical permission policy without a hook allow", async () => {
     const calls: Array<{
       readonly name: Parameters<typeof recordingBindingHandlers>[0][number]["name"];

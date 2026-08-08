@@ -53,6 +53,7 @@ export interface WorkerOutput {
 export interface WorkerResult {
   readonly sessionId: string;
   readonly artifact?: JsonObject;
+  readonly completion?: JsonObject;
   readonly output: readonly WorkerOutput[];
 }
 
@@ -193,6 +194,7 @@ export type WorkerSessionEvent = {
       readonly reason?: string;
     }
   | { readonly kind: "artifact"; readonly artifact: JsonObject }
+  | { readonly kind: "completion"; readonly submission: JsonObject }
 );
 
 export interface WorkerTurnHandle {

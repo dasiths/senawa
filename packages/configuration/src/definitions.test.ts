@@ -2,6 +2,8 @@ import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PlanArtifactSchema } from "@senawa/domain";
+import Ajv2020 from "ajv/dist/2020.js";
+import addFormats from "ajv-formats";
 import { describe, expect, it } from "vitest";
 import {
   loadRepositoryDefinitions,
@@ -23,7 +25,7 @@ describe("repository configuration", () => {
     expect(definitions.workflow.spec.phases).toHaveLength(5);
     expect(
       definitions.workflow.spec.phases.find((phase) => phase.id === "implement")?.executor,
-    ).toMatchObject({ kind: "task-frontier", repositoryChanges: ["required"] });
+    ).toMatchObject({ kind: "task-frontier", repositoryChanges: ["required", "optional"] });
     expect(Object.keys(definitions.schemas)).toHaveLength(5);
     expect(Object.keys(definitions.workerProfiles)).toEqual([
       "definer",
@@ -35,7 +37,7 @@ describe("repository configuration", () => {
     expect(definitions).not.toHaveProperty("hookConfiguration");
   });
 
-  it("defaults omitted legacy task change intent to required", () => {
+  it("leaves omitted task change intent for the frontier to derive", () => {
     const plan = PlanArtifactSchema.parse({
       summary: "Legacy plan",
       tasks: [
@@ -50,7 +52,36 @@ describe("repository configuration", () => {
       ],
     });
 
-    expect(plan.tasks[0]?.repositoryChange).toBe("required");
+    expect(plan.tasks[0]?.repositoryChange).toBeUndefined();
+    expect(plan.tasks[0]?.acceptance).toEqual(["Done"]);
+  });
+
+  it("validates both string and structured acceptance against the frozen plan schema", async () => {
+    const definitions = await loadRepositoryDefinitions(repositoryRoot);
+    const schema = definitions.schemas[".senawa/schemas/plan.schema.json"];
+    expect(schema).toBeDefined();
+    const ajv = new Ajv2020.default({ strict: true });
+    addFormats.default(ajv);
+    const validate = ajv.compile(schema ?? {});
+    const plan = (acceptance: unknown) => ({
+      summary: "Mixed acceptance",
+      tasks: [
+        {
+          key: "mixed",
+          title: "Mixed task",
+          paths: ["packages/configuration"],
+          acceptance,
+          role: "implementor",
+        },
+      ],
+    });
+
+    expect(validate(plan(["Legacy string"]))).toBe(true);
+    expect(validate(plan([{ id: "ac-one", description: "Structured", required: false }]))).toBe(
+      true,
+    );
+    expect(validate(plan([{ description: "Derived id" }]))).toBe(true);
+    expect(validate(plan([{ required: true }]))).toBe(false);
   });
 
   it("discovers the repository and owns the workflow catalog", async () => {

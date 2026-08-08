@@ -8,6 +8,7 @@ import type {
   RepositoryDeltaEvidence,
   RepositoryStateEntry,
 } from "@senawa/domain";
+import { matchesPathPattern as pathMatches } from "@senawa/domain";
 
 interface RepositorySnapshot {
   readonly head: string | null;
@@ -229,17 +230,6 @@ async function pathDigest(root: string, relativePath: string, status: string): P
     if (isNodeError(error, "ENOENT")) return hash.update("missing").digest("hex");
     throw error;
   }
-}
-
-function pathMatches(path: string, pattern: string): boolean {
-  const normalized = pattern.replaceAll("\\", "/").replace(/^\.\//u, "");
-  if (!normalized.includes("*")) return path === normalized || path.startsWith(`${normalized}/`);
-  const expression = normalized
-    .replace(/[.+?^${}()|[\]\\]/gu, "\\$&")
-    .replaceAll("**", "\u0000")
-    .replaceAll("*", "[^/]*")
-    .replaceAll("\u0000", ".*");
-  return new RegExp(`^${expression}$`, "u").test(path);
 }
 
 function isRuntimeInternal(path: string): boolean {

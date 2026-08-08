@@ -15,13 +15,20 @@ import {
   type SensorFinding,
   type SensorReading,
   type SensorResult,
+  type TaskCompletionAssessment,
 } from "@senawa/domain";
 import { z } from "zod";
 
 const artifactExtension = "@senawa/sensor-artifact";
 const commandExtension = "@senawa/sensor-command";
 const taskChangeExtension = "@senawa/sensor-task-change";
-const supportedExtensions = new Set([artifactExtension, commandExtension, taskChangeExtension]);
+const taskAcceptanceExtension = "@senawa/sensor-task-acceptance";
+const supportedExtensions = new Set([
+  artifactExtension,
+  commandExtension,
+  taskChangeExtension,
+  taskAcceptanceExtension,
+]);
 const ansiEscapePattern = new RegExp(`${String.fromCodePoint(27)}\\[[0-?]*[ -/]*[@-~]`, "gu");
 const missing = Symbol("missing");
 
@@ -33,6 +40,9 @@ const ArtifactSensorConfigSchema = z
   .strict();
 const TaskChangeSensorConfigSchema = z
   .object({ evidenceKind: z.literal("repository-delta") })
+  .strict();
+const TaskAcceptanceSensorConfigSchema = z
+  .object({ evidenceKind: z.literal("task-assessment") })
   .strict();
 const CommandSensorConfigSchema = z
   .object({
@@ -52,6 +62,7 @@ export interface GateEvaluationInput {
   readonly inputManifest?: ResolvedInputManifest;
   readonly repositoryChange?: RepositoryChangeExpectation;
   readonly repositoryEvidence?: RepositoryDeltaEvidence;
+  readonly taskAssessment?: TaskCompletionAssessment;
   readonly onOutput?: (input: {
     readonly sensorId: string;
     readonly stream: "stdout" | "stderr" | "system";
@@ -263,6 +274,12 @@ export class CommandGateEvaluator implements GateEvaluator, GateEvaluationPort {
       return assessTaskChange(input);
     }
 
+    if (sensor.extension === taskAcceptanceExtension) {
+      const config = TaskAcceptanceSensorConfigSchema.safeParse(sensor.config);
+      if (!config.success) return executionError(`Invalid ${sensor.id} configuration`);
+      return assessTaskAcceptance(input);
+    }
+
     const config = CommandSensorConfigSchema.safeParse(sensor.config);
     if (!config.success) return executionError(`Invalid ${sensor.id} configuration`);
     await input.onOutput?.({
@@ -305,6 +322,7 @@ export class CommandGateEvaluator implements GateEvaluator, GateEvaluationPort {
     const stdout = await this.normalizeEvidence(execution.stdout, input, sensor.id, "stdout");
     const stderr = await this.normalizeEvidence(execution.stderr, input, sensor.id, "stderr");
     const passed = execution.exitCode === 0;
+    const failureEvidence = stderr.summary === "" ? stdout.summary : stderr.summary;
     return {
       verdict: passed ? "pass" : "fail",
       summary: passed
@@ -316,8 +334,8 @@ export class CommandGateEvaluator implements GateEvaluator, GateEvaluationPort {
             {
               severity: "error",
               code: "command-failed",
-              message: `Command exited with code ${execution.exitCode}`,
-              ...(stderr.summary === "" ? {} : { evidence: stderr.summary }),
+              message: `${sensor.id} command failed with exit ${execution.exitCode}: ${config.data.command}`,
+              ...(failureEvidence === "" ? {} : { evidence: failureEvidence }),
             },
           ],
       data: {
@@ -658,6 +676,48 @@ function assessTaskChange(input: GateEvaluationInput): SensorAssessment {
       frozenChanges: [...evidence.frozenChanges],
       workerClaimAgreement: evidence.workerClaim.agreement,
       repositoryEvidencePath: evidence.evidencePath,
+    },
+  };
+}
+
+function assessTaskAcceptance(input: GateEvaluationInput): SensorAssessment {
+  const assessment = input.taskAssessment;
+  if (input.owner.kind !== "task" || assessment === undefined) {
+    return {
+      verdict: "fail",
+      summary: "Trusted acceptance evidence is missing",
+      findings: [
+        {
+          severity: "error",
+          code: "acceptance-assessment-missing",
+          message: "The task gate did not receive a driver-authored acceptance assessment",
+        },
+      ],
+      data: { assessmentPresent: false },
+    };
+  }
+  const unsatisfied = assessment.criteria.filter(
+    (criterion) =>
+      criterion.required && criterion.verdict !== "satisfied" && criterion.verdict !== "waived",
+  );
+  return {
+    verdict: assessment.verdict,
+    summary:
+      assessment.verdict === "pass"
+        ? `Every required acceptance criterion resolved for attempt ${assessment.attempt}`
+        : `Acceptance criteria did not resolve: ${unsatisfied.map((criterion) => criterion.id).join(", ") || "no submission"}`,
+    findings: [...assessment.findings],
+    data: {
+      stage: assessment.stage,
+      submissionPresent: assessment.submission.present,
+      submissionValid: assessment.submission.valid,
+      criteriaTotal: assessment.criteria.length,
+      requiredTotal: assessment.criteria.filter((criterion) => criterion.required).length,
+      satisfiedTotal: assessment.criteria.filter((criterion) => criterion.verdict === "satisfied")
+        .length,
+      unsatisfied: unsatisfied.map((criterion) => criterion.id),
+      unmatchedClaims: [...assessment.unmatchedClaims],
+      repositoryDeltaDigest: assessment.repositoryDeltaDigest,
     },
   };
 }
