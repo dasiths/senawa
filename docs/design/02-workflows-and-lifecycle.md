@@ -80,6 +80,9 @@ spec:
         kind: agent
         role: planner
         resumeAcrossIterations: true
+        input:
+          definition: phases.define.output
+          research: phases.research.output
         output:
           path: artifacts/plan.json
           schema: ../schemas/plan.schema.json
@@ -100,6 +103,7 @@ spec:
         role: implementor
         selector:
           phase: implement
+        repositoryChanges: [required, optional]
         concurrency: 1
         reentrant: true
       loop:
@@ -122,6 +126,11 @@ spec:
         kind: agent
         role: verifier
         resumeAcrossIterations: true
+        input:
+          definition: phases.define.output
+          research: phases.research.output
+          plan: phases.plan.output
+          implementation: evidence.implementation
         output:
           path: artifacts/verification.json
           schema: ../schemas/verification.schema.json
@@ -197,6 +206,14 @@ artifacts/
 Each phase iteration records the exact upstream versions it consumed. Session
 memory provides continuity, but the artifact remains the source of truth.
 
+`dependsOn` controls readiness. `executor.input` controls dataflow through the
+closed `phases.<phase>.output` and `evidence.implementation` reference grammar.
+Before dispatch, Senawa resolves each input to one manifest entry containing the
+logical name, owner, path, version, digest, schema kind, bounded summary, and
+content. The same manifest drives the prompt, dispatch recovery, artifact
+`consumed` provenance, verification context, and report. An accepted artifact
+never claims an available but undeclared input.
+
 ### Upstream changes
 
 | Policy | Behavior | Typical use |
@@ -234,11 +251,16 @@ scope:
       "title": "Split parse_batch into stages",
       "dependsOn": ["extract-reader"],
       "paths": ["src/ingest/parse.py"],
-      "acceptance": ["parse_batch delegates to named stage functions"],
+      "repositoryChange": "required",
+      "acceptance": [
+        "parse_batch delegates to named stage functions",
+        { "id": "ac-stage-tests", "description": "Each stage has a unit test", "required": true }
+      ],
       "role": "implementor",
       "execution": {
-        "model": "claude-sonnet-4.6",
+        "model": "claude-sonnet-5",
         "effort": "high",
+        "effortMode": "preferred",
         "group": "ingest-adapters"
       }
     }
@@ -250,13 +272,99 @@ scope:
 |-------|-------------|
 | `key` | Stable identity across plan revisions |
 | `dependsOn` | Beads dependency edges |
-| `paths` | Enforced write scope |
-| `acceptance` | Task brief and completion contract |
+| `paths` | Suggested write scope, recorded but never enforced |
+| `repositoryChange` | Declared change intent for one task |
+| `acceptance` | Ordered acceptance criteria and completion contract |
 | `role` | Worker profile selection |
 | `execution` | Portable dispatch hints |
 
 A repository may extend a Senawa-owned schema with `allOf`; it may not redefine
 the shape consumed by the importer.
+
+### Artifact structure
+
+Each version 1 artifact schema carries an optional structure beyond its minimum
+shape. Every added field is optional, so an artifact authored before the
+enrichment still validates, and a thin artifact still passes its schema. The
+structure exists so a later phase can cite an earlier one by identifier instead
+of by prose.
+
+| Artifact | Optional structure |
+|----------|--------------------|
+| Definition | Problem statement, current and desired behavior, non-goals, assumptions, stakeholders, risks with mitigations, requested evidence, and open questions that may be marked blocking |
+| Research | Finding identity, evidence kind, confidence, stated limits, answered questions, alternatives with rejection rationale, sourced constraints, risks, unknowns, and recommendations that cite finding IDs |
+| Plan | Objectives, context summary, ordered phases with todos, decisions with rejected alternatives, dependencies, risks, success criteria, declarative validation commands, and open questions |
+| Verification | Per-criterion and per-phase mapping, typed evidence references, and non-blocking deviations |
+
+The plan is the only artifact the runtime parses through its own schema library,
+because the plan importer consumes it. Definition, research, and verification
+artifacts are validated against their frozen JSON Schema alone, so a structural
+refinement expressed in code would never run for them. Their cross-reference
+integrity is enforced by the deterministic sensor described in
+[Artifact integrity](04-sensors-gates-and-enforcement.md#artifact-integrity).
+
+Declared validation commands are documentation authored by a planner. Only
+configured gate sensors execute anything.
+
+### Plan phases
+
+A plan may declare ordered phases and assign each task to one:
+
+```json
+{
+  "phases": [
+    { "id": "extract-reader", "title": "Extract the reader", "order": 1, "todos": ["Move IO out of parse_batch"] },
+    { "id": "split-stages", "title": "Split the stages", "order": 2, "dependsOn": ["extract-reader"] }
+  ],
+  "tasks": [
+    { "key": "extract-reader", "phase": "extract-reader", "...": "..." },
+    { "key": "split-parse-batch", "phase": "split-stages", "...": "..." }
+  ]
+}
+```
+
+Phases are authoring structure, not a second runtime graph. Plan import expands
+each task's `dependsOn` with the tasks of its predecessor phases, so phase order
+reaches the existing task frontier without changing either persistence adapter.
+The expansion is bounded: a fan-in above the dependency cap collapses to
+immediate predecessor phases, and the `plan.imported` event records the phase
+order, the derived dependencies, and any collapse.
+
+Import refuses a duplicate phase ID, an unknown phase dependency, an unknown
+todo task key, a phase dependency cycle, a task naming an undeclared phase, and
+a plan that phases some tasks but not others. A plan without phases keeps its
+authored dependencies unchanged. `parallelizable` is an authoring signal only;
+the [version 1 singleton](05-runtime-and-state.md#version-1-singleton) still
+runs one task at a time.
+
+## Acceptance criteria
+
+An acceptance entry is either a string or an object carrying `id`,
+`description`, and `required`. Both forms normalize to the same criterion, so
+existing plans keep working:
+
+| Property | Rule |
+|----------|------|
+| `id` | Author-optional. Senawa derives a content-addressed `ac-<hash>` from the description when it is absent, so reordering a plan preserves identity |
+| `description` | The criterion text a worker must satisfy |
+| `required` | Defaults to true. A required criterion must be satisfied before the task can close |
+
+Duplicate criterion IDs within one task are rejected at plan import. Task briefs
+list every criterion with its ID, because completion is reported against those
+IDs. [Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md#acceptance-evidence)
+owns how a claim becomes a verdict.
+
+`repositoryChange` is optional per task. The task-frontier `repositoryChanges`
+list is the human-authored ceiling. Plan import refuses a task that requests an
+expectation the frontier does not allow, so a model-authored plan can narrow the
+contract but never widen it. When a task omits the field, Senawa derives the
+expectation from the frontier: a frontier that allows exactly one value supplies
+that value, and a frontier that allows several resolves to `optional`.
+
+The expectation is a declaration, not a gate. `required` and a measured no-op
+produce a warning the report shows. Only `forbidden` still blocks, because a task
+that promised to change nothing and then changed something has broken its own
+contract.
 
 ## Phase briefs
 
@@ -285,12 +393,12 @@ metadata:
   name: implementor
 spec:
   model:
-    id: claude-sonnet-4.6
+    id: claude-sonnet-5
     effort: high
+    effortMode: preferred
   tools:
     - repository.read
     - repository.edit
-    - process.run
     - senawa.task.done
     - senawa.ask
     - senawa.discover
@@ -305,12 +413,22 @@ The filename stem must equal `metadata.name`. Unknown frontmatter fields and
 capabilities are invalid. Version 1 recognizes `repository.read`,
 `repository.edit`, `process.run`, `senawa.task.done`, `senawa.phase.submit`,
 `senawa.ask`, and `senawa.discover`. Model effort, when present, is `low`,
-`medium`, `high`, or `xhigh`.
+`medium`, `high`, or `xhigh`. `effortMode` is `required` or `preferred`.
+Unsupported required effort stops preflight; unsupported preferred effort may
+resolve to the catalog default and remains visible as requested versus resolved
+metadata.
 
 Startup validates every static workflow role. Plan import validates each dynamic
 task role before creating tasks. Missing roles fail closed. Task execution model
 and effort hints override profile defaults for that dispatch, but cannot alter
 capabilities.
+
+The repository currently requests Sonnet 5 and Opus 5 role IDs. These are
+configuration requests, not evidence of invocation. New work must confirm each
+exact ID and effort through the authenticated SDK catalog before the run is
+created. A connected `doctor --live` diagnostic resolved the configured IDs on
+2026-08-07 without invoking a model; invocation and role quality remain
+unvalidated until an explicitly approved paid workflow probe.
 
 Snapshot version 2 stores the parsed profile and exact source file. Its source
 digest contributes to the repository fingerprint, and each turn receives the
@@ -320,6 +438,15 @@ and Senawa never rewrites an earlier snapshot version in place.
 Profiles request capabilities; they do not grant authority. The host intersects
 each request with owner scope, supported host operations, and Senawa's mandatory
 security ceiling before mapping it to provider-specific controls.
+
+A profile should not request a capability its host denies. The intersection
+still holds, so an unsupported request cannot widen authority, but it produces a
+role whose instructions describe work the session cannot perform. The implementor
+profile no longer requests `process.run` for that reason;
+[Worker hosts and session topology](03-agents-and-interaction.md#worker-hosts-and-session-topology)
+owns which operations each host supports, and
+[Role instructions and briefs](03-agents-and-interaction.md#role-instructions-and-briefs)
+owns how a turn reports the capabilities it did and did not receive.
 
 ## Approval semantics
 
@@ -333,6 +460,13 @@ A phase may declare one of two approval channels:
 A sensor gate and a human approval are separate conditions. The sensor gate can
 be recomputed from readings. Approval is a durable event represented by a beads
 human gate. A crash between those conditions does not lose either result.
+
+The approval object is one immutable artifact identified by path, version, and
+digest. `senawa phase brief` returns that identity, an attributed bounded
+overview, deterministic structural counts, and the complete-artifact command.
+Approve and reject accept expected version and digest guards and refuse a stale
+decision. The [offline evidence](wip/probe-findings.md#live-default-and-evidence-contracts)
+covers exact input manifests, task provenance, and artifact-bound decisions.
 
 ## Exit and resume
 

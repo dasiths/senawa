@@ -18,7 +18,8 @@ It performs the conversational work a human would otherwise do manually:
 * Convert a goal into a valid workflow request.
 * Invoke `senawa work start` when the human asks to begin.
 * Read bounded status and incremental logs.
-* Present artifact paths when a decision is due.
+* Present the exact artifact path, version, digest, Senawa-generated overview,
+  and complete content when a decision is due.
 * Quote the sensor and finding behind a refusal.
 * Draft a rejection reason or steer for human confirmation.
 * Relay an explicit approval, rejection, answer, pause, abort, or steer.
@@ -56,12 +57,14 @@ is pinned to their own task, so a completion request cannot target another task.
 | `steer`, `answer` | No | Yes | No | Draft and relay |
 | `ask`, `discover` | No | Yes | Recognized v1 capability keywords | Relay on request |
 | `note` | No | Yes | Future binding | Relay on request |
-| `work show`, `work report`, `workflow info`, `doctor` | Yes | Yes | No | Yes |
+| `work show`, `work report`, `workflow info`, `questions`, `doctor` | Yes | Yes | No | Yes |
 
 The principal agent is the least contained caller because it runs in the human's
 session with the human's machine authority. The skill states intended behavior;
 it is not a security boundary. Commands carrying judgment therefore require
 explicit human intent, and approval records its channel.
+`--caller principal-agent` records that relay path but cannot satisfy a
+`human-direct` approval requirement.
 
 Ending a run is one of those judgments. The principal agent may relay
 `work end --reason "..."` only after the human explicitly chooses abandonment
@@ -98,6 +101,22 @@ state. It returns only the answer correlated to the same active session and turn
 It fails when that turn becomes stale or terminal and does not resume, advance,
 or complete the workflow. Questions still do not create Beads gates.
 
+An unanswered question is a first-class need. The status projection reports the
+oldest answerable question as `needs.action: answer-question` with its ID, text,
+owning phase or task, ask time, and the exact answer command. A live question
+outranks a pending approval in that projection, because it blocks a turn that is
+running now rather than one waiting to start. `senawa questions [<run>]` lists
+every open question for callers that want more than the single blocking one.
+Running a phase brief reports the question when the question belongs to that
+phase.
+
+The worker's wait is bounded below the host turn timeout so the turn can still
+report why it stopped. On expiry, the typed `senawa.ask` call returns a refusal
+naming the unanswered question and instructing the worker to end the turn rather
+than guess. The question stays open, so the same answer still applies on the next
+attempt. A parked worker is not progress: an expired wait produces a named
+refusal instead of a silent ten-minute stall.
+
 The portal projects every unanswered worker question with its owner and time.
 Questions matching the active session and turn provide an answer form; stale
 questions remain visible but disabled. Answer submission has its own UUID for
@@ -122,6 +141,60 @@ processor can replay approve, reject, steer, resume, or end without duplicating
 an already committed transition. A graceful supervisor shutdown retains its web
 claim until active command execution finishes.
 
+## Run console presentation
+
+The run console is one workspace with an overview rail, a graph stage, and an
+inspector rail. Both rails collapse to a narrow strip and resize by dragging the
+separator between them and the stage. Each separator is a `role="separator"`
+control with arrow, `Home`, and `End` keys and a live `aria-valuenow`, so the
+layout is reachable without a pointer. Rail widths and collapse state persist in
+browser storage and restore on load, and the graph refits after the stage
+resizes. A collapsed inspector still shows a pending-decision badge, so
+collapsing a rail cannot hide a phase waiting on a human.
+
+Artifacts, consumed input manifests, and evidence render through a bounded JSON
+tree rather than a wall of preformatted text. The tree scrolls inside a fixed
+maximum height, expands and collapses per node, supports case-insensitive
+substring search, and copies either the whole payload or one subtree. Rows are
+budgeted, oversized payloads fall back to bounded raw text, and every node is
+built as a DOM text node. The console constructs no HTML from run content and
+compiles no user-supplied regular expressions, which keeps the rendering
+boundary in [Provenance and Observability](06-provenance-and-observability.md#rendering-boundary)
+intact.
+
+Artifact JSON is readable for any phase that has an artifact, not only while a
+phase awaits approval, because reading an accepted or rejected artifact is
+observation. Decision controls remain bound to the exact version and digest of a
+phase that is awaiting approval, so wider reading grants no wider authority.
+
+Controls are separated by consequence rather than gathered into one column:
+
+| Surface | Holds | Why it is separate |
+|---------|-------|--------------------|
+| Run bar | Resume and the last-command status | Routine progression the human repeats often |
+| Node toolbar | Steer, view the artifact, jump to the decision controls, focus the node, and copy its identifier | Actions scoped to the selected node, shown only while one is selected |
+| Danger zone | End run | Collapsed by default, behind a two-step confirmation with an inline reason requirement |
+
+Ending a run therefore takes a deliberate sequence: expand the section, supply a
+reason, and confirm. Icons are inline SVG built through `createElementNS`, so
+iconography introduces no HTML construction from run content.
+
+An unanswered worker question appears in a global banner above the workspace,
+not only in the inspector rail. The banner names the owning phase or task, counts
+elapsed time, escalates its presentation once the wait passes a minute, and
+carries the same answer form and stale-question rules as the question list. A run
+whose worker is parked on a question is reported as blocked rather than
+progressing.
+
+Any artifact, manifest, or evidence payload opens full screen in a modal dialog
+that reuses the same bounded JSON tree, so a large payload does not have to be
+read through a rail-width column.
+
+Output scrolling is pinned to intent. The console follows new output only while
+the view is already at the bottom; scrolling up detaches the follow and reveals a
+jump-to-latest control that reattaches it. Incoming output never moves the
+reader's position.
+
 ## Role instructions and briefs
 
 Instructions have two owners:
@@ -132,9 +205,11 @@ Instructions have two owners:
 | Brief scaffolding | Senawa | Scope, input references, output contract, rules, iteration context |
 | Enforcement | Senawa | Host capability ceiling, typed tools, permission callbacks, isolation, hooks, gates, and audit |
 
-`senawa phase brief` composes those layers with current
-artifact paths and graph state. They pass paths rather than copying large
-artifacts into a prompt.
+Worker prompts compose those layers with an exact resolved input manifest and
+graph state. `senawa phase brief` is the separate human-facing approval
+projection: it reports immutable artifact identity, attributed summary or
+verdict, deterministic counts, and the supported full-artifact command without
+an approval recommendation.
 
 The [worker profile contract](02-workflows-and-lifecycle.md#worker-profiles)
 defines what a repository may request. Effective authority is always the
@@ -145,16 +220,28 @@ profile request ∩ task scope ∩ host support ∩ Senawa security ceiling
 ```
 
 Each term can remove authority; none can add authority excluded by another.
-Task paths constrain repository writes, host support removes unavailable
-operations, and Senawa's ceiling keeps graph mutation, policy mutation, nested
-agents, and unmediated completion unavailable even when a profile requests a
-broader semantic capability.
+Task paths suggest where writes belong without constraining them, host support
+removes unavailable operations, and Senawa's ceiling keeps graph mutation, policy
+mutation, nested agents, frozen-path writes, and unmediated completion
+unavailable even when a profile requests a broader semantic capability.
+
+The intersection is computed before the turn, so the turn can describe it. A task
+prompt carries the capabilities the session received, the requests the host did
+not support, and the rule that follows from both: a criterion needing an
+unavailable capability is reported as blocked and names the missing capability
+rather than being claimed. When shell execution is absent, the prompt states that
+command evidence resolves only through the gate sensors that run after the turn.
+A worker that cannot see the boundary writes a plan it cannot execute, which is
+how a turn becomes ten minutes of nothing.
 
 Instructions do not enforce policy. Capability removal, typed tools, hooks, and
 the gate own enforcement. A worker ending its turn without submitting the typed
 completion request cannot bypass the driver, because the driver evaluates the
-gate after the turn and remains authoritative. A public `task done` CLI command
-remains deferred until it can authenticate and bind the worker turn.
+gate after the turn and remains authoritative. The typed submission is a claim
+about acceptance criteria, and the driver records it;
+[Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md#acceptance-evidence)
+owns that contract. A public `task done` CLI command remains deferred until it
+can authenticate and bind the worker turn.
 
 The deterministic binding registry proves owner-bound task completion offline,
 but the subprocess adapter has no authenticated command bridge. Public
@@ -162,9 +249,14 @@ but the subprocess adapter has no authenticated command bridge. Public
 because cancelling one task must coordinate with the live driver without
 terminalizing the run; forced whole-run end does not establish that contract.
 
-## Session topology
+## Worker hosts and session topology
 
 Senawa uses independent sessions for writing work.
+
+The canonical worker hosts are `simulated`, `copilot-subprocess`, and
+`copilot-sdk`. `copilot-sdk` is the persisted default for new work;
+`simulated` must be selected explicitly for tests, offline demos, and no-credit
+probes. A failed live host is never retried through simulation.
 
 The production SDK adapter hosts sessions through `@github/copilot-sdk` 1.0.7.
 Offline fake-client conformance proves caller-chosen create and resume,
@@ -182,12 +274,20 @@ The adapter reports inspection as session-only and replay as unavailable. SDK
 session history cannot prove a Senawa turn outcome after process loss, and the
 experimental SDK cursor never crosses the application port. The application
 persists normalized lifecycle, text, tool, model, usage, and artifact events
-under Senawa-owned durable identifiers before browser fan-out. Live SDK session
-execution, model behavior, and multi-turn retention remain unvalidated and need
-an explicitly approved paid probe.
+under Senawa-owned durable identifiers before browser fan-out. An authenticated
+no-invocation diagnostic resolved the configured Sonnet 5 and Opus 5 IDs on
+2026-08-07. Live SDK session execution, model behavior, event delivery, and
+multi-turn retention remain unvalidated and need an explicitly approved paid
+probe.
 
-A subprocess topology using `copilot -p` remains the fallback for debugging and
-CI. Senawa passes the resolved profile instructions and model directly to the
+The SDK host supports repository read, repository edit, and the typed Senawa
+operations. It denies shell execution, and that denial is deliberate: no bounded
+command grammar, authenticated command bridge, or per-command audit path is
+authorized for a worker yet. Command evidence therefore comes from the gate
+sensors the driver runs after a turn, never from the worker itself.
+
+A subprocess topology using `copilot -p` remains experimental for debugging and
+CI, never a fallback. Senawa passes the resolved profile instructions and model directly to the
 subprocess, then maps the effective semantic capabilities through a
 Senawa-owned allowlist. Profile strings never become command options directly.
 The subprocess exposes the same session identity and per-task controls without
@@ -220,6 +320,10 @@ Subprocess workers set `COPILOT_HOME` to the same per-run directory.
 Isolation does not remove correlation. Session identifiers appear in the journal
 and telemetry regardless of where the session store lives.
 
+No current design claim assigns worker turns to tmux panes or projects terminals
+per turn. That question remains
+[probing](wip/decision-log.md#2026-08-07-live-execution-exact-evidence-approval-presentation-and-tmux).
+
 ## Tool containment
 
 Containment is layered from strongest to weakest:
@@ -232,6 +336,32 @@ Containment is layered from strongest to weakest:
 
 A shell deny pattern can be wrapped or invoked indirectly. Capability removal
 cannot.
+
+### Path authorization
+
+Policy paths and request paths are validated separately, because they answer
+different questions. A policy path is a prefix: the write scope of a task or an
+entry in the frozen set. A request path is what a worker asks for in one tool
+call.
+
+| Path | Wildcards | Rule |
+|------|-----------|------|
+| Policy scope | Trailing `**` only | A prefix cannot be a pattern in the middle |
+| Read request | Permitted anywhere | Glob and grep are how a worker finds files |
+| Write request | Refused | A write must name one concrete in-scope file |
+
+No segment of any path may begin with `..`, so no request escapes the repository
+root, and a resolved path that escapes is refused separately from the requested
+one. Permitting patterns in reads widens nothing: reads are already unscoped, and
+the answer to a pattern is a set of paths, not an edit. Writes keep every prior
+containment rule, so task scope and the
+[frozen set](04-sensors-gates-and-enforcement.md#frozen-definitions) still bind
+them, and a pattern that would have matched an in-scope file is still refused as
+a write.
+
+Refusing wildcards in reads made `glob` and `grep` fail on every call, which left
+a worker able to ask questions but unable to look at the repository it was asked
+to change.
 
 ## Next reading
 

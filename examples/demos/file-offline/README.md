@@ -2,7 +2,7 @@
 
 This no-credit demo builds Senawa, creates an isolated temporary repository, and
 runs the standard workflow through the real CLI and loopback browser command
-path with deterministic workers.
+path with explicitly selected simulated workers.
 
 It validates configuration loading, versioned artifacts, approval and rejection,
 SSE replay, task dependencies, gate-driven rework, finish, and report rendering.

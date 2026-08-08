@@ -29,6 +29,8 @@ import type {
   WorkerBindingPort,
   WorkerCancelResult,
   WorkerExecutionPort,
+  WorkerModelCatalogEntry,
+  WorkerModelCatalogPort,
   WorkerOutput,
   WorkerResult,
   WorkerSessionEvent,
@@ -42,7 +44,7 @@ import type {
 import { type JsonObject, JsonObjectSchema, type WorkerCapability } from "@senawa/domain";
 import { authorizeWorkerPaths, resolveWorkerPolicy } from "./authorization.js";
 
-const sdkCapabilities: readonly WorkerCapability[] = [
+export const sdkCapabilities: readonly WorkerCapability[] = [
   "repository.read",
   "repository.edit",
   "senawa.task.done",
@@ -52,6 +54,8 @@ const sdkCapabilities: readonly WorkerCapability[] = [
   "senawa.note",
 ];
 export const SDK_TURN_TIMEOUT_MS = 600_000;
+// A worker question must expire inside the turn so the turn can report which question blocked it.
+export const WORKER_QUESTION_WAIT_TIMEOUT_MS = SDK_TURN_TIMEOUT_MS - 120_000;
 
 export interface CopilotSdkSession {
   readonly sessionId: string;
@@ -84,7 +88,11 @@ export interface CopilotSdkWorkerOptions {
   readonly client?: CopilotSdkClient;
 }
 
-export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecutionPort {
+export const COPILOT_SDK_WORKER_ADAPTER_VERSION = "1.0.7";
+
+export class CopilotSdkWorkerAdapter
+  implements WorkerSessionPort, WorkerExecutionPort, WorkerModelCatalogPort
+{
   private readonly client: CopilotSdkClient;
   private readonly sessions = new Map<string, CopilotSdkSession>();
   private readonly active = new Map<string, CopilotSdkSession>();
@@ -106,7 +114,7 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
   async describe(): Promise<WorkerAdapterDescriptor> {
     return {
       name: "copilot-sdk",
-      version: "1.0.7",
+      version: COPILOT_SDK_WORKER_ADAPTER_VERSION,
       capabilities: sdkCapabilities,
       features: {
         callerChosenIdentity: true,
@@ -124,6 +132,20 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
         traceInjection: true,
       },
     };
+  }
+
+  async listModels(): Promise<readonly WorkerModelCatalogEntry[]> {
+    await this.ensureStarted();
+    return (await this.client.listModels())
+      .map((model) => ({
+        id: model.id,
+        name: model.name,
+        supportedEfforts: model.supportedReasoningEfforts ?? [],
+        ...(model.defaultReasoningEffort === undefined
+          ? {}
+          : { defaultEffort: model.defaultReasoningEffort }),
+      }))
+      .toSorted((left, right) => left.id.localeCompare(right.id));
   }
 
   async negotiate(requirements: WorkerSessionRequirements): Promise<WorkerSessionPlan> {
@@ -150,13 +172,28 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     }
     const requestedEffort = requirements.requestedModel.effort;
     const supportedEfforts = model.supportedReasoningEfforts ?? [];
+    if (
+      requestedEffort !== undefined &&
+      !supportedEfforts.includes(requestedEffort) &&
+      requirements.requestedModel.effortMode !== "preferred"
+    ) {
+      throw new Error(
+        `Copilot SDK model ${model.id} does not support required effort ${requestedEffort}; supported efforts: ${supportedEfforts.join(", ") || "none"}`,
+      );
+    }
     const effort =
       requestedEffort === undefined || supportedEfforts.includes(requestedEffort)
         ? requestedEffort
         : model.defaultReasoningEffort;
     return {
       adapter,
-      resolvedModel: { id: model.id, ...(effort === undefined ? {} : { effort }) },
+      resolvedModel: {
+        id: model.id,
+        ...(effort === undefined ? {} : { effort }),
+        ...(requirements.requestedModel.effortMode === undefined
+          ? {}
+          : { effortMode: requirements.requestedModel.effortMode }),
+      },
       grantedCapabilities: requirements.requiredCapabilities,
       toolTransport: "native",
       unsupportedPreferences: [
@@ -280,6 +317,7 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
     const queue = new EventQueue<WorkerSessionEvent>();
     const output: WorkerOutput[] = [];
     let artifact: JsonObject | undefined;
+    let completion: JsonObject | undefined;
     const authorization = workerAuthorization(turn);
     const bindings = this.options.bindings.bindingsFor(turn, authorization);
     const transportNames = new Map<string, string>();
@@ -312,6 +350,12 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
           if (binding.name === "senawa.phase.submit" && result.accepted) {
             artifact = JsonObjectSchema.parse(Reflect.get(input, "artifact"));
             queue.push(event(turn, `artifact:${binding.name}`, "artifact", { artifact }));
+          }
+          if (binding.name === "senawa.task.done" && result.accepted) {
+            completion = input;
+            queue.push(
+              event(turn, `completion:${binding.name}`, "completion", { submission: input }),
+            );
           }
           return result;
         },
@@ -426,6 +470,7 @@ export class CopilotSdkWorkerAdapter implements WorkerSessionPort, WorkerExecuti
         const value: WorkerResult = {
           sessionId: turn.sessionId,
           ...(artifact === undefined ? {} : { artifact }),
+          ...(completion === undefined ? {} : { completion }),
           output,
         };
         this.completed.set(turn.turnId, value);

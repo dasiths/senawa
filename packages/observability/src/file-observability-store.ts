@@ -9,6 +9,7 @@ import type {
   WorkerEventStoragePort,
 } from "@senawa/application";
 import type { JournalEvent, OutputRecord } from "@senawa/domain";
+import { ARTIFACT_ID_PATTERN } from "@senawa/domain";
 
 interface DurableEntry<T> {
   readonly entryId: string;
@@ -157,7 +158,7 @@ export class FileOutputLogStore implements OutputLogStoragePort {
     ownerId: string,
   ): string {
     assertIdentifier(runId, "run ID");
-    assertIdentifier(ownerId, "output owner ID");
+    assertOwnerId(ownerId, "output owner ID");
     return join(this.trackingDirectory, runId, "output", ".locks", ownerKind, `${ownerId}.lock`);
   }
 
@@ -254,7 +255,7 @@ export class FileWorkerEventStore implements WorkerEventStoragePort {
   }
 
   private async materializeTaskEvidence(record: WorkerEventRecord): Promise<void> {
-    assertIdentifier(record.owner.id, "task ID");
+    assertOwnerId(record.owner.id, "task ID");
     const events = (await this.readWorkerEvents(record.runId)).filter(
       (candidate) => candidate.owner.kind === "task" && candidate.owner.id === record.owner.id,
     );
@@ -304,7 +305,7 @@ export class FileSensorEvidenceStore {
     readonly content: string;
   }): Promise<string> {
     assertIdentifier(input.runId, "run ID");
-    assertIdentifier(input.owner.id, "sensor owner ID");
+    assertOwnerId(input.owner.id, "sensor owner ID");
     assertIdentifier(input.sensorId, "sensor ID");
     const content = sanitizeEvidence(input.content, 1_000_000);
     const digest = createHash("sha256").update(content).digest("hex").slice(0, 16);
@@ -464,6 +465,13 @@ function sanitizeEvidence(value: string, limit: number): string {
 
 function assertIdentifier(value: string, label: string): void {
   if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/u.test(value)) {
+    throw new Error(`Invalid ${label}: ${value}`);
+  }
+}
+
+/** Owner ids include plan-authored task keys, which are only bound by the artifact id shape. */
+function assertOwnerId(value: string, label: string): void {
+  if (!ARTIFACT_ID_PATTERN.test(value) || value.length > 128) {
     throw new Error(`Invalid ${label}: ${value}`);
   }
 }

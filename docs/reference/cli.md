@@ -22,15 +22,19 @@ Usage: senawa [options] [command]
 Drive bounded Senawa workflows
 
 Options:
-  --worker-host <host>          worker execution host (choices: "deterministic",
-                                "copilot", "sdk", default: "deterministic")
+  --worker-host <host>          worker execution host (choices: "simulated",
+                                "copilot-subprocess", "copilot-sdk", default:
+                                "copilot-sdk")
+  --caller <caller>             command caller attribution (choices:
+                                "principal-agent")
   --runtime <runtime>           runtime backend (file is for development and
                                 tests) (choices: "file", "beads", default:
                                 "beads")
   -h, --help                    display help for command
 
 Commands:
-  doctor
+  doctor [options]
+  model
   workflow
   sensor
   gate
@@ -39,6 +43,7 @@ Commands:
   task
   plan
   ask <question>
+  questions [runId]
   answer <questionId> <answer>
   discover <title>
   note <note>
@@ -54,6 +59,29 @@ Commands:
 
 ```text
 Usage: senawa doctor [options]
+
+Options:
+  --live      check selected live worker host, catalog, models, and capabilities
+  -h, --help  display help for command
+```
+
+## senawa model
+
+```text
+Usage: senawa model [options] [command]
+
+Options:
+  -h, --help      display help for command
+
+Commands:
+  list
+  help [command]  display help for command
+```
+
+## senawa model list
+
+```text
+Usage: senawa model list [options]
 
 Options:
   -h, --help  display help for command
@@ -386,6 +414,15 @@ Options:
   -h, --help  display help for command
 ```
 
+## senawa questions
+
+```text
+Usage: senawa questions [options] [runId]
+
+Options:
+  -h, --help  display help for command
+```
+
 ## senawa answer
 
 ```text
@@ -433,7 +470,9 @@ Usage: senawa approve [options] <phase>
 
 Options:
   --note <note>
-  -h, --help     display help for command
+  --expected-version <version>
+  --expected-digest <digest>
+  -h, --help                    display help for command
 ```
 
 ## senawa reject
@@ -443,7 +482,9 @@ Usage: senawa reject [options] <phase>
 
 Options:
   --reason <reason>
-  -h, --help         display help for command
+  --expected-version <version>
+  --expected-digest <digest>
+  -h, --help                    display help for command
 ```
 
 ## senawa steer

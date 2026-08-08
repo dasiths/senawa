@@ -3,9 +3,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { startWebSupervisor } from "@senawa/browser";
 import { type CommandActor, PlanArtifactSchema } from "@senawa/domain";
 import { Command, CommanderError, Option } from "commander";
+import { optionValue, parseWorkerHostOption } from "./execution-options.js";
 import type { SenawaServices } from "./services.js";
-
-const actor: CommandActor = { channel: "direct-cli" };
 
 export interface CliIo {
   readonly stdout: (value: string) => void;
@@ -27,14 +26,23 @@ export async function runCli(
     stdout: (value) => process.stdout.write(value),
     stderr: (value) => process.stderr.write(value),
   };
+  const selectedHost = parseWorkerHostOption(optionValue(arguments_, "--worker-host"));
+  const workerHostWasExplicit = optionValue(arguments_, "--worker-host") !== undefined;
+  const actor: CommandActor = {
+    channel:
+      optionValue(arguments_, "--caller") === "principal-agent" ? "principal-agent" : "direct-cli",
+  };
   let resultCode = 0;
   const program = new Command()
     .name("senawa")
     .description("Drive bounded Senawa workflows")
     .addOption(
       new Option("--worker-host <host>", "worker execution host")
-        .choices(["deterministic", "copilot", "sdk"])
-        .default("deterministic"),
+        .choices(["simulated", "copilot-subprocess", "copilot-sdk"])
+        .default("copilot-sdk"),
+    )
+    .addOption(
+      new Option("--caller <caller>", "command caller attribution").choices(["principal-agent"]),
     )
     .addOption(
       new Option("--runtime <runtime>", "runtime backend (file is for development and tests)")
@@ -45,10 +53,34 @@ export async function runCli(
     .exitOverride()
     .configureOutput({ writeOut: io.stdout, writeErr: io.stderr });
 
-  program.command("doctor").action(async () => {
-    const workflows = await options.services.queries.workflows();
-    for (const workflow of workflows) await options.services.loadDefinitions(workflow);
-    writeJson(io, { ok: true, workflows });
+  program
+    .command("doctor")
+    .option("--live", "check selected live worker host, catalog, models, and capabilities")
+    .action(async (commandOptions: { live?: boolean }) => {
+      const workflows = await options.services.queries.workflows();
+      const definitions = [];
+      for (const workflow of workflows) {
+        definitions.push(await options.services.loadDefinitions(workflow));
+      }
+      const readinessDefinitions = definitions[0];
+      if (commandOptions.live === true && readinessDefinitions === undefined) {
+        throw new Error("Live readiness requires at least one repository workflow");
+      }
+      const live =
+        commandOptions.live === true && readinessDefinitions !== undefined
+          ? await options.services.commands.liveReadiness(readinessDefinitions)
+          : undefined;
+      writeJson(io, {
+        ok: true,
+        workflows,
+        ...(live === undefined ? {} : { live }),
+      });
+    });
+
+  const model = program.command("model");
+  model.command("list").action(async () => {
+    const models = await options.services.commands.listModels();
+    writeJson(io, { models, count: models.length, bounded: models.length === 100 });
   });
 
   const workflow = program.command("workflow");
@@ -142,7 +174,11 @@ export async function runCli(
     });
   work.command("resume").action(async () => {
     const runId = await requireActiveRun(options.services);
-    const result = await options.services.commands.resume(runId, actor);
+    const result = await options.services.commands.resume(
+      runId,
+      actor,
+      workerHostWasExplicit ? selectedHost.kind : undefined,
+    );
     writeJson(io, result);
     if (result.kind === "awaiting-approval" || result.kind === "task-escalated") resultCode = 2;
   });
@@ -224,17 +260,7 @@ export async function runCli(
     .option("--run <runId>")
     .action(async (id: string, commandOptions: { run?: string }) => {
       const status = await requireStatus(options.services, commandOptions.run);
-      const found = status.phases.find((candidate) => candidate.id === id);
-      if (found === undefined) throw new Error(`Unknown phase ${id}`);
-      writeJson(io, {
-        runId: status.runId,
-        backend: status.backend,
-        phase: found.id,
-        status: found.status,
-        iteration: found.iteration,
-        artifactVersion: found.artifactVersion,
-        needs: status.needs?.phaseId === id ? status.needs : null,
-      });
+      writeJson(io, await options.services.queries.phaseBrief(status.runId, id));
     });
   phase
     .command("artifact")
@@ -294,6 +320,17 @@ export async function runCli(
           await requireActiveRun(options.services),
           question,
           actor,
+        ),
+      ),
+    );
+  program
+    .command("questions")
+    .argument("[runId]")
+    .action(async (runId?: string) =>
+      writeJson(
+        io,
+        await options.services.queries.openWorkerQuestions(
+          runId ?? (await requireActiveRun(options.services)),
         ),
       ),
     );
@@ -413,7 +450,9 @@ export async function runCli(
     .command("approve")
     .argument("<phase>")
     .option("--note <note>")
-    .action(async (phase: string, commandOptions: { note?: string }) =>
+    .option("--expected-version <version>")
+    .option("--expected-digest <digest>")
+    .action(async (phase: string, commandOptions: DecisionCommandOptions & { note?: string }) =>
       writeJson(
         io,
         await options.services.commands.approve(
@@ -421,6 +460,7 @@ export async function runCli(
           phase,
           actor,
           commandOptions.note,
+          decisionExpectation(commandOptions),
         ),
       ),
     );
@@ -428,7 +468,9 @@ export async function runCli(
     .command("reject")
     .argument("<phase>")
     .requiredOption("--reason <reason>")
-    .action(async (phase: string, commandOptions: { reason: string }) =>
+    .option("--expected-version <version>")
+    .option("--expected-digest <digest>")
+    .action(async (phase: string, commandOptions: DecisionCommandOptions & { reason: string }) =>
       writeJson(
         io,
         await options.services.commands.reject(
@@ -436,6 +478,7 @@ export async function runCli(
           phase,
           commandOptions.reason,
           actor,
+          decisionExpectation(commandOptions),
         ),
       ),
     );
@@ -487,6 +530,20 @@ function selectedOwner(options: { readonly phase?: string; readonly task?: strin
   return options.phase === undefined
     ? { kind: "task", id: options.task ?? "" }
     : { kind: "phase", id: options.phase };
+}
+
+interface DecisionCommandOptions {
+  readonly expectedVersion?: string;
+  readonly expectedDigest?: string;
+}
+
+function decisionExpectation(options: DecisionCommandOptions) {
+  return {
+    ...(options.expectedVersion === undefined
+      ? {}
+      : { expectedVersion: parsePositiveInteger(options.expectedVersion, "--expected-version") }),
+    ...(options.expectedDigest === undefined ? {} : { expectedDigest: options.expectedDigest }),
+  };
 }
 
 function writeJson(io: CliIo, value: unknown): void {

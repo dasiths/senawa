@@ -7,10 +7,10 @@ semantics.
 ## Demos
 
 * [File-backed offline demo](demos/file-offline/README.md) runs the complete
-  deterministic CLI and browser workflow without AI credits. The file runtime
+  simulated CLI and browser workflow without AI credits. The file runtime
   remains a development and test adapter.
 * [Beads-backed offline demo](demos/beads-offline/README.md) runs the same
-  deterministic CLI and browser workflow against real Beads without spending
+  simulated CLI and browser workflow against real Beads without spending
   AI credits.
 * [Documentation consistency demo](demos/documentation-consistency/README.md)
   creates a Git branch in the current checkout, runs the production Beads and

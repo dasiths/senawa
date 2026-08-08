@@ -18,7 +18,7 @@ It holds no model context and no authoritative plan in memory.
 | Driver lease | `driver.lock` | Heartbeat state is local and transient |
 | Steering inbox | `steering.jsonl` | Consumed between transitions |
 | Artifacts, snapshot, sessions, sensor cache | Work directory | These values are immutable documents or file-backed evidence |
-| Run identity | `work.json` | Immutable pointer to workflow, epic, fingerprint, and input |
+| Run identity | `work.json` | Immutable pointer to workflow, epic, fingerprint, input, runtime backend, worker host, adapter, and adapter version |
 | Status cache | `cache.json` | Derived and safe to delete |
 
 Where a cache and beads disagree, beads wins. Deleting `cache.json` and resuming
@@ -88,10 +88,14 @@ the driver does not shell out to itself.
 Dispatch crosses a process or RPC boundary, so the journal records both sides:
 
 ```text
-task.dispatching { task, attempt, session_id }
+task.dispatching { task, attempt, session_id, worker_host, dispatch_id }
     ... create or resume the session ...
-task.dispatched  { task, attempt, session_id, resolved_model }
+task.dispatched  { task, attempt, session_id }
 ```
+
+Requested and resolved model identity are not carried on `task.dispatched`
+itself; they arrive as a separate normalized worker `model` event joined by
+dispatch ID, per the [journal contract](06-provenance-and-observability.md#journal-contract).
 
 An intent with no outcome signals reconciliation. `senawa work resume` checks the
 stable session identifier:
@@ -104,6 +108,12 @@ stable session identifier:
 
 Worker failures and dispatch failures have separate budgets. A model flag or
 runtime outage must not consume the allowance intended for code rework.
+
+The selected canonical worker host and adapter version are frozen before the
+first dispatch. Resume resolves that persisted identity and refuses an explicit
+host mismatch. A run persisted without host identity is rejected rather than
+guessed. Senawa never infers live execution from a configured profile model.
+Offline file and Beads persistence contracts cover this recovery behavior.
 
 ## Driver lease
 
@@ -183,6 +193,15 @@ issue metadata. Immutable identity, snapshots, and artifacts remain owned by
 `@senawa/observability`; active-run ownership and fenced leases remain local
 file authorities.
 
+A commit converges only the nodes whose desired state changed. A node is skipped
+when its coarse status, state label, and metadata digest already match the
+desired state, no pending operation is unresolved, and no gate transition is
+required for it. Any other node runs the full transition sequence, so split-write
+recovery, gate creation and resolution, and operation receipts behave exactly as
+before. The saving is proportional to graph size, because every unchanged phase
+and task previously paid three or four `bd` writes on every commit. See the
+[measured commit-write reduction](wip/probe-findings.md#transition-latency).
+
 Run identity and the repository active-run pointer also store `backend` as
 `beads` or `file`. The selected composition validates both records before
 reading or mutating a run. Status and reports expose the backend. A process
@@ -200,7 +219,7 @@ The command was:
 pnpm exec vitest run tests/contract/beads-persistence.test.ts packages/runtime-beads/src/beads-client.test.ts
 ```
 
-The deterministic CLI and browser workflow also completed with eight
+The simulated CLI and browser workflow also completed with eight
 authoritative Beads nodes and no `runtime-state.json`:
 
 ```bash
@@ -213,7 +232,7 @@ composition tests proved the default selection, invalid-option rejection, and
 that a missing Beads executable creates no file runtime state. The default
 Beads demo completed through the same CLI and browser application instance.
 
-This evidence covers real Beads with deterministic workers. It does not cover a
+This evidence covers real Beads with simulated workers. It does not cover a
 live Copilot worker, multiple active drivers, or cross-host leases.
 
 ## Status projection
@@ -223,6 +242,11 @@ live Copilot worker, multiple active drivers, or cross-host leases.
 ```json
 {
   "backend": "beads",
+  "workerHost": {
+    "kind": "copilot-sdk",
+    "adapter": "copilot-sdk",
+    "adapterVersion": "1.0.7"
+  },
   "status": "awaiting_approval",
   "needs": {
     "action": "approve",
@@ -249,6 +273,10 @@ live Copilot worker, multiple active drivers, or cross-host leases.
 ```
 
 `status` and `needs` answer whether the run is done and what the human owes it.
+`needs` carries one action at a time: either an artifact decision, or an
+unanswered worker question, which takes precedence because it blocks a running
+turn. [Human questions](03-agents-and-interaction.md#human-questions) owns the
+question projection.
 The projection is capped at roughly 1,500 tokens. Larger content is represented
 by a path.
 
@@ -278,12 +306,19 @@ parallelism with the waves reported by structural graph validation.
 
 ## Model and effort resolution
 
-Execution metadata contains portable hints, not runtime flags. Before session
-creation, the dispatcher maps model and reasoning effort through a capability
-table. Unsupported effort is omitted rather than forwarded as a hard error.
+Execution metadata contains portable requests, not unchecked runtime flags.
+Before run creation and again before dispatch, the selected host resolves exact
+model and reasoning-effort requests through its authenticated catalog.
+Unsupported required effort fails closed. Unsupported preferred effort may
+resolve to the catalog default and records the degradation.
 
-The graph records both requested hints and resolved runtime values. The run report
-must describe what actually ran.
+Durable worker evidence distinguishes configured, requested, resolved, and
+invoked model identity and effort. A simulated host records no invoked model
+even when its profile names one. The
+[offline contracts](wip/probe-findings.md#live-default-and-evidence-contracts)
+cover persistence, negotiation, simulation labels, and mismatch refusal. A
+connected no-invocation diagnostic resolved the configured Sonnet 5 and Opus 5
+IDs on 2026-08-07; live invocation remains unvalidated.
 
 ## Next reading
 

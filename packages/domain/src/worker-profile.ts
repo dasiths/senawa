@@ -23,6 +23,7 @@ export const WorkerProfileSchema = z
           .object({
             id: NonEmptyStringSchema,
             effort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
+            effortMode: z.enum(["required", "preferred"]).optional(),
           })
           .strict(),
         tools: z.array(WorkerCapabilitySchema).min(1),

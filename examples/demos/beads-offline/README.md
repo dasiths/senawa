@@ -2,7 +2,7 @@
 
 This no-credit demo builds Senawa, creates an isolated temporary repository, and
 runs the standard workflow through the real CLI and loopback browser command
-path with deterministic workers. Mutable run, phase, task, dependency, gate,
+path with explicitly selected simulated workers. Mutable run, phase, task, dependency, gate,
 and terminal state is stored in a real Beads database. Immutable documents and
 append-only evidence remain in the work directory.
 

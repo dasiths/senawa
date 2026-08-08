@@ -8,8 +8,8 @@ import { authorizeWorkerPaths, resolveWorkerAuthorization } from "./authorizatio
 import { DeterministicWorkerBindingRegistry, recordingBindingHandlers } from "./bindings.js";
 import {
   buildCopilotArguments,
-  DeterministicWorkerAdapter,
   RecordingWorkerAdapter,
+  SimulatedWorkerAdapter,
   SubprocessWorkerAdapter,
 } from "./worker-adapters.js";
 import { runWorkerSessionConformance } from "./worker-conformance.test-support.js";
@@ -51,7 +51,7 @@ const turn: WorkerTurn = {
 
 runWorkerSessionConformance(
   [
-    { name: "deterministic", createAdapter: () => new DeterministicWorkerAdapter() },
+    { name: "simulated", createAdapter: () => new SimulatedWorkerAdapter() },
     {
       name: "fake subprocess",
       async createAdapter() {
@@ -106,7 +106,7 @@ describe("worker adapter conformance", () => {
   });
 
   it.each([
-    ["deterministic", () => new DeterministicWorkerAdapter()],
+    ["simulated", () => new SimulatedWorkerAdapter()],
     ["recording", () => new RecordingWorkerAdapter()],
   ])(
     "supports create, resume, inspect, cancel, and release for %s",
@@ -212,7 +212,7 @@ describe("worker adapter conformance", () => {
     expect(resumeArguments).not.toContain("--model");
   });
 
-  it("enforces normalized task and frozen path authorization", () => {
+  it("enforces frozen and repository containment while task paths stay advisory", () => {
     const authorization = resolveWorkerAuthorization({
       ownerKind: "task",
       requestedCapabilities: profile.spec.tools,
@@ -234,9 +234,103 @@ describe("worker adapter conformance", () => {
     ).toBe(false);
     expect(
       authorizeWorkerPaths(authorization, "write", [
-        { path: "packages/workers/src/link.ts", resolvedPath: "outside/link.ts" },
+        { path: "packages/workers/src/link.ts", resolvedPath: "../outside/link.ts" },
       ]).allowed,
     ).toBe(false);
+    // Task paths are advisory, so a write outside them is recorded rather than refused.
+    expect(
+      authorizeWorkerPaths(authorization, "write", [{ path: "packages/domain/src/index.ts" }]),
+    ).toEqual({ allowed: true });
+  });
+
+  it("permits glob-shaped read requests while keeping writes concrete", () => {
+    const authorization = resolveWorkerAuthorization({
+      ownerKind: "task",
+      requestedCapabilities: profile.spec.tools,
+      adapterCapabilities: profile.spec.tools,
+      taskPaths: ["packages/workers/src"],
+      frozenPaths: ["packages/workers/src/frozen/**"],
+    });
+    for (const path of [
+      "**",
+      "**/*.mjs",
+      "experiments/**/*.mjs",
+      "experiments/probes/*.mjs",
+      "*.md",
+      ".",
+      "packages/workers/src/authorization.ts",
+    ]) {
+      expect(authorizeWorkerPaths(authorization, "read", [{ path }])).toEqual({ allowed: true });
+    }
+    for (const path of ["../outside/**", "/etc/**", "c:/windows/**", "..*/secrets", ".."]) {
+      expect(authorizeWorkerPaths(authorization, "read", [{ path }])).toEqual({
+        allowed: false,
+        path,
+        reason: "Path is not repository-relative",
+      });
+    }
+    expect(
+      authorizeWorkerPaths(authorization, "read", [
+        { path: "packages/**", resolvedPath: "../outside/**" },
+      ]),
+    ).toEqual({
+      allowed: false,
+      path: "packages/**",
+      reason: "Resolved path escapes the repository",
+    });
+  });
+
+  it("refuses pattern-shaped writes without weakening containment", () => {
+    const authorization = resolveWorkerAuthorization({
+      ownerKind: "task",
+      requestedCapabilities: profile.spec.tools,
+      adapterCapabilities: profile.spec.tools,
+      taskPaths: ["packages/workers/src"],
+      frozenPaths: ["packages/workers/src/frozen/**"],
+    });
+    expect(
+      authorizeWorkerPaths(authorization, "write", [{ path: "packages/workers/src/*.ts" }]),
+    ).toEqual({
+      allowed: false,
+      path: "packages/workers/src/*.ts",
+      reason: "Write path must be a concrete repository-relative file",
+    });
+    expect(authorizeWorkerPaths(authorization, "write", [{ path: "..*/secrets.ts" }])).toEqual({
+      allowed: false,
+      path: "..*/secrets.ts",
+      reason: "Path is not repository-relative",
+    });
+    expect(
+      authorizeWorkerPaths(authorization, "write", [{ path: "packages/workers/src/index.ts" }]),
+    ).toEqual({ allowed: true });
+    expect(
+      authorizeWorkerPaths(authorization, "write", [
+        { path: "packages/workers/src/frozen/data.ts" },
+      ]).allowed,
+    ).toBe(false);
+    expect(
+      authorizeWorkerPaths(authorization, "write", [{ path: "packages/domain/src/index.ts" }])
+        .allowed,
+    ).toBe(true);
+  });
+
+  it("keeps policy scope normalization free of interior wildcards", () => {
+    const authorizationInput = {
+      ownerKind: "task" as const,
+      requestedCapabilities: profile.spec.tools,
+      adapterCapabilities: profile.spec.tools,
+      frozenPaths: [],
+    };
+    expect(() =>
+      resolveWorkerAuthorization({ ...authorizationInput, taskPaths: ["packages/*/src"] }),
+    ).toThrow("Invalid repository-relative policy path");
+    expect(() =>
+      resolveWorkerAuthorization({ ...authorizationInput, taskPaths: ["packages/**/src"] }),
+    ).toThrow("Invalid repository-relative policy path");
+    expect(
+      resolveWorkerAuthorization({ ...authorizationInput, taskPaths: ["packages/workers/**"] })
+        .taskPaths,
+    ).toContain("packages/workers/**");
   });
 
   it("binds authorized operations and rejects malformed or cross-owner calls", async () => {
@@ -272,5 +366,54 @@ describe("worker adapter conformance", () => {
       accepted: true,
     });
     expect(calls).toHaveLength(1);
+  });
+
+  it("exposes the per-criterion completion contract on the task completion binding", () => {
+    const authorization: WorkerAuthorization = {
+      runId: turn.runId,
+      owner: turn.owner,
+      profileDigest: turn.profileDigest,
+      semanticCapabilities: ["senawa.task.done"],
+      readablePaths: [],
+      writablePaths: ["packages/workers"],
+      frozenPaths: [],
+      allowedCommands: [],
+    };
+    const binding = new DeterministicWorkerBindingRegistry(
+      recordingBindingHandlers([]),
+    ).bindingsFor(turn, authorization)[0];
+
+    expect(binding?.inputSchema).toMatchObject({
+      required: ["summary"],
+      additionalProperties: false,
+      properties: {
+        criteria: {
+          type: "array",
+          items: {
+            required: ["id", "outcome", "summary"],
+            properties: {
+              outcome: { enum: ["satisfied", "blocked", "not-applicable"] },
+              evidence: {
+                items: {
+                  properties: {
+                    kind: { enum: ["file", "sensor", "command", "repository-delta"] },
+                    relationship: {
+                      enum: [
+                        "created",
+                        "modified",
+                        "deleted",
+                        "reviewed",
+                        "validated",
+                        "referenced",
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
   });
 });

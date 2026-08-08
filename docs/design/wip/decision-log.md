@@ -43,6 +43,257 @@ Copy this section for each idea and update it in place as the idea matures.
 
 ## Decisions
 
+### 2026-08-08: Advisory path scope and claimed task completion
+
+* Status: `accepted`
+* Owner: `docs/design/04-sensors-gates-and-enforcement.md`
+* Question: Should Senawa refuse work based on which files a worker edited, and
+    should it adjudicate a worker's completion claim against measured repository
+    deltas?
+* Context: Live run `run-73ec3699` escalated `fix-sanitizer` five times without a
+    single defect in the work. Attempt 1 was refused for citing a file outside
+    the task scope, attempts 2 and 4 for `required` with no measured in-scope
+    delta once the correct edit already existed, and attempt 5 for out-of-scope
+    changes made by the orchestrator rather than the worker. Enforcement produced
+    false refusals at the same rate it was meant to prevent false success.
+* Options: Split per-attempt and per-task baselines to keep enforcement, or stop
+    adjudicating attribution and record it instead.
+* Evidence needed: Whether attribution enforcement ever caught bad work that the
+    deterministic command sensors did not.
+* Probe: `not started`; the evidence is the measured escalation chain above.
+* Outcome: `accepted`. Task `paths` are advisory and recorded. The completion
+    submission stays mandatory and schema-valid, now with a required per-criterion
+    account, and Senawa records the claim rather than verifying it. The frozen
+    set, `repositoryChange: forbidden`, repository containment, and the
+    deterministic command sensors remain blocking.
+* Promotion: `docs/design/04-sensors-gates-and-enforcement.md` sections
+    `Acceptance evidence` and `Measured task-change evidence`.
+
+### 2026-08-08: Worker tooling repair, artifact structure, phase-ordered frontier, and console round two
+
+* Status: `probing`
+* Owner: `docs/design/02-workflows-and-lifecycle.md`,
+    `docs/design/03-agents-and-interaction.md`,
+    `docs/design/04-sensors-gates-and-enforcement.md`, and
+    `docs/design/05-runtime-and-state.md`
+* Question: Can a live worker read the repository and report a blocking question
+    without stalling, can version 1 artifacts carry the structure a mature
+    process needs without breaking existing artifacts, can plan phases order the
+    task frontier without a persistence change, and can the console separate
+    destructive controls from routine progression while making an unanswered
+    question impossible to miss?
+* Context: Live run `run-a15a4785` stalled for ten minutes and wrote nothing.
+    Four causes were observed in that run: every wildcard read was denied, so
+    `glob` and `grep` never returned a file; the implementor profile requested
+    `process.run`, which the SDK host always denies, so the worker planned
+    commands it could not run; a content-exclusion policy masked the probe's
+    credential-shaped literal, so the fixture looked syntactically broken to the
+    worker reading it; and the worker's question blocked inside `senawa.ask`
+    while `work show` reported `needs: null` for the entire stall. Separately,
+    the plan schema had no phases and no todos, so a plan could not express
+    ordering, and the console kept End beside Resume, rendered artifacts at rail
+    width, and stole scroll position from a reader.
+* Options: Loosen path validation globally, or split policy-path and
+    request-path validation so reads may use patterns while writes stay
+    concrete. Build a command bridge for `process.run`, or remove the request and
+    report unavailable capabilities in the prompt. Pause the run on a question,
+    or surface it as a first-class need and bound the worker's wait. Version the
+    artifact schemas, or evolve them additively with every new field optional.
+    Add a phase concept to persistence, or expand phase order into task
+    dependencies at import. Keep one console control column, or separate the run
+    bar, node toolbar, and danger zone.
+* Evidence needed: Contract tests must show glob and grep reads accepted,
+    traversal attempts refused, writes still bound by task scope and the frozen
+    set, a prompt that names unsupported capabilities, a pending question in the
+    status projection and CLI, a bounded question wait that returns a named
+    refusal, parity between the zod and JSON Schema definitions across a fixture
+    corpus, legacy artifacts and plans without phases still validating and
+    executing, phase-derived dependencies with cycle detection and a fan-in cap,
+    and string-contract tests over the production console assets for the run bar,
+    node toolbar, danger-zone confirmation, question banner, asset dialog, and
+    scroll pinning.
+* Evidence needed: A live SDK run must complete a turn that actually reads the
+    repository and either produces an artifact or reports a named blocking
+    question. Nothing below establishes that.
+* Probe: `experiments/probes/worker-sessions/README.md` for the terminal
+    projection fixture; the live workflow check remains planned in
+    `experiments/probes/orchestration/README.md`
+* Outcome: `accepted offline` for the split path validation, the capability
+    report in the task prompt, the pending-question need and bounded wait, the
+    additive artifact structure, plan-phase expansion at import, the deterministic
+    artifact-integrity sensor, and the console separation. These passed offline
+    unit and contract tests in the production packages. No live model exercised
+    any of them, so the four defects are repaired against tests, not against a
+    repeat of `run-a15a4785`.
+* Outcome: `measured-no-credit` for the tmux wrap-boundary secret leak. An
+    80-column pane capture split `token=worker-alpha-secret` across a line
+    boundary, and assignment-shaped redaction masked only the first fragment. The
+    residue matcher detected it, so the no-credit probe failed rather than
+    passing quietly. The sanitizer was then fixed by scoping the
+    wrap-continuation redaction clause to `capture-pane` output only, since only
+    tmux pane capture can hard-wrap a value; a subsequent `run-probe` attempt
+    measured `bash experiments/probes/worker-sessions/run.sh` passing under tmux
+    `3.3a` with the fix applied. See
+    [Terminal wrap boundaries defeat assignment-shaped redaction](probe-findings.md#terminal-wrap-boundaries-defeat-assignment-shaped-redaction).
+* Outcome: `measured-from-live-run` for the four defects themselves. They were
+    observed in `run-a15a4785`, not inferred from reading code. See
+    [Worker tooling defects from a failed live run](probe-findings.md#worker-tooling-defects-from-a-failed-live-run).
+* Promotion: Path authorization is promoted to
+    [Path authorization](../03-agents-and-interaction.md#path-authorization);
+    capability reporting to
+    [Role instructions and briefs](../03-agents-and-interaction.md#role-instructions-and-briefs)
+    and [Worker profiles](../02-workflows-and-lifecycle.md#worker-profiles);
+    the pending-question need to
+    [Human questions](../03-agents-and-interaction.md#human-questions) and
+    [Status projection](../05-runtime-and-state.md#status-projection);
+    artifact structure and plan phases to
+    [Artifact structure](../02-workflows-and-lifecycle.md#artifact-structure) and
+    [Plan phases](../02-workflows-and-lifecycle.md#plan-phases);
+    the integrity sensor to
+    [Artifact integrity](../04-sensors-gates-and-enforcement.md#artifact-integrity);
+    and console separation to
+    [Run console presentation](../03-agents-and-interaction.md#run-console-presentation).
+    The live-run claim and the terminal sanitizer repair remain unpromoted.
+
+### 2026-08-07: Completion evidence, console usability, commit writes, and external workers
+
+* Status: `probing`
+* Owner: `docs/design/02-workflows-and-lifecycle.md`,
+    `docs/design/03-agents-and-interaction.md`,
+    `docs/design/04-sensors-gates-and-enforcement.md`,
+    `docs/design/05-runtime-and-state.md`, and
+    `docs/design/06-provenance-and-observability.md`
+* Question: Can per-criterion completion evidence replace the blanket per-task
+    repository-change requirement, can the run console stay usable for large
+    payloads and small viewports, can Beads commits stop rewriting unchanged
+    nodes, and can workers run as external tmux-hosted processes with live
+    browser terminals?
+* Context: `repositoryChange: required` forced every task to edit files, so an
+    audit or validation task could only close by manufacturing an edit, and a
+    closed task recorded no link between an acceptance item and the files that
+    satisfied it. The console rendered artifacts as one unbounded block with no
+    way to reclaim horizontal space. Beads commits rewrote every phase and task
+    on every transition. Long-lived external workers with interactive terminals
+    were proposed as an alternative execution model.
+* Options: Keep the blanket change requirement, or make completion a
+    per-criterion claim that the driver resolves against measured evidence.
+    Keep one fixed console layout, or add collapsible and resizable rails with a
+    bounded JSON viewer. Keep unconditional convergence, or diff before writing.
+    Keep in-process workers, or host them externally with a live terminal.
+* Evidence needed: For completion evidence, an audit-style task must close
+    without a repository change while an implementation task must still fail
+    without resolvable change evidence, and fabricated, out-of-scope, frozen, or
+    unmatched claims must be refused.
+* Evidence needed: For the console, string-contract tests over the production
+    assets must show collapse, resize, persistence, keyboard control, a pending
+    decision badge, bounded JSON rendering, and no HTML construction from run
+    content.
+* Evidence needed: For commit writes, a converge run must issue zero node writes
+    when nothing changed, still converge changed nodes and unresolved pending
+    operations, and show a measured reduction in `bd` invocations and wall time.
+* Evidence needed: For external workers, tmux substrate behavior, detached
+    reattachment across a Senawa restart, an authenticated per-turn command
+    bridge, and read-only terminal streaming must each be measured before any
+    live run.
+* Probe: `experiments/probes/worker-sessions/README.md` for the external-worker
+    and terminal stages, and `experiments/probes/beads-graph/README.md` for
+    Beads latency
+* Outcome: `accepted offline` for the completion-evidence contract. Structured
+    acceptance criteria with derived IDs, the typed per-criterion submission,
+    driver-authored assessment, advisory `reviewed` and `referenced`
+    relationships, refusal of unmatched, unresolvable, out-of-scope, and frozen
+    references, and the `task-acceptance` gate sensor passed offline tests. No
+    live model produced or defended a submission.
+* Outcome: `accepted offline` for the console layout and JSON viewer. Collapsible
+    and resizable rails, keyboard separators, persisted layout, the pending
+    decision badge, the bounded searchable tree, and artifact access for any
+    phase that has an artifact passed offline string-contract tests in the
+    production browser assets. No usability study or browser-automation run was
+    performed.
+* Outcome: `measured` for the Beads commit-write reduction. On a five-phase,
+    ten-task graph with `bd 1.1.2`, converging only changed nodes issued 81%
+    fewer `bd` commands and reduced one commit from 35.8 s to 6.3 s. See
+    [Transition latency](probe-findings.md#transition-latency).
+* Outcome: `probing` for external tmux-hosted workers and live browser
+    terminals. Nothing is implemented. Tmux remains absent from the recorded
+    environment, so no session, pane, reattachment, or streaming behavior has
+    been measured. Human terminal input is recorded as incompatible as an
+    authority channel and is excluded from the staged path.
+* Promotion: Completion evidence is promoted to
+    [Acceptance criteria](../02-workflows-and-lifecycle.md#acceptance-criteria) and
+    [Acceptance evidence](../04-sensors-gates-and-enforcement.md#acceptance-evidence);
+    console behavior to
+    [Run console presentation](../03-agents-and-interaction.md#run-console-presentation);
+    report rendering to
+    [Report structure](../06-provenance-and-observability.md#report-structure);
+    commit convergence to
+    [Runtime and State](../05-runtime-and-state.md). External workers and live
+    terminals remain unpromoted.
+
+### 2026-08-07: Live execution, exact evidence, approval presentation, and tmux
+
+* Status: `probing`
+* Owner: `docs/design/01-system-model.md`,
+    `docs/design/02-workflows-and-lifecycle.md`,
+    `docs/design/03-agents-and-interaction.md`,
+    `docs/design/04-sensors-gates-and-enforcement.md`,
+    `docs/design/05-runtime-and-state.md`,
+    `docs/design/06-provenance-and-observability.md`, and
+    `docs/design/07-implementation-and-operations.md`
+* Question: Can Senawa make live SDK execution the explicit persisted default,
+    bind phase and task outcomes to exact consumed and repository evidence,
+    present immutable approval artifacts without transferring human authority,
+    and project stable per-turn tmux terminals without entering worker sessions?
+* Context: Simulated run `run-7a3b2318-05ad-4431-a827-fc74577fce9e`
+    completed the lifecycle without changing repository files. It exposed
+    false-success paths but provides no live-model or tmux evidence.
+* Options: Retain implicit simulation and aggregate evidence, or require an
+    explicit persisted worker host with no live-to-simulation fallback, exact
+    evidence manifests and repository deltas, artifact-bound approval
+    presentation, and a separately proven terminal substrate
+* Evidence needed: For the live default, an authenticated catalog-confirmed SDK
+    workflow must persist and resume the selected host, report the invoked
+    adapter and resolved model, and stop rather than simulate after live-host
+    failure.
+* Evidence needed: For exact evidence, phase and task prompts, artifact
+    provenance, repository deltas, gates, recovery, and verification must resolve
+    the same versioned inputs; required no-op work and failing verification must
+    be refused.
+* Evidence needed: For approval presentation, CLI and browser projections must
+    bind path, version, and digest to a bounded recommendation-free overview and
+    complete artifact access, while only an explicit human choice authorizes the
+    decision.
+* Evidence needed: For tmux, a no-credit deterministic-shell probe must measure
+    stable session and pane identity, bounded capture, detach and reconnect,
+    exit status, sanitization, and independent browser-terminal projection
+    before any separately cost-labeled live run.
+* Probe: `experiments/probes/worker-sessions/README.md`, with live workflow,
+    evidence, and approval checks planned in the existing orchestration subject
+* Outcome: `accepted offline` for canonical host naming and persistence, explicit
+    simulation, no-fallback composition, exact input manifests, trusted
+    repository deltas, schema-aware verification, artifact-bound presentation,
+    version-bound decisions, and report classification. Production adapters and
+    application paths passed offline tests, including a measured temporary Git
+    repository. These results do not establish authenticated model availability
+    or live execution quality.
+* Outcome: `accepted offline` for the bounded, sanitized, independently keyed
+    per-turn browser projection fixture. Two no-credit tests passed on
+    2026-08-07. This does not establish production browser integration with
+    tmux-hosted workers.
+* Outcome: `documentation-only skip` for tmux in the recorded Debian 12
+    environment because tmux was unavailable. Session and pane identity,
+    capture, detach and reconnect, exit status, disappearance, and cleanup remain
+    unmeasured.
+* Outcome: `measured` for authenticated Sonnet 5 and Opus 5 catalog availability
+    on 2026-08-07. `senawa doctor --live` resolved every configured role to its
+    exact requested model and the implementor's preferred `high` effort without
+    invoking a model. A complete live SDK workflow, live model quality and
+    telemetry, and tmux substrate behavior remain pending. The overall decision
+    and tmux production design remain `probing`.
+* Promotion: Offline contracts are promoted to the owning numbered guides and
+    linked to [Live default and evidence contracts](probe-findings.md#live-default-and-evidence-contracts).
+    Live-model and tmux claims remain unpromoted.
+
 ### 2026-08-06: Durable browser command receipts
 
 * Status: `accepted`

@@ -5,7 +5,7 @@ metadata:
   name: planner
 spec:
   model:
-    id: claude-sonnet-4.6
+    id: claude-opus-5
   tools:
     - repository.read
     - senawa.phase.submit

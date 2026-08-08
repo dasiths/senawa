@@ -28,6 +28,11 @@ export function runtimeStateContract(create: () => Promise<Reopenable<RunPersist
       await harness.current.createRun(state, "start");
       const first = await harness.current.readRun(state.identity.runId);
       expect(first.revision).toBe("1");
+      expect(first.state.identity.workerHost).toEqual({
+        kind: "simulated",
+        adapter: "simulated-worker",
+        adapterVersion: "1",
+      });
       const ended = structuredClone(first.state);
       ended.status = "ended";
       ended.endReason = "contract complete";
@@ -238,6 +243,78 @@ export function dispatchProjectionContract(
       );
       expect(projection.unsettledDispatch?.dispatchId).toBe("dispatch-one");
       expect(projection.unsettledDispatch?.operatorAction).toContain("Resume");
+    });
+
+    it("preserves exact task repository evidence after restart", async () => {
+      const harness = await create();
+      const state = createRuntimeFixture("run-task-evidence");
+      state.dispatches.push({
+        dispatchId: "dispatch-task",
+        operationId: "operation-task",
+        turnId: "turn-task",
+        sessionId: "session-task",
+        ownerKind: "task",
+        ownerId: "task-one",
+        operation: "create",
+        workAttempt: 1,
+        dispatchFailure: 0,
+        createdAt: state.identity.createdAt,
+        updatedAt: state.identity.createdAt,
+        status: "completed",
+        repositoryBaseline: {
+          version: 1,
+          kind: "repository-baseline",
+          runId: state.identity.runId,
+          taskId: "task-one",
+          attempt: 1,
+          dispatchId: "dispatch-task",
+          turnId: "turn-task",
+          expectation: "required",
+          authorizedPaths: ["packages/application"],
+          frozenPaths: [".senawa/**"],
+          head: "head-before",
+          entries: [{ path: "README.md", status: " M", digest: "a".repeat(64) }],
+          capturedAt: state.identity.createdAt,
+          uncertainty: [],
+          digest: "b".repeat(64),
+          evidencePath: "evidence/repository/tasks/task-one/baseline.json",
+        },
+        repositoryDelta: {
+          version: 1,
+          kind: "repository-delta",
+          runId: state.identity.runId,
+          taskId: "task-one",
+          attempt: 1,
+          dispatchId: "dispatch-task",
+          turnId: "turn-task",
+          expectation: "required",
+          baselineDigest: "b".repeat(64),
+          headBefore: "head-before",
+          headAfter: "head-before",
+          preExistingChanges: ["README.md"],
+          changedPaths: [
+            { path: "packages/application/src/run.ts", status: " M", digest: "c".repeat(64) },
+          ],
+          inScopeChanges: ["packages/application/src/run.ts"],
+          outOfScopeChanges: [],
+          frozenChanges: [],
+          uncertainty: [],
+          workerClaim: { reported: true, changed: false, agreement: "disagree" },
+          capturedAt: state.identity.createdAt,
+          digest: "d".repeat(64),
+          evidencePath: "evidence/repository/tasks/task-one/delta.json",
+        },
+      });
+
+      await harness.current.createRun(state, "start-task-evidence");
+
+      const reopened = await harness.reopen().readRun(state.identity.runId);
+      expect(reopened.state.dispatches[0]?.repositoryBaseline).toEqual(
+        state.dispatches[0]?.repositoryBaseline,
+      );
+      expect(reopened.state.dispatches[0]?.repositoryDelta).toEqual(
+        state.dispatches[0]?.repositoryDelta,
+      );
     });
   });
 }

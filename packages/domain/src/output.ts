@@ -1,8 +1,14 @@
 import { z } from "zod";
-import { IdentifierSchema, NonEmptyStringSchema, TimestampSchema } from "./common.js";
+import {
+  ArtifactIdSchema,
+  IdentifierSchema,
+  NonEmptyStringSchema,
+  TimestampSchema,
+} from "./common.js";
 
+/** A task owner carries the plan-authored task key, so this accepts artifact ids. */
 export const OutputOwnerSchema = z
-  .object({ kind: z.enum(["run", "phase", "task"]), id: IdentifierSchema })
+  .object({ kind: z.enum(["run", "phase", "task"]), id: ArtifactIdSchema })
   .strict();
 
 export const OutputRecordSchema = z

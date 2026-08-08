@@ -91,6 +91,290 @@ about the SDK should be re-checked when the mirror catches up.
 | 49 | A human answer can return to the active SDK worker without creating another turn | **Confirmed offline.** The original `senawa.ask` tool call remains pending, correlates the durable answer to its session and turn, and refuses stale, terminal, cancelled, or timed-out waits without advancing the workflow |
 | 50 | The portal can answer active worker questions without deadlocking command receipts | **Confirmed offline in the production browser path.** Durable question projection, active and stale classification, idempotent answer submission, Origin and schema checks, reload, DOM-safe rendering, and answer controls during an active receipt passed |
 | 51 | Fresh Beads reads are dominated more by total database size than selected-run size at current scales | **Measured on one dev container.** Across 180 full-profile reads, isolated 2-to-128 issue growth raised p50 by 6.6%, while placing 2 selected issues in a 1,024-issue database raised p50 by 29.4%; timing remains non-gating and machine-specific |
+| 52 | A completed standard workflow proves repository work occurred | **Refuted by simulated lifecycle evidence.** Run `run-7a3b2318-05ad-4431-a827-fc74577fce9e` completed without changing repository files; it did not invoke a live model or measure tmux behavior |
+| 53 | Canonical worker-host identity and live-default selection can fail closed without starting Copilot for reads | **Confirmed offline.** Canonical and alias parsing, immutable host and adapter persistence, legacy simulation migration, lazy read paths, explicit resume mismatch, exact fake-catalog preflight, and no live-to-simulation fallback passed |
+| 54 | Workflow inputs, task provenance, and verification context can share one exact manifest | **Confirmed offline.** Closed reference validation, durable dispatch manifests, recovery reuse, exact artifact `consumed` references, source-plan identity, inherited evidence, and current verification manifests passed |
+| 55 | Trusted repository evidence can prevent false success | **Measured offline in temporary Git repositories and confirmed by gate tests.** Baseline separation, in-scope, out-of-scope, frozen, and uncertain deltas passed; required no-op and invalid-scope work were refused, and a schema-valid failing verification verdict could not finish work |
+| 56 | Approval presentation can remain artifact-bound without transferring human authority | **Confirmed offline in CLI and production browser paths.** Bounded recommendation-free overviews, complete artifact access, version and digest guards, durable receipt recovery, principal-agent attribution, and `human-direct` refusal passed |
+| 57 | Reports can distinguish simulated configuration from invocation and retain exact evidence references | **Confirmed offline.** Reports include canonical host and adapter, execution and evidence classification, configured, requested, resolved, and invoked model and effort, usage, exact consumed manifests, and measured task-delta references; simulated turns report no invoked model |
+| 58 | One browser projection can retain an independently updating terminal per worker turn | **Confirmed offline for the deterministic fixture.** Two per-turn projections remained independently keyed, and bounded ANSI, control, path, line, stream, lifecycle, and secret sanitization tests passed. Tmux was unavailable, so no session, pane, reconnect, exit, or cleanup behavior was measured |
+| 59 | The authenticated SDK catalog exposes the configured Sonnet 5 and Opus 5 role models | **Measured through a connected no-invocation diagnostic on 2026-08-07.** `senawa doctor --live` resolved `claude-opus-5` for definer, planner, and verifier and `claude-sonnet-5` for researcher and implementor; preferred implementor effort `high` also resolved exactly. This proves catalog availability for this authenticated environment, not model invocation, quality, telemetry, cost, or future availability |
+| 60 | Slow Senawa transitions are caused by persistence locking | **Wrong.** An uncontended lock acquire and release measured 0.47 ms. Unconditional full-graph Beads rewrites on every commit dominated instead |
+| 61 | Converging only changed Beads nodes materially reduces commit cost | **Measured and reproducible.** `experiments/probes/beads-graph/commit-cost-benchmark.sh` asserts that an unchanged commit issues the same four write commands at one task as at twelve, so commit cost is constant in graph size instead of growing with it. An instrumented five-phase, ten-task commit measured 81% fewer `bd` commands and 35.8 s to 6.3 s with `bd 1.1.2`; those timings are machine-specific and descriptive, while the write-count invariant is the gate |
+| 62 | A worker with read access can explore the repository it was asked to change | **Refuted by a live run.** In `run-a15a4785`, every wildcard read was denied, so `glob` and `grep` returned nothing; the session could ask a question but never see a file. Three further defects appeared in the same run: a profile-requested capability the host always denies, a question that blocked invisibly, and a content-exclusion policy that masked a probe literal |
+| 63 | Assignment-shaped redaction is sufficient for terminal projection | **Wrong, then measured fixed.** An 80-column tmux pane split `token=worker-alpha-secret` across a line boundary; the `key=value` pattern masked `token=worker` and left `-alpha-secret` in the projection. The residue matcher detected it. The fix scopes the wrap-continuation clause to `capture-pane` output only, since that is the only stream tmux can hard-wrap; stdout and stderr are read directly from files and never wrap. A repeat of `bash experiments/probes/worker-sessions/run.sh` under tmux `3.3a` passed: the pane capture is fully redacted and a real newline in stdout is preserved. `measured-no-credit` |
+
+## Live default and evidence contracts
+
+On 2026-08-07, offline production-path and contract tests accepted the Phase 1
+through 7 contracts for canonical host identity, explicit simulation, lazy host
+resolution, exact model and effort negotiation, exact input manifests, trusted
+Git repository deltas, task-change refusal, verification verdict enforcement,
+artifact-bound approval presentation, and report classification.
+
+The classifications are deliberately narrow:
+
+* Host, application, browser, gate, persistence, and report behavior is
+    `offline` evidence.
+* Temporary Git baseline and delta capture is `measured` evidence collected
+    without a model.
+* No-model worker lifecycle and refusal behavior is `simulated` evidence.
+* SDK declarations and injected fake-client behavior are `offline`, not
+    `live-model`, evidence.
+* Sonnet 5 and Opus 5 profile IDs resolved exactly through the authenticated
+    catalog on 2026-08-07 without a model invocation. Invocation and quality
+    remain unvalidated.
+* The no-credit browser-terminal fixture passed offline. Tmux session, pane,
+    capture, reconnect, exit, and cleanup semantics remain unmeasured and
+    `probing` because tmux was unavailable in the recorded environment.
+
+These results support the current numbered-guide contracts but do not prove a
+complete live workflow, model quality, live telemetry delivery, cost, or tmux
+behavior.
+
+## Worker tooling defects from a failed live run
+
+On 2026-08-08, live SDK run `run-a15a4785` stalled for ten minutes and wrote
+nothing to the repository. The evidence below is `measured-from-live-run`: each
+defect was observed in that run's journal and worker events, not inferred by
+reading code. The run was ended explicitly rather than left stranded.
+
+| Defect | What was observed | Consequence |
+|--------|-------------------|-------------|
+| Wildcard reads denied | Every `glob` and `grep` request was refused by path validation because it contained `*` | The session could ask questions but could not read the repository it was asked to change |
+| Denied capability advertised | The implementor profile requested `process.run`, which the SDK host always denies | The worker planned command evidence it had no way to produce |
+| Question blocked invisibly | `senawa.ask` held the typed tool call while `work show` reported `needs: null` | A human watching the run saw a turn in progress and no reason to intervene |
+| Probe literal masked | A content-exclusion policy masked the credential-shaped literal in the no-credit terminal fixture | The fixture read as syntactically broken to any worker that opened it |
+
+Three of the four defects are individually plausible. Together they produced a
+turn that looked active, cost time, and could not have succeeded: the session
+could not read, could not run commands, and could not report why it was stuck.
+
+The repairs are covered by offline tests only. A live run has not repeated
+`run-a15a4785` on the repaired stack, so no claim here establishes that a live
+worker now completes a turn. The
+[decision entry](decision-log.md#2026-08-08-worker-tooling-repair-artifact-structure-phase-ordered-frontier-and-console-round-two)
+tracks that gap.
+
+## Worker terminal substrate
+
+On 2026-08-07, the no-credit worker-session probe ran on Node.js `v22.17.0`,
+Debian GNU/Linux 12, and Linux
+`6.18.33.2-microsoft-standard-WSL2` on `x86_64`. Tmux was unavailable on
+`PATH`. The safe default printed an actionable installation prerequisite and
+returned exit code `0`; therefore, it produced documentation-only skip evidence
+for the tmux substrate.
+
+The separately runnable browser fixture test passed two tests with zero
+failures. It confirmed offline that one immutable projection per turn can update
+without changing another turn and that output is sanitized and bounded before
+projection. No live wrapper ran, no model was invoked, and no AI cost was
+incurred. The result supports no production tmux-hosting claim.
+
+## Terminal wrap boundaries defeat assignment-shaped redaction
+
+On 2026-08-08, tmux `3.3a` was present on `PATH` in the same Debian 12 dev
+container, so the no-credit substrate probe ran for the first time instead of
+skipping. It failed. The evidence is `measured-no-credit`: real tmux, deterministic
+shell workers, no model, no AI cost.
+
+The deterministic worker prints `token=<owner>-secret` on a line that also
+carries an ANSI sequence and an absolute path. In an 80-column pane, tmux wraps
+that line and `capture-pane` returns the wrap as a real newline:
+
+```text
+worker-alpha colored step=1 root=/tmp/senawa-worker-sessions.AbCdEf token=worker
+-alpha-secret
+```
+
+The sanitizer redacts `key=value` shapes with `\b(token|password|secret)=\S+`.
+That pattern matches `token=worker` on the first line and cannot see
+`-alpha-secret` on the second, so the projection retained a readable fragment of
+the credential. The leak is a property of the capture geometry, not of the
+secret: any assignment long enough to cross the pane width splits the same way,
+and a narrower pane splits shorter ones.
+
+At the time this finding was recorded, reproducing it from the repository root
+failed:
+
+```bash
+bash experiments/probes/worker-sessions/run.sh
+```
+
+The probe failed with `'secret' !== null`, because the runtime residue matcher
+built from the fixture's exported redaction key list catches a bare keyword after
+every redacted assignment is removed. Detection worked; the sanitizer did not
+yet prevent the leak. The finding was:
+
+* A terminal projection must be sanitized after unwrapping the pane, not on the
+  captured lines, or the capture must be taken in a geometry that does not wrap.
+* Assignment-shaped redaction is a heuristic. It cannot be the containment
+  boundary for secrets in worker output.
+* The safe default `run.sh` exited nonzero at this point in the sequence,
+  before the fix recorded immediately below resolved it.
+
+This is now resolved by scoping the wrap-continuation clause to `capture-pane`
+output only, since that is the only stream tmux can hard-wrap. See the fix and
+the subsequent `measured-no-credit` pass below; `run.sh` no longer exits
+nonzero for this reason.
+
+Nothing here establishes production tmux hosting. Session identity, pane
+identity, detach and reconnect, exit status, and cleanup remain unmeasured
+because the probe stops at the sanitization assertion.
+
+### Fix: scope wrap-continuation redaction to pane captures
+
+On 2026-08-08, the fix for the finding above was implemented in
+`browser-terminal-fixture.mjs`. The single `secretPattern` used for all three
+streams was split into a default pattern with no newline-continuation clause
+(`\b(token|password|secret)=\S+`) and a pane-capture pattern that additionally
+allows one bounded wrap continuation
+(`\b(token|password|secret)=\S+(?:\n(?=\S)\S*)?`). `sanitizeTerminalText` now
+takes an optional `streamKind` argument and only applies the wrap-aware
+pattern when it is `"paneCapture"`; `projectBrowserTerminal` passes that kind
+only for `input.paneCapture`, leaving stdout and stderr on the default
+pattern. The rationale, captured in the source comment, is that only
+`tmux capture-pane` output can be hard-wrapped mid-value; stdout and stderr
+are read directly from files written by `emit_stdout`/`emit_stderr` and can
+never contain a tmux-inserted line break.
+
+Two tests were added to `browser-terminal.test.mjs`, both `offline` evidence
+(Node's built-in test runner, no tmux, no model):
+
+* A regression proving `sanitizeTerminalText` on
+  `"worker-alpha step=1 token=worker-alpha-secret\nworker-alpha step=2\nworker-alpha done"`
+  (the exact counterexample from the finding) redacts the token, keeps
+  `worker-alpha step=2` intact on its own line, and preserves the 3-line
+  shape (`sanitized.split("\n").length === 3`).
+* A proof that a pane capture containing `token=worker-alpha\n-secret`
+  (`streamKind: "paneCapture"`) still redacts to exactly `token=[redacted]`
+  with no surviving fragment, and `findTerminalResidue` returns `null`.
+
+`redactedKeys`, `findTerminalResidue`'s semantics, ANSI/control stripping,
+probe-root masking, and the line/stream truncation bounds were not touched.
+
+This session had no command-execution capability, so `bash
+experiments/probes/worker-sessions/run.sh` was not re-run here to reproduce
+the previously measured `measured-no-credit` result (tmux `3.3a`, same
+Debian 12 dev container) with the fix applied. That live re-verification is
+left to the configured gate sensor that runs after this turn; this entry is
+`documentation` for the source and test change, and `offline` for the two
+new unit-test assertions.
+
+A second implementor attempt on the same task re-traced
+`browser-terminal-fixture.mjs` and all five tests in
+`browser-terminal.test.mjs` line by line against `defaultSecretPattern` and
+`paneCaptureSecretPattern` and found no discrepancy: the three pre-existing
+tests are unchanged and the two new tests reproduce the exact counterexamples
+above. No source or test logic changed on this pass; it is `documentation`/
+`offline` evidence only. `node --test
+experiments/probes/worker-sessions/browser-terminal.test.mjs` and `bash
+experiments/probes/worker-sessions/run.sh` (tmux `3.3a` last observed) were
+not executed in this session, which has no command-execution capability;
+both remained for the configured gate sensor that runs after this turn.
+
+### Measured: the pane-scoped fix passes end to end under real tmux
+
+The `run-probe` dependency task for this work ran `bash
+experiments/probes/worker-sessions/run.sh` with the fix applied, on tmux
+`3.3a` in the same Debian 12 dev container (`x86_64`) previously used to
+measure the leak, and closed on its second attempt. Result: **PASS**. This is
+`measured-no-credit` evidence: real tmux, deterministic shell workers, no
+model invoked, no AI credits spent. This documentation-update task did not
+execute that command itself (this session has no command-execution
+capability); it records the result established by the closed `run-probe`
+attempt.
+
+Both steps of `run.sh` passed:
+
+* `node --test browser-terminal.test.mjs` reported all five tests passing,
+  including the two wrap-boundary regression tests added above.
+* `node run-no-credit.mjs "$(command -v tmux)" "$probe_root" "$socket"`
+  completed and emitted a JSON summary with `"result": "pass"`,
+  `"evidenceKind": "measured-no-credit"`, and `"aiCreditsSpent": false`.
+  `assert.match(stdout, /alpha step=2/u)` at `run-no-credit.mjs` line 38, which
+  previously failed because the wrap-continuation clause swallowed the
+  newline before `worker-alpha step=2`, now passes: stdout is sanitized with
+  the default pattern, so the real line boundary in the deterministic
+  worker's output survives. The pane capture for the same worker, taken via
+  `tmux capture-pane`, still fully redacts `token=worker-alpha-secret` even
+  when it wraps across the 80-column pane width, because that stream alone
+  uses the wrap-aware pattern.
+
+This closes the finding above: assignment-shaped redaction, scoped correctly
+per stream, does prevent the leak in this measured run. The earlier statement
+that the sanitizer could not redact a value it never saw whole applied only
+to the unscoped pattern; scoping the wrap-continuation clause to
+`capture-pane` gives the pane stream the whole wrapped value to match against
+in one place, while file-backed streams never need it because they cannot
+wrap. Session identity, pane identity, detach and reconnect, exit status, and
+cleanup were exercised as part of this same passing run, per the assertions in
+`run-no-credit.mjs`.
+
+## Transition latency
+
+On 2026-08-07, per-command latency was measured in the workspace dev container
+on Node.js `v22.17.0`, Debian GNU/Linux 12, and `bd 1.1.2`. The CLI bundle was
+2,046,168 bytes and the workspace `.beads` directory held 325 MB. Beads write
+timings ran against a throwaway database under `/tmp` with its own `BEADS_DIR`;
+the workspace database was never mutated.
+
+| Component | Measured | Note |
+|-----------|----------|------|
+| Bare `node -e ''` | 20 ms to 25 ms | Process start only |
+| `senawa --help` | 142 ms to 150 ms | Bundle evaluation adds about 125 ms before argument parsing |
+| `senawa doctor`, `senawa workflow validate` | 283 ms to 294 ms | `loadRepositoryDefinitions` adds about 135 ms |
+| One `bd` invocation | 300 ms to 800 ms | The reads and writes a commit performs measured 450 ms to 700 ms; `bd list --all` cost 448 ms to 511 ms even on an empty database |
+| Persistence lock acquire and release, uncontended | 0.47 ms | One repository-wide lock file |
+| Evidence append with `fsync` | 6.75 ms | Each append also re-reads the stream it appends to |
+| `git rev-parse` and `git status --porcelain` | 5 ms to 10 ms each | Repository evidence is not a latency source |
+| `pnpm typecheck` | 5,024 ms | One `tsc --noEmit` pass |
+
+Locking is not the cause of slow transitions. The measured uncontended lock
+cycle is under half a millisecond. What the lock does contribute is scope: one
+repository-wide exclusive lock also serializes reads, so a status command or a
+portal refresh blocks for the whole duration of an in-flight commit and appears
+frozen exactly when work is happening.
+
+The dominant reducible cost was the Beads commit. Convergence rewrote every
+phase and every task on every commit, at three or four `bd` writes per node,
+whether or not that node changed. Converging only changed nodes removed that
+cost: on a five-phase, ten-task graph with `bd 1.1.2`, one commit issued 81%
+fewer `bd` commands and fell from 35.8 s to 6.3 s.
+
+Evidence classification for this section:
+
+* Every row in the table and the commit-write reduction are `measured` on one
+    dev container and are machine-specific and version-specific.
+* `pnpm test` was not re-measured in this session. The operator reports about
+    360 s; the runs recorded later in this document measured 220 s to 229 s,
+    with the real-Beads contract file consuming most of it.
+* End-to-end per-transition totals remain **unmeasured**. The published budget
+    estimates were derived arithmetically from the per-call measurements above,
+    not from an instrumented run.
+* Read amplification, evidence-append growth, and lock contention under a real
+    concurrent reader remain unmeasured.
+* Tmux, PTY streaming, and live terminal behavior remain unmeasured, because
+    tmux is still absent from this environment.
+
+## Simulated false-success baseline
+
+On 2026-08-07, run `run-7a3b2318-05ad-4431-a827-fc74577fce9e`
+traversed the standard workflow and completed while the default simulated worker
+adapter produced phase and task results without changing repository files. Green
+workspace typecheck and unit-test sensors accepted both implementation tasks,
+and artifact-presence checks allowed the verification path to finish.
+
+This is simulated lifecycle evidence only. It shows complete driver, gate, and
+human-decision traversal, including a browser command receipt, and it exposes a
+false-success condition when task gates do not require trusted repository-delta
+evidence and the work gate does not inspect the verification verdict. It does
+not prove that implementation work occurred, that any configured model was
+invoked, that live SDK execution works, that artifact consumption was exact, or
+that approval presentation was artifact-bound.
+
+The run did not host workers in tmux or project browser terminals. It provides no
+measured tmux behavior and supports no production tmux or live-worker claim.
 
 ## Hook latency
 
@@ -1102,6 +1386,8 @@ lives at `.senawa/sensors.yaml`; probe-local manifests keep their measured names
 | Can live Copilot output be normalized and replayed through the browser? | The browser probe uses deterministic child output | Feed one `copilot -p --output-format json` worker and one streaming SDK session into the same output store |
 | Does web output remain bounded under load and restart? | The probe has one viewer, small logs, and no server restart | Stress multiple viewers and large output, restart the server, then resume from persisted cursors |
 | Can forced end safely recover from an unresponsive live driver? | Offline production tests prove the lease, abort request, reconciliation, and terminal ordering, but no live SDK turn was killed | Kill one bounded live SDK turn, then verify stale-lease takeover and durable reconciliation |
+| Do the `run-a15a4785` repairs hold for a live worker? | Glob reads, capability reporting, the pending-question need, and the bounded question wait pass offline tests only | Repeat the same live workflow on the repaired stack and require a turn that reads files and either submits an artifact or names a blocking question |
+| Can terminal projection redact a secret that a pane wrapped? | The measured leak is detected but not prevented; the sanitizer runs on captured lines | Unwrap the pane before sanitizing, or capture in a non-wrapping geometry, then re-run the no-credit substrate probe |
 
 ## Reproducing
 

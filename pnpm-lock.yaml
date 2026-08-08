@@ -77,6 +77,9 @@ importers:
 
   packages/application:
     dependencies:
+      '@noble/hashes':
+        specifier: ^2.2.0
+        version: 2.2.0
       '@senawa/domain':
         specifier: workspace:*
         version: link:../domain
@@ -118,6 +121,9 @@ importers:
       '@senawa/testing':
         specifier: workspace:*
         version: link:../testing
+      '@senawa/workers':
+        specifier: workspace:*
+        version: link:../workers
 
   packages/configuration:
     dependencies:
@@ -241,6 +247,9 @@ importers:
       '@senawa/testing':
         specifier: workspace:*
         version: link:../../packages/testing
+      '@senawa/workers':
+        specifier: workspace:*
+        version: link:../../packages/workers
       esbuild:
         specifier: 0.25.12
         version: 0.25.12
@@ -753,6 +762,10 @@ packages:
     resolution: {integrity: sha1-zQWQ4px+J+NQq31qKZK1FEWFC9k=, tarball: https://ms-feed-2.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@koromix/koffi-win32-x64/-/koffi-win32-x64-3.1.2.tgz}
     cpu: [x64]
     os: [win32]
+
+  '@noble/hashes@2.2.0':
+    resolution: {integrity: sha1-ItodFqRplU/Oh3BV1VmQCmxztjs=, tarball: https://ms-feed-2.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@noble/hashes/-/hashes-2.2.0.tgz}
+    engines: {node: '>= 20.19.0'}
 
   '@rollup/rollup-android-arm-eabi@4.62.3':
     resolution: {integrity: sha1-sKtCL7YPNYPIx4noVtZKMlB/KZ4=, tarball: https://ms-feed-12.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@rollup/rollup-android-arm-eabi/-/rollup-android-arm-eabi-4.62.3.tgz}
@@ -1511,6 +1524,8 @@ snapshots:
 
   '@koromix/koffi-win32-x64@3.1.2':
     optional: true
+
+  '@noble/hashes@2.2.0': {}
 
   '@rollup/rollup-android-arm-eabi@4.62.3':
     optional: true
