@@ -108,10 +108,8 @@ from fresh `bd list --all` output so a
 long-lived portal observes independent process commits. `@senawa/reporting`
 reads an application-owned evidence projection and escapes untrusted Markdown,
 HTML, control characters, and instruction-like tags with deterministic caps. It
-renders canonical execution identity, exact consumed manifests, trusted task
+renders canonical execution identity, exact consumed manifests, measured task
 evidence, process history, and cumulative usage and cost once per dispatch.
-Internal compatibility packages were
-removed after all imports moved to final owners.
 
 The [probe findings](wip/probe-findings.md#live-default-and-evidence-contracts)
 record the Phase 1 through 7 contracts as offline or simulated evidence. Live
@@ -316,7 +314,8 @@ Each implementation slice should preserve these executable properties:
 	live execution to simulation.
 * A worker cannot resolve `bd` or mutate graph state directly.
 * A red gate prevents task closure and returns actionable findings.
-* A required no-op or out-of-scope task delta prevents task closure.
+* A missing or schema-invalid completion submission prevents task closure.
+* A frozen-path write prevents task closure.
 * A failing or stale verification artifact prevents work completion.
 * Deleting the projection cache does not change resumed state.
 * A crash between intent and outcome reconciles without duplicate work.

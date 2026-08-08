@@ -5,28 +5,294 @@
   "additionalProperties": false,
   "required": ["summary", "inScope", "acceptanceCriteria"],
   "properties": {
-    "summary": { "type": "string", "minLength": 1 },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "problemStatement": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "description": "What is wrong today, stated so a reader can disagree with it."
+    },
+    "currentBehavior": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "desiredBehavior": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
     "inScope": {
       "type": "array",
       "minItems": 1,
-      "items": { "type": "string", "minLength": 1 }
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     },
     "outOfScope": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 }
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "nonGoals": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Outcomes deliberately not pursued, as distinct from work merely deferred."
     },
     "acceptanceCriteria": {
       "type": "array",
       "minItems": 1,
-      "items": { "type": "string", "minLength": 1 }
+      "items": {
+        "$ref": "#/$defs/definitionCriterion"
+      }
     },
     "constraints": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 }
+      "items": {
+        "$ref": "#/$defs/constraintEntry"
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "$ref": "#/$defs/assumption"
+      }
+    },
+    "stakeholders": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/stakeholder"
+      }
+    },
+    "risks": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "$ref": "#/$defs/risk"
+      }
+    },
+    "evidenceNeeded": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "$ref": "#/$defs/evidenceRequest"
+      },
+      "description": "Questions research must answer before planning can be trusted."
     },
     "openQuestions": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 }
+      "items": {
+        "$ref": "#/$defs/openQuestionEntry"
+      }
+    }
+  },
+  "$defs": {
+    "artifactId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$",
+      "description": "An id you choose to cross-reference entries inside this artifact. Any case is accepted; no spaces or slashes."
+    },
+    "level": {
+      "enum": ["high", "medium", "low"]
+    },
+    "evidenceKind": {
+      "enum": ["measured", "offline", "live-model", "simulated", "documentation"]
+    },
+    "definitionCriterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/artifactId"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "required": {
+          "type": "boolean",
+          "default": true
+        },
+        "measurement": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "verifiedBy": {
+          "enum": ["deterministic-gate", "verifier-review", "human-approval"]
+        }
+      }
+    },
+    "stakeholder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "role"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "role": {
+          "enum": ["requester", "owner", "reviewer", "affected"]
+        },
+        "concern": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      }
+    },
+    "assumption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statement"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/artifactId"
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "confidence": {
+          "$ref": "#/$defs/level"
+        },
+        "validation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      }
+    },
+    "evidenceRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/artifactId"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "expectedEvidenceKind": {
+          "$ref": "#/$defs/evidenceKind"
+        },
+        "why": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description", "mitigation"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/artifactId"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "likelihood": {
+          "$ref": "#/$defs/level"
+        },
+        "impact": {
+          "$ref": "#/$defs/level"
+        },
+        "mitigation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    "constraintEntry": {
+      "$ref": "#/$defs/constraintObject"
+    },
+    "constraintObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statement"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/artifactId"
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "kind": {
+          "enum": ["policy", "technical", "process", "external"]
+        }
+      }
+    },
+    "openQuestionEntry": {
+      "$ref": "#/$defs/openQuestionObject"
+    },
+    "openQuestionObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/artifactId"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "blocking": {
+          "type": "boolean",
+          "default": false
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "resolution": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      }
     }
   }
 }

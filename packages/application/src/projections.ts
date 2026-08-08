@@ -79,17 +79,29 @@ function projectOpenWorkerQuestion(
   ];
 }
 
+export type RunStatusNeed =
+  | {
+      readonly action: "approve-or-reject";
+      readonly phaseId: string;
+      readonly artifact: string;
+    }
+  | {
+      readonly action: "answer-question";
+      readonly questionId: string;
+      readonly question: string;
+      readonly ownerKind: "phase" | "task";
+      readonly ownerId: string;
+      readonly askedAt: string;
+      readonly answerCommand: string;
+    };
+
 export interface RunStatusProjection {
   readonly runId: string;
   readonly backend: RuntimeState["identity"]["backend"];
   readonly workerHost: RuntimeState["identity"]["workerHost"];
   readonly workflow: string;
   readonly status: RuntimeState["status"];
-  readonly needs: null | {
-    readonly action: "approve-or-reject";
-    readonly phaseId: string;
-    readonly artifact: string;
-  };
+  readonly needs: RunStatusNeed | null;
   readonly progress: { readonly phases: string; readonly tasks: string };
   readonly phases: ReadonlyArray<{
     readonly id: string;
@@ -179,14 +191,7 @@ export function projectRunStatus(state: RuntimeState): RunStatusProjection {
     workerHost: state.identity.workerHost,
     workflow: state.identity.workflow,
     status: state.status,
-    needs:
-      awaiting === undefined || awaiting.artifactVersion === null
-        ? null
-        : {
-            action: "approve-or-reject",
-            phaseId: awaiting.id,
-            artifact: `artifacts/${awaiting.id}/v${awaiting.artifactVersion}.json`,
-          },
+    needs: projectRunNeed(state, awaiting),
     progress: {
       phases: `${acceptedPhases}/${state.phases.length} accepted`,
       tasks: `${closedTasks}/${state.tasks.length} closed`,
@@ -243,6 +248,33 @@ export function projectRunStatus(state: RuntimeState): RunStatusProjection {
   };
 }
 
+// A live worker question outranks approval: it blocks a running turn right now.
+function projectRunNeed(
+  state: RuntimeState,
+  awaiting: RuntimePhase | undefined,
+): RunStatusNeed | null {
+  const pending = projectOpenWorkerQuestions(state)
+    .filter((question) => question.status === "answerable")
+    .sort((left, right) => left.askedSeq - right.askedSeq)[0];
+  if (pending !== undefined) {
+    return {
+      action: "answer-question",
+      questionId: pending.questionId,
+      question: truncate(pending.question, 500),
+      ownerKind: pending.ownerKind,
+      ownerId: pending.ownerId,
+      askedAt: pending.askedAt,
+      answerCommand: `senawa answer ${pending.questionId} "<answer>" --run ${state.identity.runId}`,
+    };
+  }
+  if (awaiting === undefined || awaiting.artifactVersion === null) return null;
+  return {
+    action: "approve-or-reject",
+    phaseId: awaiting.id,
+    artifact: `artifacts/${awaiting.id}/v${awaiting.artifactVersion}.json`,
+  };
+}
+
 export function projectPhaseBrief(state: RuntimeState, phaseId: string): PhaseBriefProjection {
   const phase = state.phases.find((candidate) => candidate.id === phaseId);
   if (phase === undefined) throw new Error(`Unknown phase ${phaseId}`);
@@ -261,7 +293,14 @@ export function projectPhaseBrief(state: RuntimeState, phaseId: string): PhaseBr
     status: phase.status,
     iteration: phase.iteration,
     artifactVersion: phase.artifactVersion,
-    needs: needs?.phaseId === phaseId ? needs : null,
+    needs:
+      needs?.action === "approve-or-reject" && needs.phaseId === phaseId
+        ? needs
+        : needs?.action === "answer-question" &&
+            needs.ownerKind === "phase" &&
+            needs.ownerId === phaseId
+          ? needs
+          : null,
     artifact: artifact === undefined ? null : projectArtifactOverview(state, artifact),
   };
 }
@@ -294,7 +333,7 @@ function projectArtifactOverview(state: RuntimeState, artifact: RuntimeArtifact)
 
 function artifactKind(state: RuntimeState, phaseId: string): string {
   const executor = workflowPhase(state, phaseId).executor;
-  return executor.kind === "agent" ? executor.output.schema : "legacy-phase-artifact";
+  return executor.kind === "agent" ? executor.output.schema : "non-agent-executor";
 }
 
 function artifactCounts(content: JsonObject): ReadonlyArray<{ name: string; count: number }> {

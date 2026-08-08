@@ -23,8 +23,7 @@ Drive bounded Senawa workflows
 
 Options:
   --worker-host <host>          worker execution host (choices: "simulated",
-                                "copilot-subprocess", "copilot-sdk",
-                                "deterministic", "copilot", "sdk", default:
+                                "copilot-subprocess", "copilot-sdk", default:
                                 "copilot-sdk")
   --caller <caller>             command caller attribution (choices:
                                 "principal-agent")
@@ -44,6 +43,7 @@ Commands:
   task
   plan
   ask <question>
+  questions [runId]
   answer <questionId> <answer>
   discover <title>
   note <note>
@@ -409,6 +409,15 @@ Options:
 
 ```text
 Usage: senawa ask [options] <question>
+
+Options:
+  -h, --help  display help for command
+```
+
+## senawa questions
+
+```text
+Usage: senawa questions [options] [runId]
 
 Options:
   -h, --help  display help for command

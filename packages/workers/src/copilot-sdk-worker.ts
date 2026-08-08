@@ -44,7 +44,7 @@ import type {
 import { type JsonObject, JsonObjectSchema, type WorkerCapability } from "@senawa/domain";
 import { authorizeWorkerPaths, resolveWorkerPolicy } from "./authorization.js";
 
-const sdkCapabilities: readonly WorkerCapability[] = [
+export const sdkCapabilities: readonly WorkerCapability[] = [
   "repository.read",
   "repository.edit",
   "senawa.task.done",
@@ -54,6 +54,8 @@ const sdkCapabilities: readonly WorkerCapability[] = [
   "senawa.note",
 ];
 export const SDK_TURN_TIMEOUT_MS = 600_000;
+// A worker question must expire inside the turn so the turn can report which question blocked it.
+export const WORKER_QUESTION_WAIT_TIMEOUT_MS = SDK_TURN_TIMEOUT_MS - 120_000;
 
 export interface CopilotSdkSession {
   readonly sessionId: string;

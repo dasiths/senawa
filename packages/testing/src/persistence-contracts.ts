@@ -32,7 +32,6 @@ export function runtimeStateContract(create: () => Promise<Reopenable<RunPersist
         kind: "simulated",
         adapter: "simulated-worker",
         adapterVersion: "1",
-        legacy: false,
       });
       const ended = structuredClone(first.state);
       ended.status = "ended";
@@ -45,35 +44,6 @@ export function runtimeStateContract(create: () => Promise<Reopenable<RunPersist
       });
       expect((await harness.reopen().readRun(state.identity.runId)).state.status).toBe("ended");
       expect(await harness.reopen().getActiveRunId()).toBeNull();
-    });
-
-    it("decodes legacy runs as explicitly legacy simulation", async () => {
-      const harness = await create();
-      const state = createRuntimeFixture("run-legacy-host");
-      const { workerHost: _workerHost, ...legacyIdentity } = state.identity;
-      const legacyState = {
-        ...state,
-        identity: legacyIdentity as typeof state.identity,
-      };
-
-      await harness.current.createRun(legacyState, "start-legacy");
-
-      const migrated = await harness.reopen().readRun(state.identity.runId);
-      expect(migrated.state.identity.workerHost).toEqual({
-        kind: "simulated",
-        adapter: "simulated-worker",
-        adapterVersion: "legacy",
-        legacy: true,
-      });
-      const paused = structuredClone(migrated.state);
-      paused.status = "paused";
-      await harness.reopen().commitRun({
-        runId: state.identity.runId,
-        expectedRevision: migrated.revision,
-        operationId: "commit-migrated",
-        state: paused,
-      });
-      expect((await harness.reopen().readRun(state.identity.runId)).state.status).toBe("paused");
     });
 
     it("rejects a stale runtime revision", async () => {

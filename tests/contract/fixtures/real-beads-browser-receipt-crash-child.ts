@@ -1,5 +1,5 @@
 import { startWebSupervisor } from "@senawa/browser";
-import { SimulatedWorkerHost } from "@senawa/workers";
+import { SimulatedWorkerAdapter } from "@senawa/workers";
 import { createRuntimeComposition } from "../../../apps/senawa/src/composition.js";
 import { createSenawaServices } from "../../../apps/senawa/src/services.js";
 
@@ -18,12 +18,11 @@ const composition = createRuntimeComposition(repositoryRoot, "beads");
 const services = createSenawaServices(repositoryRoot, {
   ...composition,
   runtimeBackend: "beads",
-  workerHost: new SimulatedWorkerHost(),
+  workerHost: new SimulatedWorkerAdapter(),
   workerHostIdentity: {
     kind: "simulated",
     adapter: "simulated-worker",
     adapterVersion: "1",
-    legacy: false,
   },
 });
 const neverProcess = new Promise<never>(() => undefined);

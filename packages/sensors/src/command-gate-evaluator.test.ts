@@ -410,7 +410,7 @@ describe("CommandGateEvaluator", () => {
     );
   });
 
-  it("refuses a required no-op before running repository commands", async () => {
+  it("records a required no-op without blocking the gate", async () => {
     const calls: string[] = [];
     const evaluator = new CommandGateEvaluator(repositoryRoot, {
       runner: {
@@ -428,11 +428,13 @@ describe("CommandGateEvaluator", () => {
       repositoryEvidence: repositoryDelta(),
     });
 
-    expect(evaluation.accepted).toBe(false);
+    // A missing change is now recorded as a warning, so the commands still run.
+    expect(evaluation.accepted).toBe(true);
     expect(evaluation.findings).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: "task-change-required-noop" })]),
+      expect.arrayContaining([
+        expect.objectContaining({ code: "task-change-required-noop", severity: "warning" }),
+      ]),
     );
-    expect(calls).toEqual([]);
   });
 
   it("accepts an in-scope measured delta and reports a worker-claim mismatch", async () => {
@@ -462,9 +464,9 @@ describe("CommandGateEvaluator", () => {
   });
 
   it.each([
-    ["out-of-scope", { outOfScopeChanges: ["README.md"] }, "task-change-out-of-scope"],
-    ["frozen", { frozenChanges: [".senawa/sensors.yaml"] }, "task-change-frozen"],
-  ] as const)("refuses %s measured changes", async (_name, override, code) => {
+    ["out-of-scope", { outOfScopeChanges: ["README.md"] }, "task-change-out-of-scope", true],
+    ["frozen", { frozenChanges: [".senawa/sensors.yaml"] }, "task-change-frozen", false],
+  ] as const)("records %s measured changes", async (_name, override, code, accepted) => {
     const evaluator = new CommandGateEvaluator(repositoryRoot, {
       runner: runnerReturning({ exitCode: 0, stdout: "ok", stderr: "" }),
     });
@@ -482,7 +484,8 @@ describe("CommandGateEvaluator", () => {
       }),
     });
 
-    expect(evaluation.accepted).toBe(false);
+    // Suggested paths are advisory; only the frozen set still refuses.
+    expect(evaluation.accepted).toBe(accepted);
     expect(evaluation.findings).toEqual(
       expect.arrayContaining([expect.objectContaining({ code })]),
     );
@@ -573,7 +576,163 @@ describe("CommandGateEvaluator", () => {
       expect.arrayContaining([expect.objectContaining({ code: "acceptance-assessment-missing" })]),
     );
   });
+
+  it("accepts a legacy definition that declares none of the richer structure", async () => {
+    const evaluation = await evaluateIntegrity({
+      summary: "Legacy definition",
+      inScope: ["packages/domain"],
+      acceptanceCriteria: [{ description: "The behavior is implemented" }],
+    });
+
+    expect(evaluation.accepted).toBe(true);
+    expect(evaluation.findings).toEqual([]);
+  });
+
+  it("refuses a definition with an unresolved blocking open question", async () => {
+    const evaluation = await evaluateIntegrity({
+      summary: "Blocked definition",
+      inScope: ["packages/domain"],
+      acceptanceCriteria: [{ description: "The behavior is implemented" }],
+      openQuestions: [{ id: "q-owner", question: "Who owns ordering?", blocking: true }],
+    });
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "definition-question-blocking" })]),
+    );
+  });
+
+  it("accepts a blocking definition question once it carries a resolution", async () => {
+    const evaluation = await evaluateIntegrity({
+      summary: "Resolved definition",
+      inScope: ["packages/domain"],
+      acceptanceCriteria: [{ description: "The behavior is implemented" }],
+      openQuestions: [
+        {
+          id: "q-owner",
+          question: "Who owns ordering?",
+          blocking: true,
+          resolution: "The importer owns it",
+        },
+      ],
+    });
+
+    expect(evaluation.accepted).toBe(true);
+  });
+
+  it("refuses a definition that repeats an acceptance criterion id", async () => {
+    const evaluation = await evaluateIntegrity({
+      summary: "Duplicate criteria",
+      inScope: ["packages/domain"],
+      acceptanceCriteria: [
+        { id: "ac-same", description: "First" },
+        { id: "ac-same", description: "Second" },
+      ],
+    });
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "definition-criterion-duplicate" })]),
+    );
+  });
+
+  it("refuses a research recommendation whose basis names no declared finding", async () => {
+    const evaluation = await evaluateIntegrity({
+      summary: "Dangling basis",
+      findings: [{ id: "f-one", claim: "Measured", source: "probe", evidenceKind: "measured" }],
+      recommendations: [{ id: "r-one", statement: "Do the thing", basis: ["f-absent"] }],
+    });
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "research-basis-unknown" })]),
+    );
+  });
+
+  it("accepts research whose cross references all resolve", async () => {
+    const evaluation = await evaluateIntegrity({
+      summary: "Consistent research",
+      findings: [
+        {
+          id: "f-one",
+          claim: "Measured",
+          source: "probe",
+          evidenceKind: "measured",
+          answers: ["q-one"],
+        },
+      ],
+      questions: [
+        { id: "q-one", question: "Does it hold?", status: "answered", answeredBy: ["f-one"] },
+      ],
+      alternatives: [
+        {
+          id: "alt-one",
+          option: "Other",
+          verdict: "rejected",
+          rationale: "Slower",
+          evidence: ["f-one"],
+        },
+      ],
+      recommendations: [
+        { statement: "Ship it", basis: ["f-one"], alternativesRejected: ["alt-one"] },
+      ],
+    });
+
+    expect(evaluation.accepted).toBe(true);
+    expect(evaluation.findings).toEqual([]);
+  });
+
+  it("refuses research that leaves a blocking unknown open", async () => {
+    const evaluation = await evaluateIntegrity({
+      summary: "Blocked research",
+      findings: [{ claim: "Measured", source: "probe", evidenceKind: "measured" }],
+      unknowns: [{ question: "Does the live model comply?", blocking: true }],
+    });
+
+    expect(evaluation.accepted).toBe(false);
+    expect(evaluation.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "research-unknown-blocking" })]),
+    );
+  });
 });
+
+async function evaluateIntegrity(artifact: JsonObject) {
+  const policy = RepositoryPolicySchema.parse({
+    version: 1,
+    extensions: [{ package: "@senawa/sensor-artifact" }],
+    sensors: [
+      {
+        id: "artifact-integrity",
+        extension: "@senawa/sensor-artifact",
+        kind: "deterministic",
+        description: "Artifact cross-reference integrity",
+        cost: "cheap",
+        trust: "blocking",
+        scope: [],
+        config: { artifactKind: "cross-reference" },
+      },
+    ],
+    gates: [
+      {
+        id: "definition-accepted",
+        description: "Definition is consistent",
+        checks: [
+          {
+            sensor: "artifact-integrity",
+            expect: { path: "/verdict", operator: "equals", value: "pass" },
+          },
+        ],
+        onFail: "block",
+      },
+    ],
+    frozen: [".senawa/sensors.yaml"],
+  });
+  return new CommandGateEvaluator(repositoryRoot).evaluate({
+    ...input(policy),
+    owner: { kind: "phase", id: "define" },
+    artifact,
+  });
+}
 
 function taskAssessment(verdict: "pass" | "fail"): TaskCompletionAssessment {
   return {

@@ -42,21 +42,23 @@ describe("repository configuration", () => {
       summary: "Legacy plan",
       tasks: [
         {
-          key: "legacy-task",
-          title: "Legacy task",
+          key: "minimal-task",
+          title: "Minimal task",
           dependsOn: [],
           paths: ["packages/application"],
-          acceptance: ["Done"],
+          acceptance: [{ description: "Done" }],
           role: "implementor",
         },
       ],
     });
 
     expect(plan.tasks[0]?.repositoryChange).toBeUndefined();
-    expect(plan.tasks[0]?.acceptance).toEqual(["Done"]);
+    expect(plan.tasks[0]?.acceptance).toEqual([
+      { description: "Done", required: true, satisfies: [] },
+    ]);
   });
 
-  it("validates both string and structured acceptance against the frozen plan schema", async () => {
+  it("requires structured acceptance in the frozen plan schema", async () => {
     const definitions = await loadRepositoryDefinitions(repositoryRoot);
     const schema = definitions.schemas[".senawa/schemas/plan.schema.json"];
     expect(schema).toBeDefined();
@@ -76,7 +78,8 @@ describe("repository configuration", () => {
       ],
     });
 
-    expect(validate(plan(["Legacy string"]))).toBe(true);
+    // A bare string is no longer an acceptance entry; only the structured shape validates.
+    expect(validate(plan(["Just a string"]))).toBe(false);
     expect(validate(plan([{ id: "ac-one", description: "Structured", required: false }]))).toBe(
       true,
     );
@@ -155,7 +158,7 @@ Review repository evidence.
     );
 
     await expect(loadRepositoryDefinitions(fixture)).rejects.toThrow(
-      "Gate definition-accepted has no deterministic non-advisory sensor anchor",
+      "Gate plan-accepted has no deterministic non-advisory sensor anchor",
     );
   });
 
@@ -207,6 +210,10 @@ Review repository evidence.
 async function copyRepositoryConfiguration(): Promise<string> {
   const fixture = await mkdtemp(join(tmpdir(), "senawa-configuration-"));
   await cp(resolve(repositoryRoot, ".senawa"), resolve(fixture, ".senawa"), { recursive: true });
-  await cp(resolve(repositoryRoot, ".agents"), resolve(fixture, ".agents"), { recursive: true });
+  // .agents/.copilot-tracking holds live run state, not configuration.
+  await cp(resolve(repositoryRoot, ".agents"), resolve(fixture, ".agents"), {
+    recursive: true,
+    filter: (source) => !source.includes(".copilot-tracking"),
+  });
   return fixture;
 }

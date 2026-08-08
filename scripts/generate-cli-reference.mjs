@@ -40,6 +40,7 @@ const groups = [
   ["plan"],
   ["plan", "revise"],
   ["ask"],
+  ["questions"],
   ["answer"],
   ["discover"],
   ["note"],

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { AcceptanceCriterion } from "./artifacts.js";
 import {
+  ArtifactIdSchema,
   IdentifierSchema,
   matchesPathPattern,
   NonEmptyStringSchema,
@@ -52,9 +53,11 @@ export const EvidenceReferenceSchema = z.discriminatedUnion("kind", [
 
 export const CriterionSubmissionSchema = z
   .object({
-    id: IdentifierSchema,
+    /** Echoes an acceptance criterion id from the plan, which the planner authored. */
+    id: ArtifactIdSchema,
     outcome: z.enum(["satisfied", "blocked", "not-applicable"]),
-    summary: NonEmptyStringSchema.max(2_000).optional(),
+    /** Required: Senawa records this account rather than verifying it, so an omission is lost work. */
+    summary: NonEmptyStringSchema.max(2_000),
     evidence: z.array(EvidenceReferenceSchema).max(20).default([]),
   })
   .strict();
@@ -84,11 +87,16 @@ export const TASK_COMPLETION_SUBMISSION_JSON_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["id", "outcome"],
+        required: ["id", "outcome", "summary"],
         properties: {
           id: { type: "string", description: "An acceptance criterion id from this task prompt" },
           outcome: { enum: ["satisfied", "blocked", "not-applicable"] },
-          summary: { type: "string", minLength: 1, maxLength: 2000 },
+          summary: {
+            type: "string",
+            minLength: 1,
+            maxLength: 2000,
+            description: "What you actually did for this criterion. Recorded, not verified.",
+          },
           evidence: {
             type: "array",
             maxItems: 20,
@@ -115,14 +123,9 @@ export const TASK_COMPLETION_SUBMISSION_JSON_SCHEMA = {
   },
 } as const;
 
-export type EvidenceResolution = "resolved" | "advisory" | "unresolved" | "contradicted";
+export type EvidenceResolution = "recorded" | "contradicted";
 
-export type EvidenceResolutionSource =
-  | "repository-delta"
-  | "authorized-paths"
-  | "frozen-paths"
-  | "gate-sensor"
-  | "none";
+export type EvidenceResolutionSource = "repository-delta" | "frozen-paths" | "none";
 
 export interface ResolvedEvidenceReference {
   readonly claim: EvidenceReference;
@@ -289,19 +292,7 @@ function assessCriterion(
     };
   }
 
-  const evidence = claim.evidence.map((reference) => resolveReference(reference, input));
-  const contradicted = evidence.filter((entry) => entry.resolution === "contradicted");
-  for (const entry of contradicted) {
-    findings.push({
-      severity: "error",
-      code: "acceptance-evidence-contradicted",
-      message: `Acceptance criterion ${criterion.id} cites contradicted evidence: ${entry.detail}`,
-      ...(input.repositoryDelta === null ? {} : { evidence: input.repositoryDelta.evidencePath }),
-    });
-  }
-  if (contradicted.length > 0) {
-    return criterionOutcome(criterion, claim, evidence, "contradicted");
-  }
+  const evidence = claim.evidence.map((reference) => recordReference(reference, input));
 
   if (claim.outcome !== "satisfied") {
     if (criterion.required) {
@@ -315,20 +306,7 @@ function assessCriterion(
     return criterionOutcome(criterion, claim, evidence, "waived");
   }
 
-  const resolving = evidence.filter((entry) => entry.resolution === "resolved");
-  const unresolvable = evidence.filter((entry) => entry.resolution === "unresolved");
-  if (resolving.length === 0 || unresolvable.length > 0) {
-    findings.push({
-      severity,
-      code: "acceptance-evidence-unresolved",
-      message:
-        unresolvable.length > 0
-          ? `Acceptance criterion ${criterion.id} cites unresolvable evidence: ${unresolvable[0]?.detail}`
-          : `Acceptance criterion ${criterion.id} has no resolving evidence: ${criterion.description}`,
-      ...(input.repositoryDelta === null ? {} : { evidence: input.repositoryDelta.evidencePath }),
-    });
-    return criterionOutcome(criterion, claim, evidence, "unresolved");
-  }
+  // The claim is the evidence. Senawa records what the worker states and does not verify it.
   return criterionOutcome(criterion, claim, evidence, "satisfied");
 }
 
@@ -348,158 +326,31 @@ function criterionOutcome(
   };
 }
 
-function resolveReference(
+function recordReference(
   claim: EvidenceReference,
   input: TaskCompletionAssessmentInput,
 ): ResolvedEvidenceReference {
-  if (claim.kind === "repository-delta") {
-    const delta = input.repositoryDelta;
-    if (delta === null) {
-      return unresolved(
-        claim,
-        "repository-delta",
-        "No repository delta was measured for this attempt",
-      );
-    }
-    if (claim.scope === "in-scope") {
-      return delta.inScopeChanges.length > 0
-        ? resolved(
-            claim,
-            "repository-delta",
-            `Measured in-scope changes: ${delta.inScopeChanges.join(", ")}`,
-          )
-        : contradicted(
-            claim,
-            "repository-delta",
-            "No in-scope change was measured for this attempt",
-          );
-    }
-    return delta.changedPaths.length === 0
-      ? resolved(claim, "repository-delta", "No repository change was measured for this attempt")
-      : contradicted(
-          claim,
-          "repository-delta",
-          `A repository change was measured for this attempt: ${delta.changedPaths.map((entry) => entry.path).join(", ")}`,
-        );
-  }
-
-  if (claim.kind === "sensor" || claim.kind === "command") {
-    const descriptor = input.gateSensors.find((sensor) =>
-      claim.kind === "sensor"
-        ? sensor.sensorId === claim.sensorId
-        : sensor.command !== null && sensor.command === claim.command.trim(),
-    );
-    if (descriptor === undefined) {
-      return unresolved(
-        claim,
-        "gate-sensor",
-        claim.kind === "sensor"
-          ? `Sensor ${claim.sensorId} is not a check of gate ${input.gateId ?? "unknown"}`
-          : `Command ${claim.command} does not match a configured sensor of gate ${input.gateId ?? "unknown"}`,
-      );
-    }
-    if (input.stage === "pre-gate") {
-      return resolved(
-        claim,
-        "gate-sensor",
-        `Gate ${input.gateId ?? "unknown"} runs ${descriptor.sensorId}`,
-      );
-    }
-    const reading = input.readings.find((candidate) => candidate.sensorId === descriptor.sensorId);
-    if (reading === undefined) {
-      return unresolved(
-        claim,
-        "gate-sensor",
-        `Sensor ${descriptor.sensorId} produced no reading for this attempt`,
-      );
-    }
-    return reading.matched && "verdict" in reading.result && reading.result.verdict === "pass"
-      ? resolved(claim, "gate-sensor", `Sensor ${descriptor.sensorId} passed for this attempt`)
-      : contradicted(
-          claim,
-          "gate-sensor",
-          `Sensor ${descriptor.sensorId} did not pass for this attempt`,
-        );
-  }
-
-  if (input.frozenPaths.some((pattern) => matchesPathPattern(claim.path, pattern))) {
+  if (claim.kind === "file" && input.frozenPaths.some((p) => matchesPathPattern(claim.path, p))) {
     return contradicted(claim, "frozen-paths", `${claim.path} is inside a frozen path`);
   }
-  if (!input.authorizedPaths.some((pattern) => matchesPathPattern(claim.path, pattern))) {
-    return contradicted(
-      claim,
-      "authorized-paths",
-      `${claim.path} is outside the authorized write scope for this task`,
-    );
-  }
-  if (ADVISORY_EVIDENCE_RELATIONSHIPS.includes(claim.relationship)) {
+  const delta = input.repositoryDelta;
+  if (claim.kind === "file" && delta !== null) {
+    const measured = delta.changedPaths.some((entry) => entry.path === claim.path);
     return {
       claim,
-      resolution: "advisory",
-      source: "authorized-paths",
-      detail: `${claim.path} is in scope; Senawa did not verify that the worker ${claim.relationship} it`,
+      resolution: "recorded",
+      source: "repository-delta",
+      detail: measured
+        ? `${claim.path} was ${claim.relationship} and a change was measured for this attempt`
+        : `${claim.path} was ${claim.relationship}; no change was measured for this attempt`,
     };
   }
-  if (claim.relationship === "validated") {
-    const descriptor = input.gateSensors.find(
-      (sensor) =>
-        !sensor.advisory &&
-        (sensor.scope.length === 0 ||
-          sensor.scope.some((pattern) => matchesPathPattern(claim.path, pattern))),
-    );
-    if (descriptor === undefined) {
-      return unresolved(claim, "gate-sensor", `No blocking gate sensor covers ${claim.path}`);
-    }
-    if (input.stage === "pre-gate") {
-      return resolved(
-        claim,
-        "gate-sensor",
-        `Gate ${input.gateId ?? "unknown"} runs ${descriptor.sensorId} over ${claim.path}`,
-      );
-    }
-    const reading = input.readings.find((candidate) => candidate.sensorId === descriptor.sensorId);
-    return reading?.matched === true
-      ? resolved(claim, "gate-sensor", `Sensor ${descriptor.sensorId} passed over ${claim.path}`)
-      : contradicted(
-          claim,
-          "gate-sensor",
-          `Sensor ${descriptor.sensorId} did not pass over ${claim.path}`,
-        );
-  }
-
-  const delta = input.repositoryDelta;
-  if (delta === null) {
-    return unresolved(
-      claim,
-      "repository-delta",
-      "No repository delta was measured for this attempt",
-    );
-  }
-  if (delta.frozenChanges.includes(claim.path)) {
-    return contradicted(claim, "frozen-paths", `${claim.path} changed inside a frozen path`);
-  }
-  if (delta.outOfScopeChanges.includes(claim.path)) {
-    return contradicted(
-      claim,
-      "authorized-paths",
-      `${claim.path} changed outside the authorized write scope for this task`,
-    );
-  }
-  const entry = delta.changedPaths.find((candidate) => candidate.path === claim.path);
-  if (entry === undefined || !delta.inScopeChanges.includes(claim.path)) {
-    return unresolved(
-      claim,
-      "repository-delta",
-      `${claim.path} does not appear in the measured in-scope delta for this attempt`,
-    );
-  }
-  return statusMatchesRelationship(entry.status, claim.relationship)
-    ? resolved(claim, "repository-delta", `${claim.path} was ${claim.relationship} in this attempt`)
-    : contradicted(
-        claim,
-        "repository-delta",
-        `${claim.path} was measured as "${entry.status}", which does not match the claimed relationship ${claim.relationship}`,
-      );
+  return {
+    claim,
+    resolution: "recorded",
+    source: "none",
+    detail: `Recorded as stated by the worker`,
+  };
 }
 
 function statusMatchesRelationship(status: string, relationship: EvidenceRelationship): boolean {
@@ -507,22 +358,6 @@ function statusMatchesRelationship(status: string, relationship: EvidenceRelatio
   if (relationship === "created") return codes.includes("?") || codes.includes("A");
   if (relationship === "deleted") return codes.includes("D");
   return codes.includes("M") || codes.includes("R") || codes.includes("T");
-}
-
-function resolved(
-  claim: EvidenceReference,
-  source: EvidenceResolutionSource,
-  detail: string,
-): ResolvedEvidenceReference {
-  return { claim, resolution: "resolved", source, detail };
-}
-
-function unresolved(
-  claim: EvidenceReference,
-  source: EvidenceResolutionSource,
-  detail: string,
-): ResolvedEvidenceReference {
-  return { claim, resolution: "unresolved", source, detail };
 }
 
 function contradicted(

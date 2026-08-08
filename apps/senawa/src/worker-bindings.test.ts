@@ -1,5 +1,7 @@
 import type { WorkerAuthorization, WorkerBindingContext, WorkerTurn } from "@senawa/application";
+import { QuestionAnswerTimeoutError } from "@senawa/application";
 import type { WorkerProfile } from "@senawa/domain";
+import { SDK_TURN_TIMEOUT_MS, WORKER_QUESTION_WAIT_TIMEOUT_MS } from "@senawa/workers";
 import { describe, expect, it, vi } from "vitest";
 import type { SenawaServices } from "./services.js";
 import { createSdkWorkerBindings } from "./worker-bindings.js";
@@ -68,6 +70,7 @@ describe("production SDK worker bindings", () => {
             {
               id: "ac-one",
               outcome: "satisfied",
+              summary: "what was done",
               evidence: [
                 {
                   kind: "file",
@@ -149,10 +152,13 @@ describe("production SDK worker bindings", () => {
     await flushMicrotasks();
 
     expect(settled).toBe(false);
-    expect(waitForQuestionAnswer).toHaveBeenCalledWith(turn.runId, "question-1", {
-      sessionId: turn.sessionId,
-      turnId: turn.turnId,
-    });
+    expect(waitForQuestionAnswer).toHaveBeenCalledWith(
+      turn.runId,
+      "question-1",
+      { sessionId: turn.sessionId, turnId: turn.turnId },
+      { timeoutMs: WORKER_QUESTION_WAIT_TIMEOUT_MS },
+    );
+    expect(WORKER_QUESTION_WAIT_TIMEOUT_MS).toBeLessThan(SDK_TURN_TIMEOUT_MS);
 
     answer.resolve("Keep it in application queries.");
 
@@ -166,6 +172,50 @@ describe("production SDK worker bindings", () => {
     expect(drive).not.toHaveBeenCalled();
     expect(advance).not.toHaveBeenCalled();
     expect(finish).not.toHaveBeenCalled();
+  });
+
+  it("refuses ask with the blocking question when the bounded wait expires", async () => {
+    const ask = vi.fn(async () => ({ runId: turn.runId, questionId: "question-1" }));
+    const waitForQuestionAnswer = vi.fn(() =>
+      Promise.reject(
+        new QuestionAnswerTimeoutError(
+          turn.runId,
+          "question-1",
+          "Which boundary?",
+          WORKER_QUESTION_WAIT_TIMEOUT_MS,
+        ),
+      ),
+    );
+    const bindings = createSdkWorkerBindings(() =>
+      services({ ask }, waitForQuestionAnswer),
+    ).bindingsFor(turn, authorization);
+
+    await expect(
+      bindings
+        .find((binding) => binding.name === "senawa.ask")
+        ?.handle({ question: "Which boundary?" }, context),
+    ).resolves.toMatchObject({
+      accepted: false,
+      code: "question_unanswered",
+      message: expect.stringContaining("question-1"),
+      data: { questionId: "question-1", question: "Which boundary?" },
+    });
+  });
+
+  it("propagates a non-timeout ask failure instead of masking it as unanswered", async () => {
+    const ask = vi.fn(async () => ({ runId: turn.runId, questionId: "question-1" }));
+    const waitForQuestionAnswer = vi.fn(() =>
+      Promise.reject(new Error("Worker turn turn-bindings is no longer active")),
+    );
+    const bindings = createSdkWorkerBindings(() =>
+      services({ ask }, waitForQuestionAnswer),
+    ).bindingsFor(turn, authorization);
+
+    await expect(
+      bindings
+        .find((binding) => binding.name === "senawa.ask")
+        ?.handle({ question: "Which boundary?" }, context),
+    ).rejects.toThrow("is no longer active");
   });
 
   it("correlates concurrent asks when answers arrive in reverse order", async () => {

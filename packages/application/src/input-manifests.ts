@@ -363,7 +363,7 @@ function resolvedArtifact(
 
 function artifactSchemaKind(state: RuntimeState, phaseId: string): string {
   const phase = state.snapshot.workflow.spec.phases.find((candidate) => candidate.id === phaseId);
-  return phase?.executor.kind === "agent" ? phase.executor.output.schema : "legacy-phase-artifact";
+  return phase?.executor.kind === "agent" ? phase.executor.output.schema : "non-agent-executor";
 }
 
 function boundedContent(content: JsonObject): JsonObject {

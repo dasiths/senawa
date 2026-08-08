@@ -4,9 +4,9 @@ import {
   COPILOT_SDK_WORKER_ADAPTER_VERSION,
   COPILOT_SUBPROCESS_WORKER_ADAPTER_VERSION,
   CopilotSdkWorkerAdapter,
-  CopilotSubprocessHost,
   SIMULATED_WORKER_ADAPTER_VERSION,
-  SimulatedWorkerHost,
+  SimulatedWorkerAdapter,
+  SubprocessWorkerAdapter,
 } from "@senawa/workers";
 import { createRuntimeComposition, selectRuntime } from "./composition.js";
 import { resolveExecutable } from "./executable.js";
@@ -27,9 +27,9 @@ const copilotExecutable = () =>
       : "copilot",
   );
 const workerHosts = new LazyWorkerHostResolver({
-  simulated: () => new SimulatedWorkerHost(),
+  simulated: () => new SimulatedWorkerAdapter(),
   "copilot-subprocess": () =>
-    new CopilotSubprocessHost({
+    new SubprocessWorkerAdapter({
       enabled: true,
       repositoryRoot,
       isolationRoot: join(repositoryRoot, ".agents", ".copilot-tracking", "copilot-home"),
@@ -69,7 +69,6 @@ try {
           : workerHost === "copilot-subprocess"
             ? COPILOT_SUBPROCESS_WORKER_ADAPTER_VERSION
             : SIMULATED_WORKER_ADAPTER_VERSION,
-      legacy: false,
     },
   });
   process.exitCode = await runCli(arguments_, {

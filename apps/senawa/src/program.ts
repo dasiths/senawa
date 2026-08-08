@@ -32,25 +32,13 @@ export async function runCli(
     channel:
       optionValue(arguments_, "--caller") === "principal-agent" ? "principal-agent" : "direct-cli",
   };
-  if (selectedHost.alias !== undefined) {
-    io.stderr(
-      `Worker host alias '${selectedHost.alias}' is deprecated; use '${selectedHost.kind}'.\n`,
-    );
-  }
   let resultCode = 0;
   const program = new Command()
     .name("senawa")
     .description("Drive bounded Senawa workflows")
     .addOption(
       new Option("--worker-host <host>", "worker execution host")
-        .choices([
-          "simulated",
-          "copilot-subprocess",
-          "copilot-sdk",
-          "deterministic",
-          "copilot",
-          "sdk",
-        ])
+        .choices(["simulated", "copilot-subprocess", "copilot-sdk"])
         .default("copilot-sdk"),
     )
     .addOption(
@@ -332,6 +320,17 @@ export async function runCli(
           await requireActiveRun(options.services),
           question,
           actor,
+        ),
+      ),
+    );
+  program
+    .command("questions")
+    .argument("[runId]")
+    .action(async (runId?: string) =>
+      writeJson(
+        io,
+        await options.services.queries.openWorkerQuestions(
+          runId ?? (await requireActiveRun(options.services)),
         ),
       ),
     );

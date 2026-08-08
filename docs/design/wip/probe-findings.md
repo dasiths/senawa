@@ -101,6 +101,8 @@ about the SDK should be re-checked when the mirror catches up.
 | 59 | The authenticated SDK catalog exposes the configured Sonnet 5 and Opus 5 role models | **Measured through a connected no-invocation diagnostic on 2026-08-07.** `senawa doctor --live` resolved `claude-opus-5` for definer, planner, and verifier and `claude-sonnet-5` for researcher and implementor; preferred implementor effort `high` also resolved exactly. This proves catalog availability for this authenticated environment, not model invocation, quality, telemetry, cost, or future availability |
 | 60 | Slow Senawa transitions are caused by persistence locking | **Wrong.** An uncontended lock acquire and release measured 0.47 ms. Unconditional full-graph Beads rewrites on every commit dominated instead |
 | 61 | Converging only changed Beads nodes materially reduces commit cost | **Measured and reproducible.** `experiments/probes/beads-graph/commit-cost-benchmark.sh` asserts that an unchanged commit issues the same four write commands at one task as at twelve, so commit cost is constant in graph size instead of growing with it. An instrumented five-phase, ten-task commit measured 81% fewer `bd` commands and 35.8 s to 6.3 s with `bd 1.1.2`; those timings are machine-specific and descriptive, while the write-count invariant is the gate |
+| 62 | A worker with read access can explore the repository it was asked to change | **Refuted by a live run.** In `run-a15a4785`, every wildcard read was denied, so `glob` and `grep` returned nothing; the session could ask a question but never see a file. Three further defects appeared in the same run: a profile-requested capability the host always denies, a question that blocked invisibly, and a content-exclusion policy that masked a probe literal |
+| 63 | Assignment-shaped redaction is sufficient for terminal projection | **Wrong, and measured.** An 80-column tmux pane split `token=worker-alpha-secret` across a line boundary; the `key=value` pattern masked `token=worker` and left `-alpha-secret` in the projection. The residue matcher now detects it; the sanitizer does not yet prevent it |
 
 ## Live default and evidence contracts
 
@@ -130,6 +132,30 @@ These results support the current numbered-guide contracts but do not prove a
 complete live workflow, model quality, live telemetry delivery, cost, or tmux
 behavior.
 
+## Worker tooling defects from a failed live run
+
+On 2026-08-08, live SDK run `run-a15a4785` stalled for ten minutes and wrote
+nothing to the repository. The evidence below is `measured-from-live-run`: each
+defect was observed in that run's journal and worker events, not inferred by
+reading code. The run was ended explicitly rather than left stranded.
+
+| Defect | What was observed | Consequence |
+|--------|-------------------|-------------|
+| Wildcard reads denied | Every `glob` and `grep` request was refused by path validation because it contained `*` | The session could ask questions but could not read the repository it was asked to change |
+| Denied capability advertised | The implementor profile requested `process.run`, which the SDK host always denies | The worker planned command evidence it had no way to produce |
+| Question blocked invisibly | `senawa.ask` held the typed tool call while `work show` reported `needs: null` | A human watching the run saw a turn in progress and no reason to intervene |
+| Probe literal masked | A content-exclusion policy masked the credential-shaped literal in the no-credit terminal fixture | The fixture read as syntactically broken to any worker that opened it |
+
+Three of the four defects are individually plausible. Together they produced a
+turn that looked active, cost time, and could not have succeeded: the session
+could not read, could not run commands, and could not report why it was stuck.
+
+The repairs are covered by offline tests only. A live run has not repeated
+`run-a15a4785` on the repaired stack, so no claim here establishes that a live
+worker now completes a turn. The
+[decision entry](decision-log.md#2026-08-08-worker-tooling-repair-artifact-structure-phase-ordered-frontier-and-console-round-two)
+tracks that gap.
+
 ## Worker terminal substrate
 
 On 2026-08-07, the no-credit worker-session probe ran on Node.js `v22.17.0`,
@@ -144,6 +170,52 @@ failures. It confirmed offline that one immutable projection per turn can update
 without changing another turn and that output is sanitized and bounded before
 projection. No live wrapper ran, no model was invoked, and no AI cost was
 incurred. The result supports no production tmux-hosting claim.
+
+## Terminal wrap boundaries defeat assignment-shaped redaction
+
+On 2026-08-08, tmux `3.3a` was present on `PATH` in the same Debian 12 dev
+container, so the no-credit substrate probe ran for the first time instead of
+skipping. It failed. The evidence is `measured-no-credit`: real tmux, deterministic
+shell workers, no model, no AI cost.
+
+The deterministic worker prints `token=<owner>-secret` on a line that also
+carries an ANSI sequence and an absolute path. In an 80-column pane, tmux wraps
+that line and `capture-pane` returns the wrap as a real newline:
+
+```text
+worker-alpha colored step=1 root=/tmp/senawa-worker-sessions.AbCdEf token=worker
+-alpha-secret
+```
+
+The sanitizer redacts `key=value` shapes with `\b(token|password|secret)=\S+`.
+That pattern matches `token=worker` on the first line and cannot see
+`-alpha-secret` on the second, so the projection retained a readable fragment of
+the credential. The leak is a property of the capture geometry, not of the
+secret: any assignment long enough to cross the pane width splits the same way,
+and a narrower pane splits shorter ones.
+
+Reproduce it from the repository root:
+
+```bash
+bash experiments/probes/worker-sessions/run.sh
+```
+
+The probe now fails with `'secret' !== null`, because the runtime residue matcher
+built from the fixture's exported redaction key list catches a bare keyword after
+every redacted assignment is removed. Detection is the only part that works. The
+sanitizer still cannot redact a value it never sees whole, so this finding is
+open:
+
+* A terminal projection must be sanitized after unwrapping the pane, not on the
+  captured lines, or the capture must be taken in a geometry that does not wrap.
+* Assignment-shaped redaction is a heuristic. It cannot be the containment
+  boundary for secrets in worker output.
+* The safe default `run.sh` exits nonzero until this is repaired, which is the
+  intended behavior for a probe whose subject is currently broken.
+
+Nothing here establishes production tmux hosting. Session identity, pane
+identity, detach and reconnect, exit status, and cleanup remain unmeasured
+because the probe stops at the sanitization assertion.
 
 ## Transition latency
 
@@ -1220,6 +1292,8 @@ lives at `.senawa/sensors.yaml`; probe-local manifests keep their measured names
 | Can live Copilot output be normalized and replayed through the browser? | The browser probe uses deterministic child output | Feed one `copilot -p --output-format json` worker and one streaming SDK session into the same output store |
 | Does web output remain bounded under load and restart? | The probe has one viewer, small logs, and no server restart | Stress multiple viewers and large output, restart the server, then resume from persisted cursors |
 | Can forced end safely recover from an unresponsive live driver? | Offline production tests prove the lease, abort request, reconciliation, and terminal ordering, but no live SDK turn was killed | Kill one bounded live SDK turn, then verify stale-lease takeover and durable reconciliation |
+| Do the `run-a15a4785` repairs hold for a live worker? | Glob reads, capability reporting, the pending-question need, and the bounded question wait pass offline tests only | Repeat the same live workflow on the repaired stack and require a turn that reads files and either submits an artifact or names a blocking question |
+| Can terminal projection redact a secret that a pane wrapped? | The measured leak is detected but not prevented; the sanitizer runs on captured lines | Unwrap the pane before sanitizing, or capture in a non-wrapping geometry, then re-run the no-credit substrate probe |
 
 ## Reproducing
 

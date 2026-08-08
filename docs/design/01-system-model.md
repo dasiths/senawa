@@ -21,8 +21,8 @@ Three invariants carry the system:
   never the only ground truth.
 * The record of what happened is produced by harness operations, not authored by
   an agent.
-* A change-requiring task closes only against a trusted repository delta and its
-  configured deterministic gate evidence.
+* A task closes only when the worker states, criterion by criterion, what it did,
+  and its configured deterministic gate evidence passes.
 
 Definitions are inputs. Beads is runtime truth. The journal is history.
 

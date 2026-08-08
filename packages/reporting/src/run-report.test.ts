@@ -15,7 +15,6 @@ describe("renderRunReport", () => {
           kind: "simulated",
           adapter: "simulated-worker",
           adapterVersion: "1",
-          legacy: false,
         },
       },
       status: "finished",
@@ -37,7 +36,7 @@ describe("renderRunReport", () => {
           dependsOn: [],
           paths: ["packages"],
           repositoryChange: "required",
-          acceptance: ["tests pass"],
+          acceptance: [{ description: "tests pass", required: true, satisfies: [] }],
           role: "implementor",
           status: "closed",
           attempt: 2,
@@ -132,14 +131,14 @@ describe("renderRunReport", () => {
                       path: "packages/reporting/src/run-report.ts",
                       relationship: "modified",
                     },
-                    resolution: "resolved",
+                    resolution: "recorded",
                     source: "repository-delta",
                     detail: "The path appears in the measured in-scope delta",
                   },
                   {
                     claim: { kind: "sensor", sensorId: "unit-tests" },
-                    resolution: "resolved",
-                    source: "gate-sensor",
+                    resolution: "recorded",
+                    source: "none",
                     detail: "A gate reading for this attempt matched",
                   },
                 ],
@@ -157,9 +156,9 @@ describe("renderRunReport", () => {
                       path: "docs/design/06-provenance-and-observability.md",
                       relationship: "reviewed",
                     },
-                    resolution: "advisory",
-                    source: "authorized-paths",
-                    detail: "Existence only; Senawa never claims a file was read",
+                    resolution: "recorded",
+                    source: "none",
+                    detail: "Recorded as stated by the worker",
                   },
                 ],
               },
@@ -268,7 +267,6 @@ describe("renderRunReport", () => {
             kind: "copilot-sdk",
             adapter: "copilot-sdk",
             adapterVersion: "1.0.7",
-            legacy: false,
           },
           configuredModel: { id: "claude-opus-5", effort: "high" },
           event: {
@@ -303,11 +301,11 @@ describe("renderRunReport", () => {
       "evidence/acceptance/tasks/validate/attempt\\-2/dispatch\\-1/assessment.json",
     );
     expect(report).toContain(
-      "| ac\\-tests | yes | satisfied | satisfied | packages/reporting/src/run\\-report.ts \\(modified\\): resolved via repository\\-delta; sensor unit\\-tests: resolved via gate\\-sensor |",
+      "| ac\\-tests | yes | satisfied | satisfied | packages/reporting/src/run\\-report.ts \\(modified\\): recorded via repository\\-delta; sensor unit\\-tests: recorded via none |",
     );
     expect(report).toContain("| ac\\-review | no | not\\-applicable | waived |");
     expect(report).toContain(
-      "docs/design/06\\-provenance\\-and\\-observability.md \\(reviewed\\): advisory via authorized\\-paths",
+      "docs/design/06\\-provenance\\-and\\-observability.md \\(reviewed\\): recorded via none",
     );
     expect(report).toContain("unmatched claims ac\\-ghost");
     expect(report).toContain("artifacts/define/v1.json");
@@ -381,7 +379,6 @@ function emptyRun(): ReportRun {
         kind: "simulated",
         adapter: "simulated-worker",
         adapterVersion: "1",
-        legacy: false,
       },
     },
     status: "finished",

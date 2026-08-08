@@ -11,7 +11,34 @@ const ansiEscapePattern = new RegExp(
   "gu",
 );
 const unsafeControlPattern = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu;
-const secretPattern = /\b(token|password|secret)=\S+/giu;
+
+// Single source of truth for the assignment keys the sanitizer redacts.
+export const redactedKeys = Object.freeze(["token", "password", "secret"]);
+const redactionMarker = "[redacted]";
+const keyAlternation = redactedKeys.join("|");
+// tmux wraps a long pane line at the pane width, so `key=value` can arrive
+// with a single hard newline inserted mid-value (no whitespace on either side
+// of the break). The value's first run of non-whitespace is followed by at
+// most one such wrap continuation: a bare `\n` immediately followed by more
+// non-whitespace. Bounding the continuation to one keeps a real line break
+// (followed by whitespace, another `\n`, or end of text) a hard stop, so an
+// unrelated line after the wrapped secret is never absorbed into the match.
+const secretPattern = new RegExp(`\\b(${keyAlternation})=\\S+(?:\\n(?=\\S)\\S*)?`, "giu");
+const redactedAssignmentPattern = new RegExp(
+  `\\b(?:${keyAlternation})=${redactionMarker.replaceAll(/[[\]]/gu, String.raw`\$&`)}`,
+  "giu",
+);
+// Once every redacted assignment is removed, any surviving escape or redaction
+// keyword is leaked residue: an unredacted value, a bare secret word, or a raw
+// control sequence.
+const residuePattern = new RegExp(
+  `${String.fromCodePoint(27)}|\\b(?:${keyAlternation})\\b`,
+  "iu",
+);
+
+export function findTerminalResidue(text) {
+  return residuePattern.exec(text.replace(redactedAssignmentPattern, ""))?.[0] ?? null;
+}
 
 export function sanitizeTerminalText(value, probeRoot, limits = terminalProjectionLimits) {
   const normalized = value
@@ -20,7 +47,7 @@ export function sanitizeTerminalText(value, probeRoot, limits = terminalProjecti
     .replace(ansiEscapePattern, "")
     .replace(unsafeControlPattern, "")
     .replaceAll(probeRoot, "[probe-root]")
-    .replace(secretPattern, "$1=[redacted]");
+    .replace(secretPattern, `$1=${redactionMarker}`);
   const boundedLines = normalized
     .split("\n")
     .map((line) => truncate(line, limits.maxCharsPerLine, "...[line truncated]"))

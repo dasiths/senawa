@@ -299,6 +299,27 @@ describe("Copilot SDK worker adapter offline conformance", () => {
     ).toMatchObject({ kind: "reject", feedback: expect.stringContaining("unbound") });
   });
 
+  it("approves glob-shaped reads and still refuses reads outside the repository", async () => {
+    const { adapter, client } = fixture();
+    await (await adapter.create(turn)).result;
+    const config = client.createConfigs[0];
+    for (const path of ["experiments/**/*.mjs", "**/*.mjs", "*.md", "/workspace/**/*.mjs"]) {
+      expect(
+        await config?.onPermissionRequest?.(readRequest(path), { sessionId: turn.sessionId }),
+      ).toEqual({ kind: "approve-once" });
+    }
+    expect(
+      await config?.onPermissionRequest?.(readRequest("../outside/**"), {
+        sessionId: turn.sessionId,
+      }),
+    ).toMatchObject({ kind: "reject", feedback: expect.stringContaining("repository-relative") });
+    expect(
+      await config?.onPermissionRequest?.(writeRequest("packages/workers/src/*.ts"), {
+        sessionId: turn.sessionId,
+      }),
+    ).toMatchObject({ kind: "reject", feedback: expect.stringContaining("concrete") });
+  });
+
   it("discovers models, degrades preferred effort, and refuses unsupported required effort", async () => {
     const { adapter, client } = fixture();
     const plan = await adapter.negotiate({
@@ -564,6 +585,10 @@ function writeRequest(fileName: string): PermissionRequest {
     intention: "test write",
     canOfferSessionApproval: false,
   };
+}
+
+function readRequest(path: string): PermissionRequest {
+  return { kind: "read", path, intention: "test read" };
 }
 
 function shellRequest(): PermissionRequest {

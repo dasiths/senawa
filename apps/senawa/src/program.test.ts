@@ -14,7 +14,7 @@ import { startWebSupervisor, type WebSupervisor } from "@senawa/browser";
 import { loadRepositoryDefinitions } from "@senawa/configuration";
 import type { BrowserRunCommand, CommandActor } from "@senawa/domain";
 import { createFileTestComposition } from "@senawa/testing";
-import { SimulatedWorkerHost } from "@senawa/workers";
+import { SimulatedWorkerAdapter } from "@senawa/workers";
 import { beforeAll, describe, expect, it } from "vitest";
 import { type CliRunOptions, runCli as runCliWithRuntime } from "./program.js";
 import { createSenawaServices, type SenawaServices } from "./services.js";
@@ -57,7 +57,7 @@ describe("Commander CLI", () => {
       ok: true,
       workflows: ["standard-delivery"],
     });
-    expect(await runCli(["--worker-host", "sdk", "doctor"], { services, io })).toBe(0);
+    expect(await runCli(["--worker-host", "copilot-sdk", "doctor"], { services, io })).toBe(0);
     expect(JSON.parse(output.pop() ?? "{}")).toMatchObject({ ok: true });
     expect(await runCli(["workflow", "render", "standard-delivery"], { services, io })).toBe(0);
     expect(output.pop()).toContain("flowchart LR");
@@ -143,7 +143,7 @@ describe("Commander CLI", () => {
             dependsOn: [],
             paths: ["packages/application"],
             repositoryChange: "required",
-            acceptance: ["Focused checks pass"],
+            acceptance: [{ description: "Focused checks pass" }],
             role: "implementor",
             execution: {
               model: "claude-opus-5",
@@ -183,7 +183,7 @@ describe("Commander CLI", () => {
         "copilot-sdk": () => failing,
         simulated: () => {
           simulatedConstructions += 1;
-          return new SimulatedWorkerHost();
+          return new SimulatedWorkerAdapter();
         },
       }),
     });
@@ -287,6 +287,8 @@ describe("Commander CLI", () => {
     expect(await runCli(["ask", "Which boundary is authoritative?"], { services, io })).toBe(0);
     const question = JSON.parse(output.pop() ?? "{}") as { questionId?: string };
     expect(question.questionId).toMatch(/^question-/u);
+    expect(await runCli(["questions"], { services, io })).toBe(0);
+    expect(JSON.parse(output.pop() ?? "null")).toEqual([]);
     expect(
       await runCli(["answer", question.questionId ?? "", "The application boundary"], {
         services,
@@ -307,7 +309,7 @@ describe("Commander CLI", () => {
             title: "Run follow-up validation",
             dependsOn: [],
             paths: ["packages/application"],
-            acceptance: ["Focused checks pass"],
+            acceptance: [{ description: "Focused checks pass" }],
             role: "implementor",
           },
         ],
@@ -608,12 +610,11 @@ function createTestServices(
     ...composition,
     repositoryEvidence: repositoryEvidence ?? composition.repositoryEvidence,
     now,
-    workerHost: new SimulatedWorkerHost(),
+    workerHost: new SimulatedWorkerAdapter(),
     workerHostIdentity: {
       kind: "simulated",
       adapter: "simulated-worker",
       adapterVersion: "1",
-      legacy: false,
     },
   });
 }
@@ -775,7 +776,12 @@ function catalogWorkerHost(
 async function copyRepositoryConfiguration(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "senawa-doctor-"));
   await cp(resolve(process.cwd(), ".senawa"), resolve(root, ".senawa"), { recursive: true });
-  await cp(resolve(process.cwd(), ".agents"), resolve(root, ".agents"), { recursive: true });
+  // .agents/.copilot-tracking holds live run state; copying it would leak the
+  // active-run pointer into this isolated root.
+  await cp(resolve(process.cwd(), ".agents"), resolve(root, ".agents"), {
+    recursive: true,
+    filter: (source) => !source.includes(".copilot-tracking"),
+  });
   return root;
 }
 

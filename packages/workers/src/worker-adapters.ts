@@ -385,14 +385,6 @@ export class SubprocessWorkerAdapter implements WorkerSessionPort, WorkerExecuti
   }
 }
 
-export const CopilotSubprocessHost = SubprocessWorkerAdapter;
-export const SimulatedWorkerHost = SimulatedWorkerAdapter;
-/** @deprecated Use SimulatedWorkerAdapter. */
-export const DeterministicWorkerAdapter = SimulatedWorkerAdapter;
-/** @deprecated Use SimulatedWorkerHost. */
-export const DeterministicWorkerHost = SimulatedWorkerAdapter;
-export type CopilotSubprocessHostOptions = SubprocessWorkerOptions;
-
 export function buildCopilotArguments(turn: WorkerTurn): string[] {
   const policy = resolveWorkerPolicy(turn, subprocessCapabilities);
   const arguments_ =
@@ -688,7 +680,7 @@ function artifactForPhase(phaseId: string, turn: WorkerTurn): unknown {
         summary: `Define ${turn.goal}`,
         inScope: [turn.goal],
         outOfScope: [],
-        acceptanceCriteria: ["The requested change is implemented and verified"],
+        acceptanceCriteria: [{ description: "The requested change is implemented and verified" }],
         constraints: [],
         openQuestions: [],
       });
@@ -703,7 +695,7 @@ function artifactForPhase(phaseId: string, turn: WorkerTurn): unknown {
           },
         ],
         constraints: [],
-        recommendations: ["Implement the bounded plan"],
+        recommendations: [{ statement: "Implement the bounded plan" }],
       });
     case "plan":
       return PlanArtifactSchema.parse({
@@ -715,7 +707,7 @@ function artifactForPhase(phaseId: string, turn: WorkerTurn): unknown {
             dependsOn: [],
             paths: ["packages"],
             repositoryChange: "required",
-            acceptance: ["The requested behavior is implemented"],
+            acceptance: [{ description: "The requested behavior is implemented" }],
             role: "implementor",
           },
         ],

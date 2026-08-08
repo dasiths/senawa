@@ -272,14 +272,70 @@ scope:
 |-------|-------------|
 | `key` | Stable identity across plan revisions |
 | `dependsOn` | Beads dependency edges |
-| `paths` | Enforced write scope |
-| `repositoryChange` | Optional trusted repository-delta policy for one task |
+| `paths` | Suggested write scope, recorded but never enforced |
+| `repositoryChange` | Declared change intent for one task |
 | `acceptance` | Ordered acceptance criteria and completion contract |
 | `role` | Worker profile selection |
 | `execution` | Portable dispatch hints |
 
 A repository may extend a Senawa-owned schema with `allOf`; it may not redefine
 the shape consumed by the importer.
+
+### Artifact structure
+
+Each version 1 artifact schema carries an optional structure beyond its minimum
+shape. Every added field is optional, so an artifact authored before the
+enrichment still validates, and a thin artifact still passes its schema. The
+structure exists so a later phase can cite an earlier one by identifier instead
+of by prose.
+
+| Artifact | Optional structure |
+|----------|--------------------|
+| Definition | Problem statement, current and desired behavior, non-goals, assumptions, stakeholders, risks with mitigations, requested evidence, and open questions that may be marked blocking |
+| Research | Finding identity, evidence kind, confidence, stated limits, answered questions, alternatives with rejection rationale, sourced constraints, risks, unknowns, and recommendations that cite finding IDs |
+| Plan | Objectives, context summary, ordered phases with todos, decisions with rejected alternatives, dependencies, risks, success criteria, declarative validation commands, and open questions |
+| Verification | Per-criterion and per-phase mapping, typed evidence references, and non-blocking deviations |
+
+The plan is the only artifact the runtime parses through its own schema library,
+because the plan importer consumes it. Definition, research, and verification
+artifacts are validated against their frozen JSON Schema alone, so a structural
+refinement expressed in code would never run for them. Their cross-reference
+integrity is enforced by the deterministic sensor described in
+[Artifact integrity](04-sensors-gates-and-enforcement.md#artifact-integrity).
+
+Declared validation commands are documentation authored by a planner. Only
+configured gate sensors execute anything.
+
+### Plan phases
+
+A plan may declare ordered phases and assign each task to one:
+
+```json
+{
+  "phases": [
+    { "id": "extract-reader", "title": "Extract the reader", "order": 1, "todos": ["Move IO out of parse_batch"] },
+    { "id": "split-stages", "title": "Split the stages", "order": 2, "dependsOn": ["extract-reader"] }
+  ],
+  "tasks": [
+    { "key": "extract-reader", "phase": "extract-reader", "...": "..." },
+    { "key": "split-parse-batch", "phase": "split-stages", "...": "..." }
+  ]
+}
+```
+
+Phases are authoring structure, not a second runtime graph. Plan import expands
+each task's `dependsOn` with the tasks of its predecessor phases, so phase order
+reaches the existing task frontier without changing either persistence adapter.
+The expansion is bounded: a fan-in above the dependency cap collapses to
+immediate predecessor phases, and the `plan.imported` event records the phase
+order, the derived dependencies, and any collapse.
+
+Import refuses a duplicate phase ID, an unknown phase dependency, an unknown
+todo task key, a phase dependency cycle, a task naming an undeclared phase, and
+a plan that phases some tasks but not others. A plan without phases keeps its
+authored dependencies unchanged. `parallelizable` is an authoring signal only;
+the [version 1 singleton](05-runtime-and-state.md#version-1-singleton) still
+runs one task at a time.
 
 ## Acceptance criteria
 
@@ -303,8 +359,12 @@ list is the human-authored ceiling. Plan import refuses a task that requests an
 expectation the frontier does not allow, so a model-authored plan can narrow the
 contract but never widen it. When a task omits the field, Senawa derives the
 expectation from the frontier: a frontier that allows exactly one value supplies
-that value, and a frontier that allows several resolves to `optional` so
-criterion evidence, rather than a blanket edit requirement, decides the outcome.
+that value, and a frontier that allows several resolves to `optional`.
+
+The expectation is a declaration, not a gate. `required` and a measured no-op
+produce a warning the report shows. Only `forbidden` still blocks, because a task
+that promised to change nothing and then changed something has broken its own
+contract.
 
 ## Phase briefs
 
@@ -339,7 +399,6 @@ spec:
   tools:
     - repository.read
     - repository.edit
-    - process.run
     - senawa.task.done
     - senawa.ask
     - senawa.discover
@@ -379,6 +438,15 @@ and Senawa never rewrites an earlier snapshot version in place.
 Profiles request capabilities; they do not grant authority. The host intersects
 each request with owner scope, supported host operations, and Senawa's mandatory
 security ceiling before mapping it to provider-specific controls.
+
+A profile should not request a capability its host denies. The intersection
+still holds, so an unsupported request cannot widen authority, but it produces a
+role whose instructions describe work the session cannot perform. The implementor
+profile no longer requests `process.run` for that reason;
+[Worker hosts and session topology](03-agents-and-interaction.md#worker-hosts-and-session-topology)
+owns which operations each host supports, and
+[Role instructions and briefs](03-agents-and-interaction.md#role-instructions-and-briefs)
+owns how a turn reports the capabilities it did and did not receive.
 
 ## Approval semantics
 

@@ -37,7 +37,7 @@ export function renderRunReport(run: ReportRun): string {
     "",
     `Worker host: ${escapeMarkdown(run.identity.workerHost.kind)}`,
     "",
-    `Worker adapter: ${escapeMarkdown(`${run.identity.workerHost.adapter}@${run.identity.workerHost.adapterVersion}`)}${run.identity.workerHost.legacy ? " (legacy migration)" : ""}`,
+    `Worker adapter: ${escapeMarkdown(`${run.identity.workerHost.adapter}@${run.identity.workerHost.adapterVersion}`)}`,
     "",
     `Outcome: **${escapeMarkdown(run.status)}**`,
     "",

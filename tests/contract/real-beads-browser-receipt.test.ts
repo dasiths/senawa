@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { startWebSupervisor, type WebSupervisor } from "@senawa/browser";
 import { BeadsClient } from "@senawa/runtime-beads";
 import { createRuntimeFixture } from "@senawa/testing";
-import { SimulatedWorkerHost } from "@senawa/workers";
+import { SimulatedWorkerAdapter } from "@senawa/workers";
 import { build } from "esbuild";
 import { describe, expect, it } from "vitest";
 import { createRuntimeComposition } from "../../apps/senawa/src/composition.js";
@@ -85,12 +85,11 @@ describe("real Beads browser receipt recovery", () => {
         const restartedServices = createSenawaServices(root, {
           ...restartedComposition,
           runtimeBackend: "beads",
-          workerHost: new SimulatedWorkerHost(),
+          workerHost: new SimulatedWorkerAdapter(),
           workerHostIdentity: {
             kind: "simulated",
             adapter: "simulated-worker",
             adapterVersion: "1",
-            legacy: false,
           },
         });
         restartedSupervisor = await startWebSupervisor(restartedServices, {

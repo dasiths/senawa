@@ -1,8 +1,8 @@
 import { createRunSnapshot, loadRepositoryDefinitions } from "@senawa/configuration";
-import type { RuntimePhase, RuntimeState } from "@senawa/domain";
+import type { RuntimePhase, RuntimeState, RuntimeTask } from "@senawa/domain";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolvePhaseInputManifest } from "./input-manifests.js";
-import { createPhasePrompt } from "./prompts.js";
+import { createPhasePrompt, createTaskPrompt } from "./prompts.js";
 
 let definitions: Awaited<ReturnType<typeof loadRepositoryDefinitions>>;
 
@@ -45,7 +45,6 @@ describe("phase worker prompts", () => {
           kind: "simulated",
           adapter: "simulated-worker",
           adapterVersion: "1",
-          legacy: false,
         },
       },
       snapshot,
@@ -88,7 +87,6 @@ describe("phase worker prompts", () => {
           kind: "simulated",
           adapter: "simulated-worker",
           adapterVersion: "1",
-          legacy: false,
         },
       },
       snapshot,
@@ -183,7 +181,6 @@ describe("phase worker prompts", () => {
           kind: "simulated",
           adapter: "simulated-worker",
           adapterVersion: "1",
-          legacy: false,
         },
       },
       snapshot,
@@ -254,7 +251,6 @@ describe("phase worker prompts", () => {
           kind: "simulated",
           adapter: "simulated-worker",
           adapterVersion: "1",
-          legacy: false,
         },
       },
       snapshot,
@@ -268,7 +264,7 @@ describe("phase worker prompts", () => {
           dependsOn: [],
           paths: ["packages/application"],
           repositoryChange: "required",
-          acceptance: ["Done"],
+          acceptance: [{ description: "Done", required: true, satisfies: [] }],
           role: "implementor",
           status: "closed",
           attempt: 2,
@@ -435,5 +431,146 @@ describe("phase worker prompts", () => {
         blockingIssues: [],
       },
     });
+  });
+
+  it("tells each phase worker which optional structure it must populate", () => {
+    const snapshot = createRunSnapshot(
+      "run-authoring",
+      definitions,
+      new Date("2026-08-06T00:00:00.000Z"),
+    );
+    const state: Pick<RuntimeState, "artifacts" | "identity" | "phases" | "snapshot"> = {
+      identity: {
+        runId: snapshot.runId,
+        backend: "file",
+        workflow: snapshot.workflow.metadata.name,
+        request: { goal: "Author richer artifacts", constraints: [] },
+        createdAt: snapshot.createdAt,
+        fingerprint: snapshot.fingerprint,
+        workerHost: {
+          kind: "simulated",
+          adapter: "simulated-worker",
+          adapterVersion: "1",
+        },
+      },
+      snapshot,
+      artifacts: [],
+      phases: snapshot.workflow.spec.phases.map((definition) => ({
+        id: definition.id,
+        status: "accepted" as const,
+        iteration: 1,
+        artifactVersion: 1,
+        sessionId: null,
+        rejectionReason: null,
+      })),
+    };
+    const promptFor = (phaseId: string) => {
+      const phase = state.phases.find((candidate) => candidate.id === phaseId);
+      if (phase === undefined) throw new Error(`fixture is missing ${phaseId}`);
+      return JSON.parse(createPhasePrompt(state, phase, 1)).submission.authoring;
+    };
+
+    expect(promptFor("define").expectedFields).toContain("problemStatement");
+    expect(promptFor("research").expectedFields).toContain("unknowns");
+    expect(promptFor("plan")).toMatchObject({
+      expectedFields: expect.arrayContaining(["phases", "decisions", "successCriteria"]),
+      rules: expect.arrayContaining([expect.stringContaining("ordered todos")]),
+    });
+    expect(promptFor("verify").expectedFields).toContain("deviations");
+  });
+});
+
+describe("task worker prompts", () => {
+  const planContent = {
+    summary: "Phased plan",
+    phases: [
+      {
+        id: "schemas",
+        title: "Schemas",
+        intent: "Widen the contracts",
+        todos: [{ text: "Extend zod" }],
+      },
+      {
+        id: "frontier",
+        title: "Frontier",
+        dependsOn: ["schemas"],
+        todos: [{ text: "Expand dependsOn" }],
+      },
+    ],
+    tasks: [],
+  };
+  const inputManifest = {
+    version: 1 as const,
+    inputs: [
+      {
+        name: "source-plan",
+        reference: "phases.plan.output",
+        ownerKind: "phase" as const,
+        ownerId: "plan",
+        path: "artifacts/plan/v1.json",
+        version: 1,
+        digest: "a".repeat(64),
+        schemaKind: "phase-artifact" as const,
+        summary: { summary: "Phased plan" },
+        content: planContent,
+      },
+    ],
+  };
+  const task = (extra: Record<string, unknown> = {}): RuntimeTask =>
+    ({
+      key: "expand-frontier",
+      title: "Expand the frontier",
+      dependsOn: [],
+      paths: ["packages/application"],
+      acceptance: [
+        { description: "Phase order reaches the frontier", required: true, satisfies: [] },
+      ],
+      role: "implementor",
+      status: "pending",
+      attempt: 0,
+      dispatchFailures: 0,
+      sessionId: null,
+      steering: [],
+      reworkFindings: [],
+      ...extra,
+    }) as RuntimeTask;
+  const state = () =>
+    ({
+      identity: { request: { goal: "Order the frontier", constraints: [] } },
+      snapshot: createRunSnapshot(
+        "run-task-context",
+        definitions,
+        new Date("2026-08-06T00:00:00.000Z"),
+      ),
+      tasks: [],
+    }) as unknown as RuntimeState;
+
+  it("adds only the task's own phase rather than restating the plan", () => {
+    const prompt = JSON.parse(
+      createTaskPrompt(state(), task({ phase: "frontier" }), 1, inputManifest),
+    );
+
+    expect(prompt.planContext).toMatchObject({
+      phase: { id: "frontier", title: "Frontier", todos: [{ text: "Expand dependsOn" }] },
+      phaseOrder: ["schemas", "frontier"],
+    });
+    expect(JSON.stringify(prompt.planContext)).not.toContain("Extend zod");
+  });
+
+  it("omits plan context for a task that declares no phase", () => {
+    const prompt = JSON.parse(createTaskPrompt(state(), task(), 1, inputManifest));
+
+    expect(prompt).not.toHaveProperty("planContext");
+  });
+
+  it("omits plan context when the source plan declares no phases", () => {
+    const unphased = {
+      version: 1 as const,
+      inputs: [{ ...inputManifest.inputs[0], content: { summary: "Legacy plan", tasks: [] } }],
+    } as typeof inputManifest;
+
+    expect(
+      JSON.parse(createTaskPrompt(state(), task({ phase: "frontier" }), 1, unphased)),
+    ).not.toHaveProperty("planContext");
   });
 });

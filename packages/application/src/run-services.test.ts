@@ -19,6 +19,28 @@ import {
 import { projectPhaseBrief, projectRunStatus } from "./projections.js";
 import { RunCommandService, RunQueryService } from "./run-services.js";
 import { FakeClock, FakeRunPersistence, SequenceIdentifiers } from "./testing.js";
+import type { WorkerAdapterDescriptor, WorkerExecutionPort, WorkerSessionPort } from "./workers.js";
+
+const sdkLikeDescriptor: WorkerAdapterDescriptor = {
+  name: "fake-host",
+  version: "1",
+  features: {
+    callerChosenIdentity: true,
+    resume: true,
+    inspect: "session-only",
+    replay: false,
+    streaming: true,
+    cancellation: true,
+    nativeTypedTools: true,
+    commandBridge: false,
+    pathEnforcement: "policy",
+    usageCheckpoints: true,
+    permissionFeedback: true,
+    modelDiscovery: false,
+    traceInjection: true,
+  },
+  capabilities: ["repository.read", "repository.edit", "senawa.task.done"],
+};
 
 const clock = new FakeClock(new Date("2026-08-05T12:00:00.000Z"));
 let definitions: Awaited<ReturnType<typeof loadRepositoryDefinitions>>;
@@ -43,7 +65,6 @@ describe("application run use cases", () => {
           kind: "simulated",
           adapter: "simulated-worker",
           adapterVersion: "1",
-          legacy: false,
         },
       },
       snapshot,
@@ -85,7 +106,7 @@ describe("application run use cases", () => {
             dependsOn: [],
             paths: ["packages/application"],
             repositoryChange: "required",
-            acceptance: ["Pass"],
+            acceptance: [{ description: "Pass", required: true, satisfies: [] }],
             role: "implementor",
           },
           {
@@ -94,7 +115,7 @@ describe("application run use cases", () => {
             dependsOn: [],
             paths: ["docs"],
             repositoryChange: "forbidden",
-            acceptance: ["Pass"],
+            acceptance: [{ description: "Pass", required: true, satisfies: [] }],
             role: "implementor",
           },
         ],
@@ -162,7 +183,6 @@ describe("application run use cases", () => {
           kind: "simulated",
           adapter: "simulated-worker",
           adapterVersion: "1",
-          legacy: false,
         },
       },
       snapshot,
@@ -183,7 +203,9 @@ describe("application run use cases", () => {
           dependsOn: [],
           paths: ["docs"],
           repositoryChange: "required",
-          acceptance: ["Documentation is consistent"],
+          acceptance: [
+            { description: "Documentation is consistent", required: true, satisfies: [] },
+          ],
           role: "implementor",
           status: "pending",
           attempt: 0,
@@ -208,6 +230,107 @@ describe("application run use cases", () => {
     expect(projection.tasks[0]?.parentPhaseId).toBe("execute-docs");
   });
 
+  it("tells a retried phase why its artifact failed the frozen schema", async () => {
+    const persistence = new FakeRunPersistence();
+    const commands = new RunCommandService(
+      persistence,
+      {
+        async execute(turn) {
+          return {
+            sessionId: turn.sessionId,
+            artifact: JsonObjectSchema.parse({ summary: "missing required fields" }),
+            output: [],
+          };
+        },
+      },
+      {
+        async evaluate(input) {
+          return { gateId: input.gateId, accepted: true, readings: [], findings: [] };
+        },
+      },
+      {
+        validatePhaseArtifact: () => {
+          throw new Error("must have required property 'inScope'");
+        },
+      },
+      clock,
+      new SequenceIdentifiers("operation"),
+      { scheduleEvery: () => () => undefined },
+    );
+    const queries = new RunQueryService(persistence, undefined, {
+      render: async (runId) => `report:${runId}`,
+    });
+    const runId = "schema-feedback-run";
+
+    await commands.start({
+      actor: { channel: "direct-cli" },
+      request: { goal: "Exercise schema feedback", constraints: [] },
+      runId,
+      snapshot: createRunSnapshot(runId, definitions, clock.now()),
+    });
+    await expect(commands.drive(runId, { channel: "driver" })).rejects.toThrow("inScope");
+
+    const status = await queries.status(runId);
+    expect(status).toMatchObject({ status: "paused" });
+    expect(status?.phases[0]).toMatchObject({ id: "define", status: "pending" });
+
+    // The retry prompt reads rejectionReason, so the failure must be recorded there.
+    const state = await persistence.readRun(runId);
+    expect(state.state.phases[0]?.rejectionReason).toContain("failed its frozen schema");
+    expect(state.state.phases[0]?.rejectionReason).toContain("inScope");
+  });
+
+  it("tells a retried phase which gate findings it must resolve", async () => {
+    const persistence = new FakeRunPersistence();
+    const commands = new RunCommandService(
+      persistence,
+      {
+        async execute(turn) {
+          return {
+            dispatchId: turn.dispatchId,
+            sessionId: turn.sessionId,
+            artifact: JsonObjectSchema.parse({ summary: "valid shape, unacceptable content" }),
+            output: [],
+          };
+        },
+      },
+      {
+        async evaluate(input) {
+          return {
+            gateId: input.gateId,
+            accepted: false,
+            readings: [],
+            findings: [
+              {
+                severity: "error" as const,
+                message: "Reference to an undeclared finding id: risk-doc-overclaim",
+              },
+            ],
+          };
+        },
+      },
+      { validatePhaseArtifact: () => undefined },
+      clock,
+      new SequenceIdentifiers("operation"),
+      { scheduleEvery: () => () => undefined },
+    );
+    const runId = "gate-feedback-run";
+
+    await commands.start({
+      actor: { channel: "direct-cli" },
+      request: { goal: "Exercise gate feedback", constraints: [] },
+      runId,
+      snapshot: createRunSnapshot(runId, definitions, clock.now()),
+    });
+    await commands.drive(runId, { channel: "driver" });
+
+    const state = await persistence.readRun(runId);
+    const phase = state.state.phases[0];
+    expect(phase?.status).toBe("pending");
+    // Without the findings the worker repeats the same mistake on every retry.
+    expect(phase?.rejectionReason).toContain("risk-doc-overclaim");
+  });
+
   it("runs start, status, dispatch, gate, approval, and report through fakes", async () => {
     const persistence = new FakeRunPersistence();
     const turns: WorkerTurn[] = [];
@@ -218,14 +341,16 @@ describe("application run use cases", () => {
           turns.push(turn);
           return {
             sessionId: turn.sessionId,
-            artifact: DefinitionArtifactSchema.parse({
-              summary: "Define the application boundary",
-              inScope: ["application"],
-              outOfScope: [],
-              acceptanceCriteria: ["Application ports are explicit"],
-              constraints: [],
-              openQuestions: [],
-            }),
+            artifact: JsonObjectSchema.parse(
+              DefinitionArtifactSchema.parse({
+                summary: "Define the application boundary",
+                inScope: ["application"],
+                outOfScope: [],
+                acceptanceCriteria: [{ description: "Application ports are explicit" }],
+                constraints: [],
+                openQuestions: [],
+              }),
+            ),
             output: [{ stream: "stdout", text: "definition complete" }],
           };
         },
@@ -261,12 +386,14 @@ describe("application run use cases", () => {
         kind: "simulated",
         adapter: "simulated-worker",
         adapterVersion: "1",
-        legacy: false,
       },
     });
     expect((await commands.drive(runId, { channel: "driver" })).kind).toBe("awaiting-approval");
     expect(turns).toHaveLength(1);
-    expect((await queries.status(runId))?.needs?.phaseId).toBe("define");
+    expect((await queries.status(runId))?.needs).toMatchObject({
+      action: "approve-or-reject",
+      phaseId: "define",
+    });
     const artifact = await queries.artifact(runId, "define");
     expect(artifact).toMatchObject({ version: 1 });
     await expect(
@@ -336,7 +463,7 @@ describe("application run use cases", () => {
         summary: "Authority fixture",
         inScope: ["application"],
         outOfScope: [],
-        acceptanceCriteria: ["Human-direct authority is enforced"],
+        acceptanceCriteria: [{ description: "Human-direct authority is enforced" }],
         constraints: [],
         openQuestions: [],
       },
@@ -376,14 +503,16 @@ describe("application run use cases", () => {
           });
           return {
             sessionId: turn.sessionId,
-            artifact: DefinitionArtifactSchema.parse({
-              summary: "Ordered evidence",
-              inScope: ["application"],
-              outOfScope: [],
-              acceptanceCriteria: ["Events precede output"],
-              constraints: [],
-              openQuestions: [],
-            }),
+            artifact: JsonObjectSchema.parse(
+              DefinitionArtifactSchema.parse({
+                summary: "Ordered evidence",
+                inScope: ["application"],
+                outOfScope: [],
+                acceptanceCriteria: [{ description: "Events precede output" }],
+                constraints: [],
+                openQuestions: [],
+              }),
+            ),
             output: [{ stream: "stdout", text: "visible after persistence" }],
           };
         },
@@ -413,7 +542,6 @@ describe("application run use cases", () => {
       kind: "simulated",
       adapter: "simulated-worker",
       adapterVersion: "1",
-      legacy: false,
     });
     expect(persistence.workerEvents[0]?.configuredModel).toEqual({
       id: "claude-opus-5",
@@ -435,14 +563,16 @@ describe("application run use cases", () => {
           }
           return {
             sessionId: turn.sessionId,
-            artifact: DefinitionArtifactSchema.parse({
-              summary: "Recovered with fresh identities",
-              inScope: ["application"],
-              outOfScope: [],
-              acceptanceCriteria: ["The retry is independently durable"],
-              constraints: [],
-              openQuestions: [],
-            }),
+            artifact: JsonObjectSchema.parse(
+              DefinitionArtifactSchema.parse({
+                summary: "Recovered with fresh identities",
+                inScope: ["application"],
+                outOfScope: [],
+                acceptanceCriteria: [{ description: "The retry is independently durable" }],
+                constraints: [],
+                openQuestions: [],
+              }),
+            ),
             output: [],
           };
         },
@@ -484,14 +614,16 @@ describe("application run use cases", () => {
   it("reconciles a completed turn from durable events after the worker process exits", async () => {
     const persistence = new FakeRunPersistence();
     let executeCount = 0;
-    const artifact = DefinitionArtifactSchema.parse({
-      summary: "Recovered from durable worker events",
-      inScope: ["application"],
-      outOfScope: [],
-      acceptanceCriteria: ["A restarted driver can prove completion"],
-      constraints: [],
-      openQuestions: [],
-    });
+    const artifact = JsonObjectSchema.parse(
+      DefinitionArtifactSchema.parse({
+        summary: "Recovered from durable worker events",
+        inScope: ["application"],
+        outOfScope: [],
+        acceptanceCriteria: [{ description: "A restarted driver can prove completion" }],
+        constraints: [],
+        openQuestions: [],
+      }),
+    );
     const commands = new RunCommandService(
       persistence,
       {
@@ -559,12 +691,16 @@ describe("application run use cases", () => {
   it("persists exact phase inputs before dispatch and reuses them during recovery", async () => {
     const persistence = new FakeRunPersistence();
     const prompts: string[] = [];
-    const artifact = ResearchArtifactSchema.parse({
-      summary: "Recovered research",
-      findings: [{ claim: "The manifest is durable", source: "dispatch", evidenceKind: "offline" }],
-      constraints: [],
-      recommendations: [],
-    });
+    const artifact = JsonObjectSchema.parse(
+      ResearchArtifactSchema.parse({
+        summary: "Recovered research",
+        findings: [
+          { claim: "The manifest is durable", source: "dispatch", evidenceKind: "offline" },
+        ],
+        constraints: [],
+        recommendations: [],
+      }),
+    );
     const commands = new RunCommandService(
       persistence,
       {
@@ -634,7 +770,7 @@ describe("application run use cases", () => {
         summary: "Accepted definition",
         inScope: ["packages/application"],
         outOfScope: [],
-        acceptanceCriteria: ["Inputs are exact"],
+        acceptanceCriteria: [{ description: "Inputs are exact" }],
         constraints: [],
         openQuestions: [],
       },
@@ -731,7 +867,7 @@ describe("application run use cases", () => {
       dependsOn: [],
       paths: ["packages/application"],
       repositoryChange: "required",
-      acceptance: ["Current change is implemented"],
+      acceptance: [{ description: "Current change is implemented", required: true, satisfies: [] }],
       role: "implementor",
       status: "closed",
       attempt: 1,
@@ -914,7 +1050,9 @@ describe("application run use cases", () => {
           title: "Implement exact provenance",
           dependsOn: [],
           paths: ["packages/application"],
-          acceptance: ["Task provenance is durable"],
+          acceptance: [
+            { description: "Task provenance is durable", required: true, satisfies: [] },
+          ],
           role: "implementor",
         },
       ],
@@ -984,6 +1122,122 @@ describe("application run use cases", () => {
       },
     });
     expect(taskPrompt).not.toHaveProperty("acceptance");
+    const legacyImport = (await persistence.readRun(runId)).state.journal.find(
+      (entry) => entry.event === "plan.imported",
+    );
+    expect(legacyImport?.data).toEqual({ phaseId: "plan", tasks: ["exact-task"] });
+  });
+
+  it("orders imported tasks by plan phase and records the derived dependencies", async () => {
+    const persistence = new FakeRunPersistence();
+    const commands = new RunCommandService(
+      persistence,
+      {
+        async execute(turn) {
+          return { sessionId: turn.sessionId, output: [] };
+        },
+      },
+      {
+        evaluate: async (input) => ({
+          gateId: input.gateId,
+          accepted: true,
+          readings: [],
+          findings: [],
+        }),
+      },
+      { validatePhaseArtifact: () => undefined },
+      clock,
+      new SequenceIdentifiers("plan-phases"),
+      { scheduleEvery: () => () => undefined },
+    );
+    const runId = "plan-phase-ordering";
+    await commands.start({
+      actor: { channel: "direct-cli" },
+      request: { goal: "Order the frontier by plan phases", constraints: [] },
+      runId,
+      snapshot: createRunSnapshot(runId, definitions, clock.now()),
+    });
+    const current = await persistence.readRun(runId);
+    for (const phaseId of ["define", "research"] as const) {
+      const phase = current.state.phases.find((candidate) => candidate.id === phaseId);
+      if (phase === undefined) throw new Error(`standard fixture is missing ${phaseId}`);
+      phase.status = "accepted";
+      phase.iteration = 1;
+      phase.artifactVersion = 1;
+      current.state.artifacts.push({
+        phaseId,
+        version: 1,
+        path: `artifacts/${phaseId}/v1.json`,
+        createdAt: clock.now().toISOString(),
+        content: { summary: `${phaseId} evidence` },
+        consumed: [],
+      });
+    }
+    const planPhase = current.state.phases.find((phase) => phase.id === "plan");
+    if (planPhase === undefined) throw new Error("standard fixture is missing plan");
+    planPhase.status = "awaiting_approval";
+    planPhase.iteration = 1;
+    planPhase.artifactVersion = 1;
+    current.state.status = "awaiting_approval";
+    current.state.artifacts.push({
+      phaseId: "plan",
+      version: 1,
+      path: "artifacts/plan/v1.json",
+      createdAt: clock.now().toISOString(),
+      content: JsonObjectSchema.parse(
+        PlanArtifactSchema.parse({
+          summary: "Phased plan",
+          phases: [
+            { id: "schemas", title: "Schemas", order: 1 },
+            { id: "frontier", title: "Frontier", order: 2, dependsOn: ["schemas"] },
+          ],
+          tasks: [
+            {
+              key: "expand-frontier",
+              title: "Expand the frontier",
+              paths: ["packages/application"],
+              acceptance: [
+                { description: "Phase order reaches the frontier", required: true, satisfies: [] },
+              ],
+              role: "implementor",
+              phase: "frontier",
+            },
+            {
+              key: "extend-schemas",
+              title: "Extend the schemas",
+              paths: ["packages/domain"],
+              acceptance: [
+                { description: "Every new field is optional", required: true, satisfies: [] },
+              ],
+              role: "implementor",
+              phase: "schemas",
+            },
+          ],
+        }),
+      ),
+      consumed: resolvePhaseInputManifest(current.state, planPhase).inputs,
+    });
+    await persistence.commitRun({
+      runId,
+      expectedRevision: current.revision,
+      operationId: "seed-phased-plan",
+      state: current.state,
+    });
+
+    await commands.approve(runId, "plan", { channel: "direct-cli" });
+
+    const state = (await persistence.readRun(runId)).state;
+    expect(state.tasks.map((task) => task.key)).toEqual(["extend-schemas", "expand-frontier"]);
+    expect(state.tasks.map((task) => task.dependsOn)).toEqual([[], ["extend-schemas"]]);
+    expect(state.journal.find((entry) => entry.event === "plan.imported")?.data).toEqual({
+      phaseId: "plan",
+      tasks: ["extend-schemas", "expand-frontier"],
+      phases: ["schemas", "frontier"],
+      derivedDependencies: [
+        { task: "expand-frontier", from: "frontier", added: ["extend-schemas"] },
+      ],
+      collapsed: [],
+    });
   });
 
   it("persists repository baseline before execution and delta before task gates", async () => {
@@ -1036,7 +1290,6 @@ describe("application run use cases", () => {
         kind: "simulated",
         adapter: "simulated-worker",
         adapterVersion: "1",
-        legacy: false,
       },
       {
         async captureBaseline(input) {
@@ -1101,7 +1354,7 @@ describe("application run use cases", () => {
         dependsOn: [],
         paths: ["packages/application"],
         repositoryChange: "required",
-        acceptance: ["Measured"],
+        acceptance: [{ description: "Measured", required: true, satisfies: [] }],
         role: "implementor",
         status: "pending",
         attempt: 0,
@@ -1123,28 +1376,115 @@ describe("application run use cases", () => {
     expect(order).toEqual(["baseline", "execute", "delta", "gate"]);
   });
 
+  it("reports negotiated capability gaps in the task prompt", async () => {
+    const persistence = new FakeRunPersistence();
+    const runId = "task-capability-report";
+    let taskPrompt: Record<string, unknown> | undefined;
+    const workerHost: WorkerExecutionPort & Pick<WorkerSessionPort, "negotiate"> = {
+      async execute(turn) {
+        if (turn.owner.kind === "task") taskPrompt = JSON.parse(turn.prompt);
+        return { sessionId: turn.sessionId, output: [] };
+      },
+      async negotiate(requirements) {
+        return {
+          adapter: sdkLikeDescriptor,
+          resolvedModel: requirements.requestedModel,
+          grantedCapabilities: ["repository.read", "repository.edit", "senawa.task.done"],
+          toolTransport: "native",
+          unsupportedPreferences: ["senawa.discover"],
+        };
+      },
+    };
+    const commands = new RunCommandService(
+      persistence,
+      workerHost,
+      {
+        evaluate: async (input) => ({
+          gateId: input.gateId,
+          accepted: true,
+          readings: [],
+          findings: [],
+        }),
+      },
+      { validatePhaseArtifact: () => undefined },
+      clock,
+      new SequenceIdentifiers("capability-report"),
+      { scheduleEvery: () => () => undefined },
+    );
+    await commands.start({
+      actor: { channel: "direct-cli" },
+      request: { goal: "Report capability gaps", constraints: [] },
+      runId,
+      snapshot: createRunSnapshot(runId, definitions, clock.now()),
+    });
+    const current = await persistence.readRun(runId);
+    for (const phase of current.state.phases) {
+      phase.status =
+        phase.id === "implement" ? "pending" : phase.id === "verify" ? "ended" : "accepted";
+    }
+    current.state.tasks = [
+      {
+        key: "capability-task",
+        title: "Respect granted capabilities",
+        dependsOn: [],
+        paths: ["packages/application"],
+        repositoryChange: "forbidden",
+        acceptance: [{ description: "Capabilities are honest", required: true, satisfies: [] }],
+        role: "implementor",
+        status: "pending",
+        attempt: 0,
+        dispatchFailures: 0,
+        sessionId: null,
+        steering: [],
+      },
+    ];
+    await persistence.commitRun({
+      runId,
+      expectedRevision: current.revision,
+      operationId: "seed-capability-frontier",
+      state: current.state,
+    });
+
+    await commands.advance(runId, { channel: "driver" });
+
+    expect(taskPrompt).toMatchObject({
+      capabilities: {
+        granted: ["repository.read", "repository.edit", "senawa.task.done"],
+        unavailable: ["senawa.discover"],
+        instructions: expect.arrayContaining([
+          expect.stringContaining("cannot execute commands"),
+          expect.stringContaining("Report that criterion as blocked"),
+        ]),
+      },
+    });
+    const reported = taskPrompt as {
+      readonly capabilities: { readonly granted: readonly string[] };
+    };
+    expect(reported.capabilities.granted).not.toContain("process.run");
+  });
+
   it.each([
     [
-      "resolves an in-scope completion claim and persists the driver assessment",
+      "records an in-scope completion claim and persists the driver assessment",
       { path: "packages/application/src/run.ts", relationship: "modified" } as const,
       "satisfied",
       "pass",
     ],
     [
-      "refuses a fabricated completion claim",
+      "records a claim the measured delta does not show",
       { path: "packages/application/src/invented.ts", relationship: "modified" } as const,
-      "unresolved",
-      "fail",
+      "satisfied",
+      "pass",
     ],
     [
-      "refuses a completion claim outside the authorized task paths",
+      "records a claim outside the suggested task paths",
       { path: "README.md", relationship: "modified" } as const,
-      "contradicted",
-      "fail",
+      "satisfied",
+      "pass",
     ],
   ])("%s", async (_name, file, verdict, assessmentVerdict) => {
     const persistence = new FakeRunPersistence();
-    const runId = `task-acceptance-${verdict}`;
+    const runId = `task-acceptance-${file.path.replaceAll(/[^a-z]/gu, "")}`;
     const gateInputs: Array<{ readonly stage: string; readonly verdict: string }> = [];
     const persisted: string[] = [];
     const criterionId = deriveAcceptanceCriterionId("The change is implemented");
@@ -1162,7 +1502,12 @@ describe("application run use cases", () => {
             submission: {
               summary: "Implemented",
               criteria: [
-                { id: criterionId, outcome: "satisfied", evidence: [{ kind: "file", ...file }] },
+                {
+                  id: criterionId,
+                  outcome: "satisfied",
+                  summary: "what was done",
+                  evidence: [{ kind: "file", ...file }],
+                },
               ],
             },
           });
@@ -1191,7 +1536,7 @@ describe("application run use cases", () => {
       { scheduleEvery: () => () => undefined },
       30_000,
       "file",
-      { kind: "simulated", adapter: "simulated-worker", adapterVersion: "1", legacy: false },
+      { kind: "simulated", adapter: "simulated-worker", adapterVersion: "1" },
       taskDeltaEvidence(),
       {
         async persist(assessment) {
@@ -1215,7 +1560,7 @@ describe("application run use cases", () => {
       title: "Measure task",
       dependsOn: [],
       paths: ["packages/application"],
-      acceptance: ["The change is implemented"],
+      acceptance: [{ description: "The change is implemented", required: true, satisfies: [] }],
       role: "implementor",
       status: "pending",
       attempt: 0,
@@ -1274,7 +1619,7 @@ describe("application run use cases", () => {
       { scheduleEvery: () => () => undefined },
       30_000,
       "file",
-      { kind: "simulated", adapter: "simulated-worker", adapterVersion: "1", legacy: false },
+      { kind: "simulated", adapter: "simulated-worker", adapterVersion: "1" },
       taskDeltaEvidence(),
     );
     await commands.start({
@@ -1288,7 +1633,7 @@ describe("application run use cases", () => {
       title: "Silent task",
       dependsOn: [],
       paths: ["packages/application"],
-      acceptance: ["The change is implemented"],
+      acceptance: [{ description: "The change is implemented", required: true, satisfies: [] }],
       role: "implementor",
       status: "pending",
       attempt: 0,
@@ -1327,6 +1672,7 @@ describe("application run use cases", () => {
                   {
                     id: criterionId,
                     outcome: "satisfied",
+                    summary: "what was done",
                     evidence: [
                       {
                         kind: "file",
@@ -1372,7 +1718,7 @@ describe("application run use cases", () => {
       { scheduleEvery: () => () => undefined },
       30_000,
       "file",
-      { kind: "simulated", adapter: "simulated-worker", adapterVersion: "1", legacy: false },
+      { kind: "simulated", adapter: "simulated-worker", adapterVersion: "1" },
       taskDeltaEvidence(),
     );
     await commands.start({
@@ -1386,7 +1732,7 @@ describe("application run use cases", () => {
       title: "Recovered task",
       dependsOn: [],
       paths: ["packages/application"],
-      acceptance: ["The change is implemented"],
+      acceptance: [{ description: "The change is implemented", required: true, satisfies: [] }],
       role: "implementor",
       status: "pending",
       attempt: 0,
@@ -1451,7 +1797,7 @@ describe("application run use cases", () => {
               dependsOn: [],
               paths: ["packages/application"],
               repositoryChange: "forbidden",
-              acceptance: ["No evidence required"],
+              acceptance: [{ description: "No evidence required", required: true, satisfies: [] }],
               role: "implementor",
             },
           ],
@@ -1525,7 +1871,6 @@ describe("application run use cases", () => {
         kind: "simulated",
         adapter: "simulated-worker",
         adapterVersion: "1",
-        legacy: false,
       },
       {
         async captureBaseline(input) {
@@ -1598,7 +1943,7 @@ describe("application run use cases", () => {
         dependsOn: [],
         paths: ["packages/application"],
         repositoryChange: "required",
-        acceptance: ["Evidence survives"],
+        acceptance: [{ description: "Evidence survives", required: true, satisfies: [] }],
         role: "implementor",
         status: "pending",
         attempt: 0,
@@ -1639,14 +1984,16 @@ describe("application run use cases", () => {
 
   it("reuses durable artifact evidence when the runtime commit retries", async () => {
     const persistence = new SplitArtifactPersistence();
-    const artifact = DefinitionArtifactSchema.parse({
-      summary: "Reuse immutable artifact evidence",
-      inScope: ["application"],
-      outOfScope: [],
-      acceptanceCriteria: ["A split commit does not duplicate the artifact"],
-      constraints: [],
-      openQuestions: [],
-    });
+    const artifact = JsonObjectSchema.parse(
+      DefinitionArtifactSchema.parse({
+        summary: "Reuse immutable artifact evidence",
+        inScope: ["application"],
+        outOfScope: [],
+        acceptanceCriteria: [{ description: "A split commit does not duplicate the artifact" }],
+        constraints: [],
+        openQuestions: [],
+      }),
+    );
     const commands = new RunCommandService(
       persistence,
       {
@@ -1717,7 +2064,7 @@ describe("application run use cases", () => {
         dependsOn: [],
         paths: ["docs"],
         repositoryChange: "required",
-        acceptance: ["The task can continue"],
+        acceptance: [{ description: "The task can continue", required: true, satisfies: [] }],
         role: "implementor",
         status: "escalated",
         attempt: 1,
@@ -1976,7 +2323,40 @@ describe("application run use cases", () => {
       harness.expectedTurn,
       { timeoutMs: 100 },
     );
-    const rejection = expect(waiting).rejects.toThrow("Timed out waiting for answer");
+    const rejection = expect(waiting).rejects.toThrow(
+      `Timed out after 100ms waiting for answer to ${question.questionId}`,
+    );
+
+    await flushMicrotasks();
+    harness.clock.set(new Date(harness.clock.now().getTime() + 100));
+    await harness.scheduler.tick();
+
+    await rejection;
+    expect(harness.scheduler.activeCount).toBe(0);
+  });
+
+  it("names the blocking question and its remedy when a wait expires", async () => {
+    const harness = await createQuestionHarness("named-answer-timeout");
+    const question = await harness.commands.ask(
+      harness.runId,
+      "Which boundary owns this?",
+      harness.workerActor,
+      harness.workerContext,
+    );
+    const waiting = harness.queries.waitForQuestionAnswer(
+      harness.runId,
+      question.questionId,
+      harness.expectedTurn,
+      { timeoutMs: 100 },
+    );
+    const rejection = expect(waiting).rejects.toMatchObject({
+      name: "QuestionAnswerTimeoutError",
+      questionId: question.questionId,
+      question: "Which boundary owns this?",
+      message: expect.stringContaining(
+        `senawa answer ${question.questionId} "<answer>" --run ${harness.runId}`,
+      ),
+    });
 
     await flushMicrotasks();
     harness.clock.set(new Date(harness.clock.now().getTime() + 100));
@@ -2037,6 +2417,54 @@ describe("application run use cases", () => {
 
     await rejection;
     expect(harness.scheduler.activeCount).toBe(0);
+  });
+
+  it("surfaces an answerable worker question as a first-class status need", async () => {
+    const harness = await createQuestionHarness("question-status-need");
+    expect((await harness.queries.status(harness.runId))?.needs).toBeNull();
+
+    const question = await harness.commands.ask(
+      harness.runId,
+      "Which boundary owns this?",
+      harness.workerActor,
+      harness.workerContext,
+    );
+
+    expect((await harness.queries.status(harness.runId))?.needs).toEqual({
+      action: "answer-question",
+      questionId: question.questionId,
+      question: "Which boundary owns this?",
+      ownerKind: "phase",
+      ownerId: "define",
+      askedAt: expect.any(String),
+      answerCommand: `senawa answer ${question.questionId} "<answer>" --run ${harness.runId}`,
+    });
+    expect((await harness.queries.phaseBrief(harness.runId, "define")).needs).toMatchObject({
+      action: "answer-question",
+      questionId: question.questionId,
+    });
+
+    await harness.commands.answer(harness.runId, question.questionId, "Application queries", {
+      channel: "direct-cli",
+    });
+
+    expect((await harness.queries.status(harness.runId))?.needs).toBeNull();
+  });
+
+  it("never reports a stale worker question as a status need", async () => {
+    const harness = await createQuestionHarness("stale-question-need");
+    await harness.commands.ask(
+      harness.runId,
+      "Which boundary?",
+      harness.workerActor,
+      harness.workerContext,
+    );
+    await updateRuntime(harness.persistence, harness.runId, (state) => {
+      if (state.activeTurn === null) throw new Error("Expected an active turn");
+      state.activeTurn = { ...state.activeTurn, turnId: "replacement-turn" };
+    });
+
+    expect((await harness.queries.status(harness.runId))?.needs).toBeNull();
   });
 
   it("projects multiple open worker questions and classifies replaced turns as stale", async () => {

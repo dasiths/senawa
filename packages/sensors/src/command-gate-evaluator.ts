@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
 import type { GateEvaluationPort } from "@senawa/application";
 import {
+  deriveAcceptanceCriterionId,
   GateEvaluationSchema,
   type JsonObject,
   type JsonValue,
@@ -36,7 +37,9 @@ export const SENSOR_OUTPUT_LIMIT = 8_000;
 export const DEFAULT_SENSOR_TIMEOUT_MS = 120_000;
 
 const ArtifactSensorConfigSchema = z
-  .object({ artifactKind: z.enum(["phase-output", "verification-output"]) })
+  .object({
+    artifactKind: z.enum(["phase-output", "verification-output", "cross-reference"]),
+  })
   .strict();
 const TaskChangeSensorConfigSchema = z
   .object({ evidenceKind: z.literal("repository-delta") })
@@ -248,6 +251,9 @@ export class CommandGateEvaluator implements GateEvaluator, GateEvaluationPort {
       if (!config.success) return executionError(`Invalid ${sensor.id} configuration`);
       if (config.data.artifactKind === "verification-output") {
         return assessVerification(input);
+      }
+      if (config.data.artifactKind === "cross-reference") {
+        return assessArtifactIntegrity(input);
       }
       const present = input.owner.kind === "phase" && input.artifact !== undefined;
       return {
@@ -615,17 +621,18 @@ function assessTaskChange(input: GateEvaluationInput): SensorAssessment {
   const findings: SensorFinding[] = [];
   if (evidence.uncertainty.length > 0) {
     findings.push({
-      severity: "error",
+      severity: "warning",
       code: "task-change-uncertain",
       message: `Repository attribution is uncertain: ${evidence.uncertainty.join(", ")}`,
       evidence: evidence.evidencePath,
     });
   }
+  // Task paths are advisory, so where a change landed is recorded rather than refused.
   if (evidence.outOfScopeChanges.length > 0) {
     findings.push({
-      severity: "error",
+      severity: "warning",
       code: "task-change-out-of-scope",
-      message: `Out-of-scope changes: ${evidence.outOfScopeChanges.join(", ")}`,
+      message: `Changes outside the suggested paths: ${evidence.outOfScopeChanges.join(", ")}`,
       evidence: evidence.evidencePath,
     });
   }
@@ -639,9 +646,9 @@ function assessTaskChange(input: GateEvaluationInput): SensorAssessment {
   }
   if (expectation === "required" && evidence.inScopeChanges.length === 0) {
     findings.push({
-      severity: "error",
+      severity: "warning",
       code: "task-change-required-noop",
-      message: "The task required an in-scope repository change but none was measured",
+      message: "The task expected a repository change but none was measured for this attempt",
       evidence: evidence.evidencePath,
     });
   }
@@ -665,8 +672,8 @@ function assessTaskChange(input: GateEvaluationInput): SensorAssessment {
   return {
     verdict: blocking ? "fail" : "pass",
     summary: blocking
-      ? "Trusted repository change evidence did not satisfy task policy"
-      : `Trusted repository change evidence satisfied ${expectation} policy`,
+      ? "Measured repository change evidence broke a hard boundary"
+      : `Measured repository change evidence recorded against ${expectation} intent`,
     findings,
     data: {
       expectation,
@@ -720,6 +727,241 @@ function assessTaskAcceptance(input: GateEvaluationInput): SensorAssessment {
       repositoryDeltaDigest: assessment.repositoryDeltaDigest,
     },
   };
+}
+
+/**
+ * Definition and research artifacts are Ajv-only in production, so a zod refinement on them
+ * would never run. This deterministic assessment is where their cross-reference integrity lives.
+ */
+function assessArtifactIntegrity(input: GateEvaluationInput): SensorAssessment {
+  const artifact = input.owner.kind === "phase" ? input.artifact : undefined;
+  if (artifact === undefined) {
+    return {
+      verdict: "fail",
+      summary: "No candidate artifact was produced for the integrity assessment",
+      findings: [
+        {
+          severity: "error",
+          code: "artifact-missing",
+          message: "No candidate phase artifact was produced",
+        },
+      ],
+      data: { artifactPresent: false },
+    };
+  }
+
+  const kind = classifyArtifact(artifact);
+  const findings =
+    kind === "definition"
+      ? definitionIntegrityFindings(artifact)
+      : kind === "research"
+        ? researchIntegrityFindings(artifact)
+        : [];
+  return {
+    verdict: findings.length === 0 ? "pass" : "fail",
+    summary:
+      kind === "unknown"
+        ? "The candidate artifact has no cross-reference contract to assess"
+        : findings.length === 0
+          ? `The candidate ${kind} artifact is internally consistent`
+          : `The candidate ${kind} artifact has ${findings.length} integrity problem(s)`,
+    findings: [...findings],
+    data: { artifactKind: kind, problemCount: findings.length },
+  };
+}
+
+function classifyArtifact(artifact: JsonObject): "definition" | "research" | "unknown" {
+  if (Array.isArray(Reflect.get(artifact, "tasks"))) return "unknown";
+  const findings = Reflect.get(artifact, "findings");
+  if (
+    Array.isArray(findings) &&
+    findings.some(
+      (entry) =>
+        entry !== null &&
+        typeof entry === "object" &&
+        typeof Reflect.get(entry, "evidenceKind") === "string",
+    )
+  ) {
+    return "research";
+  }
+  if (Array.isArray(Reflect.get(artifact, "checks"))) return "unknown";
+  return Array.isArray(Reflect.get(artifact, "inScope")) ? "definition" : "unknown";
+}
+
+function definitionIntegrityFindings(artifact: JsonObject): readonly SensorFinding[] {
+  const findings: SensorFinding[] = [];
+  findings.push(
+    ...duplicateIdFindings(
+      objectsIn(artifact, "acceptanceCriteria"),
+      (entry) => declaredId(entry) ?? deriveAcceptanceCriterionId(text(entry, "description") ?? ""),
+      "definition-criterion-duplicate",
+      "acceptance criterion",
+    ),
+    ...duplicateIdFindings(
+      objectsIn(artifact, "assumptions"),
+      declaredId,
+      "definition-assumption-duplicate",
+      "assumption",
+    ),
+    ...duplicateIdFindings(
+      objectsIn(artifact, "evidenceNeeded"),
+      declaredId,
+      "definition-evidence-duplicate",
+      "evidence request",
+    ),
+  );
+  for (const question of objectsIn(artifact, "openQuestions")) {
+    if (Reflect.get(question, "blocking") !== true) continue;
+    if (text(question, "resolution") !== undefined) continue;
+    findings.push({
+      severity: "error",
+      code: "definition-question-blocking",
+      message: `A blocking open question is unresolved: ${text(question, "question") ?? "unnamed"}`,
+    });
+  }
+  return findings;
+}
+
+function researchIntegrityFindings(artifact: JsonObject): readonly SensorFinding[] {
+  const findings: SensorFinding[] = [];
+  const evidence = objectsIn(artifact, "findings");
+  const findingIds = new Set(
+    evidence.flatMap((entry) =>
+      declaredId(entry) === undefined ? [] : [declaredId(entry) as string],
+    ),
+  );
+  const questionIds = new Set(
+    objectsIn(artifact, "questions").flatMap((entry) =>
+      declaredId(entry) === undefined ? [] : [declaredId(entry) as string],
+    ),
+  );
+  const alternativeIds = new Set(
+    objectsIn(artifact, "alternatives").flatMap((entry) =>
+      declaredId(entry) === undefined ? [] : [declaredId(entry) as string],
+    ),
+  );
+
+  findings.push(
+    ...duplicateIdFindings(evidence, declaredId, "research-finding-duplicate", "finding"),
+    ...duplicateIdFindings(
+      objectsIn(artifact, "questions"),
+      declaredId,
+      "research-question-duplicate",
+      "question",
+    ),
+    ...duplicateIdFindings(
+      objectsIn(artifact, "alternatives"),
+      declaredId,
+      "research-alternative-duplicate",
+      "alternative",
+    ),
+  );
+
+  for (const entry of evidence) {
+    findings.push(
+      ...danglingReferences(entry, "answers", questionIds, "research-answer-unknown", "question"),
+    );
+  }
+  for (const entry of objectsIn(artifact, "questions")) {
+    findings.push(
+      ...danglingReferences(
+        entry,
+        "answeredBy",
+        findingIds,
+        "research-answered-by-unknown",
+        "finding",
+      ),
+    );
+  }
+  for (const entry of objectsIn(artifact, "alternatives")) {
+    findings.push(
+      ...danglingReferences(entry, "evidence", findingIds, "research-evidence-unknown", "finding"),
+    );
+  }
+  for (const entry of objectsIn(artifact, "recommendations")) {
+    findings.push(
+      ...danglingReferences(entry, "basis", findingIds, "research-basis-unknown", "finding"),
+      ...danglingReferences(
+        entry,
+        "alternativesRejected",
+        alternativeIds,
+        "research-rejected-unknown",
+        "alternative",
+      ),
+    );
+  }
+  for (const unknown of objectsIn(artifact, "unknowns")) {
+    if (Reflect.get(unknown, "blocking") !== true) continue;
+    findings.push({
+      severity: "error",
+      code: "research-unknown-blocking",
+      message: `A blocking unknown remains open: ${text(unknown, "question") ?? "unnamed"}`,
+    });
+  }
+  return findings;
+}
+
+function objectsIn(artifact: JsonObject, key: string): readonly JsonObject[] {
+  const value = Reflect.get(artifact, key);
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (entry): entry is JsonObject =>
+      entry !== null && typeof entry === "object" && !Array.isArray(entry),
+  );
+}
+
+function declaredId(entry: JsonObject): string | undefined {
+  return text(entry, "id");
+}
+
+function text(entry: JsonObject, key: string): string | undefined {
+  const value = Reflect.get(entry, key);
+  return typeof value === "string" ? value : undefined;
+}
+
+function duplicateIdFindings(
+  entries: readonly JsonObject[],
+  identify: (entry: JsonObject) => string | undefined,
+  code: string,
+  label: string,
+): readonly SensorFinding[] {
+  const seen = new Set<string>();
+  const findings: SensorFinding[] = [];
+  for (const entry of entries) {
+    const id = identify(entry);
+    if (id === undefined || id === "") continue;
+    if (seen.has(id)) {
+      findings.push({
+        severity: "error",
+        code,
+        message: `Duplicate ${label} id: ${id}`,
+      });
+    }
+    seen.add(id);
+  }
+  return findings;
+}
+
+function danglingReferences(
+  entry: JsonObject,
+  key: string,
+  known: ReadonlySet<string>,
+  code: string,
+  label: string,
+): readonly SensorFinding[] {
+  const value = Reflect.get(entry, key);
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((reference) =>
+    typeof reference === "string" && !known.has(reference)
+      ? [
+          {
+            severity: "error" as const,
+            code,
+            message: `Reference to an undeclared ${label} id: ${reference}`,
+          },
+        ]
+      : [],
+  );
 }
 
 export class SpawnCommandRunner implements CommandRunner {

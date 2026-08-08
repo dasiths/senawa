@@ -1,7 +1,11 @@
 import type { WorkerBindingContext } from "@senawa/application";
+import { QuestionAnswerTimeoutError } from "@senawa/application";
 import { TaskCompletionSubmissionSchema } from "@senawa/domain";
 import type { WorkerBindingHandlers } from "@senawa/workers";
-import { DeterministicWorkerBindingRegistry } from "@senawa/workers";
+import {
+  DeterministicWorkerBindingRegistry,
+  WORKER_QUESTION_WAIT_TIMEOUT_MS,
+} from "@senawa/workers";
 import type { SenawaServices } from "./services.js";
 
 export function createSdkWorkerBindings(
@@ -45,17 +49,28 @@ export function createSdkWorkerBindings(
         sessionId: context.sessionId,
         turnId: context.turnId,
       });
-      const answer = await services.queries.waitForQuestionAnswer(
-        context.runId,
-        result.questionId,
-        { sessionId: context.sessionId, turnId: context.turnId },
-      );
-      return {
-        accepted: true,
-        code: "question_answered",
-        message: `Question ${result.questionId} was answered by the human.`,
-        data: { questionId: result.questionId, answer },
-      };
+      try {
+        const answer = await services.queries.waitForQuestionAnswer(
+          context.runId,
+          result.questionId,
+          { sessionId: context.sessionId, turnId: context.turnId },
+          { timeoutMs: WORKER_QUESTION_WAIT_TIMEOUT_MS },
+        );
+        return {
+          accepted: true,
+          code: "question_answered",
+          message: `Question ${result.questionId} was answered by the human.`,
+          data: { questionId: result.questionId, answer },
+        };
+      } catch (error) {
+        if (!(error instanceof QuestionAnswerTimeoutError)) throw error;
+        return {
+          accepted: false,
+          code: "question_unanswered",
+          message: `${error.message} The question stays open, so end this turn and report that ${result.questionId} is blocking it. Do not guess the answer.`,
+          data: { questionId: result.questionId, question },
+        };
+      }
     },
     "senawa.discover": async (input, context) => {
       const title = requiredString(Reflect.get(input, "title"), "title");

@@ -216,7 +216,7 @@ function task(key: string): RuntimeTask {
     dependsOn: [],
     paths: [`src/${key}.ts`],
     repositoryChange: "required",
-    acceptance: [`${key} passes`],
+    acceptance: [{ description: `${key} passes`, required: true, satisfies: [] }],
     role: "worker",
     status: "pending",
     attempt: 0,

@@ -27,6 +27,16 @@ export const IdentifierSchema = z
   .max(128)
   .regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/);
 
+/**
+ * Identity for ids a model authors inside an artifact. Forgiving about case and separator
+ * runs, because demanding kebab-case of a worker costs a paid turn on a cross-reference key
+ * that Senawa never interprets. Still safe as a single path segment and URL fragment: no
+ * separator, no leading dot, no whitespace, no control character.
+ */
+export const ARTIFACT_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/u;
+
+export const ArtifactIdSchema = z.string().min(1).max(128).regex(ARTIFACT_ID_PATTERN);
+
 export const NonEmptyStringSchema = z.string().trim().min(1);
 export const RelativePathSchema = NonEmptyStringSchema.refine(
   (value) => !value.startsWith("/") && !value.split(/[\\/]/u).includes(".."),

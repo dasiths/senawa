@@ -3,6 +3,8 @@ import { test } from "node:test";
 import {
   applyBrowserTerminalUpdate,
   createBrowserTerminalStore,
+  findTerminalResidue,
+  redactedKeys,
   sanitizeTerminalText,
   terminalProjectionLimits,
 } from "./browser-terminal-fixture.mjs";
@@ -30,6 +32,28 @@ test("sanitizes secrets, controls, paths, lines, and streams before projection",
   assert.match(sanitized, /\[probe-root\]/u);
   assert.ok(sanitized.length <= terminalProjectionLimits.maxCharsPerStream);
   assert.match(sanitized, /truncated/u);
+});
+
+test("builds the residue finder from the redaction key list", () => {
+  const escape = String.fromCodePoint(27);
+
+  assert.equal(findTerminalResidue(escape + "[31m"), escape);
+  for (const key of redactedKeys) {
+    assert.ok(findTerminalResidue(`${key}=anything-at-all`) !== null);
+    assert.ok(findTerminalResidue(`${key.toUpperCase()}=Anything`) !== null);
+    assert.ok(findTerminalResidue(`a bare ${key} word survived a wrap`) !== null);
+    assert.equal(findTerminalResidue(`${key}=[redacted]`), null);
+  }
+  assert.equal(findTerminalResidue("nothing sensitive here"), null);
+  assert.equal(
+    findTerminalResidue(
+      sanitizeTerminalText(
+        `${escape}[31m ${redactedKeys.map((key) => `${key}=leaked-value`).join(" ")}`,
+        "/tmp/unused-root",
+      ),
+    ),
+    null,
+  );
 });
 
 function terminal(turnId, stdout) {

@@ -111,9 +111,9 @@ runtime outage must not consume the allowance intended for code rework.
 
 The selected canonical worker host and adapter version are frozen before the
 first dispatch. Resume resolves that persisted identity and refuses an explicit
-host mismatch. Legacy runs without host identity decode as legacy simulation;
-Senawa never infers live execution from a configured profile model. Offline file
-and Beads persistence contracts cover this migration and recovery behavior.
+host mismatch. A run persisted without host identity is rejected rather than
+guessed. Senawa never infers live execution from a configured profile model.
+Offline file and Beads persistence contracts cover this recovery behavior.
 
 ## Driver lease
 
@@ -273,6 +273,10 @@ live Copilot worker, multiple active drivers, or cross-host leases.
 ```
 
 `status` and `needs` answer whether the run is done and what the human owes it.
+`needs` carries one action at a time: either an artifact decision, or an
+unanswered worker question, which takes precedence because it blocks a running
+turn. [Human questions](03-agents-and-interaction.md#human-questions) owns the
+question projection.
 The projection is capped at roughly 1,500 tokens. Larger content is represented
 by a path.
 

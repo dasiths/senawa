@@ -6,6 +6,7 @@ import { access, writeFile } from "node:fs/promises";
 import {
   applyBrowserTerminalUpdate,
   createBrowserTerminalStore,
+  findTerminalResidue,
   projectBrowserTerminal,
   terminalProjectionLimits,
 } from "./browser-terminal-fixture.mjs";
@@ -54,7 +55,7 @@ for (const turn of turns) {
   assert.equal(terminal.lifecycle.at(-1)?.event, turn.expectedExit === 0 ? "completed" : "failed");
   assert.ok(terminal.lifecycle.length <= terminalProjectionLimits.maxLifecycleRecords);
   for (const text of Object.values(terminal.streams)) {
-    assert.doesNotMatch(text, /\u001b|secret|password=.*password/u);
+    assert.equal(findTerminalResidue(text), null);
     assert.doesNotMatch(text, new RegExp(escapeRegex(probeRoot), "u"));
     assert.ok(text.length <= terminalProjectionLimits.maxCharsPerStream);
   }

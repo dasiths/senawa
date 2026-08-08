@@ -17,13 +17,14 @@ const criterion: AcceptanceCriterion = {
 };
 
 describe("task completion submission", () => {
-  it("accepts an outcome with evidence for every criterion", () => {
+  it("requires an account for every criterion", () => {
     const parsed = TaskCompletionSubmissionSchema.parse({
       summary: "Implemented",
       criteria: [
         {
           id: "ac-one",
           outcome: "satisfied",
+          summary: "Rewrote the parser and added a regression test",
           evidence: [
             { kind: "file", path: "packages/domain/src/runtime.ts", relationship: "modified" },
           ],
@@ -32,13 +33,26 @@ describe("task completion submission", () => {
     });
 
     expect(parsed.criteria[0]?.evidence).toHaveLength(1);
+    expect(
+      TaskCompletionSubmissionSchema.safeParse({
+        summary: "Implemented",
+        criteria: [{ id: "ac-one", outcome: "satisfied" }],
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects an unknown evidence kind", () => {
     expect(() =>
       TaskCompletionSubmissionSchema.parse({
         summary: "Implemented",
-        criteria: [{ id: "ac-one", outcome: "satisfied", evidence: [{ kind: "vibes" }] }],
+        criteria: [
+          {
+            id: "ac-one",
+            outcome: "satisfied",
+            summary: "what was done",
+            evidence: [{ kind: "vibes" }],
+          },
+        ],
       }),
     ).toThrow();
   });
@@ -58,7 +72,7 @@ describe("assessTaskCompletion", () => {
     expect(assessment.criteria[0]).toMatchObject({ verdict: "satisfied", claimed: "satisfied" });
   });
 
-  it("refuses a fabricated path that is absent from the measured delta", () => {
+  it("records a claimed path that the measured delta does not show", () => {
     const assessment = assess({
       submission: claim({
         kind: "file",
@@ -67,35 +81,20 @@ describe("assessTaskCompletion", () => {
       }),
     });
 
-    expect(assessment.verdict).toBe("fail");
-    expect(assessment.criteria[0]?.verdict).toBe("unresolved");
-    expect(assessment.findings).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: "acceptance-evidence-unresolved" })]),
-    );
+    // The claim is the evidence. Senawa notes the disagreement without refusing the criterion.
+    expect(assessment.verdict).toBe("pass");
+    expect(assessment.criteria[0]?.verdict).toBe("satisfied");
+    expect(assessment.criteria[0]?.evidence[0]).toMatchObject({ resolution: "recorded" });
+    expect(assessment.criteria[0]?.evidence[0]?.detail).toContain("no change was measured");
   });
 
-  it("contradicts a measured status that disagrees with the claimed relationship", () => {
-    const assessment = assess({
-      submission: claim({
-        kind: "file",
-        path: "packages/domain/src/runtime.ts",
-        relationship: "created",
-      }),
-    });
-
-    expect(assessment.criteria[0]?.verdict).toBe("contradicted");
-  });
-
-  it("refuses a path outside the authorized write scope", () => {
+  it("records a claimed path outside the suggested write scope", () => {
     const assessment = assess({
       submission: claim({ kind: "file", path: "README.md", relationship: "modified" }),
     });
 
-    expect(assessment.verdict).toBe("fail");
-    expect(assessment.criteria[0]?.evidence[0]).toMatchObject({
-      resolution: "contradicted",
-      source: "authorized-paths",
-    });
+    expect(assessment.verdict).toBe("pass");
+    expect(assessment.criteria[0]?.evidence[0]).toMatchObject({ resolution: "recorded" });
   });
 
   it("refuses a path inside a frozen path", () => {
@@ -115,7 +114,7 @@ describe("assessTaskCompletion", () => {
     });
   });
 
-  it("records reviewed and referenced claims as advisory rather than proof", () => {
+  it("accepts a reviewed claim as a stated account", () => {
     const assessment = assess({
       submission: claim({
         kind: "file",
@@ -124,12 +123,12 @@ describe("assessTaskCompletion", () => {
       }),
     });
 
-    expect(assessment.criteria[0]?.evidence[0]).toMatchObject({ resolution: "advisory" });
-    expect(assessment.criteria[0]?.verdict).toBe("unresolved");
-    expect(assessment.verdict).toBe("fail");
+    expect(assessment.criteria[0]?.evidence[0]).toMatchObject({ resolution: "recorded" });
+    expect(assessment.criteria[0]?.verdict).toBe("satisfied");
+    expect(assessment.verdict).toBe("pass");
   });
 
-  it("resolves a sensor claim only against a reading from this attempt", () => {
+  it("records sensor claims without adjudicating them", () => {
     const passing = assess({
       stage: "final",
       submission: claim({ kind: "sensor", sensorId: "typecheck" }),
@@ -147,8 +146,8 @@ describe("assessTaskCompletion", () => {
     });
 
     expect(passing.verdict).toBe("pass");
-    expect(failing.criteria[0]?.verdict).toBe("contradicted");
-    expect(unknown.criteria[0]?.evidence[0]).toMatchObject({ resolution: "unresolved" });
+    expect(failing.criteria[0]?.verdict).toBe("satisfied");
+    expect(unknown.criteria[0]?.evidence[0]).toMatchObject({ resolution: "recorded" });
   });
 
   it("resolves a command claim only when it matches a configured gate sensor command", () => {
@@ -164,7 +163,7 @@ describe("assessTaskCompletion", () => {
     });
 
     expect(matched.verdict).toBe("pass");
-    expect(freeText.criteria[0]?.evidence[0]).toMatchObject({ resolution: "unresolved" });
+    expect(freeText.criteria[0]?.evidence[0]).toMatchObject({ resolution: "recorded" });
   });
 
   it("closes an audit criterion that claims the measured empty delta", () => {
@@ -177,10 +176,11 @@ describe("assessTaskCompletion", () => {
     expect(assessment.criteria[0]?.verdict).toBe("satisfied");
   });
 
-  it("contradicts a no-change claim when a change was measured", () => {
+  it("records a no-change claim even when a change was measured", () => {
     const assessment = assess({ submission: claim({ kind: "repository-delta", scope: "none" }) });
 
-    expect(assessment.criteria[0]?.verdict).toBe("contradicted");
+    expect(assessment.criteria[0]?.verdict).toBe("satisfied");
+    expect(assessment.criteria[0]?.evidence[0]).toMatchObject({ resolution: "recorded" });
   });
 
   it("leaves every required criterion unmet when no submission arrived", () => {
@@ -207,7 +207,7 @@ describe("assessTaskCompletion", () => {
       const assessment = assess({
         submission: {
           summary: "Reported",
-          criteria: [{ id: "ac-one", outcome, evidence: [] }],
+          criteria: [{ id: "ac-one", outcome, summary: "what was done", evidence: [] }],
         },
       });
 
@@ -221,7 +221,9 @@ describe("assessTaskCompletion", () => {
       criteria: [{ id: "ac-one", description: "Optional", required: false }],
       submission: {
         summary: "Reported",
-        criteria: [{ id: "ac-one", outcome: "not-applicable", evidence: [] }],
+        criteria: [
+          { id: "ac-one", outcome: "not-applicable", summary: "what was done", evidence: [] },
+        ],
       },
     });
 
@@ -234,8 +236,13 @@ describe("assessTaskCompletion", () => {
       submission: {
         summary: "Reported",
         criteria: [
-          { id: "ac-one", outcome: "satisfied", evidence: [inScopeFileClaim()] },
-          { id: "ac-invented", outcome: "satisfied", evidence: [] },
+          {
+            id: "ac-one",
+            outcome: "satisfied",
+            summary: "what was done",
+            evidence: [inScopeFileClaim()],
+          },
+          { id: "ac-invented", outcome: "satisfied", summary: "what was done", evidence: [] },
         ],
       },
     });
@@ -269,7 +276,9 @@ function inScopeFileClaim(): EvidenceReference {
 function claim(reference: EvidenceReference): TaskCompletionSubmission {
   return {
     summary: "Reported",
-    criteria: [{ id: "ac-one", outcome: "satisfied", evidence: [reference] }],
+    criteria: [
+      { id: "ac-one", outcome: "satisfied", summary: "what was done", evidence: [reference] },
+    ],
   };
 }
 

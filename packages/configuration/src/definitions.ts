@@ -20,7 +20,9 @@ const artifactExtension = "@senawa/sensor-artifact";
 const commandExtension = "@senawa/sensor-command";
 const taskChangeExtension = "@senawa/sensor-task-change";
 const ArtifactSensorConfigSchema = z
-  .object({ artifactKind: z.enum(["phase-output", "verification-output"]) })
+  .object({
+    artifactKind: z.enum(["phase-output", "verification-output", "cross-reference"]),
+  })
   .strict();
 const TaskChangeSensorConfigSchema = z
   .object({ evidenceKind: z.literal("repository-delta") })

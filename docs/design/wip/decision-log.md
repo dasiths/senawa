@@ -43,6 +43,114 @@ Copy this section for each idea and update it in place as the idea matures.
 
 ## Decisions
 
+### 2026-08-08: Advisory path scope and claimed task completion
+
+* Status: `accepted`
+* Owner: `docs/design/04-sensors-gates-and-enforcement.md`
+* Question: Should Senawa refuse work based on which files a worker edited, and
+    should it adjudicate a worker's completion claim against measured repository
+    deltas?
+* Context: Live run `run-73ec3699` escalated `fix-sanitizer` five times without a
+    single defect in the work. Attempt 1 was refused for citing a file outside
+    the task scope, attempts 2 and 4 for `required` with no measured in-scope
+    delta once the correct edit already existed, and attempt 5 for out-of-scope
+    changes made by the orchestrator rather than the worker. Enforcement produced
+    false refusals at the same rate it was meant to prevent false success.
+* Options: Split per-attempt and per-task baselines to keep enforcement, or stop
+    adjudicating attribution and record it instead.
+* Evidence needed: Whether attribution enforcement ever caught bad work that the
+    deterministic command sensors did not.
+* Probe: `not started`; the evidence is the measured escalation chain above.
+* Outcome: `accepted`. Task `paths` are advisory and recorded. The completion
+    submission stays mandatory and schema-valid, now with a required per-criterion
+    account, and Senawa records the claim rather than verifying it. The frozen
+    set, `repositoryChange: forbidden`, repository containment, and the
+    deterministic command sensors remain blocking.
+* Promotion: `docs/design/04-sensors-gates-and-enforcement.md` sections
+    `Acceptance evidence` and `Measured task-change evidence`.
+
+### 2026-08-08: Worker tooling repair, artifact structure, phase-ordered frontier, and console round two
+
+* Status: `probing`
+* Owner: `docs/design/02-workflows-and-lifecycle.md`,
+    `docs/design/03-agents-and-interaction.md`,
+    `docs/design/04-sensors-gates-and-enforcement.md`, and
+    `docs/design/05-runtime-and-state.md`
+* Question: Can a live worker read the repository and report a blocking question
+    without stalling, can version 1 artifacts carry the structure a mature
+    process needs without breaking existing artifacts, can plan phases order the
+    task frontier without a persistence change, and can the console separate
+    destructive controls from routine progression while making an unanswered
+    question impossible to miss?
+* Context: Live run `run-a15a4785` stalled for ten minutes and wrote nothing.
+    Four causes were observed in that run: every wildcard read was denied, so
+    `glob` and `grep` never returned a file; the implementor profile requested
+    `process.run`, which the SDK host always denies, so the worker planned
+    commands it could not run; a content-exclusion policy masked the probe's
+    credential-shaped literal, so the fixture looked syntactically broken to the
+    worker reading it; and the worker's question blocked inside `senawa.ask`
+    while `work show` reported `needs: null` for the entire stall. Separately,
+    the plan schema had no phases and no todos, so a plan could not express
+    ordering, and the console kept End beside Resume, rendered artifacts at rail
+    width, and stole scroll position from a reader.
+* Options: Loosen path validation globally, or split policy-path and
+    request-path validation so reads may use patterns while writes stay
+    concrete. Build a command bridge for `process.run`, or remove the request and
+    report unavailable capabilities in the prompt. Pause the run on a question,
+    or surface it as a first-class need and bound the worker's wait. Version the
+    artifact schemas, or evolve them additively with every new field optional.
+    Add a phase concept to persistence, or expand phase order into task
+    dependencies at import. Keep one console control column, or separate the run
+    bar, node toolbar, and danger zone.
+* Evidence needed: Contract tests must show glob and grep reads accepted,
+    traversal attempts refused, writes still bound by task scope and the frozen
+    set, a prompt that names unsupported capabilities, a pending question in the
+    status projection and CLI, a bounded question wait that returns a named
+    refusal, parity between the zod and JSON Schema definitions across a fixture
+    corpus, legacy artifacts and plans without phases still validating and
+    executing, phase-derived dependencies with cycle detection and a fan-in cap,
+    and string-contract tests over the production console assets for the run bar,
+    node toolbar, danger-zone confirmation, question banner, asset dialog, and
+    scroll pinning.
+* Evidence needed: A live SDK run must complete a turn that actually reads the
+    repository and either produces an artifact or reports a named blocking
+    question. Nothing below establishes that.
+* Probe: `experiments/probes/worker-sessions/README.md` for the terminal
+    projection fixture; the live workflow check remains planned in
+    `experiments/probes/orchestration/README.md`
+* Outcome: `accepted offline` for the split path validation, the capability
+    report in the task prompt, the pending-question need and bounded wait, the
+    additive artifact structure, plan-phase expansion at import, the deterministic
+    artifact-integrity sensor, and the console separation. These passed offline
+    unit and contract tests in the production packages. No live model exercised
+    any of them, so the four defects are repaired against tests, not against a
+    repeat of `run-a15a4785`.
+* Outcome: `measured-no-credit` for the tmux wrap-boundary secret leak. An
+    80-column pane capture split `token=worker-alpha-secret` across a line
+    boundary, and assignment-shaped redaction masked only the first fragment. The
+    residue matcher now detects it, so the no-credit probe fails rather than
+    passing quietly. The sanitizer is not fixed. See
+    [Terminal wrap boundaries defeat assignment-shaped redaction](probe-findings.md#terminal-wrap-boundaries-defeat-assignment-shaped-redaction).
+* Outcome: `measured-from-live-run` for the four defects themselves. They were
+    observed in `run-a15a4785`, not inferred from reading code. See
+    [Worker tooling defects from a failed live run](probe-findings.md#worker-tooling-defects-from-a-failed-live-run).
+* Promotion: Path authorization is promoted to
+    [Path authorization](../03-agents-and-interaction.md#path-authorization);
+    capability reporting to
+    [Role instructions and briefs](../03-agents-and-interaction.md#role-instructions-and-briefs)
+    and [Worker profiles](../02-workflows-and-lifecycle.md#worker-profiles);
+    the pending-question need to
+    [Human questions](../03-agents-and-interaction.md#human-questions) and
+    [Status projection](../05-runtime-and-state.md#status-projection);
+    artifact structure and plan phases to
+    [Artifact structure](../02-workflows-and-lifecycle.md#artifact-structure) and
+    [Plan phases](../02-workflows-and-lifecycle.md#plan-phases);
+    the integrity sensor to
+    [Artifact integrity](../04-sensors-gates-and-enforcement.md#artifact-integrity);
+    and console separation to
+    [Run console presentation](../03-agents-and-interaction.md#run-console-presentation).
+    The live-run claim and the terminal sanitizer repair remain unpromoted.
+
 ### 2026-08-07: Completion evidence, console usability, commit writes, and external workers
 
 * Status: `probing`

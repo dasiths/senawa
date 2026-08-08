@@ -32,6 +32,15 @@ sensors:
     scope: []
     config:
       artifactKind: phase-output
+  - id: artifact-integrity
+    extension: "@senawa/sensor-artifact"
+    kind: deterministic
+    description: Confirm that a definition or research artifact is internally consistent
+    cost: cheap
+    trust: blocking
+    scope: []
+    config:
+      artifactKind: cross-reference
   - id: verification-current
     extension: "@senawa/sensor-artifact"
     kind: deterministic
@@ -68,12 +77,16 @@ gates:
     checks:
       - sensor: artifact-present
         expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: artifact-integrity
+        expect: { path: /verdict, operator: equals, value: pass }
     onFail: block
     escalateOnExhaustion: true
   - id: research-accepted
     description: Research artifact is present and schema-valid
     checks:
       - sensor: artifact-present
+        expect: { path: /verdict, operator: equals, value: pass }
+      - sensor: artifact-integrity
         expect: { path: /verdict, operator: equals, value: pass }
     onFail: block
     escalateOnExhaustion: true

@@ -10,6 +10,7 @@ import {
   type JsonValue,
   normalizeAcceptance,
   type PlanArtifact,
+  type PlanArtifactInput,
   PlanArtifactSchema,
   type RepositoryPolicy,
   type RunSnapshot,
@@ -35,6 +36,7 @@ import {
   resolvePhaseInputManifest,
   resolveTaskInputManifest,
 } from "./input-manifests.js";
+import { expandPlanPhases } from "./plan-phases.js";
 import type {
   ArtifactValidationPort,
   ClockPort,
@@ -61,7 +63,7 @@ import {
   projectRunStatus,
   type RunStatusProjection,
 } from "./projections.js";
-import { createPhasePrompt, createTaskPrompt } from "./prompts.js";
+import { createPhasePrompt, createTaskPrompt, type PromptCapabilityReport } from "./prompts.js";
 import { effectiveRepositoryChange } from "./repository-change.js";
 import { UnconfiguredRepositoryEvidencePort } from "./repository-evidence.js";
 import { fixedWorkerHostResolver } from "./workers.js";
@@ -101,6 +103,22 @@ export interface WaitForQuestionAnswerOptions {
   readonly pollIntervalMs?: number;
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
+}
+
+export class QuestionAnswerTimeoutError extends Error {
+  constructor(
+    readonly runId: string,
+    readonly questionId: string,
+    readonly question: string | undefined,
+    readonly timeoutMs: number,
+  ) {
+    super(
+      `Timed out after ${timeoutMs}ms waiting for answer to ${questionId}` +
+        (question === undefined ? "" : `: ${question}`) +
+        `. Answer it with: senawa answer ${questionId} "<answer>" --run ${runId}`,
+    );
+    this.name = "QuestionAnswerTimeoutError";
+  }
 }
 
 export interface StartRunInput {
@@ -160,7 +178,6 @@ export class RunCommandService implements RunDriver {
       kind: "simulated",
       adapter: "simulated-worker",
       adapterVersion: "1",
-      legacy: false,
     },
     private readonly repositoryEvidence: RepositoryEvidencePort = new UnconfiguredRepositoryEvidencePort(),
     private readonly taskAssessments: TaskAssessmentPort | null = null,
@@ -585,7 +602,7 @@ export class RunCommandService implements RunDriver {
     return { runId, noteId };
   }
 
-  async revisePlan(runId: string, input: PlanArtifact, actor: CommandActor) {
+  async revisePlan(runId: string, input: PlanArtifactInput, actor: CommandActor) {
     const plan = PlanArtifactSchema.parse(input);
     const currentState = await this.store.readRun(runId);
     await this.preflightPlanTasks(currentState, plan.tasks);
@@ -912,7 +929,7 @@ export class RunCommandService implements RunDriver {
       authorization: { taskPaths: [], frozenPaths: state.snapshot.policy.frozen },
     };
     if (active?.ownerKind !== "phase") {
-      await this.preflightTurn(state.identity, turn);
+      await this.preflightTurn(state.identity, role, resolveTurnProfile(state, role));
       await this.store.updateRun(state.identity.runId, (draft) => {
         const current = requirePhase(draft, phase.id);
         current.status = "running";
@@ -974,6 +991,11 @@ export class RunCommandService implements RunDriver {
           const current = requirePhase(draft, phase.id);
           current.status = "pending";
           current.sessionId = result.sessionId;
+          // Carried into the next prompt so a retry is told what was invalid.
+          current.rejectionReason = truncate(
+            `The submitted artifact failed its frozen schema: ${errorMessage(error)}`,
+            1_000,
+          );
           draft.activeTurn = null;
           completeDispatch(draft, turn.dispatchId, this.now());
           draft.status = "paused";
@@ -1014,6 +1036,14 @@ export class RunCommandService implements RunDriver {
       completeDispatch(draft, turn.dispatchId, this.now());
       appendGateEvaluation(draft, gate, turn, this.now());
       if (!gate.accepted || result.artifact === undefined) {
+        if (!gate.accepted && gate.findings.length > 0) {
+          current.rejectionReason = truncate(
+            `The ${gate.gateId} gate refused this artifact. Resolve every finding before resubmitting: ${gate.findings
+              .map((finding) => finding.message)
+              .join("; ")}`,
+            2_000,
+          );
+        }
         current.status = "pending";
         draft.status = "paused";
         return;
@@ -1096,6 +1126,8 @@ export class RunCommandService implements RunDriver {
     const operationId = this.identifiers.createId();
     const dispatchId = this.identifiers.createId();
     const inputManifest = resolveTaskInputManifest(state, task);
+    const turnProfile = resolveTurnProfile(state, task.role, task.execution);
+    const capabilities = await this.preflightTurn(state.identity, task.role, turnProfile);
     const turn: WorkerTurn = {
       runId: state.identity.runId,
       owner: { kind: "task", id: task.key },
@@ -1105,16 +1137,16 @@ export class RunCommandService implements RunDriver {
       operationId,
       ...traceContext(state.identity.runId, dispatchId),
       role: task.role,
-      ...resolveTurnProfile(state, task.role, task.execution),
+      ...turnProfile,
       attempt,
       sessionId,
       goal: state.identity.request.goal,
       rejectionReason: null,
       steering: [...task.steering],
-      prompt: createTaskPrompt(state, task, attempt, inputManifest),
+      prompt: createTaskPrompt(state, task, attempt, inputManifest, capabilities),
       authorization: { taskPaths: task.paths, frozenPaths: state.snapshot.policy.frozen },
     };
-    await this.preflightTurn(state.identity, turn);
+    // Each attempt measures what changed during that attempt. The delta is recorded, not gated.
     const repositoryBaseline = await this.captureTaskBaseline(state, task, turn, false);
     await this.store.updateRun(state.identity.runId, (draft) => {
       const currentPhase = requirePhase(draft, phase.id);
@@ -1519,10 +1551,23 @@ export class RunCommandService implements RunDriver {
     }
   }
 
-  private async preflightTurn(identity: RuntimeState["identity"], turn: WorkerTurn): Promise<void> {
-    await this.workerHosts.preflight(identity.workerHost, [
-      workerPreflightRequest(turn.role, turn.profile, turn.requestedModel ?? turn.resolvedModel),
+  private async preflightTurn(
+    identity: RuntimeState["identity"],
+    role: string,
+    turnProfile: {
+      readonly profile: WorkerProfile;
+      readonly requestedModel: WorkerProfile["spec"]["model"];
+    },
+  ): Promise<PromptCapabilityReport | undefined> {
+    const plans = await this.workerHosts.preflight(identity.workerHost, [
+      workerPreflightRequest(role, turnProfile.profile, turnProfile.requestedModel),
     ]);
+    const plan = plans[0];
+    if (plan === undefined) return undefined;
+    return {
+      granted: [...plan.grantedCapabilities],
+      unavailable: [...plan.unsupportedPreferences],
+    };
   }
 
   private captureTaskBaseline(
@@ -1913,13 +1958,20 @@ export class RunQueryService {
       "Question answer timeout",
     );
     const deadline = this.clock.now().getTime() + timeoutMs;
-    const check = () => this.readQuestionAnswer(runId, questionId, expectedTurn);
+    let questionText: string | undefined;
+    const check = async () => {
+      const observed = await this.readQuestionAnswer(runId, questionId, expectedTurn);
+      questionText = observed.question;
+      return observed.answer;
+    };
     if (options.signal?.aborted === true) return Promise.reject(questionWaitAborted(questionId));
 
     return new Promise<string>((resolve, reject) => {
       let settled = false;
       let checking = false;
       let cancelTimer: () => void = () => undefined;
+      const expired = () =>
+        new QuestionAnswerTimeoutError(runId, questionId, questionText, timeoutMs);
       const finish = (outcome: { readonly answer: string } | { readonly error: unknown }) => {
         if (settled) return;
         settled = true;
@@ -1932,7 +1984,7 @@ export class RunQueryService {
       const poll = () => {
         if (settled) return;
         if (this.clock.now().getTime() >= deadline) {
-          finish({ error: new Error(`Timed out waiting for answer to ${questionId}`) });
+          finish({ error: expired() });
           return;
         }
         if (checking) return;
@@ -1940,7 +1992,7 @@ export class RunQueryService {
         void check()
           .then((answer) => {
             if (this.clock.now().getTime() >= deadline) {
-              finish({ error: new Error(`Timed out waiting for answer to ${questionId}`) });
+              finish({ error: expired() });
               return;
             }
             if (answer !== null) finish({ answer });
@@ -1961,13 +2013,15 @@ export class RunQueryService {
     runId: string,
     questionId: string,
     expectedTurn: ActiveQuestionTurn,
-  ): Promise<string | null> {
+  ): Promise<{ readonly question: string | undefined; readonly answer: string | null }> {
     const state = await this.store.readRun(runId);
     const asked = state.journal.find(
       (event) =>
         event.event === "question.asked" && Reflect.get(event.data, "questionId") === questionId,
     );
     if (asked === undefined) throw new Error(`Unknown question ${questionId}`);
+    const askedText = Reflect.get(asked.data, "question");
+    const question = typeof askedText === "string" ? askedText : undefined;
     if (asked.actor.channel !== "worker" || asked.actor.sessionId !== expectedTurn.sessionId) {
       throw new Error(
         `Question ${questionId} does not belong to worker session ${expectedTurn.sessionId}`,
@@ -1990,9 +2044,9 @@ export class RunQueryService {
         event.event === "question.answered" && Reflect.get(event.data, "questionId") === questionId,
     );
     const answer = answered === undefined ? undefined : Reflect.get(answered.data, "answer");
-    if (answered === undefined) return null;
+    if (answered === undefined) return { question, answer: null };
     if (typeof answer !== "string") throw new Error(`Answer for ${questionId} is invalid`);
-    return answer;
+    return { question, answer };
   }
 
   async journal(runId: string, after = 0, limit = 200) {
@@ -2266,10 +2320,9 @@ function unsatisfiedCriteria(
       verdict: criterion.verdict,
       reason: truncate(
         criterion.evidence.find((entry) => entry.resolution === "contradicted")?.detail ??
-          criterion.evidence.find((entry) => entry.resolution === "unresolved")?.detail ??
           (criterion.claimed === "unreported"
             ? `No outcome was reported for ${criterion.description}`
-            : `No resolving evidence was reported for ${criterion.description}`),
+            : `${criterion.description} was reported as ${criterion.claimed}`),
         500,
       ),
       evidencePath: criterion.evidence.some((entry) => entry.claim.kind !== "sensor")
@@ -2422,7 +2475,8 @@ function importPlan(
   }
   const existing = new Set(state.tasks.map((task) => task.key));
   const added: string[] = [];
-  for (const task of plan.tasks) {
+  const expansion = expandPlanPhases(plan);
+  for (const task of expansion.tasks) {
     if (existing.has(task.key)) continue;
     state.tasks.push({
       ...task,
@@ -2438,7 +2492,21 @@ function importPlan(
     existing.add(task.key);
     added.push(task.key);
   }
-  emit(state, "plan.imported", actor, now, { phaseId: phase.id, tasks: added });
+  emit(state, "plan.imported", actor, now, {
+    phaseId: phase.id,
+    tasks: added,
+    ...(expansion.phases.length === 0
+      ? {}
+      : {
+          phases: [...expansion.phases],
+          derivedDependencies: expansion.derivedDependencies.map((entry) => ({
+            task: entry.task,
+            from: entry.from,
+            added: [...entry.added],
+          })),
+          collapsed: [...expansion.collapsed],
+        }),
+  });
 }
 
 function appendArtifact(

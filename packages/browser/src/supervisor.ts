@@ -420,7 +420,7 @@ function isJsonContentType(value: string | undefined): boolean {
 }
 
 function parseStream(value: string): { kind: "run" | "phase" | "task"; id: string } {
-  const match = value.match(/^(run|phase|task):([a-z0-9]+(?:[._-][a-z0-9]+)*)$/u);
+  const match = value.match(/^(run|phase|task):([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/u);
   if (match === null) throw new Error("Unknown output stream");
   return { kind: match[1] as "run" | "phase" | "task", id: match[2] ?? "" };
 }

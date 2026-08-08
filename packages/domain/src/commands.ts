@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { WorkRequestSchema } from "./artifacts.js";
-import { IdentifierSchema, NonEmptyStringSchema, Sha256Schema, TimestampSchema } from "./common.js";
+import {
+  ArtifactIdSchema,
+  IdentifierSchema,
+  NonEmptyStringSchema,
+  Sha256Schema,
+  TimestampSchema,
+} from "./common.js";
 
 export const CommandActorSchema = z
   .object({
@@ -49,7 +55,7 @@ const SteerCommandSchema = z
     command: z.literal("task.steer"),
     actor: CommandActorSchema,
     runId: IdentifierSchema,
-    taskId: IdentifierSchema,
+    taskId: ArtifactIdSchema,
     instruction: NonEmptyStringSchema,
   })
   .strict();
@@ -117,7 +123,7 @@ export const BrowserRunCommandSchema = z.discriminatedUnion("command", [
     .object({
       ...BrowserCommandBase,
       command: z.literal("steer"),
-      taskId: IdentifierSchema,
+      taskId: ArtifactIdSchema,
       instruction: NonEmptyStringSchema.max(2000),
     })
     .strict(),
@@ -165,7 +171,7 @@ const BrowserCommandTransitionResultSchema = z
       "idle",
     ]),
     phaseId: IdentifierSchema.optional(),
-    taskId: IdentifierSchema.optional(),
+    taskId: ArtifactIdSchema.optional(),
   })
   .strict();
 

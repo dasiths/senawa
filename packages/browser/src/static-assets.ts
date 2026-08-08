@@ -24,10 +24,39 @@ export const indexHtml = `<!doctype html>
   <script src="/app.js" defer></script>
 </head>
 <body>
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="icon-steer" viewBox="0 0 16 16"><path d="M2 8h9M8 4l4 4-4 4"/></symbol>
+    <symbol id="icon-resume" viewBox="0 0 16 16"><path d="M4 3l9 5-9 5z"/></symbol>
+    <symbol id="icon-end" viewBox="0 0 16 16"><path d="M4 4h8v8H4z"/></symbol>
+    <symbol id="icon-view" viewBox="0 0 16 16"><path d="M2 8s2.5-4 6-4 6 4 6 4-2.5 4-6 4-6-4-6-4z"/><circle cx="8" cy="8" r="1.8"/></symbol>
+    <symbol id="icon-approve" viewBox="0 0 16 16"><path d="M3 8.5l3.5 3.5L13 5"/></symbol>
+    <symbol id="icon-reject" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
+    <symbol id="icon-focus" viewBox="0 0 16 16"><path d="M2 5V2h3M11 2h3v3M14 11v3h-3M5 14H2v-3"/></symbol>
+    <symbol id="icon-copy" viewBox="0 0 16 16"><path d="M5 5h7v9H5zM3 2h7v2"/></symbol>
+  </svg>
   <header class="topbar">
     <div><strong>SENAWA</strong><span>Run console</span></div>
-    <div><span id="connection">Connecting</span><b id="run-status">Loading</b></div>
+    <div class="runbar">
+      <p id="last-command" role="status" aria-live="polite">No browser command sent.</p>
+      <button id="resume" class="run-command icon-button" type="button"><span>Resume</span></button>
+      <span id="connection">Connecting</span><b id="run-status">Loading</b>
+    </div>
   </header>
+  <section id="question-banner" class="question-banner" aria-labelledby="question-banner-title" hidden>
+    <div class="question-banner-head">
+      <h2 id="question-banner-title">The agent needs your answer</h2>
+      <p id="question-banner-owner" class="question-banner-owner"></p>
+      <p id="question-banner-elapsed" class="question-banner-elapsed"></p>
+    </div>
+    <form id="question-banner-form">
+      <p id="question-banner-text" class="question-banner-text"></p>
+      <textarea id="question-banner-answer" maxlength="4000" placeholder="Answer" aria-labelledby="question-banner-text"></textarea>
+      <button id="question-banner-submit" type="submit">Send answer</button>
+      <p id="question-banner-status" class="question-status" role="status" aria-live="polite"></p>
+      <button id="question-banner-more" class="linklike" type="button" hidden></button>
+    </form>
+  </section>
+  <p id="question-alert" class="visually-hidden" role="alert"></p>
   <main class="workspace" id="workspace" data-left="expanded" data-right="expanded">
     <aside class="overview rail" id="overview">
       <div class="rail-head">
@@ -50,7 +79,10 @@ export const indexHtml = `<!doctype html>
       <div id="graph" class="graph" aria-label="Workflow dependency graph"></div>
       <hr>
       <header><small>AGENT OUTPUT</small><h2 id="console-title">Select a node</h2></header>
-      <div id="terminal" class="terminal" role="log"></div>
+      <div class="stage-output">
+        <div id="terminal" class="terminal" role="log" tabindex="0" aria-label="Agent output"></div>
+        <button id="output-jump" class="output-jump" type="button" hidden>Jump to latest</button>
+      </div>
     </section>
     <div id="splitter-right" class="splitter" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="inspector" aria-label="Resize inspector rail" aria-valuemin="180" aria-valuemax="640" aria-valuenow="320"></div>
     <aside class="controls rail" id="inspector">
@@ -60,6 +92,7 @@ export const indexHtml = `<!doctype html>
         <span id="decision-badge" class="rail-badge" role="status" hidden></span>
       </div>
       <div class="rail-body" id="inspector-body">
+      <div id="node-toolbar" class="node-toolbar" role="toolbar" aria-label="Selected node actions" hidden></div>
       <section id="questions">
         <small>OPEN QUESTIONS <span id="question-count">0</span></small>
         <div id="question-list"></div>
@@ -89,17 +122,28 @@ export const indexHtml = `<!doctype html>
       </section>
       <section id="steering" hidden>
         <textarea id="instruction" placeholder="Steering instruction"></textarea>
-        <button id="steer" class="run-command">Send steer</button>
+        <button id="steer" class="run-command icon-button" type="button"><span>Send steer</span></button>
       </section>
-      <section><button id="resume" class="run-command">Resume</button></section>
-      <section id="ending">
-        <textarea id="end-reason" placeholder="Reason required"></textarea>
-        <button id="end" class="danger run-command">End run</button>
-      </section>
-      <p id="last-command" role="status" aria-live="polite">No browser command sent.</p>
+      <details id="danger-zone" class="danger-zone">
+        <summary>Danger zone</summary>
+        <section id="ending">
+          <label for="end-reason">Reason (required)</label>
+          <textarea id="end-reason" required maxlength="1000" placeholder="Why this run must end"></textarea>
+          <button id="end" class="danger run-command icon-button" type="button" aria-describedby="end-hint"><span id="end-label">End run</span></button>
+          <p id="end-hint" class="hint" role="status" aria-live="polite"></p>
+        </section>
+      </details>
       </div>
     </aside>
   </main>
+  <dialog id="asset-overlay" class="assetview" aria-labelledby="asset-title">
+    <header class="assetview-head">
+      <h2 id="asset-title">Asset</h2>
+      <p id="asset-source" class="assetview-source"></p>
+      <button id="asset-close" class="assetview-close" type="button" aria-label="Close asset viewer">Close</button>
+    </header>
+    <div id="asset-body" class="jsonview" aria-label="Asset payload"></div>
+  </dialog>
 </body>
 </html>`;
 
@@ -109,6 +153,50 @@ export const stylesCss = `
 body{margin:0;min-width:320px;color:var(--ink);background-color:var(--paper);background-image:linear-gradient(rgba(24,32,29,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(24,32,29,.035) 1px,transparent 1px);background-size:24px 24px;font-family:"Trebuchet MS","Gill Sans",sans-serif;letter-spacing:0}
 .topbar{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;color:#fff;background:#1c2924;border-bottom:3px solid #d4a72c}
 .topbar>div{display:flex;align-items:center;gap:12px}.topbar span{color:#bdc8c1}.topbar b{padding:5px 9px;color:#1c2924;background:#fff;border-radius:3px}
+.runbar button{margin-top:0;min-height:28px;padding:5px 10px;font-size:12px}
+.runbar #last-command{max-width:34ch;overflow:hidden;color:#cfd9d3;white-space:nowrap;text-overflow:ellipsis}
+.sprite{position:absolute;width:0;height:0;overflow:hidden}
+.icon{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.icon-resume,.icon-end{fill:currentColor;stroke:none}
+.icon-button{display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.question-banner{padding:12px 20px;color:#2a1d00;background:#ffe9a8;border-bottom:3px solid var(--amber)}
+.question-banner[hidden]{display:none}
+.question-banner h2{margin:0;font-size:15px}
+.question-banner-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:12px}
+.question-banner-owner,.question-banner-elapsed{margin:0;font:11px/1.5 monospace}
+.question-banner-elapsed.overdue{color:var(--red);font-weight:700;animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.45}}
+.question-banner-text{margin:6px 0;font-size:13px;line-height:1.4;overflow-wrap:anywhere}
+#question-banner-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;align-items:start}
+#question-banner-text,#question-banner-status,#question-banner-more{grid-column:1/-1}
+#question-banner-answer{min-height:52px;font:12px/1.4 monospace}
+#question-banner-submit{margin-top:0}
+.linklike{min-height:0;margin:0;padding:0;color:#5a4300;background:transparent;border:0;font-size:11px;text-decoration:underline}
+.linklike[hidden]{display:none}
+.node-toolbar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.node-toolbar[hidden]{display:none}
+.toolbar-button{min-height:26px;margin:0;padding:4px 8px;color:#1c2924;background:#e7ece8;border:1px solid var(--line)}
+.toolbar-button:disabled{cursor:not-allowed}
+.danger-zone{margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}
+.danger-zone[hidden]{display:none}
+.danger-zone>summary{color:var(--red);font-size:12px;font-weight:700;cursor:pointer}
+.danger-zone #ending{margin-top:8px;padding-top:0;border-top:0}
+.danger-zone label{display:block;margin-top:8px;color:#67716d;font-size:11px;font-weight:700}
+.danger-zone .hint{margin:6px 0 0;color:var(--red);font-size:11px;line-height:1.4}
+#end.armed{background:#7d1620;outline:2px solid var(--red);outline-offset:2px}
+.stage-output{position:relative}
+.output-jump{position:absolute;right:14px;bottom:14px;min-height:26px;margin:0;padding:4px 10px;color:#131816;background:#d9e4dc;border-radius:13px;font-size:11px;box-shadow:0 1px 4px rgba(0,0,0,.35)}
+.output-jump[hidden]{display:none}
+.assetview{width:min(1200px,94vw);height:88vh;padding:0;border:1px solid var(--line);border-radius:6px}
+.assetview-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.assetview-head h2{margin:0;font-size:15px}
+.assetview-source{flex:1 1 120px;margin:0;overflow-wrap:anywhere;color:#67716d;font:11px/1.5 monospace}
+.assetview-close{min-height:26px;margin:0;padding:4px 10px;font-size:12px}
+.assetview .jsonview{display:flex;flex-direction:column;height:calc(88vh - 78px);margin:0;padding:0 16px 16px}
+.assetview .jsontree,.assetview .jsonraw{max-height:none;flex:1 1 auto}
+dialog::backdrop{background:rgba(19,24,22,.72)}
+html[data-modal="true"]{overflow:hidden}
 .workspace{min-height:calc(100vh - 56px);display:grid;grid-template-columns:var(--rail-left,220px) 6px minmax(320px,1fr) 6px var(--rail-right,320px)}
 .workspace[data-left="collapsed"]{--rail-left:40px}
 .workspace[data-right="collapsed"]{--rail-right:40px}
@@ -127,12 +215,12 @@ html[data-dragging="true"]{cursor:col-resize;user-select:none}
 small{color:#67716d;font-size:11px;font-weight:700}h1{font-size:23px}h2{font-size:17px}h1,h2{margin:6px 0 18px}
 dl{margin-top:30px}dl div{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)}dd{margin:0;font-family:monospace}
 .graph{position:relative;width:100%;height:700px;min-height:480px;overflow:hidden;border:1px solid var(--line);border-radius:4px;background:rgba(255,255,255,.72)}
-.terminal{height:430px;overflow:auto;padding:14px 16px;color:#d9e4dc;background:var(--terminal);border-radius:4px;font:12px/1.6 monospace;white-space:pre-wrap;word-break:break-word}
+.terminal{height:430px;overflow:auto;overflow-anchor:none;padding:14px 16px;color:#d9e4dc;background:var(--terminal);border-radius:4px;font:12px/1.6 monospace;white-space:pre-wrap;word-break:break-word}
 .line{display:grid;grid-template-columns:72px 52px minmax(0,1fr);gap:8px}.line .meta{color:#839089}.line.stderr .stream{color:#ff9aa4}
 .controls section{margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}textarea{width:100%;min-height:70px;padding:9px;resize:vertical}
-button{min-height:36px;margin-top:8px;padding:8px 12px;color:#fff;background:var(--green);border:0;border-radius:4px;font-weight:700;cursor:pointer}.danger{background:var(--red)}button:disabled{cursor:wait;opacity:.55}#last-command.busy{color:var(--blue);font-weight:700}#last-command.busy::before{content:"";display:inline-block;width:8px;height:8px;margin-right:7px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+button{min-height:36px;margin-top:8px;padding:8px 12px;color:#fff;background:var(--green);border:0;border-radius:4px;font-weight:700;cursor:pointer}.danger{background:var(--red)}button:disabled{cursor:wait;opacity:.55}#last-command.busy{color:#8fc7f0;font-weight:700}#last-command.busy::before{content:"";display:inline-block;width:8px;height:8px;margin-right:7px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 #questions{margin-top:0;padding-top:0;border-top:0}#questions small{display:flex;justify-content:space-between}#question-list:empty::after{content:"None";display:block;margin-top:8px;color:#67716d;font-size:12px}.question{padding:12px 0;border-bottom:1px solid var(--line)}.question p{margin:6px 0;font-size:13px;line-height:1.4;overflow-wrap:anywhere}.question textarea{min-height:56px;font:12px/1.4 monospace}.question button{width:100%}.question .question-status{color:#67716d;font-size:11px}.question.stale textarea,.question.stale button{cursor:not-allowed}
-#artifact-identity{margin:10px 0}#artifact-identity div{display:block;padding:6px 0}#artifact-identity dd{margin-top:3px;overflow-wrap:anywhere;font-size:11px}#artifact-declared{font-size:13px;line-height:1.4}#artifact-counts{padding-left:18px;font:11px/1.5 monospace}#artifact-command{display:block;overflow-wrap:anywhere;font-size:11px}#decision-controls>div{display:grid;grid-template-columns:1fr 1fr;gap:8px}#steer,#resume,#end{width:100%}#last-command{color:#67716d;font:11px/1.5 monospace}
+#artifact-identity{margin:10px 0}#artifact-identity div{display:block;padding:6px 0}#artifact-identity dd{margin-top:3px;overflow-wrap:anywhere;font-size:11px}#artifact-declared{font-size:13px;line-height:1.4}#artifact-counts{padding-left:18px;font:11px/1.5 monospace}#artifact-command{display:block;overflow-wrap:anywhere;font-size:11px}#decision-controls>div{display:grid;grid-template-columns:1fr 1fr;gap:8px}#steer,#end{width:100%}#last-command{margin:0;color:#67716d;font:11px/1.5 monospace}
 .jsonview{display:flex;flex-direction:column;gap:6px;margin:10px 0}
 .jsonview-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .jsonview-toolbar input{flex:1 1 88px;min-width:0;padding:4px 6px;border:1px solid var(--line);border-radius:3px;font:11px/1.4 monospace}
@@ -172,8 +260,18 @@ let pendingPhaseId=null;
 let receiptCursor=0;
 let recordsRenderPending=false;
 let approvalArtifact=null;
+let approvalPayload=null;
 let approvalLoad=0;
 let approvalKey=null;
+let questionsSignature="";
+let toolbarSignature="";
+let bannerQuestionId=null;
+const questionFocused=new Set();
+let endArmed=false;
+let endDisarmTimer=null;
+let assetReturnFocus=null;
+let outputPinned=true;
+let outputUnseen=0;
 
 const LAYOUT_KEY="senawa.console.layout.v1";
 const RAIL_MIN=180;
@@ -194,6 +292,11 @@ const JSON_STRING_CAP=512;
 const JSON_DEFAULT_DEPTH=2;
 const jsonNodeValues=new WeakMap();
 
+const SVG_NS="http://www.w3.org/2000/svg";
+const OUTPUT_PIN_SLACK=24;
+const QUESTION_OVERDUE_MS=60000;
+const END_ARM_MS=5000;
+
 cytoscape.use(cytoscapeDagre);
 
 async function api(path,options={}){
@@ -208,6 +311,31 @@ function text(tag,value,className){
   node.textContent=value;
   if(className)node.className=className;
   return node;
+}
+
+function icon(name){
+  const svg=document.createElementNS(SVG_NS,"svg");
+  svg.setAttribute("class","icon icon-"+name);
+  svg.setAttribute("aria-hidden","true");
+  svg.setAttribute("focusable","false");
+  const use=document.createElementNS(SVG_NS,"use");
+  use.setAttribute("href","#icon-"+name);
+  svg.append(use);
+  return svg;
+}
+
+function iconButton(id,name,label,className){
+  const button=text("button","",className);
+  button.id=id;
+  button.type="button";
+  button.append(icon(name));
+  button.setAttribute("aria-label",label);
+  button.title=label;
+  return button;
+}
+
+function decorateIcon(selector,name){
+  q(selector).prepend(icon(name));
 }
 
 function clampRail(width){return Math.min(RAIL_MAX,Math.max(RAIL_MIN,Math.round(width)))}
@@ -323,10 +451,12 @@ function scheduleGraphFit(){
 }
 
 function updateDecisionBadge(){
-  const pending=state!==null&&state.phases.some((phase)=>phase.status==="awaiting_approval");
+  const decisionPending=state!==null&&state.phases.some((phase)=>phase.status==="awaiting_approval");
+  const questionPendingNow=openQuestions.some((question)=>question.status==="answerable");
+  const pending=decisionPending||questionPendingNow;
   const badge=q("#decision-badge");
-  badge.textContent=pending?"!":"";
-  badge.title=pending?"A phase decision is pending":"";
+  badge.textContent=questionPendingNow?"?":pending?"!":"";
+  badge.title=questionPendingNow?"A worker is waiting for an answer":pending?"A phase decision is pending":"";
   badge.hidden=!pending;
 }
 
@@ -517,8 +647,13 @@ function renderJson(host,value,label){
   const copyAll=text("button","Copy JSON","jsonview-copy");
   copyAll.type="button";
   copyAll.addEventListener("click",()=>copyJson(view,value));
+  const expandFull=text("button","Full screen","jsonview-full");
+  expandFull.type="button";
+  expandFull.addEventListener("click",()=>openAsset(value,label,host.dataset.assetSource||label));
   if(raw.length>JSON_RAW_LIMIT){
-    toolbar.append(copyAll,text("span",label+" is "+Math.round(raw.length/1024)+" KB; showing bounded raw text.","jsonview-note"),status);
+    toolbar.append(copyAll);
+    if(host.id!=="asset-body")toolbar.append(expandFull);
+    toolbar.append(text("span",label+" is "+Math.round(raw.length/1024)+" KB; showing bounded raw text.","jsonview-note"),status);
     host.append(toolbar,text("pre",raw.slice(0,JSON_RAW_LIMIT),"jsonraw"));
     return;
   }
@@ -542,10 +677,35 @@ function renderJson(host,value,label){
   const collapse=text("button","Collapse all","jsonview-collapse");
   collapse.type="button";
   collapse.addEventListener("click",()=>collapseJsonTree(view));
-  toolbar.append(search,expand,collapse,copyAll,status);
+  toolbar.append(search,expand,collapse,copyAll);
+  if(host.id!=="asset-body")toolbar.append(expandFull);
+  toolbar.append(status);
   tree.append(jsonRow(view,null,value));
   host.append(toolbar,tree);
   expandJsonToDepth(view,tree,JSON_DEFAULT_DEPTH);
+}
+
+function openAsset(value,label,source){
+  const overlay=q("#asset-overlay");
+  assetReturnFocus=document.activeElement;
+  q("#asset-title").textContent=label;
+  q("#asset-source").textContent=source;
+  renderJson(q("#asset-body"),value,label);
+  document.documentElement.dataset.modal="true";
+  overlay.showModal();
+  q("#asset-body").querySelector(".jsonview-search")?.focus();
+}
+
+function closeAsset(){
+  const overlay=q("#asset-overlay");
+  if(overlay.open)overlay.close();
+}
+
+function releaseAsset(){
+  q("#asset-body").replaceChildren();
+  delete document.documentElement.dataset.modal;
+  if(assetReturnFocus!==null&&typeof assetReturnFocus.focus==="function")assetReturnFocus.focus();
+  assetReturnFocus=null;
 }
 
 function nodes(){
@@ -680,8 +840,10 @@ function renderGraph(){
 }
 
 function render(){
+  const awaitingAnswer=openQuestions.some((question)=>question.status==="answerable");
   q("#workflow-name").textContent=state.workflow;
-  q("#run-status").textContent=state.status.replaceAll("_"," ");
+  q("#run-status").textContent=awaitingAnswer?"waiting for answer":state.status.replaceAll("_"," ");
+  document.title=(awaitingAnswer?"● Answer needed — ":"")+"Senawa Run Console";
   q("#event-cursor").textContent=String(state.cursor);
   q("#phase-progress").textContent=state.progress.phases;
   const active=nodes().find((node)=>["running","in_progress","awaiting_approval"].includes(node.status));
@@ -697,15 +859,91 @@ function render(){
   if(artifactKey!==approvalKey){
     approvalKey=artifactKey;
     approvalArtifact=null;
+    approvalPayload=null;
     if(artifactKey!==null)void renderApproval(phase.id);
   }
   updateDecision();
   q("#steering").hidden=node?.kind!=="task"||["closed","ended"].includes(node.status);
   q("#resume").hidden=["awaiting_approval","ended","finished"].includes(state.status);
   q("#ending").hidden=["ended","finished"].includes(state.status);
+  q("#danger-zone").hidden=q("#ending").hidden;
+  if(q("#danger-zone").hidden)disarmEnd();
+  renderNodeToolbar();
   updateDecisionBadge();
   renderQuestions();
+  renderQuestionBanner();
   updateCommandProgress();
+}
+
+function renderNodeToolbar(){
+  const toolbar=q("#node-toolbar");
+  const node=nodes().find((item)=>item.id===selected);
+  toolbar.hidden=node===undefined;
+  if(node===undefined){toolbar.replaceChildren();toolbarSignature="";return}
+  const steerable=node.kind==="task"&&!["closed","ended"].includes(node.status);
+  const viewable=node.kind==="phase"&&approvalPayload!==null;
+  const decidable=node.kind==="phase"&&node.status==="awaiting_approval"&&approvalArtifact!==null;
+  const signature=[node.id,node.kind,node.status,steerable,viewable,decidable,graph!==null].join("|");
+  if(signature===toolbarSignature)return;
+  toolbarSignature=signature;
+  const steerButton=iconButton("node-steer","steer","Steer this task","toolbar-button");
+  steerButton.disabled=!steerable;
+  steerButton.addEventListener("click",()=>{q("#steering").hidden=false;q("#instruction").focus()});
+  const viewButton=iconButton("node-view","view","View the artifact full screen","toolbar-button");
+  viewButton.disabled=!viewable;
+  viewButton.addEventListener("click",()=>{if(approvalPayload!==null)openAsset(approvalPayload.content,"Artifact content",node.id)});
+  const decideButton=iconButton("node-decide","approve","Go to the approve and reject controls","toolbar-button");
+  decideButton.disabled=!decidable;
+  decideButton.addEventListener("click",()=>{q("#decision-controls").scrollIntoView({block:"nearest"});q("#decision-note").focus()});
+  const focusButton=iconButton("node-focus","focus","Center this node in the graph","toolbar-button");
+  focusButton.disabled=graph===null;
+  focusButton.addEventListener("click",()=>{const element=graph?.getElementById((node.kind==="phase"?"phase:":"task:")+node.id);if(element!==undefined&&element.length>0)graph.fit(element,64)});
+  const copyButton=iconButton("node-copy","copy","Copy the node identifier","toolbar-button");
+  copyButton.addEventListener("click",()=>void writeClipboard(node.id));
+  const buttons=[steerButton,viewButton,decideButton,focusButton,copyButton];
+  for(const button of buttons)button.tabIndex=-1;
+  const first=buttons.find((button)=>!button.disabled);
+  if(first!==undefined)first.tabIndex=0;
+  toolbar.replaceChildren(...buttons);
+}
+
+function toolbarKeydown(event){
+  const buttons=[...q("#node-toolbar").querySelectorAll("button:not([disabled])")];
+  const index=buttons.indexOf(document.activeElement);
+  if(index<0||buttons.length===0)return;
+  let next=index;
+  if(event.key==="ArrowRight")next=(index+1)%buttons.length;
+  else if(event.key==="ArrowLeft")next=(index-1+buttons.length)%buttons.length;
+  else if(event.key==="Home")next=0;
+  else if(event.key==="End")next=buttons.length-1;
+  else return;
+  for(const button of buttons)button.tabIndex=-1;
+  buttons[next].tabIndex=0;
+  buttons[next].focus();
+  event.preventDefault();
+}
+
+function disarmEnd(){
+  endArmed=false;
+  if(endDisarmTimer!==null){clearTimeout(endDisarmTimer);endDisarmTimer=null}
+  q("#end-label").textContent="End run";
+  q("#end").classList.remove("armed");
+}
+
+function requestEnd(){
+  const reason=q("#end-reason").value.trim();
+  if(reason===""){q("#end-hint").textContent="A reason is required before this run can end.";q("#end-reason").focus();return}
+  if(!endArmed){
+    endArmed=true;
+    q("#end-label").textContent="Confirm end run";
+    q("#end").classList.add("armed");
+    q("#end-hint").textContent="Click again within 5 seconds to end this run.";
+    endDisarmTimer=setTimeout(()=>{endDisarmTimer=null;disarmEnd();q("#end-hint").textContent=""},END_ARM_MS);
+    return;
+  }
+  disarmEnd();
+  q("#end-hint").textContent="";
+  void command("end",{reason});
 }
 
 function updateDecision(){
@@ -719,6 +957,7 @@ function updateDecision(){
 async function renderApproval(phaseId){
   const load=++approvalLoad;
   approvalArtifact=null;
+  approvalPayload=null;
   q("#decision-controls").hidden=true;
   q("#artifact-path").textContent="Loading";
   try{
@@ -728,6 +967,7 @@ async function renderApproval(phaseId){
     const artifact=await api("/api/v1/runs/"+encodeURIComponent(runId)+"/phases/"+encodeURIComponent(phaseId)+"/artifacts/"+overview.version);
     if(load!==approvalLoad||selected!==phaseId)return;
     approvalArtifact=overview;
+    approvalPayload=artifact;
     q("#artifact-path").textContent=overview.path;
     q("#artifact-version").textContent=String(overview.version);
     q("#artifact-digest").textContent=overview.digest;
@@ -741,11 +981,15 @@ async function renderApproval(phaseId){
     renderJson(q("#artifact-content"),artifact.content,"Artifact content");
     renderJson(q("#artifact-inputs"),artifact.consumed,"Consumed inputs");
     updateDecision();
+    renderNodeToolbar();
   }catch(error){if(load===approvalLoad)q("#artifact-path").textContent="Unavailable: "+error.message}
 }
 
 function renderQuestions(){
   q("#question-count").textContent=String(openQuestions.length);
+  const signature=openQuestions.map((question)=>question.questionId+":"+question.status).join("|");
+  if(signature===questionsSignature)return;
+  questionsSignature=signature;
   const list=q("#question-list");
   list.replaceChildren();
   for(const question of openQuestions){
@@ -767,6 +1011,70 @@ function renderQuestions(){
     form.append(owner,prompt,answer,button,status);
     list.append(form);
   }
+}
+
+function questionOwnerLabel(question){
+  const owner=question.ownerKind+" "+question.ownerId;
+  if(state===null)return owner+" · turn "+question.turnId;
+  const title=question.ownerKind==="task"
+    ?state.tasks.find((task)=>task.key===question.ownerId)?.title
+    :state.phases.find((phase)=>phase.id===question.ownerId)?.role;
+  return owner+(title?" · "+title:"")+" · turn "+question.turnId;
+}
+
+function answerableQuestions(){
+  return openQuestions.filter((question)=>question.status==="answerable").sort((left,right)=>left.askedSeq-right.askedSeq);
+}
+
+function renderQuestionBanner(){
+  const pending=answerableQuestions();
+  const banner=q("#question-banner");
+  const question=pending[0];
+  if(question===undefined){
+    banner.hidden=true;
+    bannerQuestionId=null;
+    q("#question-alert").textContent="";
+    updateQuestionElapsed();
+    return;
+  }
+  banner.hidden=false;
+  const answer=q("#question-banner-answer");
+  if(bannerQuestionId!==question.questionId){
+    bannerQuestionId=question.questionId;
+    q("#question-banner-text").textContent=question.question;
+    q("#question-banner-status").textContent="";
+    q("#question-alert").textContent="The agent is waiting for your answer: "+question.question;
+  }
+  q("#question-banner-owner").textContent=questionOwnerLabel(question);
+  if(document.activeElement!==answer)answer.value=questionDrafts.get(question.questionId)||"";
+  const locked=questionPending.has(question.questionId);
+  answer.disabled=locked;
+  q("#question-banner-submit").disabled=locked;
+  const more=q("#question-banner-more");
+  more.hidden=pending.length<2;
+  more.textContent=pending.length<2?"":"Show all "+pending.length+" questions";
+  const idle=document.activeElement===null||document.activeElement===document.body;
+  if(idle&&!questionFocused.has(question.questionId)){
+    questionFocused.add(question.questionId);
+    answer.focus();
+  }
+  updateQuestionElapsed();
+}
+
+function updateQuestionElapsed(){
+  const elapsed=q("#question-banner-elapsed");
+  const question=openQuestions.find((candidate)=>candidate.questionId===bannerQuestionId);
+  if(question===undefined){elapsed.textContent="";elapsed.classList.remove("overdue");return}
+  const waited=Math.max(0,Date.now()-Date.parse(question.askedAt));
+  const seconds=Math.floor(waited/1000);
+  elapsed.textContent="waiting "+Math.floor(seconds/60)+"m "+String(seconds%60).padStart(2,"0")+"s";
+  elapsed.classList.toggle("overdue",waited>=QUESTION_OVERDUE_MS);
+}
+
+function submitBannerAnswer(){
+  const question=openQuestions.find((candidate)=>candidate.questionId===bannerQuestionId);
+  if(question===undefined)return;
+  void submitAnswer(question,q("#question-banner-answer"),q("#question-banner-submit"),q("#question-banner-status"));
 }
 
 async function submitAnswer(question,answer,button,status){
@@ -794,6 +1102,7 @@ async function submitAnswer(question,answer,button,status){
 }
 
 function updateCommandProgress(){
+  if(openQuestions.some((question)=>question.status==="answerable")){q("#last-command").textContent="waiting for your answer";return}
   if(activeReceipt===null||pendingCommand===null)return;
   if(activeReceipt.status==="queued"){q("#last-command").textContent=pendingCommand+" queued";return}
   if(activeReceipt.status==="refused"){q("#last-command").textContent="refused: "+activeReceipt.error.message;return}
@@ -806,26 +1115,49 @@ function updateCommandProgress(){
     q("#last-command").textContent=pendingCommand+" in progress…";
     return;
   }
+  if(state.needs?.action==="answer-question"){q("#last-command").textContent="waiting for an answer to "+state.needs.questionId;return}
   const activeTask=state.tasks.find((task)=>task.status==="in_progress"||task.status==="rework");
   const activePhase=state.phases.find((phase)=>phase.status==="running");
   if(activeTask){q("#last-command").textContent=activeTask.title+" · "+activeTask.status.replaceAll("_"," ")+"…";return}
   if(activePhase){q("#last-command").textContent=activePhase.id+" · "+activePhase.status.replaceAll("_"," ")+"…";return}
-  if(state.needs?.phaseId){q("#last-command").textContent="awaiting "+state.needs.phaseId+" decision";return}
+  if(state.needs?.action==="approve-or-reject"){q("#last-command").textContent="awaiting "+state.needs.phaseId+" decision";return}
   q("#last-command").textContent=pendingCommand+" accepted; continuing…";
+}
+
+function outputAtBottom(terminal){
+  return terminal.scrollHeight-terminal.clientHeight-terminal.scrollTop<=OUTPUT_PIN_SLACK;
+}
+
+function updateOutputJump(){
+  const jump=q("#output-jump");
+  jump.hidden=outputPinned;
+  jump.textContent=outputUnseen===0?"Jump to latest":outputUnseen===1?"Jump to latest (1 new)":"Jump to latest ("+outputUnseen+" new)";
+}
+
+function jumpToLatest(){
+  const terminal=q("#terminal");
+  outputPinned=true;
+  outputUnseen=0;
+  terminal.scrollTop=terminal.scrollHeight;
+  updateOutputJump();
 }
 
 function renderRecords(){
   const terminal=q("#terminal");
+  const previousTop=terminal.scrollTop;
   terminal.replaceChildren();
   for(const record of records){
     const row=text("div","","line "+record.stream);
     row.append(text("span",new Date(record.ts).toLocaleTimeString([],{hour12:false}),"meta"),text("span",record.stream,"stream"),text("span",record.text));
     terminal.append(row);
   }
-  terminal.scrollTop=terminal.scrollHeight;
+  if(outputPinned)terminal.scrollTop=terminal.scrollHeight;
+  else terminal.scrollTop=previousTop;
+  updateOutputJump();
 }
 
 function scheduleRecordsRender(){
+  if(!outputPinned)outputUnseen+=1;
   if(recordsRenderPending)return;
   recordsRenderPending=true;
   requestAnimationFrame(()=>{recordsRenderPending=false;renderRecords()});
@@ -855,6 +1187,8 @@ function select(id){
   outputSource?.close();
   workerSource?.close();
   records=[];
+  outputPinned=true;
+  outputUnseen=0;
   render();
   renderRecords();
   q("#console-title").textContent=id+" output";
@@ -899,6 +1233,7 @@ function applyReceipt(receipt){
   activeReceipt=receipt;
   pendingCommand=receipt.payload.command;
   pendingPhaseId=typeof receipt.payload.phaseId==="string"?receipt.payload.phaseId:null;
+  disarmEnd();
   updateControlsLocked();
   updateCommandProgress();
   return true;
@@ -930,13 +1265,40 @@ q("#approve").addEventListener("click",()=>approvalArtifact&&command("approve",{
 q("#reject").addEventListener("click",()=>approvalArtifact&&command("reject",{phaseId:selected,expectedVersion:approvalArtifact.version,expectedDigest:approvalArtifact.digest,reason:q("#decision-note").value}));
 q("#steer").addEventListener("click",()=>command("steer",{taskId:selected,instruction:q("#instruction").value}));
 q("#resume").addEventListener("click",()=>command("resume"));
-q("#end").addEventListener("click",()=>command("end",{reason:q("#end-reason").value}));
+q("#end").addEventListener("click",requestEnd);
+q("#end-reason").addEventListener("input",()=>{disarmEnd();q("#end-hint").textContent=""});
+q("#danger-zone").addEventListener("toggle",()=>{if(!q("#danger-zone").open){disarmEnd();q("#end-hint").textContent=""}});
+q("#danger-zone").addEventListener("keydown",(event)=>{if(event.key==="Escape"){disarmEnd();q("#end-hint").textContent=""}});
+q("#node-toolbar").addEventListener("keydown",toolbarKeydown);
+q("#asset-close").addEventListener("click",closeAsset);
+q("#asset-overlay").addEventListener("close",releaseAsset);
+q("#asset-overlay").addEventListener("keydown",(event)=>{if(event.key==="Escape"){event.preventDefault();closeAsset()}});
+q("#asset-overlay").addEventListener("click",(event)=>{if(event.target===q("#asset-overlay"))closeAsset()});
+q("#question-banner-form").addEventListener("submit",(event)=>{event.preventDefault();submitBannerAnswer()});
+q("#question-banner-answer").addEventListener("input",()=>{if(bannerQuestionId!==null)questionDrafts.set(bannerQuestionId,q("#question-banner-answer").value)});
+q("#question-banner-answer").addEventListener("keydown",(event)=>{if(event.key==="Enter"&&(event.ctrlKey||event.metaKey)){event.preventDefault();submitBannerAnswer()}});
+q("#question-banner-more").addEventListener("click",()=>{toggleRail("right",false);q("#question-list").querySelector("textarea")?.focus()});
+q("#terminal").addEventListener("scroll",()=>{
+  const pinned=outputAtBottom(q("#terminal"));
+  if(pinned===outputPinned)return;
+  outputPinned=pinned;
+  if(pinned)outputUnseen=0;
+  updateOutputJump();
+},{passive:true});
+q("#terminal").addEventListener("keydown",(event)=>{if(event.key==="End"&&!event.shiftKey){jumpToLatest();event.preventDefault()}});
+q("#output-jump").addEventListener("click",jumpToLatest);
+decorateIcon("#resume","resume");
+decorateIcon("#end","end");
+decorateIcon("#steer","steer");
+decorateIcon("#approve","approve");
+decorateIcon("#reject","reject");
 bindSplitter("#splitter-left","left");
 bindSplitter("#splitter-right","right");
 q("#overview-toggle").addEventListener("click",()=>toggleRail("left"));
 q("#inspector-toggle").addEventListener("click",()=>toggleRail("right"));
 readLayout();
 applyLayout();
+setInterval(updateQuestionElapsed,1000);
 if(typeof ResizeObserver==="function")new ResizeObserver(()=>{if(dragState===null)scheduleGraphFit()}).observe(q("#graph"));
 addEventListener("resize",()=>{graph?.resize();graph?.fit(undefined,32)});
 

@@ -175,10 +175,8 @@ renders from an application evidence projection rather than a runtime adapter.
 The report renderer neutralizes control characters, instruction-like tags, raw
 HTML, and Markdown syntax in capped untrusted fields. It renders request and
 outcome, decomposition, worker execution, gate and human history, discoveries,
-notes, exact consumed manifests, trusted task evidence, and usage by role and
-invoked model. `@senawa/web` and
-`@senawa/report` have been removed with the other internal compatibility
-packages. The `senawa` app wires target adapters directly.
+notes, exact consumed manifests, measured task evidence, and usage by role and
+invoked model. The `senawa` app wires target adapters directly.
 
 Run identity and the active-run pointer record the selected backend. Status and
 reports expose it, and reopening through another backend is rejected. Beads

@@ -1,4 +1,5 @@
 import {
+  type JsonValue,
   normalizeAcceptance,
   type ResolvedInputManifest,
   type RuntimePhase,
@@ -36,6 +37,8 @@ export function createPhasePrompt(
   const taskFrontier = state.snapshot.workflow.spec.phases.find(
     (candidate) => candidate.executor.kind === "task-frontier",
   );
+  const artifactSchema = JSON.parse(schemaFile.content) as { readonly $id?: unknown };
+  const authoring = authoringExpectations(artifactSchema.$id);
   return JSON.stringify({
     kind: "phase",
     phase: phase.id,
@@ -60,9 +63,87 @@ export function createPhasePrompt(
     submission: {
       tool: "senawa.phase.submit",
       instruction: "Submit exactly one artifact matching this frozen JSON Schema.",
-      artifactSchema: JSON.parse(schemaFile.content),
+      ...(authoring === undefined ? {} : { authoring }),
+      artifactSchema,
     },
   });
+}
+
+interface AuthoringExpectation {
+  readonly instruction: string;
+  readonly expectedFields: readonly string[];
+  readonly rules: readonly string[];
+}
+
+const AUTHORING_EXPECTATIONS: Readonly<Record<string, AuthoringExpectation>> = {
+  "https://senawa.dev/schemas/definition/v1": {
+    instruction:
+      "Populate the optional structure. A definition that carries only summary, inScope, and acceptanceCriteria is schema-valid but too thin to plan from.",
+    expectedFields: [
+      "problemStatement",
+      "currentBehavior",
+      "desiredBehavior",
+      "nonGoals",
+      "assumptions",
+      "risks",
+      "evidenceNeeded",
+      "openQuestions",
+    ],
+    rules: [
+      "State the problem so a reader can disagree with it, and separate current behavior from desired behavior.",
+      "Give every acceptance criterion a stable id and say how it will be measured through the structured criterion form.",
+      "Mark an open question blocking only when planning genuinely cannot proceed without the answer.",
+      "Every risk needs a mitigation. Do not record a risk you have no answer for; record it as an open question instead.",
+    ],
+  },
+  "https://senawa.dev/schemas/research/v1": {
+    instruction:
+      "Findings carry identity so downstream artifacts can cite them. Record what the evidence does not prove.",
+    expectedFields: ["questions", "alternatives", "risks", "unknowns"],
+    rules: [
+      "Give every finding an id, and use limits to say what that finding does not prove.",
+      "Answer the definition's evidenceNeeded questions and link each finding back through answers.",
+      "Every recommendation cites the finding ids that support it through basis.",
+      "Record rejected alternatives with the rationale that rejected them, not only the option you chose.",
+      "Classify evidenceKind honestly: measured, offline, live-model, simulated, or documentation.",
+    ],
+  },
+  "https://senawa.dev/schemas/plan/v1": {
+    instruction:
+      "Produce ordered phases with todos, not a flat task list. Phases order the task frontier at import.",
+    expectedFields: [
+      "objectives",
+      "phases",
+      "decisions",
+      "dependencies",
+      "risks",
+      "successCriteria",
+      "validation",
+    ],
+    rules: [
+      "Every phase declares an id, a title, ordered todos, and the phases it depends on.",
+      "If the plan declares phases, every task must name a phase. A partly phased plan is refused.",
+      "Senawa expands each task's dependsOn with the tasks of its predecessor phases, so do not restate that ordering by hand.",
+      "parallelizable is an authoring signal only: the task frontier runs one task at a time today.",
+      "Every decision carries the rationale that produced it and, where a real option was discarded, alternativesRejected.",
+      "validation entries are declarative documentation. Only configured gate sensors execute anything.",
+    ],
+  },
+  "https://senawa.dev/schemas/verification/v1": {
+    instruction:
+      "Map checks to the criteria and phases they prove, and record honest limits where they belong.",
+    expectedFields: ["criteria", "phases", "deviations"],
+    rules: [
+      "Give every check an id, then reference those ids from criteria and phases.",
+      "Cover every required definition criterion in criteria, with the source that declared it.",
+      "Record an honest limit as a deviation. findings is for unresolved problems and fails the gate.",
+      "Never claim a check you did not run.",
+    ],
+  },
+};
+
+function authoringExpectations(schemaId: unknown): AuthoringExpectation | undefined {
+  return typeof schemaId === "string" ? AUTHORING_EXPECTATIONS[schemaId] : undefined;
 }
 
 function resolveSnapshotPath(base: string, reference: string): string {
@@ -80,6 +161,11 @@ function resolveSnapshotPath(base: string, reference: string): string {
   return parts.join("/");
 }
 
+export interface PromptCapabilityReport {
+  readonly granted: readonly string[];
+  readonly unavailable: readonly string[];
+}
+
 export function createTaskPrompt(
   state: RuntimeState,
   task: RuntimeTask,
@@ -88,6 +174,7 @@ export function createTaskPrompt(
     version: 1,
     inputs: task.inheritedInputs ?? [],
   },
+  capabilities?: PromptCapabilityReport,
 ): string {
   const dependencyOutcomes = task.dependsOn.map((dependency) => {
     const resolved = state.tasks.find((candidate) => candidate.key === dependency);
@@ -97,6 +184,7 @@ export function createTaskPrompt(
       attempt: resolved?.attempt ?? 0,
     };
   });
+  const planContext = resolvePlanContext(task, inputManifest);
   return JSON.stringify({
     kind: "task",
     task: task.key,
@@ -105,30 +193,31 @@ export function createTaskPrompt(
     goal: state.identity.request.goal,
     constraints: state.identity.request.constraints,
     role: task.role,
-    paths: task.paths,
+    suggestedPaths: task.paths,
+    ...(capabilities === undefined ? {} : { capabilities: capabilityBlock(capabilities) }),
     repositoryChange: effectiveRepositoryChange(state, task),
     acceptanceCriteria: normalizeAcceptance(task.acceptance),
     completion: {
       tool: "senawa.task.done",
       instruction:
-        "Before ending the turn, report an outcome and resolving evidence for every required acceptance criterion, addressed by its id.",
+        "Before ending the turn, report an outcome and an account of what you did for every required acceptance criterion, addressed by its id. Senawa records what you state; it does not verify it, so an omission is lost work.",
       evidenceKinds: {
         file: "A repository-relative path with a relationship of created, modified, deleted, reviewed, validated, or referenced.",
         sensor: "A gate sensor id that ran for this attempt.",
         command: "A command that exactly matches a configured gate sensor command.",
         "repository-delta":
-          "scope in-scope when this attempt changed authorized files, or none when it changed nothing.",
+          "scope in-scope when this attempt changed files, or none when it changed nothing.",
       },
       resolutionRules: [
-        "created, modified, and deleted resolve only against the measured in-scope repository delta for this attempt.",
-        "reviewed and referenced are advisory: Senawa records them but never accepts them as proof on their own.",
-        "validated resolves only against a blocking gate sensor that covers the path.",
-        "Any path outside the authorized paths, or inside a frozen path, refuses the criterion.",
-        "blocked and not-applicable never satisfy a required criterion.",
+        "suggestedPaths indicate where this work is expected to land. Edit whatever the task actually requires; writing elsewhere is recorded, not refused.",
+        "Frozen paths are the one hard boundary: worker profiles, workflows, schemas, and sensor policy cannot be edited.",
+        "Every required criterion needs an outcome and a short account of what you did.",
+        "blocked and not-applicable are honest outcomes, but they never satisfy a required criterion.",
       ],
       submissionSchema: TASK_COMPLETION_SUBMISSION_JSON_SCHEMA,
     },
     sourcePlan: task.sourcePlan ?? null,
+    ...(planContext === undefined ? {} : { planContext }),
     inputManifest,
     dependencyOutcomes,
     steering: task.steering,
@@ -141,4 +230,55 @@ export function createTaskPrompt(
             nextPrompt: "Address every finding, then request completion again.",
           }),
   });
+}
+
+function capabilityBlock(capabilities: PromptCapabilityReport) {
+  const instructions = [
+    "Only the granted capabilities are available in this session. A capability that is not granted is denied by the worker host and cannot be obtained.",
+    "Never claim an acceptance criterion that needs an unavailable capability. Report that criterion as blocked and name the missing capability.",
+  ];
+  if (!capabilities.granted.includes("process.run")) {
+    instructions.push(
+      "This session cannot execute commands. `command` evidence resolves only through configured gate sensors that run after this turn.",
+    );
+  }
+  return {
+    granted: capabilities.granted,
+    unavailable: capabilities.unavailable,
+    instructions,
+  };
+}
+
+/**
+ * A bounded projection of the task's own plan phase. The manifest already carries the whole
+ * plan, so this block exists to point the worker at its phase, not to restate the plan.
+ */
+function resolvePlanContext(task: RuntimeTask, inputManifest: ResolvedInputManifest) {
+  if (task.phase === undefined) return undefined;
+  const sourcePlan = inputManifest.inputs.find((input) => input.name === "source-plan");
+  if (sourcePlan === undefined) return undefined;
+  const declared = Reflect.get(sourcePlan.content, "phases");
+  if (!Array.isArray(declared)) return undefined;
+  const phases = declared.filter(
+    (entry): entry is Record<string, JsonValue> =>
+      entry !== null && typeof entry === "object" && !Array.isArray(entry),
+  );
+  const current = phases.find((entry) => Reflect.get(entry, "id") === task.phase);
+  if (current === undefined) return undefined;
+  return {
+    instruction:
+      "This is the plan phase that owns this task. Stay inside it; the full plan is in the input manifest.",
+    phase: {
+      id: task.phase,
+      title: Reflect.get(current, "title") ?? null,
+      intent: Reflect.get(current, "intent") ?? null,
+      todos: Reflect.get(current, "todos") ?? [],
+      exitCriteria: Reflect.get(current, "exitCriteria") ?? [],
+      validation: Reflect.get(current, "validation") ?? [],
+    },
+    phaseOrder: phases.flatMap((entry) => {
+      const id = Reflect.get(entry, "id");
+      return typeof id === "string" ? [id] : [];
+    }),
+  };
 }

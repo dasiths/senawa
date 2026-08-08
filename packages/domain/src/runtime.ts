@@ -16,7 +16,6 @@ export interface WorkerHostIdentity {
   readonly kind: WorkerHostKind;
   readonly adapter: string;
   readonly adapterVersion: string;
-  readonly legacy: boolean;
 }
 
 export interface RunIdentity {
@@ -34,25 +33,14 @@ export function decodeRunIdentity(value: unknown): RunIdentity {
     readonly workerHost?: Partial<WorkerHostIdentity> & { readonly kind?: string };
   };
   const workerHost = identity.workerHost;
-  if (workerHost === undefined) {
-    return {
-      ...identity,
-      workerHost: {
-        kind: "simulated",
-        adapter: "simulated-worker",
-        adapterVersion: "legacy",
-        legacy: true,
-      },
-    };
-  }
+  if (workerHost === undefined) throw new Error("Persisted run identity has no worker host");
   const kind = canonicalWorkerHostKind(workerHost.kind);
   return {
     ...identity,
     workerHost: {
       kind,
       adapter: workerHost.adapter ?? adapterName(kind),
-      adapterVersion: workerHost.adapterVersion ?? "legacy",
-      legacy: workerHost.legacy ?? workerHost.adapterVersion === undefined,
+      adapterVersion: workerHost.adapterVersion ?? "unknown",
     },
   };
 }
@@ -60,13 +48,10 @@ export function decodeRunIdentity(value: unknown): RunIdentity {
 function canonicalWorkerHostKind(value: string | undefined): WorkerHostKind {
   switch (value) {
     case "simulated":
-    case "deterministic":
       return "simulated";
     case "copilot-subprocess":
-    case "copilot":
       return "copilot-subprocess";
     case "copilot-sdk":
-    case "sdk":
       return "copilot-sdk";
     default:
       throw new Error(`Invalid persisted worker host kind: ${String(value)}`);

@@ -19,6 +19,8 @@ next workflow transition.
 | Inspect a workflow | `senawa workflow info <name>` |
 | Start requested work | `senawa work start "<goal>" --workflow <name>` |
 | Read bounded status | `senawa work show` |
+| List open worker questions | `senawa questions [<run>]` |
+| Relay a human answer | `senawa answer <question-id> "<answer>"` |
 | Read an approval overview | `senawa phase brief <phase>` |
 | Inspect a phase artifact before approval | `senawa phase artifact <phase>` |
 | Open the run console | `senawa browser [<run>]` |
@@ -44,18 +46,23 @@ After every bounded stop from start, resume, wait, or exit code `2`, follow this
 sequence:
 
 1. Run `senawa work show` and report the bounded state and `needs`.
-2. When approval is required, run `senawa phase brief <phase>`. Present its exact
+2. When `needs` reports `answer-question`, a worker is blocked on the human. Quote
+	the question, name its owner, and ask the human for an answer. Run
+	`senawa questions` when more than one question is open. Relay the human's words
+	with `senawa answer <question-id> "<answer>"`. Do not answer on their behalf,
+	and do not treat the run as progressing while the question is open.
+3. When approval is required, run `senawa phase brief <phase>`. Present its exact
 	artifact path, version, digest, and Senawa-generated overview without adding
 	an approval recommendation.
-3. Present the complete artifact with `senawa phase artifact <phase> --version
+4. Present the complete artifact with `senawa phase artifact <phase> --version
 	<version>` or present the brief's supported full-artifact command.
-4. Ask neutrally whether the human chooses to approve that exact artifact,
+5. Ask neutrally whether the human chooses to approve that exact artifact,
 	reject it with a reason, or leave it pending.
-5. Relay only the explicit human choice. Include `--caller principal-agent`,
+6. Relay only the explicit human choice. Include `--caller principal-agent`,
 	`--expected-version <version>`, and `--expected-digest <digest>` on approval
 	or rejection. Do not infer a decision from silence, prior approval, wording
 	about quality, or a request to continue.
-6. Run `senawa work resume`, then report the next bounded state. Do not choose
+7. Run `senawa work resume`, then report the next bounded state. Do not choose
 	the next workflow transition yourself.
 
 Exit code `2` from a start or resume is a normal decision point. Read `status`

@@ -198,58 +198,83 @@ and uses only that evaluation to accept, close, rework, or pause work.
 A worker reports completion against the
 [acceptance criteria](02-workflows-and-lifecycle.md#acceptance-criteria) of its
 task. The submission carries a summary and, for each criterion, its ID, an
-outcome of `satisfied`, `blocked`, or `not-applicable`, and evidence references.
-A reference names a file with a relationship, a gate sensor, a configured gate
-command, or the repository delta.
+outcome of `satisfied`, `blocked`, or `not-applicable`, a required account of
+what the worker did, and optional evidence references. A reference names a file
+with a relationship, a gate sensor, a configured gate command, or the repository
+delta.
 
-The submission is a claim. The driver authors the verdict. Senawa resolves every
-reference against evidence it measured itself:
+The submission is a claim, and the claim is enough. Senawa records what the
+worker states rather than adjudicating it. The purpose of the contract is to
+force the worker to articulate completion criterion by criterion so nothing is
+silently forgotten, not to audit the worker against measurement.
 
-| Relationship or kind | Resolution rule |
-|----------------------|-----------------|
-| `created`, `modified`, `deleted` | Resolves only against the measured in-scope repository delta for this attempt |
-| `validated` | Resolves only against a blocking gate sensor whose scope covers the path |
-| `reviewed`, `referenced` | Advisory. Senawa checks that the path is in scope and records the reference, but never claims a worker read a file |
-| `sensor`, `command` | Resolves only against a reading from this attempt's gate |
-| `repository-delta` | Resolves against the measured delta for this attempt |
+What still fails a task:
 
-A path outside the authorized paths, or inside the frozen set, contradicts the
-criterion. Unresolvable references, `blocked`, and `not-applicable` never satisfy
-a required criterion. A claim naming a criterion the task does not define is
-refused. A missing or schema-invalid submission leaves every required criterion
-unmet rather than passing silently.
+| Condition | Why it fails |
+|-----------|--------------|
+| No submission, or a schema-invalid one | Explicitness is the contract; silence is not completion |
+| A required criterion with no claim | The worker did not address it |
+| A required criterion reported `blocked` or `not-applicable` | An honest outcome, but not a satisfied one |
+| A claim naming a criterion the task does not define | The claim does not correspond to the work |
+| A cited path inside the frozen set | The frozen set is a hard boundary |
+
+Senawa still measures the repository delta and notes, per reference, whether a
+measured change supports the claim. That note is recorded for the reader; it
+never overturns the worker's outcome.
 
 The result is a driver-authored assessment addressed by run, task, attempt, and
 dispatch, and stored beside the worker submission rather than replacing it. The
 deterministic `task-acceptance` sensor reads that assessment, so acceptance is
 evaluated as a cheap check ahead of type-check and test commands and a refusal
-names the failing criterion, the reason, and the evidence path.
-
-Because criterion evidence carries the verdict, an audit or validation task can
-close without editing the repository, while an implementation criterion still
-needs a resolvable change. The report renders the per-criterion outcome and the
-resolved references; see
+names the failing criterion and the reason. The report renders the per-criterion
+outcome and the recorded references; see
 [Provenance and Observability](06-provenance-and-observability.md#report-structure).
 
-## Trusted task-change evidence
+## Measured task-change evidence
 
 Every imported task resolves a `repositoryChange` expectation, either from the
 task or from the frontier ceiling that owns it. A plan may narrow that ceiling
-and never widen it. Senawa captures a path-limited baseline before worker
-execution and a post-turn delta before gate evaluation. The delta separates
-pre-existing, in-scope, out-of-scope, frozen, and uncertain changes and binds the
-measurement to run, task, attempt, dispatch, and turn identifiers.
+and never widen it. Senawa captures a baseline before worker execution and a
+post-turn delta before gate evaluation. The delta separates pre-existing,
+in-scope, out-of-scope, frozen, and uncertain changes and binds the measurement
+to run, task, attempt, dispatch, and turn identifiers.
 
-The worker's reported patch is advisory. The deterministic `task-change` sensor
-uses the trusted delta and reports disagreement. A required no-op, an
-out-of-scope change, a frozen-path change, or unresolved recovery attribution
-blocks before typecheck and tests can make the task look successful. These
-refusal paths are [confirmed offline](wip/probe-findings.md#live-default-and-evidence-contracts).
+Task `paths` are a suggestion about where work belongs, not a boundary. A worker
+that edits elsewhere is recorded, not refused, because prescribing the file set
+in advance produced false refusals more often than it caught bad work. The
+`task-change` sensor reports where a change landed and whether an expected
+change was measured, at warning severity.
+
+Two conditions still block:
+
+* A change inside the frozen set.
+* A change when the task declared `repositoryChange: forbidden`.
 
 The `work-done` gate is schema-aware. It requires the current verification
-artifact to declare `verdict: pass` and requires resolvable current evidence; a
-schema-valid failing verdict cannot finish work. Simulated verification remains
-simulated evidence and cannot establish live implementation quality.
+artifact to declare `verdict: pass`; a schema-valid failing verdict cannot finish
+work. Simulated verification remains simulated evidence and cannot establish live
+implementation quality.
+
+## Artifact integrity
+
+A definition or research artifact is validated against its frozen JSON Schema
+only. A schema describes shape, not agreement between fields, so a schema-valid
+definition can still carry two criteria with the same ID or a blocking open
+question that nothing resolved.
+
+The deterministic `artifact-integrity` sensor closes that gap. It classifies the
+candidate phase artifact, then reports duplicate acceptance-criterion,
+assumption, and evidence-request identifiers, an unresolved blocking open
+question, research recommendations and answers that cite finding IDs no finding
+declares, and the same dangling-reference problems in questions and alternatives.
+An artifact with no cross-reference contract passes rather than blocks. The
+`definition-accepted` and `research-accepted` gates require its verdict
+alongside artifact presence.
+
+The plan artifact is excluded because the plan importer already parses it
+through the runtime schema library, where the equivalent refinements run.
+[Artifact structure](02-workflows-and-lifecycle.md#artifact-structure) owns the
+field contract this sensor reads.
 
 ## Evaluation order
 

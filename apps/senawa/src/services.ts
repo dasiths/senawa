@@ -237,7 +237,6 @@ export function createSenawaServices(
     kind: "copilot-sdk",
     adapter: "copilot-sdk",
     adapterVersion: "1.0.7",
-    legacy: false,
   };
   const workerHost = options.workerHostResolver ?? options.workerHost;
   if (workerHost === undefined) {
