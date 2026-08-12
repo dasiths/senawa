@@ -45,8 +45,8 @@ Each phase records:
 | 1. Canonical codec and graph kernel | Complete | `b1712fe` | Pushed |
 | 2. Completion, gates, closure, and escalation | Complete | `d8a3d7a` | Pushed |
 | 3. Protocol and in-memory command slice | Complete | `0f5f485` | Pushed |
-| 4. SQLite authority and immutable assets | Ready to commit | Pending | Pending |
-| 5. Fenced runner and reconciliation | Not started | Pending | Pending |
+| 4. SQLite authority and immutable assets | Complete | `ef8580a` | Pushed |
+| 5. Fenced runner and reconciliation | In progress | Pending | Pending |
 | 6. Workflow and sensor configuration | Not started | Pending | Pending |
 | 7. Context broker and serial workers | Not started | Pending | Pending |
 | 8. Local supervisor, HTTP, SSE, and CLI | Not started | Pending | Pending |
@@ -1590,6 +1590,9 @@ Pending atomic staging, commit, and push.
   fault injection and read-only storage tests cover rollback paths.
 * The final enforced benchmark measured 21.75 ms p99 locally; the independent
   review measured 13.67 ms p99, both below the 25 ms threshold.
+
+Commit `ef8580a feat: add transactional local authority` was pushed to
+`origin/redesign/workflow-state-machine` on 2026-08-12.
 
 ## Entry template
 
