@@ -17,6 +17,20 @@ if (
   );
 }
 
+const storageManifest = JSON.parse(await readFile("packages/storage-sqlite/package.json", "utf8"));
+const storageDependencies = Object.keys(storageManifest.dependencies ?? {});
+const allowedStorageDependencies = new Set([
+  "@senawa/kernel",
+  "@senawa/protocol",
+  "@senawa/runtime",
+  "better-sqlite3",
+]);
+if (storageDependencies.some((dependency) => !allowedStorageDependencies.has(dependency))) {
+  violations.push(
+    "packages/storage-sqlite/package.json: storage-sqlite has an unsupported production dependency",
+  );
+}
+
 for (const file of [...packageFiles, ...appFiles]) {
   const content = await readFile(file, "utf8");
   violations.push(...checkSource(file, content));
@@ -42,7 +56,7 @@ function checkSource(file, content) {
   if (isPackage && /(?:from\s+|import\s*(?:\(\s*)?)["'][^"']*apps\//u.test(content)) {
     findings.push(`${file}: packages cannot import apps`);
   }
-  if (isPackage && content.includes("@senawa/testing")) {
+  if (isPackage && !file.endsWith(".test.ts") && content.includes("@senawa/testing")) {
     findings.push(`${file}: production packages cannot import testing`);
   }
   if ((isKernel || isProtocol || isRuntime) && hasNodeRuntimeImport(content)) {

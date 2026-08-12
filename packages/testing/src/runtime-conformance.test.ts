@@ -730,6 +730,14 @@ describe("transport-independent runtime command conformance", () => {
     };
     const runMismatch = service.submit(otherRepository, admission.at());
     expect(runMismatch.error?.code).toBe("run-repository-mismatch");
+
+    const serialized = service.authority.toCanonicalJson();
+    const restarted = createService(
+      InMemoryAuthority.fromCanonicalJson(serialized, createDependencies()),
+    );
+    expect(restarted.queryReceipt(otherRun.commandId)).toEqual(repositoryConflict);
+    expect(restarted.queryReceipt(otherRepository.commandId)).toEqual(runMismatch);
+    expect(restarted.authority.toCanonicalJson()).toBe(serialized);
   });
 });
 

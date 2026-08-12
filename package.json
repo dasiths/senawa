@@ -8,6 +8,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "benchmark:sqlite-authority": "pnpm build && node scripts/benchmark-sqlite-authority.mjs",
     "build": "tsc -b",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "docs:links": "node scripts/check-markdown-links.mjs",

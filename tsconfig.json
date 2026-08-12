@@ -11,6 +11,9 @@
       "path": "packages/runtime"
     },
     {
+      "path": "packages/storage-sqlite"
+    },
+    {
       "path": "packages/testing"
     },
     {

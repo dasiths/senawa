@@ -1,18 +1,17 @@
 {
-  "name": "@senawa/testing",
+  "name": "@senawa/storage-sqlite",
   "version": "0.1.0-alpha.0",
-  "private": true,
   "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./authority-conformance": {
-      "types": "./dist/authority-conformance.d.ts",
-      "default": "./dist/authority-conformance.js"
     }
   },
+  "files": [
+    "dist",
+    "migrations"
+  ],
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false"
@@ -20,6 +19,11 @@
   "dependencies": {
     "@senawa/kernel": "workspace:*",
     "@senawa/protocol": "workspace:*",
-    "@senawa/runtime": "workspace:*"
+    "@senawa/runtime": "workspace:*",
+    "better-sqlite3": "12.11.1"
+  },
+  "devDependencies": {
+    "@senawa/testing": "workspace:*",
+    "@types/better-sqlite3": "9.6.0"
   }
 }

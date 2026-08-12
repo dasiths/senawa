@@ -6,6 +6,7 @@
       "apps/*/package.json",
       "apps/*/tsconfig.json",
       "packages/*/src/**/*.ts",
+      "packages/*/tests/**/*.ts",
       "packages/*/package.json",
       "packages/*/tsconfig.json",
       "scripts/**/*.mjs",

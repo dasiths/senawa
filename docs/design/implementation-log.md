@@ -45,7 +45,7 @@ Each phase records:
 | 1. Canonical codec and graph kernel | Complete | `b1712fe` | Pushed |
 | 2. Completion, gates, closure, and escalation | Complete | `d8a3d7a` | Pushed |
 | 3. Protocol and in-memory command slice | Complete | `0f5f485` | Pushed |
-| 4. SQLite authority and immutable assets | In progress | Pending | Pending |
+| 4. SQLite authority and immutable assets | Ready to commit | Pending | Pending |
 | 5. Fenced runner and reconciliation | Not started | Pending | Pending |
 | 6. Workflow and sensor configuration | Not started | Pending | Pending |
 | 7. Context broker and serial workers | Not started | Pending | Pending |
@@ -1180,6 +1180,156 @@ Commit `d8a3d7a feat: add completion and escalation semantics` was pushed to
 * Consequence: Phase 4 transactions must commit command history and authority
   effects atomically while preserving this refusal behavior.
 
+## Decision D-031: Pin better-sqlite3 for the alpha authority
+
+* Date: 2026-08-12
+* Status: Accepted after Phase 4 no-credit probe
+* Phase: 4
+* Decision: Pin `better-sqlite3@12.11.1` and
+  `@types/better-sqlite3@9.6.0` while the Node floor remains 22.12. Use one
+  long-lived local write connection with WAL, `synchronous=FULL`, foreign keys,
+  trusted schema off, finite busy timeout, immediate write transactions, and no
+  network filesystem support.
+* Alternatives: Built-in `node:sqlite`; `better-sqlite3@13`; SQLite WASM.
+* Rationale: Node 22.12 requires an experimental flag and lacks later backup and
+  timeout APIs. Node 22.17 in this container bundles SQLite 3.50.0, within a
+  documented WAL-reset corruption range fixed in 3.51.3. `better-sqlite3@13`
+  failed the Node 22.12 probe, while 12.11.1 loaded on 22.12 and 22.17, bundles
+  SQLite 3.53.2, and passed WAL, rollback, busy timeout, migration, integrity,
+  and online backup probes.
+* Consequence: Native prebuild packaging becomes part of the alpha platform
+  matrix. Disprove the choice if clean install falls back to compilation or the
+  reference workload exceeds 25 ms transaction p99 or 50 ms event-loop-delay
+  p99.
+
+## Decision D-037: Replace whole-snapshot command persistence
+
+* Date: 2026-08-12
+* Status: Accepted after Phase 4 latency disproof
+* Phase: 4
+* Decision: Keep canonical snapshot export and startup verification, but stop
+  replaying and rewriting the complete authority on every command. Maintain a
+  revision-aware per-connection authority cache and persist only changed run,
+  command, receipt, event, and projection rows inside the immediate transaction.
+  Refresh from canonical authority when another connection advances revision.
+* Alternatives: Raise the latency threshold; accept whole-snapshot behavior for
+  alpha; remove normalized tables; use one database for many repositories.
+* Rationale: The intended one-repository workload reached 190 ms p99 after 100
+  durable command lifecycles, exceeding the 25 ms threshold. Whole-authority
+  replay and full normalized-table synchronization make command cost grow with
+  history.
+* Consequence: Incremental persistence must retain exact canonical export,
+  restart replay validation, optimistic revisions, refusal rollback, concurrent
+  connection visibility, and normalized-table equality checks.
+* Implementation: Each SQLite connection caches one replay-validated
+  `InMemoryAuthority`, its `RuntimeCommandService`, canonical snapshot fragments,
+  and the observed revision. `BEGIN IMMEDIATE` protects the revision read. A
+  revision mismatch rebuilds all three caches from canonical JSON before command
+  execution. A new command appends one checked three-receipt and three-event
+  lifecycle, upserts only its run and repository ownership, and advances the
+  canonical snapshot and revision in the same transaction. Pre-commit failures
+  roll back SQLite and rebuild the cache from committed canonical JSON;
+  post-commit acknowledgement faults retain the committed cache for exact retry.
+  CAS continues through full normalized replacement so absent rows are deleted
+  exactly, and startup still verifies normalized tables against replay-validated
+  canonical state.
+* Validation: The original 100-command same-run payload-digest refusal workload
+  measured about 190 ms p99. The final repaired workload measured 12.46 ms p50,
+  20.00 ms p95, 23.80 ms p99, and 79.27 ms maximum with a 25 ms p99 limit.
+  Four preceding fresh-database runs measured p99 between 15.20 and 21.28 ms.
+  A 16,384-page WAL auto-checkpoint interval keeps automatic checkpointing bounded
+  without repeatedly charging growing canonical-row checkpoints to command
+  commits.
+
+## Decision D-032: Transact through replay-validated canonical authority state
+
+* Date: 2026-08-12
+* Status: Superseded for steady-state command submission by D-037
+* Phase: 4
+* Decision: Each command submission starts `BEGIN IMMEDIATE`, loads the exact
+  canonical runtime snapshot and optimistic revision, reconstructs the in-memory
+  authority by deterministic replay, executes `RuntimeCommandService`, and
+  persists the new snapshot plus normalized rows under the same revision guard.
+* Alternatives: Reimplement command handlers in SQL; persist only an opaque
+  snapshot; let receipt history and runtime records commit separately.
+* Rationale: Reusing the Phase 3 command service preserves one decision path and
+  its exact refusal rollback behavior. Normalized rows add relational integrity
+  without becoming a second source of lifecycle semantics.
+* Consequence: The initial command path was synchronous and rewrote normalized
+  command, receipt, and event rows. D-037 retained replay validation for startup,
+  revision refresh, rollback recovery, and CAS input while replacing steady-state
+  command replay and normalized rewrites with incremental caches and deltas.
+
+## Decision D-033: Install immutable asset bytes before committing descriptors
+
+* Date: 2026-08-12
+* Status: Accepted
+* Phase: 4
+* Decision: Stage asset bytes on the asset filesystem, digest them through the
+  supplied SHA-256 port, fsync the file, atomically link it at its digest path,
+  fsync the containing directory, and only then commit its SQLite descriptor.
+* Alternatives: Commit the descriptor before rename; store large assets as
+  SQLite blobs; coordinate descriptor and filesystem writes with recovery flags.
+* Rationale: SQLite and filesystem operations cannot share one atomic commit.
+  Installing immutable bytes first permits harmless unreferenced files after a
+  crash while preventing committed descriptors from naming absent bytes.
+* Consequence: Orphan digest files can remain after a failed descriptor
+  transaction and may be garbage-collected only by a later maintenance feature.
+  Every existing path component is checked without following symlinks; new
+  directories and parents are fsynced before descriptor authority is committed.
+
+## Decision D-034: Separate command history scopes from active-run ownership
+
+* Date: 2026-08-12
+* Status: Accepted
+* Phase: 4
+* Decision: Key persisted run scopes by repository and requested run identity,
+  but enforce repository and global run singleton rules only for instantiated
+  runs with authority records. Rejected commands against another run retain
+  durable receipt history without becoming active runs.
+* Alternatives: Drop identity-conflict receipt history; make every refused scope
+  an active run; attach conflict receipts to a different run identity.
+* Rationale: Phase 3 creates queued, claimed, and refused history before an
+  authority identity conflict is known. Treating that history scope as active
+  contradicted deterministic snapshot restoration and SQL uniqueness.
+* Consequence: Repository rows point to one active composite run key while
+  non-active run scopes remain queryable for command history.
+
+## Decision D-035: Treat every expired lease acquisition as a new fenced epoch
+
+* Date: 2026-08-12
+* Status: Accepted
+* Phase: 4
+* Decision: Lease acquisition and renewal use immediate transactions. A live
+  owner can renew its current fence, but any acquisition after expiry increments
+  the fence, including reacquisition by the same owner identity. Guarded writes
+  require the exact live owner and fence.
+* Alternatives: Reuse fences for the same owner; rely on expiry alone; defer all
+  lease storage until the runner exists.
+* Rationale: Owner labels can survive process restarts and cannot identify one
+  execution epoch. Incrementing after expiry prevents stale work from regaining
+  authority under a reused label.
+* Consequence: Phase 5 runner writes must carry the granted fence and use guarded
+  storage operations rather than checking a lease outside their transaction.
+
+## Decision D-036: Verify backups and restore only into a fresh authority path
+
+* Date: 2026-08-12
+* Status: Accepted for the alpha restore surface
+* Phase: 4
+* Decision: Online backups publish a self-contained bundle directory containing
+  `authority.db`, exact content-addressed assets, and a manifest binding database
+  and asset digests. Build and verify a unique partial bundle, fsync all files and
+  directories, and publish the manifest last. Restore verifies the complete
+  bundle and writes only to fresh database and asset destinations.
+* Alternatives: Replace a possibly live database in place; restore without asset
+  verification; expose raw SQLite backup files without verification.
+* Rationale: Replacing a path while another process holds the old inode can split
+  local authority. Fresh-destination restore is a smaller safe alpha contract.
+* Consequence: Backup destinations overlapping or aliasing the live database,
+  WAL, SHM, asset tree, or existing paths are refused. In-place disaster recovery
+  requires an explicit coordinated shutdown and swap workflow later.
+
 ## Phase 3 log
 
 ### Bounded slice A: Browser-safe protocol contracts
@@ -1329,6 +1479,117 @@ Passed on 2026-08-12:
 * Architecture boundaries across 66 source files and negative fixtures
 * Documentation links across 17 Markdown files
 * `git diff --check`
+
+## Phase 4 log
+
+### Decisions
+
+* D-031 pins `better-sqlite3@12.11.1` and its type package.
+* D-032 keeps runtime command semantics in one replay-validated decision path.
+* D-033 orders asset installation before descriptor commitment.
+* D-034 distinguishes durable refusal scopes from active-run ownership.
+* D-035 gives every post-expiry lease epoch a new fence.
+* D-036 verifies backup content and limits restore to a fresh destination.
+* D-037 replaces per-command replay and whole-history normalized rewrites with a
+  revision-aware connection cache and checked command deltas.
+
+### Scope
+
+* Added `@senawa/storage-sqlite` with one checksummed strict-schema migration,
+  `user_version`, startup integrity checks, WAL, full synchronous durability,
+  foreign keys, trusted schema disabled, finite busy timeout, and immediate write
+  transactions.
+* Added normalized repository, run, command, receipt, event, runtime-record,
+  projection-time, asset, lease, claim, cancellation, effect-intent, and
+  effect-outcome storage. The exact canonical authority snapshot remains the
+  replay-validated source used by command execution and recovery.
+* Added a runtime `AuthorityPort` while preserving `InMemoryAuthority` and all
+  existing command, query, serialization, replay, and refusal behavior.
+* Added content-addressed asset staging, digest installation, descriptor
+  transactions, read verification, startup descriptor verification, online
+  backup, verified partial files, atomic rename, and fresh-path restore.
+* Added immediate-transaction lease acquisition, expiry takeover, monotonically
+  increasing fences, and one guarded cancellation placeholder write.
+* Added one reusable authority conformance suite and ran it against in-memory and
+  SQLite implementations. SQLite-specific tests cover independent connections,
+  real concurrent writer contention, stale revisions, full reopen journeys,
+  duplicate commands, active-run ownership, lease fences, command and asset
+  crash points, migrations, backup, restore, corruption, and read-only storage.
+* Added stale connection refresh, same-instance cache rollback, and trigger-backed
+  append-only normalized history tests. Added a deterministic 100-refusal
+  benchmark that reports p50, p95, p99, and maximum latency and fails at a 25 ms
+  p99.
+* Added the exact native and type dependencies through pnpm, allowed only the
+  `better-sqlite3` install script, added project references, and constrained
+  storage production dependencies in the boundary checker.
+
+### Narrowed requirements
+
+* Claim, cancellation, effect-intent, and effect-outcome tables are real durable
+  schema, but only lease acquisition and a fence-guarded cancellation placeholder
+  have behavioral APIs in Phase 4. Phase 5 defines runner intent, outcome, claim,
+  and reconciliation transitions.
+* Disk-full behavior was not deterministically injectable in this environment.
+  Pre-commit fault injection proves rollback and the POSIX read-only probe proves
+  no receipt is returned when SQLite cannot write.
+* Clean tarball installation and native loading ran on the current Linux and Node
+  container only. The declared alpha platform matrix remains release validation.
+* Restore writes only to a fresh destination. Coordinated in-place replacement is
+  intentionally absent to avoid split authority with open database handles.
+
+### Validation
+
+Passed on 2026-08-12:
+
+* Frozen-lock installation across seven workspace projects
+* Complete workspace build and typecheck
+* Biome check across 57 intended files
+* Focused authority suites: three files and 45 tests
+* Complete workspace suite: 15 files and 322 tests
+* Architecture boundaries across 73 source files and negative fixtures
+* Documentation links across 17 Markdown files
+* D-037 benchmark with 100 same-run durable refusals below the 25 ms p99 limit
+* Clean npm tarball install of kernel, protocol, runtime, and storage packages,
+  followed by opening the installed SQLite authority and packaged migration
+
+### Review
+
+Independent review found four high-severity defects and drove these repairs:
+
+* Backup publication can no longer replace or alias a live authority path.
+* CAS path creation rejects symlink and hardlink escape and fsyncs new parents.
+* Fence-guarded writes compare lease expiry with a separately supplied trusted
+  current time rather than a backdated request timestamp.
+* Normalized rows are exact projections of canonical state; CAS removes absent
+  rows and startup rejects any divergence.
+
+The review also drove self-contained backup bundles, concurrent first-migration
+retry, storage identifier validation, and D-037 incremental persistence. The
+final independent gate found no critical or high issues and approved Phase 4
+under the explicit narrowed scope below.
+
+### Commit and push
+
+Pending atomic staging, commit, and push.
+
+### Remaining risks
+
+* Canonical snapshot export and the canonical authority-row update remain linear
+  in retained history. D-037 removes replay, deep canonical revalidation, and
+  normalized history rewriting from the steady-state command path, but larger
+  histories still require representative measurement.
+* Unreferenced digest files after failed descriptor transactions have no garbage
+  collector yet.
+* Network filesystems remain unsupported, and the adapter does not attempt to
+  detect every mount topology.
+* Full runner claim, intent, outcome, cancellation, and reconciliation behavior
+  remains Phase 5 work.
+* Platform packaging is proven only on Linux glibc x64 with Node 22.17. macOS,
+  Windows, other architectures and libc variants remain release-matrix work.
+* Real `ENOSPC` during WAL, checkpoint, backup, or asset fsync remains untested;
+  fault injection and read-only storage tests cover rollback paths.
+* The final enforced benchmark measured 21.75 ms p99 locally; the independent
+  review measured 13.67 ms p99, both below the 25 ms threshold.
 
 ## Entry template
 

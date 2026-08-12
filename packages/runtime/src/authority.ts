@@ -60,6 +60,7 @@ import {
 import type {
   AdmissionFacts,
   AllocationKind,
+  AuthorityPort,
   AuthorizationPolicy,
   CommandServicePort,
   RuntimeDependencies,
@@ -122,7 +123,7 @@ interface StoredAdmission {
   readonly allocations: readonly StoredAllocation[];
 }
 
-interface MutableRun {
+export interface RuntimeAuthorityRun {
   repositoryId: string;
   runId: string;
   cursor: number;
@@ -149,8 +150,10 @@ interface SerializedRun {
   readonly projectionGeneratedAt?: string;
 }
 
-export class InMemoryAuthority implements SerializableAuthorityPort {
-  readonly runs: Map<string, MutableRun>;
+export class InMemoryAuthority
+  implements AuthorityPort<RuntimeAuthorityRun>, SerializableAuthorityPort
+{
+  readonly runs: Map<string, RuntimeAuthorityRun>;
 
   constructor() {
     this.runs = new Map();
@@ -177,7 +180,7 @@ export class InMemoryAuthority implements SerializableAuthorityPort {
     validateSnapshotUniqueness(runs);
     const authority = new InMemoryAuthority();
     const service = new RuntimeCommandService(dependencies, authority);
-    for (const run of runs) replaySerializedRun(service, run);
+    for (const run of runs) replaySerializedRun(service, run, runs);
     if (authority.toCanonicalJson() !== serialized) {
       throw new TypeError("Runtime authority snapshot does not equal deterministic command replay");
     }
@@ -195,10 +198,13 @@ export class InMemoryAuthority implements SerializableAuthorityPort {
 }
 
 export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPort {
-  readonly authority: InMemoryAuthority;
+  readonly authority: AuthorityPort<RuntimeAuthorityRun>;
   readonly dependencies: RuntimeDependencies;
 
-  constructor(dependencies: RuntimeDependencies, authority = new InMemoryAuthority()) {
+  constructor(
+    dependencies: RuntimeDependencies,
+    authority: AuthorityPort<RuntimeAuthorityRun> = new InMemoryAuthority(),
+  ) {
     this.dependencies = dependencies;
     this.authority = authority;
     for (const run of authority.runs.values()) {
@@ -322,6 +328,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
   restoreNonEffectCommand(
     sourceRun: SerializedRun,
     stored: SerializedRun["commands"][number],
+    snapshotRuns: readonly SerializedRun[],
   ): void {
     const command = decodeCommandEnvelope(stored.canonicalEnvelope);
     const terminal = stored.receipt;
@@ -350,6 +357,11 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       authorizationDecision,
       payloadDigest,
     );
+    const authorityIdentityError = deterministicAuthorityIdentityError(
+      command,
+      snapshotRuns,
+      terminalError.code,
+    );
     if (deterministicError !== undefined) {
       const expectedStatus = deterministicError.code === "command-expired" ? "expired" : "refused";
       if (
@@ -357,6 +369,10 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
         canonicalStringify(terminalError) !== canonicalStringify(deterministicError)
       ) {
         throw new TypeError("Stored deterministic refusal does not match admission facts");
+      }
+    } else if (authorityIdentityError !== undefined) {
+      if (canonicalStringify(terminalError) !== canonicalStringify(authorityIdentityError)) {
+        throw new TypeError("Stored authority identity refusal does not match snapshot state");
       }
     } else if (
       terminal.status !== "refused" ||
@@ -438,7 +454,11 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     });
   }
 
-  private execute(command: CommandEnvelope, admission: AdmissionFacts, run: MutableRun): JsonValue {
+  private execute(
+    command: CommandEnvelope,
+    admission: AdmissionFacts,
+    run: RuntimeAuthorityRun,
+  ): JsonValue {
     switch (command.intent.type) {
       case "instantiate-run":
         return this.instantiateRun(command, admission, run);
@@ -460,7 +480,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
   private instantiateRun(
     command: CommandEnvelope,
     admission: AdmissionFacts,
-    run: MutableRun,
+    run: RuntimeAuthorityRun,
   ): JsonValue {
     if (run.records !== undefined) {
       throw new RuntimeRefusal("run-already-instantiated", "Run is already instantiated");
@@ -517,7 +537,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
   private acceptGraphRevision(
     command: CommandEnvelope,
     admission: AdmissionFacts,
-    run: MutableRun,
+    run: RuntimeAuthorityRun,
   ): JsonValue {
     const records = requiredRecords(run);
     if (records.assessments.length > 0 || records.candidate !== undefined) {
@@ -567,7 +587,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     return canonicalValue({ graphRevision: graph.revisionDigest }) as unknown as JsonValue;
   }
 
-  private submitCompletion(command: CommandEnvelope, run: MutableRun): JsonValue {
+  private submitCompletion(command: CommandEnvelope, run: RuntimeAuthorityRun): JsonValue {
     const records = requiredRecords(run);
     this.assertGraphRevision(command, records);
     if (records.candidate !== undefined) {
@@ -615,7 +635,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     return canonicalValue({ assessmentDigest, assessment }) as unknown as JsonValue;
   }
 
-  private evaluateGate(command: CommandEnvelope, run: MutableRun): JsonValue {
+  private evaluateGate(command: CommandEnvelope, run: RuntimeAuthorityRun): JsonValue {
     const records = requiredRecords(run);
     this.assertGraphRevision(command, records);
     if (records.candidate !== undefined) {
@@ -678,7 +698,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
   private recordAuthorityDecision(
     command: CommandEnvelope,
     admission: AdmissionFacts,
-    run: MutableRun,
+    run: RuntimeAuthorityRun,
   ): JsonValue {
     const records = requiredRecords(run);
     this.assertGraphRevision(command, records);
@@ -709,7 +729,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     return canonicalValue(authorityDecision) as unknown as JsonValue;
   }
 
-  private closePhase(command: CommandEnvelope, run: MutableRun): JsonValue {
+  private closePhase(command: CommandEnvelope, run: RuntimeAuthorityRun): JsonValue {
     const records = requiredRecords(run);
     this.assertGraphRevision(command, records);
     exactObject(command.payload, "close-phase payload", []);
@@ -765,7 +785,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     }
   }
 
-  private validateAuthorityIdentity(command: CommandEnvelope, current: MutableRun): void {
+  private validateAuthorityIdentity(command: CommandEnvelope, current: RuntimeAuthorityRun): void {
     for (const run of this.authority.runs.values()) {
       if (run === current || run.records === undefined) continue;
       if (run.runId === command.runId && run.repositoryId !== command.repositoryId) {
@@ -819,7 +839,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     );
   }
 
-  private validateHydratedRun(run: MutableRun): void {
+  private validateHydratedRun(run: RuntimeAuthorityRun): void {
     for (const [index, event] of run.events.entries()) {
       const receipt = run.receiptHistory[index];
       if (
@@ -858,7 +878,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
   }
 
   private transition(
-    run: MutableRun,
+    run: RuntimeAuthorityRun,
     command: CommandEnvelope,
     admission: AdmissionFacts,
     allocatedEventId: string,
@@ -932,7 +952,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
 
   private findStoredCommand(
     commandId: string,
-  ): { readonly run: MutableRun; readonly command: StoredCommand } | undefined {
+  ): { readonly run: RuntimeAuthorityRun; readonly command: StoredCommand } | undefined {
     for (const run of this.authority.runs.values()) {
       const command = run.commands.get(commandId);
       if (command !== undefined) return { run, command };
@@ -940,11 +960,11 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     return undefined;
   }
 
-  private getOrCreateRun(repositoryId: string, runIdentity: string): MutableRun {
+  private getOrCreateRun(repositoryId: string, runIdentity: string): RuntimeAuthorityRun {
     const key = runKey(repositoryId, runIdentity);
     const current = this.authority.runs.get(key);
     if (current !== undefined) return current;
-    const run: MutableRun = {
+    const run: RuntimeAuthorityRun = {
       repositoryId,
       runId: runIdentity,
       cursor: 0,
@@ -1026,7 +1046,7 @@ function assertActivePhaseTask(
   }
 }
 
-function requiredRecords(run: MutableRun): RuntimeRunRecords {
+function requiredRecords(run: RuntimeAuthorityRun): RuntimeRunRecords {
   if (run.records === undefined) {
     throw new RuntimeRefusal("run-not-instantiated", "Run has not been instantiated");
   }
@@ -1150,11 +1170,51 @@ function deterministicAdmissionError(
   return undefined;
 }
 
+function deterministicAuthorityIdentityError(
+  command: CommandEnvelope,
+  snapshotRuns: readonly SerializedRun[],
+  code: string,
+): ErrorEnvelope | undefined {
+  if (
+    code === "repository-run-conflict" &&
+    snapshotRuns.some(
+      (run) =>
+        run.records !== undefined &&
+        run.repositoryId === command.repositoryId &&
+        run.runId !== command.runId,
+    )
+  ) {
+    return errorEnvelope(
+      command,
+      "repository-run-conflict",
+      "Repository already has a different active run",
+      false,
+    );
+  }
+  if (
+    code === "run-repository-mismatch" &&
+    snapshotRuns.some(
+      (run) =>
+        run.records !== undefined &&
+        run.runId === command.runId &&
+        run.repositoryId !== command.repositoryId,
+    )
+  ) {
+    return errorEnvelope(
+      command,
+      "run-repository-mismatch",
+      "Run identity is already bound to a different repository",
+      false,
+    );
+  }
+  return undefined;
+}
+
 function runKey(repositoryId: string, runIdentity: string): string {
   return `${repositoryId}\u0000${runIdentity}`;
 }
 
-function serializeRun(run: MutableRun): SerializedRun {
+function serializeRun(run: RuntimeAuthorityRun): SerializedRun {
   return {
     repositoryId: run.repositoryId,
     runId: run.runId,
@@ -1419,7 +1479,8 @@ function isApprovalRequiredPolicy(value: unknown): boolean {
 
 function validateSnapshotUniqueness(runs: readonly SerializedRun[]): void {
   const runKeys = new Set<string>();
-  const repositoryIds = new Set<string>();
+  const activeRepositoryIds = new Set<string>();
+  const activeRunIds = new Set<string>();
   const commandIds = new Set<string>();
   const eventIds = new Set<string>();
   for (const run of runs) {
@@ -1427,10 +1488,18 @@ function validateSnapshotUniqueness(runs: readonly SerializedRun[]): void {
     if (runKeys.has(key))
       throw new TypeError("Runtime authority snapshot contains duplicate run keys");
     runKeys.add(key);
-    if (repositoryIds.has(run.repositoryId)) {
+    if (run.records !== undefined && activeRepositoryIds.has(run.repositoryId)) {
       throw new TypeError("Runtime authority snapshot contains multiple runs for one repository");
     }
-    repositoryIds.add(run.repositoryId);
+    if (run.records !== undefined && activeRunIds.has(run.runId)) {
+      throw new TypeError(
+        "Runtime authority snapshot contains one active run in multiple repositories",
+      );
+    }
+    if (run.records !== undefined) {
+      activeRepositoryIds.add(run.repositoryId);
+      activeRunIds.add(run.runId);
+    }
     for (const command of run.commands) {
       if (commandIds.has(command.commandId)) {
         throw new TypeError("Runtime authority snapshot contains duplicate command identities");
@@ -1448,7 +1517,11 @@ function validateSnapshotUniqueness(runs: readonly SerializedRun[]): void {
   }
 }
 
-function replaySerializedRun(service: RuntimeCommandService, run: SerializedRun): void {
+function replaySerializedRun(
+  service: RuntimeCommandService,
+  run: SerializedRun,
+  snapshotRuns: readonly SerializedRun[],
+): void {
   const firstCursorByCommand = new Map<string, number>();
   for (const receipt of run.receiptHistory) {
     if (!firstCursorByCommand.has(receipt.commandId)) {
@@ -1462,7 +1535,7 @@ function replaySerializedRun(service: RuntimeCommandService, run: SerializedRun)
   );
   for (const stored of commands) {
     if (stored.receipt.status !== "completed") {
-      service.restoreNonEffectCommand(run, stored);
+      service.restoreNonEffectCommand(run, stored, snapshotRuns);
       continue;
     }
     let allocationIndex = 0;

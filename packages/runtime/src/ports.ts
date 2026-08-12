@@ -46,3 +46,7 @@ export interface RuntimeQueryPort {
 export interface SerializableAuthorityPort {
   toCanonicalJson(): string;
 }
+
+export interface AuthorityPort<RunState = unknown> extends SerializableAuthorityPort {
+  readonly runs: Map<string, RunState>;
+}
