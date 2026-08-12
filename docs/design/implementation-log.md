@@ -42,8 +42,8 @@ Each phase records:
 | Phase | State | Commit | Push |
 |-------|-------|--------|------|
 | 0. Preserve evidence and reset | Complete | `749c9c0` | Pushed |
-| 1. Canonical codec and graph kernel | Ready to commit | Pending | Pending |
-| 2. Completion, gates, closure, and escalation | Not started | Pending | Pending |
+| 1. Canonical codec and graph kernel | Complete | `b1712fe` | Pushed |
+| 2. Completion, gates, closure, and escalation | In progress | Pending | Pending |
 | 3. Protocol and in-memory command slice | Not started | Pending | Pending |
 | 4. SQLite authority and immutable assets | Not started | Pending | Pending |
 | 5. Fenced runner and reconciliation | Not started | Pending | Pending |
@@ -594,6 +594,11 @@ Passed on 2026-08-12:
 
 Concrete SHA-256 adapters remain a later composition-layer responsibility and
 must pass canonical-byte conformance tests before persistence relies on them.
+
+#### Commit and push
+
+* Commit: `b1712fe feat: add canonical workflow graph kernel`
+* Push: succeeded to `origin/redesign/workflow-state-machine` on 2026-08-12
 
 ## Entry template
 
