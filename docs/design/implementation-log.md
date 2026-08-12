@@ -44,7 +44,7 @@ Each phase records:
 | 0. Preserve evidence and reset | Complete | `749c9c0` | Pushed |
 | 1. Canonical codec and graph kernel | Complete | `b1712fe` | Pushed |
 | 2. Completion, gates, closure, and escalation | Complete | `d8a3d7a` | Pushed |
-| 3. Protocol and in-memory command slice | In progress | Pending | Pending |
+| 3. Protocol and in-memory command slice | Ready to commit | Pending | Pending |
 | 4. SQLite authority and immutable assets | Not started | Pending | Pending |
 | 5. Fenced runner and reconciliation | Not started | Pending | Pending |
 | 6. Workflow and sensor configuration | Not started | Pending | Pending |
@@ -992,6 +992,340 @@ and closure/escalation contradiction handling.
 
 Commit `d8a3d7a feat: add completion and escalation semantics` was pushed to
 `origin/redesign/workflow-state-machine` on 2026-08-12.
+
+## Decision D-022: Canonical dependency-free protocol validation
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 3 bounded slice A
+* Phase: 3
+* Decision: Define the `senawa.dev/protocol/v1alpha1` wire contracts as
+  browser-safe TypeScript DTOs with dependency-free exact runtime validators.
+  Accept object inputs for canonical encoding, and require raw JSON inputs to
+  already use the canonical key ordering and scalar encoding. Apply fixed byte,
+  depth, node, string, identity, role, capability, and version-list limits.
+* Alternatives: Add a schema dependency; accept arbitrary JSON text and lose
+  duplicate-key evidence during native parsing; reuse kernel brands and
+  canonical helpers; defer runtime validation to transport adapters.
+* Rationale: The bounded schemas are manageable without a dependency. Requiring
+  canonical raw JSON rejects duplicate keys, including ambiguous repeated
+  principal fields, while deterministic encoding gives every browser and
+  transport one golden representation. Independent wire strings avoid coupling
+  protocol clients to kernel compile-time brands or behavior.
+* Consequence: Clients encode through the protocol codec before transport.
+  Future protocol fields require an API version change or an explicit schema
+  revision because every current object rejects unknown fields.
+
+## Decision D-023: Principal and transport attribution remain singular
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 3 bounded slice A
+* Phase: 3
+* Decision: Carry exactly one authenticated principal value containing issuer,
+  subject, tenant, assurance, and sorted roles. Carry transport kind and request
+  identity in a separate exact attribution value. Do not admit principal IDs,
+  issuers, roles, or equivalent authentication claims in transport attribution
+  or beside the canonical principal field.
+* Alternatives: Use one unqualified principal ID; merge authentication and
+  transport metadata; allow each transport to define identity fields; accept a
+  client principal plus a server principal.
+* Rationale: Authentication claims and delivery provenance answer different
+  questions. A singular principal prevents precedence ambiguity, while separate
+  attribution preserves an audit trail without letting transport metadata act
+  as authority.
+* Consequence: Authenticated ingress adapters must construct the canonical
+  principal from verified credentials and must not forward competing
+  client-supplied identity fields. Authorization remains runtime behavior.
+
+## Decision D-024: Receipt contracts expose uncertainty without transitions
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 3 bounded slice A
+* Phase: 3
+* Decision: Define durable receipts with queued, claimed, completed, refused,
+  expired, cancelled, and unknown-effect statuses; a non-negative safe-integer
+  cursor; and optional prior revision, result revision, result, and exact error
+  values. Keep transition legality, cursor advancement, replay, and terminal
+  status rules outside protocol validation.
+* Alternatives: Omit unknown effect; make status transitions protocol behavior;
+  infer receipt state from command responses; use transport sequence numbers as
+  authority cursors.
+* Rationale: Lost output can leave effect state unknowable, so uncertainty must
+  be representable rather than collapsed into failure. Protocol defines the
+  durable shape, while a transactional runtime must decide and persist legal
+  monotonic transitions.
+* Consequence: Phase 3 runtime work must enforce exact replay idempotency,
+  conflicting command refusal, expiry, authorization, and cursor monotonicity.
+  A receipt decoder validates one record but cannot prove history by itself.
+
+## Decision D-025: Runtime verifies protocol canonical payload bytes
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 3 bounded slice B
+* Phase: 3
+* Decision: Export a browser-safe protocol canonical byte API and require the
+  runtime command service to recompute every payload digest with an injected
+  SHA-256 implementation before executing an intent. Keep kernel canonical
+  behavior out of protocol and use the protocol encoder for wire payloads.
+* Alternatives: Trust the supplied digest; recompute with kernel canonical
+  helpers; hash transport-specific request bodies; import Node crypto directly.
+* Rationale: Every transport needs one payload byte definition, while protocol
+  must remain behavior-free and runtime must remain independent of Node APIs.
+  Digest verification before mutation prevents a caller from binding authority
+  to a digest that does not describe the decoded payload.
+* Consequence: Concrete composition roots supply SHA-256. Protocol and runtime
+  conformance share one canonical byte vector without coupling browser clients
+  to kernel brands.
+
+## Decision D-026: Admission facts and authorization are injected
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 3 bounded slice B
+* Phase: 3
+* Decision: Make current time, canonical admission facts, approval and stream
+  event identity allocation, SHA-256, and authorization policy explicit runtime
+  inputs. Authorize the singular authenticated principal by intent and role.
+  Do not consult ambient clocks, randomness, transport attribution, or process
+  state.
+* Alternatives: Read `Date.now()` and random identifiers inside runtime; grant
+  authority by transport kind; embed one fixed role matrix in the command
+  service; let clients supply authority decision principals in payloads.
+* Rationale: Supplied facts make admission deterministic and restartable.
+  Keeping policy behind a port permits repository-specific composition without
+  allowing transport metadata or payload claims to widen authority.
+* Consequence: Adapters authenticate once, construct one canonical principal,
+  and supply deterministic admission facts. Runtime rejects duplicate allocated
+  stream event identities and binds authority decisions to the authenticated
+  principal.
+
+## Decision D-027: Receipts are the durable command state machine
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 3 bounded slice B
+* Phase: 3
+* Decision: Admit each new command through `queued`, `claimed`, and exactly one
+  terminal receipt with a monotonically increasing per-run cursor. Store the
+  canonical command envelope beside its terminal receipt. Exact replay returns
+  that original receipt without advancing authority. Reuse of the command
+  identity with a different canonical envelope returns a conflict refusal and
+  cannot replace the stored command.
+* Alternatives: Store only terminal outcomes; infer command state from events;
+  make replay execute the intent again; compare only payloads for command reuse;
+  assign cursors per transport connection.
+* Rationale: Durable intermediate states make lost responses and later claims
+  observable. The complete canonical envelope includes principal, guards,
+  expiry, attribution, and payload, so all authority-relevant changes conflict.
+* Consequence: Receipt and event queries replay one ordered authority history.
+  Completed receipts carry prior and result record revisions where present.
+  Conflict responses do not mutate the already terminal command history.
+
+## Decision D-028: Runtime snapshots retain records and revalidate sources
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 3 bounded slice B
+* Phase: 3
+* Decision: Serialize the in-memory authority as canonical JSON containing
+  commands, receipt transitions, event frames, kernel run events, and immutable
+  lifecycle records. On reconstruction, verify cursor and receipt legality,
+  command-to-run bindings, event payload digests, graph replay, completion
+  accounting, candidates, gate evidence, authority decisions, closure, and the
+  derived lifecycle projection through current protocol and kernel APIs.
+* Alternatives: Serialize a mutable status projection; retain process-memory
+  indexes; trust typed snapshot records; replay only protocol event frames;
+  place the in-memory authority in the testing package.
+* Rationale: The restart test must prove that no process memory is authoritative.
+  Kernel validators remain the source of workflow semantics, while runtime owns
+  command ordering, identity, authorization, expiry, and query assembly.
+* Consequence: Production runtime does not import testing. Deterministic
+  fixtures and conformance cases live in testing, while the real in-memory
+  authority and command/query ports live in runtime for later adapter
+  conformance.
+
+## Decision D-029: Authority snapshots reconstruct command provenance
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 3 review repair
+* Phase: 3
+* Decision: Persist exact admission time, canonical facts, allocation sequence,
+  and authorization decision with each command. Restore completed commands by
+  deterministic execution into an empty authority. Restore non-effect refused
+  or expired commands by deterministically reconstructing their exact receipt
+  and event lifecycle from validated admission facts and allocations.
+* Alternatives: Trust serialized lifecycle records; protect snapshots with an
+  unkeyed digest; rerun every refusal under current dependencies; copy submitted
+  receipt and event history directly.
+* Rationale: An unkeyed snapshot digest cannot establish authority. Deterministic
+  replay proves completed effects. Non-effect outcomes need their observed error
+  fact preserved, but all deterministic admission errors and every transition
+  field can still be reconstructed and compared exactly.
+* Consequence: Policy drift makes a snapshot incompatible. Unknown-effect is not
+  restored directly until Phase 5 reconciliation exists. Global run, repository,
+  command, and event identities are checked before replay.
+
+## Decision D-030: Failed command execution rolls back authority records
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 3 review repair
+* Phase: 3
+* Decision: Preserve queued and claimed command history, but restore run records
+  and projection metadata to their exact pre-execution values before persisting
+  any terminal refusal caused after execution begins.
+* Alternatives: Let failed commands retain partial records; discard the entire
+  command lifecycle; require every handler to implement its own rollback.
+* Rationale: Receipt durability and workflow authority are separate. A refused
+  command must remain observable without granting any mutation it failed to
+  finalize.
+* Consequence: Phase 4 transactions must commit command history and authority
+  effects atomically while preserving this refusal behavior.
+
+## Phase 3 log
+
+### Bounded slice A: Browser-safe protocol contracts
+
+#### Decisions
+
+* D-022 establishes dependency-free exact validation, canonical raw JSON, fixed
+  input budgets, and wire identities independent from kernel brands.
+* D-023 separates one authenticated principal from transport attribution.
+* D-024 represents durable receipt outcomes and unknown effects without moving
+  transition authority into protocol.
+
+#### Scope
+
+* Added public v1alpha DTOs and exact encode/decode APIs for authenticated
+  principals, transport attribution, repository and run identity, commands,
+  durable receipts, event stream frames, projections, capability handshakes,
+  and errors.
+* Added command intents for run instantiation, graph revision acceptance,
+  completion submission, gate evaluation, authority decisions, phase closure,
+  escalation creation, and allowance grants.
+* Added deterministic canonical JSON encoding plus byte, depth, node, string,
+  list, identity, digest, timestamp, cursor, Unicode, dense-array, plain-object,
+  and accessor safety checks. Exact schemas reject every unknown field.
+* Added command and receipt golden encodings plus adversarial coverage for all
+  intents and statuses, duplicate principal keys, alternate attribution,
+  malformed and oversized values, non-canonical capabilities, accessors, sparse
+  arrays, deep payloads, and unknown fields on every envelope.
+* Kept kernel imports, Node APIs, schema dependencies, workflow decisions,
+  persistence, authorization, expiry decisions, receipt transitions, runtime
+  packages, and transport adapters outside this bounded slice.
+
+#### Validation
+
+Passed on 2026-08-12:
+
+* Focused protocol suite: 29 tests
+* Protocol package typecheck and build
+* Biome check across seven protocol package files
+* Architecture boundaries across 58 source files and negative fixtures
+
+#### Remaining risks
+
+* The next Phase 3 slice must persist commands and receipts in memory, enforce
+  replay identity and conflicting reuse, evaluate expiry and authorization,
+  advance cursors monotonically, and expose transport-independent conformance.
+* Payload digests and exact object digests are format-validated at the wire
+  boundary. Runtime composition must recompute them with its SHA-256 adapter
+  before accepting authority effects.
+* Later version negotiation must define compatibility when more than one
+  protocol version is implemented; this slice only accepts v1alpha1 envelopes.
+
+### Bounded slice B: In-memory command authority
+
+#### Decisions
+
+* D-025 establishes protocol canonical bytes and runtime payload digest
+  verification through injected SHA-256.
+* D-026 establishes supplied admission time, facts, identity allocation, and
+  intent-role authorization.
+* D-027 establishes legal receipt transitions, monotonic per-run cursors, exact
+  replay, and conflicting command identity refusal.
+* D-028 establishes canonical authority snapshots and source revalidation during
+  reconstruction.
+
+#### Scope
+
+* Added the real `@senawa/runtime` package with explicit SHA-256,
+  authorization, admission-fact, command, query, and serializable-authority
+  ports. Runtime depends only on protocol and kernel.
+* Added an in-memory command authority with canonical snapshot serialization,
+  restart reconstruction, legal `queued` to `claimed` to terminal receipt
+  transitions, prior and result record revisions, monotonic run cursors, exact
+  command replay, conflicting reuse refusal, and receipt, event, and projection
+  queries.
+* Added strict admission for protocol decode, payload digest, expiry,
+  authorization, repository and run identity, one active run per repository,
+  graph revision, task context revision, and exact candidate guards.
+* Mapped `instantiate-run`, `submit-completion`, `evaluate-gate`,
+  `record-authority-decision`, and `close-phase` through exact kernel source
+  validation. The command-only journey compiles and instantiates a graph,
+  assesses completion, constructs the exact phase candidate, evaluates gate
+  evidence, records authenticated approval, closes the phase, and derives the
+  lifecycle projection from immutable records.
+* Included `accept-graph-revision` while no lifecycle records exist. Runtime
+  replays the current kernel run state, enforces the expected revision, rejects
+  replacement of the configured lifecycle phase, and records the accepted
+  content-addressed graph event.
+* Extended testing with deterministic graph, principal, SHA-256, clock, facts,
+  and identity fixtures plus a transport-independent conformance suite.
+* Extended dependency boundaries to reject runtime Node imports, ambient clock
+  or randomness, dependencies beyond protocol and kernel, and any production
+  dependency on testing.
+
+#### Narrowed scope
+
+* `create-escalation` and `grant-allowance` remain valid protocol intents but
+  return `unsupported-intent` in this bounded runtime slice. Their ordered
+  resolution and policy semantics remain for a later Phase 3 slice that can
+  preserve the Phase 2 closure and escalation consistency rules.
+* The in-memory authority is synchronous and has no SQLite, HTTP, lease, claim
+  owner, or external-effect behavior. Transactional cross-connection authority
+  remains Phase 4 work.
+
+#### Validation
+
+Passed on 2026-08-12:
+
+* Focused protocol and runtime conformance: 37 tests
+* Complete workspace build and typecheck
+* Biome check across 50 intended files
+* Complete workspace suite: 13 files and 285 tests
+* Architecture boundaries across 66 source files and negative fixtures
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+#### Remaining risks
+
+* A transactional authority port for cross-process persistence belongs to Phase
+  4 and must preserve these receipt, replay, cursor, and snapshot conformance
+  semantics.
+* Receipt conflict responses intentionally preserve the original terminal
+  command without appending a second lifecycle for the reused identity. Later
+  transports must expose that refusal without treating it as a new command.
+* The runtime implementation does not yet process escalation and allowance
+  intents. Those remain explicit unsupported-intent outcomes until ordered
+  escalation resolution is added.
+
+### Phase 3 final review and validation
+
+Independent review found and drove repairs for altered completed-command replay,
+cross-run identity collisions, non-exact lifecycle records, partial mutation on
+refusal, empty-run creation during event-ID preflight, and forged non-effect
+receipt, event, allocation, and terminal-error histories.
+
+The final gate reproduced eleven individual snapshot forgeries and rejected all
+of them. Exact completed, expired, unauthorized, payload-digest mismatch, and
+rolled-back generic refusal snapshots restore byte-for-byte. No critical, high,
+medium, or low findings remain.
+
+Passed on 2026-08-12:
+
+* Frozen-lock dependency installation
+* Clean workspace build and typecheck
+* Biome check across 50 intended files
+* Complete workspace suite: 13 files and 292 tests
+* Architecture boundaries across 66 source files and negative fixtures
+* Documentation links across 17 Markdown files
+* `git diff --check`
 
 ## Entry template
 

@@ -12,5 +12,10 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@senawa/kernel": "workspace:*",
+    "@senawa/protocol": "workspace:*",
+    "@senawa/runtime": "workspace:*"
   }
 }

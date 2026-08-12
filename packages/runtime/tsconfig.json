@@ -11,9 +11,6 @@
     },
     {
       "path": "../kernel"
-    },
-    {
-      "path": "../runtime"
     }
   ]
 }

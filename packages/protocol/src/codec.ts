@@ -1,0 +1,746 @@
+import {
+  type AssuranceLevel,
+  type AuthenticatedPrincipal,
+  type CapabilityHandshake,
+  type CommandEnvelope,
+  type CommandIntent,
+  type DurableReceipt,
+  type ErrorEnvelope,
+  type EventStreamFrame,
+  type JsonValue,
+  type OpaqueIdentity,
+  PROTOCOL_VERSION,
+  type ProjectionEnvelope,
+  type ReceiptStatus,
+  type RunIdentity,
+  type TransportAttribution,
+  type TransportKind,
+} from "./contracts.js";
+
+export const PROTOCOL_LIMITS = Object.freeze({
+  maxWireBytes: 262_144,
+  maxJsonDepth: 32,
+  maxJsonNodes: 10_000,
+  maxStringLength: 65_536,
+  maxIdentityLength: 128,
+  maxRoles: 32,
+  maxRoleLength: 64,
+  maxMessageLength: 4_096,
+  maxCapabilities: 64,
+  maxSupportedVersions: 16,
+});
+
+export type ProtocolValidationErrorCode =
+  | "invalid-json"
+  | "oversized"
+  | "invalid-type"
+  | "invalid-value"
+  | "missing-field"
+  | "unknown-field";
+
+export class ProtocolValidationError extends Error {
+  readonly code: ProtocolValidationErrorCode;
+  readonly path: string;
+
+  constructor(code: ProtocolValidationErrorCode, path: string, message: string) {
+    super(message);
+    this.name = "ProtocolValidationError";
+    this.code = code;
+    this.path = path;
+  }
+}
+
+const IDENTITY_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
+const COMMAND_ID_PATTERN =
+  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|command_[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$/;
+const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
+const ROLE_PATTERN = /^[a-z0-9](?:[a-z0-9:-]{0,62}[a-z0-9])?$/;
+const TOKEN_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+const VERSION_PATTERN = /^senawa\.dev\/protocol\/v[1-9][0-9]*(?:alpha|beta|rc)[1-9][0-9]*$/;
+
+const ASSURANCE_LEVELS = new Set<AssuranceLevel>([
+  "single-factor",
+  "multi-factor",
+  "hardware-backed",
+]);
+const TRANSPORT_KINDS = new Set<TransportKind>(["cli", "http", "runner", "portal", "remote"]);
+const INTENT_TYPES = new Set<CommandIntent["type"]>([
+  "instantiate-run",
+  "accept-graph-revision",
+  "submit-completion",
+  "evaluate-gate",
+  "record-authority-decision",
+  "close-phase",
+  "create-escalation",
+  "grant-allowance",
+]);
+const RECEIPT_STATUSES = new Set<ReceiptStatus>([
+  "queued",
+  "claimed",
+  "completed",
+  "refused",
+  "expired",
+  "cancelled",
+  "unknown-effect",
+]);
+
+export function decodeCommandEnvelope(input: string | unknown): CommandEnvelope {
+  const value = decodeWireValue(input);
+  const object = exactObject(
+    value,
+    "$",
+    [
+      "apiVersion",
+      "commandId",
+      "principal",
+      "transport",
+      "repositoryId",
+      "runId",
+      "intent",
+      "payload",
+      "payloadDigest",
+    ],
+    ["expectedDefinitionRevision", "expectedGraphRevision", "exactObjectDigest", "expiresAt"],
+  );
+
+  protocolVersion(object.apiVersion, "$.apiVersion");
+  commandId(object.commandId, "$.commandId");
+  const principal = authenticatedPrincipal(object.principal, "$.principal");
+  const transport = transportAttribution(object.transport, "$.transport");
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  const intent = commandIntent(object.intent, "$.intent");
+  const payload = jsonValue(object.payload, "$.payload");
+  digest(object.payloadDigest, "$.payloadDigest");
+  optional(object, "expectedDefinitionRevision", identity, "$.");
+  optional(object, "expectedGraphRevision", identity, "$.");
+  optional(object, "exactObjectDigest", digest, "$.");
+  optional(object, "expiresAt", timestamp, "$.");
+
+  return Object.freeze({
+    apiVersion: PROTOCOL_VERSION,
+    commandId: object.commandId as string,
+    principal,
+    transport,
+    repositoryId: object.repositoryId as string,
+    runId: object.runId as string,
+    intent,
+    payload,
+    payloadDigest: object.payloadDigest as string,
+    ...optionalField(object, "expectedDefinitionRevision"),
+    ...optionalField(object, "expectedGraphRevision"),
+    ...optionalField(object, "exactObjectDigest"),
+    ...optionalField(object, "expiresAt"),
+  });
+}
+
+export function encodeCommandEnvelope(input: unknown): string {
+  return canonicalStringify(decodeCommandEnvelope(input));
+}
+
+export function decodeAuthenticatedPrincipal(input: string | unknown): AuthenticatedPrincipal {
+  return authenticatedPrincipal(decodeWireValue(input), "$");
+}
+
+export function encodeAuthenticatedPrincipal(input: unknown): string {
+  return canonicalStringify(decodeAuthenticatedPrincipal(input));
+}
+
+export function decodeTransportAttribution(input: string | unknown): TransportAttribution {
+  return transportAttribution(decodeWireValue(input), "$");
+}
+
+export function encodeTransportAttribution(input: unknown): string {
+  return canonicalStringify(decodeTransportAttribution(input));
+}
+
+export function decodeRunIdentity(input: string | unknown): RunIdentity {
+  const object = exactObject(decodeWireValue(input), "$", ["repositoryId", "runId"]);
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  return Object.freeze({
+    repositoryId: object.repositoryId as string,
+    runId: object.runId as string,
+  });
+}
+
+export function encodeRunIdentity(input: unknown): string {
+  return canonicalStringify(decodeRunIdentity(input));
+}
+
+export function validateOpaqueIdentity(value: unknown): OpaqueIdentity {
+  identity(value, "$");
+  return value as string;
+}
+
+export function decodeDurableReceipt(input: string | unknown): DurableReceipt {
+  const object = exactObject(
+    decodeWireValue(input),
+    "$",
+    ["apiVersion", "commandId", "repositoryId", "runId", "status", "cursor"],
+    ["priorRevision", "resultRevision", "result", "error"],
+  );
+  protocolVersion(object.apiVersion, "$.apiVersion");
+  commandId(object.commandId, "$.commandId");
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  enumValue(object.status, "$.status", RECEIPT_STATUSES);
+  cursor(object.cursor, "$.cursor");
+  optional(object, "priorRevision", identity, "$.");
+  optional(object, "resultRevision", identity, "$.");
+  const result = Object.hasOwn(object, "result")
+    ? { result: jsonValue(object.result, "$.result") }
+    : {};
+  const error = Object.hasOwn(object, "error")
+    ? { error: errorEnvelope(object.error, "$.error") }
+    : {};
+  return Object.freeze({
+    apiVersion: PROTOCOL_VERSION,
+    commandId: object.commandId as string,
+    repositoryId: object.repositoryId as string,
+    runId: object.runId as string,
+    status: object.status as ReceiptStatus,
+    cursor: object.cursor as number,
+    ...optionalField(object, "priorRevision"),
+    ...optionalField(object, "resultRevision"),
+    ...result,
+    ...error,
+  });
+}
+
+export function encodeDurableReceipt(input: unknown): string {
+  return canonicalStringify(decodeDurableReceipt(input));
+}
+
+export function decodeEventStreamFrame(input: string | unknown): EventStreamFrame {
+  const object = exactObject(
+    decodeWireValue(input),
+    "$",
+    [
+      "apiVersion",
+      "cursor",
+      "repositoryId",
+      "runId",
+      "eventId",
+      "eventType",
+      "occurredAt",
+      "payload",
+      "payloadDigest",
+    ],
+    ["commandId"],
+  );
+  protocolVersion(object.apiVersion, "$.apiVersion");
+  cursor(object.cursor, "$.cursor");
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  identity(object.eventId, "$.eventId");
+  token(object.eventType, "$.eventType");
+  timestamp(object.occurredAt, "$.occurredAt");
+  const payload = jsonValue(object.payload, "$.payload");
+  digest(object.payloadDigest, "$.payloadDigest");
+  optional(object, "commandId", commandId, "$.");
+  return Object.freeze({
+    apiVersion: PROTOCOL_VERSION,
+    cursor: object.cursor as number,
+    repositoryId: object.repositoryId as string,
+    runId: object.runId as string,
+    eventId: object.eventId as string,
+    eventType: object.eventType as string,
+    occurredAt: object.occurredAt as string,
+    payload,
+    payloadDigest: object.payloadDigest as string,
+    ...optionalField(object, "commandId"),
+  });
+}
+
+export function encodeEventStreamFrame(input: unknown): string {
+  return canonicalStringify(decodeEventStreamFrame(input));
+}
+
+export function decodeProjectionEnvelope(input: string | unknown): ProjectionEnvelope {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "apiVersion",
+    "cursor",
+    "repositoryId",
+    "runId",
+    "projectionType",
+    "revision",
+    "generatedAt",
+    "payload",
+    "payloadDigest",
+  ]);
+  protocolVersion(object.apiVersion, "$.apiVersion");
+  cursor(object.cursor, "$.cursor");
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  token(object.projectionType, "$.projectionType");
+  identity(object.revision, "$.revision");
+  timestamp(object.generatedAt, "$.generatedAt");
+  const payload = jsonValue(object.payload, "$.payload");
+  digest(object.payloadDigest, "$.payloadDigest");
+  return Object.freeze({
+    apiVersion: PROTOCOL_VERSION,
+    cursor: object.cursor as number,
+    repositoryId: object.repositoryId as string,
+    runId: object.runId as string,
+    projectionType: object.projectionType as string,
+    revision: object.revision as string,
+    generatedAt: object.generatedAt as string,
+    payload,
+    payloadDigest: object.payloadDigest as string,
+  });
+}
+
+export function encodeProjectionEnvelope(input: unknown): string {
+  return canonicalStringify(decodeProjectionEnvelope(input));
+}
+
+export function decodeCapabilityHandshake(input: string | unknown): CapabilityHandshake {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "apiVersion",
+    "peerId",
+    "supportedVersions",
+    "capabilities",
+  ]);
+  protocolVersion(object.apiVersion, "$.apiVersion");
+  identity(object.peerId, "$.peerId");
+  const supportedVersions = sortedStringSet(
+    object.supportedVersions,
+    "$.supportedVersions",
+    PROTOCOL_LIMITS.maxSupportedVersions,
+    version,
+  );
+  if (!supportedVersions.includes(PROTOCOL_VERSION)) {
+    fail("invalid-value", "$.supportedVersions", `must include ${PROTOCOL_VERSION}`);
+  }
+  const capabilities = sortedStringSet(
+    object.capabilities,
+    "$.capabilities",
+    PROTOCOL_LIMITS.maxCapabilities,
+    token,
+  );
+  return Object.freeze({
+    apiVersion: PROTOCOL_VERSION,
+    peerId: object.peerId as string,
+    supportedVersions,
+    capabilities,
+  });
+}
+
+export function encodeCapabilityHandshake(input: unknown): string {
+  return canonicalStringify(decodeCapabilityHandshake(input));
+}
+
+export function decodeErrorEnvelope(input: string | unknown): ErrorEnvelope {
+  return errorEnvelope(decodeWireValue(input), "$.");
+}
+
+export function encodeErrorEnvelope(input: unknown): string {
+  return canonicalStringify(decodeErrorEnvelope(input));
+}
+
+export function canonicalStringify(input: unknown): string {
+  const value = snapshotJsonValue(input, "$", { depth: 0, nodes: 0 });
+  const encoded = serialize(value);
+  if (utf8Length(encoded) > PROTOCOL_LIMITS.maxWireBytes) {
+    fail("oversized", "$", `wire value exceeds ${PROTOCOL_LIMITS.maxWireBytes} bytes`);
+  }
+  return encoded;
+}
+
+export function canonicalBytes(input: unknown): Uint8Array {
+  return new TextEncoder().encode(canonicalStringify(input));
+}
+
+function authenticatedPrincipal(value: unknown, path: string): AuthenticatedPrincipal {
+  const object = exactObject(value, path, ["issuer", "subject", "tenant", "assurance", "roles"]);
+  boundedString(object.issuer, `${path}.issuer`, 1, 512);
+  boundedString(object.subject, `${path}.subject`, 1, 512);
+  identity(object.tenant, `${path}.tenant`);
+  enumValue(object.assurance, `${path}.assurance`, ASSURANCE_LEVELS);
+  if (!Array.isArray(object.roles)) {
+    fail("invalid-type", `${path}.roles`, "must be an array");
+  }
+  if (object.roles.length > PROTOCOL_LIMITS.maxRoles) {
+    fail("oversized", `${path}.roles`, `must contain at most ${PROTOCOL_LIMITS.maxRoles} roles`);
+  }
+  const roles: string[] = [];
+  for (const [index, role] of object.roles.entries()) {
+    boundedString(role, `${path}.roles[${index}]`, 1, PROTOCOL_LIMITS.maxRoleLength);
+    if (!ROLE_PATTERN.test(role as string)) {
+      fail("invalid-value", `${path}.roles[${index}]`, "must be a lowercase role token");
+    }
+    if (roles.includes(role as string)) {
+      fail("invalid-value", `${path}.roles[${index}]`, "must not duplicate a role");
+    }
+    const priorRole = roles.at(-1);
+    if (priorRole !== undefined && priorRole >= (role as string)) {
+      fail("invalid-value", `${path}.roles`, "must be sorted lexicographically");
+    }
+    roles.push(role as string);
+  }
+  return Object.freeze({
+    issuer: object.issuer as string,
+    subject: object.subject as string,
+    tenant: object.tenant as string,
+    assurance: object.assurance as AssuranceLevel,
+    roles: Object.freeze(roles),
+  });
+}
+
+function transportAttribution(value: unknown, path: string): TransportAttribution {
+  const object = exactObject(value, path, ["kind", "requestId"]);
+  enumValue(object.kind, `${path}.kind`, TRANSPORT_KINDS);
+  identity(object.requestId, `${path}.requestId`);
+  return Object.freeze({
+    kind: object.kind as TransportKind,
+    requestId: object.requestId as string,
+  });
+}
+
+function commandIntent(value: unknown, path: string): CommandIntent {
+  const object = exactObject(value, path, ["type"]);
+  enumValue(object.type, `${path}.type`, INTENT_TYPES);
+  return Object.freeze({ type: object.type as CommandIntent["type"] });
+}
+
+function errorEnvelope(value: unknown, path: string): ErrorEnvelope {
+  const rootPath = path.endsWith(".") ? path.slice(0, -1) : path;
+  const object = exactObject(
+    value,
+    rootPath,
+    ["apiVersion", "code", "message", "retryable"],
+    ["commandId", "details"],
+  );
+  protocolVersion(object.apiVersion, `${rootPath}.apiVersion`);
+  token(object.code, `${rootPath}.code`);
+  boundedString(object.message, `${rootPath}.message`, 1, PROTOCOL_LIMITS.maxMessageLength);
+  if (typeof object.retryable !== "boolean") {
+    fail("invalid-type", `${rootPath}.retryable`, "must be a boolean");
+  }
+  optional(object, "commandId", commandId, `${rootPath}.`);
+  const details = Object.hasOwn(object, "details")
+    ? { details: jsonValue(object.details, `${rootPath}.details`) }
+    : {};
+  return Object.freeze({
+    apiVersion: PROTOCOL_VERSION,
+    code: object.code as string,
+    message: object.message as string,
+    retryable: object.retryable,
+    ...optionalField(object, "commandId"),
+    ...details,
+  });
+}
+
+function decodeWireValue(input: string | unknown): JsonValue {
+  if (typeof input === "string") {
+    if (utf8Length(input) > PROTOCOL_LIMITS.maxWireBytes) {
+      fail("oversized", "$", `wire input exceeds ${PROTOCOL_LIMITS.maxWireBytes} bytes`);
+    }
+    try {
+      const value = snapshotJsonValue(JSON.parse(input), "$", { depth: 0, nodes: 0 });
+      if (serialize(value) !== input) {
+        fail("invalid-json", "$", "must use canonical JSON encoding without duplicate keys");
+      }
+      return value;
+    } catch (error) {
+      if (error instanceof ProtocolValidationError) {
+        throw error;
+      }
+      fail("invalid-json", "$", "must contain one valid JSON value");
+    }
+  }
+  const value = snapshotJsonValue(input, "$", { depth: 0, nodes: 0 });
+  if (utf8Length(serialize(value)) > PROTOCOL_LIMITS.maxWireBytes) {
+    fail("oversized", "$", `wire value exceeds ${PROTOCOL_LIMITS.maxWireBytes} bytes`);
+  }
+  return value;
+}
+
+function snapshotJsonValue(
+  value: unknown,
+  path: string,
+  budget: { depth: number; nodes: number },
+  ancestors = new Set<object>(),
+): JsonValue {
+  budget.nodes += 1;
+  if (budget.nodes > PROTOCOL_LIMITS.maxJsonNodes) {
+    fail("oversized", path, `JSON value exceeds ${PROTOCOL_LIMITS.maxJsonNodes} nodes`);
+  }
+  if (value === null || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    boundedString(value, path, 0, PROTOCOL_LIMITS.maxStringLength);
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      fail("invalid-value", path, "numbers must be finite");
+    }
+    return Object.is(value, -0) ? 0 : value;
+  }
+  if (typeof value !== "object") {
+    fail("invalid-type", path, "must contain only JSON values");
+  }
+  if (budget.depth >= PROTOCOL_LIMITS.maxJsonDepth) {
+    fail("oversized", path, `JSON value exceeds depth ${PROTOCOL_LIMITS.maxJsonDepth}`);
+  }
+  if (ancestors.has(value)) {
+    fail("invalid-value", path, "must not contain cycles");
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+    fail("invalid-type", path, "objects must have a plain or null prototype");
+  }
+  ancestors.add(value);
+  budget.depth += 1;
+  try {
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Array.isArray(value)) {
+      return snapshotArray(descriptors, path, budget, ancestors);
+    }
+    const result: Record<string, JsonValue> = Object.create(null);
+    for (const key of Reflect.ownKeys(descriptors)) {
+      if (typeof key !== "string") {
+        fail("invalid-type", path, "objects must not contain symbol keys");
+      }
+      const descriptor = descriptors[key];
+      if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+        fail("invalid-type", `${path}.${key}`, "properties must be enumerable data properties");
+      }
+      result[key] = snapshotJsonValue(descriptor.value, `${path}.${key}`, budget, ancestors);
+    }
+    return Object.freeze(result);
+  } finally {
+    budget.depth -= 1;
+    ancestors.delete(value);
+  }
+}
+
+function snapshotArray(
+  descriptors: PropertyDescriptorMap,
+  path: string,
+  budget: { depth: number; nodes: number },
+  ancestors: Set<object>,
+): JsonValue {
+  const length = descriptors.length?.value;
+  if (
+    !Number.isSafeInteger(length) ||
+    length < 0 ||
+    Reflect.ownKeys(descriptors).length !== length + 1
+  ) {
+    fail("invalid-type", path, "arrays must be dense and contain no extra properties");
+  }
+  const result: JsonValue[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = descriptors[String(index)];
+    if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+      fail("invalid-type", `${path}[${index}]`, "array entries must be enumerable data properties");
+    }
+    result.push(snapshotJsonValue(descriptor.value, `${path}[${index}]`, budget, ancestors));
+  }
+  return Object.freeze(result);
+}
+
+function jsonValue(value: unknown, path: string): JsonValue {
+  return snapshotJsonValue(value, path, { depth: 0, nodes: 0 });
+}
+
+function exactObject(
+  value: unknown,
+  path: string,
+  required: readonly string[],
+  optionalFields: readonly string[] = [],
+): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    fail("invalid-type", path, "must be an object");
+  }
+  const object = value as Readonly<Record<string, unknown>>;
+  const allowed = new Set([...required, ...optionalFields]);
+  for (const key of Object.keys(object)) {
+    if (!allowed.has(key)) {
+      fail("unknown-field", `${path}.${key}`, "is not allowed");
+    }
+  }
+  for (const key of required) {
+    if (!Object.hasOwn(object, key)) {
+      fail("missing-field", `${path}.${key}`, "is required");
+    }
+  }
+  return object;
+}
+
+function optional(
+  object: Readonly<Record<string, unknown>>,
+  key: string,
+  validator: (value: unknown, path: string) => void,
+  pathPrefix: string,
+): void {
+  if (Object.hasOwn(object, key)) {
+    validator(object[key], `${pathPrefix}${key}`);
+  }
+}
+
+function optionalField(
+  object: Readonly<Record<string, unknown>>,
+  key: string,
+): Readonly<Record<string, string>> {
+  return Object.hasOwn(object, key) ? { [key]: object[key] as string } : {};
+}
+
+function protocolVersion(value: unknown, path: string): void {
+  if (value !== PROTOCOL_VERSION) {
+    fail("invalid-value", path, `must equal ${PROTOCOL_VERSION}`);
+  }
+}
+
+function commandId(value: unknown, path: string): void {
+  boundedString(value, path, 1, PROTOCOL_LIMITS.maxIdentityLength);
+  if (!COMMAND_ID_PATTERN.test(value as string)) {
+    fail("invalid-value", path, "must be a lowercase RFC 4122 UUID or command_ identity");
+  }
+}
+
+function identity(value: unknown, path: string): void {
+  boundedString(value, path, 1, PROTOCOL_LIMITS.maxIdentityLength);
+  if (!IDENTITY_PATTERN.test(value as string)) {
+    fail("invalid-value", path, "must be an opaque ASCII identity token");
+  }
+}
+
+function digest(value: unknown, path: string): void {
+  if (typeof value !== "string" || !DIGEST_PATTERN.test(value)) {
+    fail("invalid-value", path, "must be 64 lowercase hexadecimal characters");
+  }
+}
+
+function timestamp(value: unknown, path: string): void {
+  if (typeof value !== "string" || !TIMESTAMP_PATTERN.test(value)) {
+    fail("invalid-value", path, "must be a valid UTC RFC 3339 timestamp");
+  }
+  const millisecondTimestamp = value.length === 20 ? `${value.slice(0, -1)}.000Z` : value;
+  try {
+    if (new Date(value).toISOString() !== millisecondTimestamp) {
+      fail("invalid-value", path, "must be a valid UTC RFC 3339 timestamp");
+    }
+  } catch {
+    fail("invalid-value", path, "must be a valid UTC RFC 3339 timestamp");
+  }
+}
+
+function cursor(value: unknown, path: string): void {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    fail("invalid-value", path, "must be a non-negative safe integer");
+  }
+}
+
+function token(value: unknown, path: string): void {
+  boundedString(value, path, 1, 64);
+  if (!TOKEN_PATTERN.test(value as string)) {
+    fail("invalid-value", path, "must be a lowercase token");
+  }
+}
+
+function version(value: unknown, path: string): void {
+  boundedString(value, path, 1, 128);
+  if (!VERSION_PATTERN.test(value as string)) {
+    fail("invalid-value", path, "must be a Senawa prerelease protocol version");
+  }
+}
+
+function sortedStringSet(
+  value: unknown,
+  path: string,
+  maximumItems: number,
+  validator: (value: unknown, path: string) => void,
+): readonly string[] {
+  if (!Array.isArray(value)) {
+    fail("invalid-type", path, "must be an array");
+  }
+  if (value.length === 0 || value.length > maximumItems) {
+    fail("oversized", path, `must contain 1-${maximumItems} entries`);
+  }
+  const result: string[] = [];
+  for (const [index, entry] of value.entries()) {
+    validator(entry, `${path}[${index}]`);
+    const priorEntry = result.at(-1);
+    if (priorEntry !== undefined && priorEntry >= (entry as string)) {
+      fail("invalid-value", path, "must be sorted and contain no duplicates");
+    }
+    result.push(entry as string);
+  }
+  return Object.freeze(result);
+}
+
+function boundedString(
+  value: unknown,
+  path: string,
+  minimumLength: number,
+  maximumLength: number,
+): void {
+  if (typeof value !== "string") {
+    fail("invalid-type", path, "must be a string");
+  }
+  if (value.length < minimumLength || value.length > maximumLength) {
+    fail("oversized", path, `must contain ${minimumLength}-${maximumLength} UTF-16 code units`);
+  }
+  if (!hasWellFormedUtf16(value)) {
+    fail("invalid-value", path, "must not contain unpaired UTF-16 surrogates");
+  }
+}
+
+function hasWellFormedUtf16(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      if (index + 1 >= value.length) {
+        return false;
+      }
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        return false;
+      }
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function enumValue<Value extends string>(
+  value: unknown,
+  path: string,
+  accepted: ReadonlySet<Value>,
+): void {
+  if (typeof value !== "string" || !accepted.has(value as Value)) {
+    fail("invalid-value", path, `must be one of ${[...accepted].join(", ")}`);
+  }
+}
+
+function serialize(value: JsonValue): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (isJsonArray(value)) {
+    return `[${value.map(serialize).join(",")}]`;
+  }
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${serialize(value[key] as JsonValue)}`)
+    .join(",")}}`;
+}
+
+function isJsonArray(value: JsonValue): value is readonly JsonValue[] {
+  return Array.isArray(value);
+}
+
+function utf8Length(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+function fail(code: ProtocolValidationErrorCode, path: string, message: string): never {
+  throw new ProtocolValidationError(code, path, `${path} ${message}`);
+}

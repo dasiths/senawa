@@ -1,5 +1,5 @@
 {
-  "name": "@senawa/protocol",
+  "name": "@senawa/runtime",
   "version": "0.1.0-alpha.0",
   "type": "module",
   "exports": {
@@ -13,7 +13,10 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run --root ../.. packages/protocol/src",
     "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@senawa/kernel": "workspace:*",
+    "@senawa/protocol": "workspace:*"
   }
 }

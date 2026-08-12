@@ -27,7 +27,26 @@ importers:
 
   packages/protocol: {}
 
-  packages/testing: {}
+  packages/runtime:
+    dependencies:
+      '@senawa/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+      '@senawa/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
+  packages/testing:
+    dependencies:
+      '@senawa/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+      '@senawa/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@senawa/runtime':
+        specifier: workspace:*
+        version: link:../runtime
 
 packages:
 
