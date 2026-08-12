@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { Sha256 } from "./canonical.js";
+import { canonicalValue, type Sha256 } from "./canonical.js";
 import {
   type ContainsEdge,
   type CriterionDefinition,
@@ -119,6 +119,29 @@ describe("workflow graph compilation", () => {
     expectTypeOf<PhaseDefinition>().not.toEqualTypeOf<TaskDefinition>();
     expectTypeOf<TaskDefinition>().not.toEqualTypeOf<CriterionDefinition>();
   });
+
+  it("binds task completion policy into the canonical definition digest", () => {
+    const firstInput = softwareDeliveryFixture();
+    const secondInput = softwareDeliveryFixture();
+    required(
+      secondInput.executableWork.find((task) => task.id === taskId("task_test")),
+    ).completionPolicy.evidencePolicy = {
+      mode: "required-criteria",
+      requirements: [{ kind: canonicalValue({ kind: "test-report" }), minimumCount: 1 }],
+    };
+
+    const first = compileWorkflowGraph(firstInput, deterministicSha256);
+    const second = compileWorkflowGraph(secondInput, deterministicSha256);
+    const firstTask = required(
+      first.nodes.find((node) => node.definition.id === taskId("task_test")),
+    );
+    const secondTask = required(
+      second.nodes.find((node) => node.definition.id === taskId("task_test")),
+    );
+
+    expect(firstTask.definition.definitionDigest).not.toBe(secondTask.definition.definitionDigest);
+    expect(first.revisionDigest).not.toBe(second.revisionDigest);
+  });
 });
 
 describe("workflow graph validation", () => {
@@ -215,6 +238,41 @@ describe("workflow graph validation", () => {
 });
 
 describe("graph invariants", () => {
+  it.each([
+    [
+      "omitted owned criterion",
+      (input: MutableWorkflowInput) => {
+        required(
+          input.executableWork.find((task) => task.id === taskId("task_contain")),
+        ).completionPolicy.criteria = [];
+      },
+    ],
+    [
+      "unknown criterion",
+      (input: MutableWorkflowInput) => {
+        required(input.executableWork[0]).completionPolicy.criteria = [
+          { criterionId: criterionId("criterion_unknown"), required: true },
+        ];
+      },
+    ],
+    [
+      "duplicate criterion",
+      (input: MutableWorkflowInput) => {
+        const policy = required(
+          input.executableWork.find((task) => task.id === taskId("task_contain")),
+        ).completionPolicy;
+        policy.criteria.push({ ...required(policy.criteria[0]) });
+      },
+    ],
+  ])("rejects a completion policy with an %s", (_name, mutate) => {
+    const input = incidentResponseFixture();
+    mutate(input);
+
+    expectCompilationError("invalid-completion-policy", () =>
+      compileWorkflowGraph(input, deterministicSha256),
+    );
+  });
+
   it("rejects stateful accessors without invoking them", () => {
     const input = incidentResponseFixture();
     let reads = 0;
@@ -379,6 +437,7 @@ describe("graph invariants", () => {
       generation: definitionGeneration(1),
       parentId: phaseId("phase_followup"),
       source: source("incident", "/tasks/followup-triage"),
+      completionPolicy: emptyCompletionPolicy(),
     });
 
     expect(() => compileWorkflowGraph(input, deterministicSha256)).not.toThrow();
@@ -565,8 +624,15 @@ describe("graph invariants", () => {
 interface MutableWorkflowInput {
   workflow: WorkflowDefinitionInput;
   phases: PhaseDefinitionInput[];
-  executableWork: TaskDefinitionInput[];
+  executableWork: MutableTaskDefinitionInput[];
   criteria: CriterionDefinitionInput[];
+}
+
+interface MutableTaskDefinitionInput extends Omit<TaskDefinitionInput, "completionPolicy"> {
+  completionPolicy: {
+    criteria: Array<{ criterionId: ReturnType<typeof criterionId>; required: boolean }>;
+    evidencePolicy: TaskDefinitionInput["completionPolicy"]["evidencePolicy"];
+  };
 }
 
 interface MutableGraph {
@@ -622,6 +688,7 @@ function softwareDeliveryFixture(): MutableWorkflowInput {
         parentId: phaseId("phase_build"),
         source: source("software", "/tasks/compile"),
         input: { target: "application" },
+        completionPolicy: emptyCompletionPolicy(),
       },
       {
         id: taskId("task_old-check"),
@@ -629,6 +696,7 @@ function softwareDeliveryFixture(): MutableWorkflowInput {
         generation: definitionGeneration(1),
         parentId: phaseId("phase_build"),
         source: source("software", "/tasks/old-check"),
+        completionPolicy: emptyCompletionPolicy(),
       },
       {
         id: taskId("task_test"),
@@ -639,6 +707,10 @@ function softwareDeliveryFixture(): MutableWorkflowInput {
         supersedes: [taskId("task_old-check")],
         source: source("software", "/tasks/test"),
         input: { environment: { clean: true, shard: 1 }, command: "test" },
+        completionPolicy: {
+          criteria: [{ criterionId: criterionId("criterion_tests-pass"), required: true }],
+          evidencePolicy: { mode: "none", requirements: [] },
+        },
       },
       {
         id: taskId("task_publish"),
@@ -646,6 +718,7 @@ function softwareDeliveryFixture(): MutableWorkflowInput {
         generation: definitionGeneration(1),
         parentId: phaseId("phase_release"),
         source: source("software", "/tasks/publish"),
+        completionPolicy: emptyCompletionPolicy(),
       },
     ],
     criteria: [
@@ -695,6 +768,7 @@ function incidentResponseFixture(): MutableWorkflowInput {
         parentId: phaseId("phase_triage"),
         source: source("incident", "/tasks/assess"),
         input: { action: "assess-impact" },
+        completionPolicy: emptyCompletionPolicy(),
       },
       {
         id: taskId("task_contain"),
@@ -704,6 +778,10 @@ function incidentResponseFixture(): MutableWorkflowInput {
         dependsOn: [taskId("task_assess")],
         source: source("incident", "/tasks/contain"),
         input: { action: "isolate-failure" },
+        completionPolicy: {
+          criteria: [{ criterionId: criterionId("criterion_contained"), required: true }],
+          evidencePolicy: { mode: "none", requirements: [] },
+        },
       },
       {
         id: taskId("task_observe"),
@@ -711,6 +789,7 @@ function incidentResponseFixture(): MutableWorkflowInput {
         generation: definitionGeneration(2),
         parentId: phaseId("phase_triage"),
         source: source("incident", "/tasks/observe"),
+        completionPolicy: emptyCompletionPolicy(),
       },
     ],
     criteria: [
@@ -728,6 +807,10 @@ function incidentResponseFixture(): MutableWorkflowInput {
 
 function source(fixture: string, pointer: string) {
   return { locator: `fixture://${fixture}`, pointer };
+}
+
+function emptyCompletionPolicy() {
+  return { criteria: [], evidencePolicy: { mode: "none" as const, requirements: [] } };
 }
 
 function required<Value>(value: Value | undefined): Value {

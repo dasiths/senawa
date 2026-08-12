@@ -8,6 +8,11 @@ import {
   type Sha256Digest,
 } from "./canonical.js";
 import {
+  CompletionAccountingError,
+  type CompletionPolicy,
+  validateCompletionPolicy,
+} from "./completion.js";
+import {
   type ConsumerKey,
   type CriterionId,
   type DefinitionGeneration,
@@ -51,6 +56,7 @@ export interface PhaseDefinitionInput extends DefinitionInput<PhaseId, PhaseId> 
 export interface TaskDefinitionInput extends DefinitionInput<TaskId, TaskId> {
   readonly parentId: PhaseId;
   readonly dependsOn?: readonly TaskId[];
+  readonly completionPolicy: CompletionPolicy;
 }
 
 export type ExecutableWorkInput = TaskDefinitionInput;
@@ -87,6 +93,7 @@ export interface TaskDefinition extends Definition<TaskId> {
   readonly parentId: PhaseId;
   readonly dependsOn: readonly TaskId[];
   readonly supersedes: readonly TaskId[];
+  readonly completionPolicy: CompletionPolicy;
 }
 
 export interface CriterionDefinition extends Definition<CriterionId> {
@@ -154,6 +161,7 @@ export type GraphCompilationErrorCode =
   | "dependency-cycle"
   | "supersession-cycle"
   | "invalid-supersession"
+  | "invalid-completion-policy"
   | "invalid-source";
 
 export class GraphCompilationError extends Error {
@@ -398,6 +406,7 @@ function taskDefinitionInput(value: unknown, path: string): TaskDefinitionInput 
     "parentId",
     "dependsOn",
     "supersedes",
+    "completionPolicy",
   ]);
   assertCommonDefinition(value, definitionPath, isTaskId);
   if (!isPhaseId(value.parentId)) {
@@ -405,6 +414,10 @@ function taskDefinitionInput(value: unknown, path: string): TaskDefinitionInput 
   }
   assertIdentityArray(value.dependsOn, `${definitionPath}.dependsOn`, isTaskId);
   assertIdentityArray(value.supersedes, `${definitionPath}.supersedes`, isTaskId);
+  const completionPolicy = graphCompletionPolicy(
+    value.completionPolicy,
+    `${definitionPath}.completionPolicy`,
+  );
   return {
     id: value.id as TaskId,
     key: value.key as ConsumerKey,
@@ -414,7 +427,17 @@ function taskDefinitionInput(value: unknown, path: string): TaskDefinitionInput 
     parentId: value.parentId,
     dependsOn: value.dependsOn as TaskId[],
     supersedes: value.supersedes as TaskId[],
+    completionPolicy,
   };
+}
+
+function graphCompletionPolicy(value: unknown, path: string): CompletionPolicy {
+  try {
+    return validateCompletionPolicy(value);
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    return invalidGraph(`${path} is invalid${detail}`);
+  }
 }
 
 function criterionDefinitionInput(value: unknown, path: string): CriterionDefinitionInput {
@@ -557,6 +580,7 @@ function assertNormalizedWorkflowInput(input: NormalizedWorkflowInput): void {
     }
     assertRelationIdentities("task", task.id, "dependsOn", task.dependsOn, isTaskId);
     assertRelationIdentities("task", task.id, "supersedes", task.supersedes, isTaskId);
+    compileCompletionPolicy(task.completionPolicy);
   }
   for (const criterion of input.criteria) {
     assertDefinitionScalars("criterion", criterion, isCriterionId);
@@ -641,12 +665,31 @@ function compilePhase(input: PhaseDefinitionInput, sha256: Sha256): PhaseDefinit
 function compileTask(input: TaskDefinitionInput, sha256: Sha256): TaskDefinition {
   const dependsOn = sortedUnique(input.dependsOn ?? []);
   const supersedes = sortedUnique(input.supersedes ?? []);
+  const completionPolicy = compileCompletionPolicy(input.completionPolicy);
   const common = compileCommon("task", input, sha256, {
     parentId: input.parentId,
     dependsOn,
     supersedes,
+    completionPolicy,
   });
-  return Object.freeze({ ...common, parentId: input.parentId, dependsOn, supersedes });
+  return Object.freeze({
+    ...common,
+    parentId: input.parentId,
+    dependsOn,
+    supersedes,
+    completionPolicy,
+  });
+}
+
+function compileCompletionPolicy(value: unknown): CompletionPolicy {
+  try {
+    return validateCompletionPolicy(value);
+  } catch (error) {
+    if (error instanceof CompletionAccountingError) {
+      throw new GraphCompilationError("invalid-completion-policy", error.message);
+    }
+    throw error;
+  }
 }
 
 function compileCriterion(input: CriterionDefinitionInput, sha256: Sha256): CriterionDefinition {
@@ -790,6 +833,28 @@ function assertReferences(
       unknownReference(criterion.id, criterion.parentId);
     }
     assertKnown(criterion.id, criterion.supersedes, criterionById);
+  }
+
+  const criteriaByTask = new Map<TaskId, CriterionId[]>();
+  for (const criterion of criteria) {
+    const owned = criteriaByTask.get(criterion.parentId) ?? [];
+    owned.push(criterion.id);
+    criteriaByTask.set(criterion.parentId, owned);
+  }
+  for (const task of tasks) {
+    const owned = [...(criteriaByTask.get(task.id) ?? [])].sort(compareText);
+    const declared = task.completionPolicy.criteria
+      .map((requirement) => requirement.criterionId)
+      .sort(compareText);
+    if (
+      owned.length !== declared.length ||
+      owned.some((criterionId, index) => criterionId !== declared[index])
+    ) {
+      throw new GraphCompilationError(
+        "invalid-completion-policy",
+        `Task ${task.id} completion policy must declare every owned criterion exactly once`,
+      );
+    }
   }
 }
 

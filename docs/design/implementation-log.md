@@ -43,7 +43,7 @@ Each phase records:
 |-------|-------|--------|------|
 | 0. Preserve evidence and reset | Complete | `749c9c0` | Pushed |
 | 1. Canonical codec and graph kernel | Complete | `b1712fe` | Pushed |
-| 2. Completion, gates, closure, and escalation | In progress | Pending | Pending |
+| 2. Completion, gates, closure, and escalation | Ready to commit | Pending | Pending |
 | 3. Protocol and in-memory command slice | Not started | Pending | Pending |
 | 4. SQLite authority and immutable assets | Not started | Pending | Pending |
 | 5. Fenced runner and reconciliation | Not started | Pending | Pending |
@@ -599,6 +599,396 @@ must pass canonical-byte conformance tests before persistence relies on them.
 
 * Commit: `b1712fe feat: add canonical workflow graph kernel`
 * Push: succeeded to `origin/redesign/workflow-state-machine` on 2026-08-12
+
+## Decision D-015: Exact completion and evidence accounting
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 2 bounded slice A
+* Phase: 2
+* Decision: Bind each completion submission to an exact task identity,
+  definition generation, and context revision digest. Require one terminal
+  disposition, a non-empty summary, and exactly one outcome for every declared
+  criterion. Account workflow-defined evidence by canonical kind under `none`,
+  `task`, `required-criteria`, or `all-satisfied` policies. Treat malformed or
+  contradictory accounts as typed errors, while unmet evidence minimums remain
+  valid negative accounting assessments.
+* Alternatives: Infer task completion from mutable status; permit partial
+  criterion maps; compare evidence kinds by object identity or caller ordering;
+  make missing evidence a parse error; let sensors determine completion.
+* Rationale: Exact generation binding prevents stale work from completing a
+  different definition. Complete criterion accounting prevents omitted work
+  from disappearing. Canonical descriptor equality and explicit minimums keep
+  evidence accounting deterministic, while negative assessments preserve facts
+  for later gate decisions instead of conflating insufficiency with malformed
+  input.
+* Consequence: Required criteria cannot be skipped, and their waiver must carry
+  the exact canonical authority fact configured by the workflow. Superseded
+  submissions must name a distinct replacement task generation. Later command,
+  event, candidate, and gate slices consume these immutable records rather than
+  adding completion semantics to sensors or adapters.
+
+## Decision D-016: Content-addressed readings and fail-closed gates
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 2 bounded slice B
+* Phase: 2
+* Decision: Represent each sensor result as immutable success or failure facts
+  bound to an exact input digest and identified by its canonical content digest.
+  Define gate policies as digest-addressed blocking and advisory rule sets over
+  bounded JSON Pointers. Evaluate conditions with strong Kleene three-valued
+  logic. Missing or failed readings and incompatible comparison types produce
+  `unknown`; a missing path makes `exists` false. A gate accepts only when every
+  blocking rule is true. Advisory results are recorded but never affect
+  acceptance.
+* Alternatives: Add an allocated reading identity; use binary predicates; let
+  sensors select workflow consequences; treat unknown as success; evaluate
+  unbounded consumer expressions.
+* Rationale: Content identity avoids an uncoordinated new identity kind while
+  binding every decision to exact evidence. Three-valued predicates preserve
+  uncertainty, and fail-closed blocking rules prevent missing evidence from
+  granting authority. Fixed condition and pointer limits keep pure evaluation
+  finite without introducing runtime effects.
+* Consequence: Sensor execution remains outside the kernel. Later runtime and
+  configuration layers must provide exact input digests, persist reading and
+  evaluation records, and interpret the gate decision without allowing sensors
+  to choose lifecycle consequences.
+
+## Decision D-017: Accepted phase accounts and concurrency capacity
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 2 integration
+* Phase: 2
+* Decision: Admit an accounting assessment into a phase candidate only when the
+  task disposition is `completed`, its evidence policy is satisfied, and every
+  required criterion is satisfied or explicitly waived. Model concurrency as a
+  scheduler capacity ceiling rather than a monotonic consumable budget.
+* Alternatives: Treat every structurally valid terminal account as accepted;
+  let phase gates infer unresolved accounting; consume one permanent budget unit
+  per worker start; add reversible budget counters to the pure budget ledger.
+* Rationale: Structural accounting and acceptance are separate. A blocked or
+  evidence-deficient account is useful evidence but cannot satisfy a phase.
+  Concurrent-worker capacity measures current occupancy and must be released, so
+  it does not share monotonic budget semantics.
+* Consequence: Blocked, skipped, superseded, or unresolved work escalates or is
+  replaced before candidate construction. Phase 10 owns concurrency reservation
+  and release under scheduler fencing.
+
+## Decision D-019: Waivers remain obligation-scoped
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 2 review repair
+* Phase: 2
+* Decision: Restrict phase authority decisions to `approve` and `reject`.
+  Required-criterion waivers remain exact workflow-policy-bound facts inside
+  completion accounting, and budget allowances remain exact escalation-policy
+  decisions. A phase-level waiver cannot substitute for approval.
+* Alternatives: Permit unscoped phase waivers; require an arbitrary scoped
+  obligation on phase decisions; treat a waiver as approval during closure.
+* Rationale: An exception must bind the exact obligation it changes. The phase
+  candidate contains several independent obligations, so a broad waiver is
+  ambiguous and can bypass completion or gate policy.
+* Consequence: Closing an approval-required phase needs an exact `approve`
+  decision. New waiver classes require their own typed, policy-bound contracts.
+
+## Decision D-020: Completion policy is graph authority
+
+* Date: 2026-08-12
+* Status: Accepted as a Phase 2 review repair
+* Phase: 2, with a Phase 1 graph-contract amendment
+* Decision: Store each task generation's completion policy in its canonical graph
+  definition. Candidate creation receives the validated workflow graph and
+  derives exact completion requirements for selected task generations from that
+  graph. Callers cannot submit or replace requirements beside an assessment.
+* Alternatives: Trust requirements embedded in each candidate entry; compare two
+  caller-supplied requirement digests; introduce a detached policy record without
+  binding it to graph authority.
+* Rationale: Reassessment prevents forged arithmetic only when the expected
+  obligations come from an independently accepted source. The canonical graph is
+  already the authority for task generations and criteria, so it must also own
+  their completion policy.
+* Consequence: Task graph inputs gain a typed completion policy. The compiler
+  validates its exact schema and criterion membership, then includes it in the
+  task definition digest and graph revision. Candidate creation validates the
+  exact graph and derives requirements from graph definitions before reassessing
+  submissions. This deliberately amends the Phase 1 graph contract.
+
+## Decision D-021: Phase candidates cover every active direct task
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 2 review repair
+* Phase: 2
+* Decision: Derive the complete active direct-task set from the canonical graph.
+  A task is inactive when another task owned by the same phase supersedes it.
+  Candidate task IDs and generations must exactly equal that active set; context
+  revisions remain exact caller facts checked against assessments.
+* Alternatives: Let callers select any subset; infer completeness from supplied
+  assessments; include superseded generations; aggregate child-phase tasks into
+  the parent candidate.
+* Rationale: A phase cannot close while graph-owned work is omitted. Child phases
+  close independently, and superseded generations no longer own obligations.
+* Consequence: Empty, partial, extra, superseded, or stale-generation task sets
+  fail before accounting or gate evaluation.
+
+## Decision D-018: Exact snapshot lifecycle projection
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 2 bounded slice E
+* Phase: 2
+* Decision: Derive phase lifecycle projections from one exact snapshot of a
+  phase generation and its current immutable candidate, gate evaluation,
+  approval policy, authority decision, closure, and escalation records. Treat
+  every supplied escalation as active. Reject a snapshot containing both a
+  closure and an escalation because these records carry no sequence or explicit
+  resolution fact. Revalidate every record digest and cross-record relation
+  before deriving status, accounting, human needs, and the projection digest.
+* Alternatives: Persist mutable phase status; infer latest state from record
+  timestamps; let closure always override escalation; let escalation always
+  override closure; add event ordering or escalation resolution records in this
+  slice.
+* Rationale: Operational views must be reproducible from authority records and
+  must not become another authority. Timestamps do not establish total order,
+  and neither closure nor escalation records encode resolution. Rejecting a
+  contradictory snapshot preserves exact semantics until a later ordered event
+  or resolution model can prove which fact is current.
+* Consequence: Runtime projections must supply only current records for one
+  phase generation. An active escalation prevents `closed`; resolving an
+  escalation requires omitting it from the exact current snapshot under a
+  separately validated authority model. Future ordered projections must retain
+  this rejection rule unless they add explicit closure and escalation ordering
+  semantics.
+
+## Phase 2 log
+
+### Bounded slice A: Task completion accounting
+
+#### Decisions
+
+* D-015 establishes exact task-generation binding, complete criterion accounts,
+  canonical evidence policy semantics, and exact required-waiver authority.
+
+#### Scope
+
+* Added immutable task generation references, completion submissions, terminal
+  and criterion dispositions, evidence attachments and requirements, criterion
+  assessments, accounting assessments, and typed accounting errors.
+* Added exact runtime validation for task identities, generations, context
+  revision digests, non-empty summaries, criterion declarations and outcomes,
+  waiver authority, supersession replacement references, evidence assets, and
+  evidence policy minimums.
+* Added deterministic canonical-kind evidence counts for task, required
+  criterion, and satisfied-criterion scopes. Insufficient counts produce a
+  negative immutable assessment rather than a malformed-input error.
+* Added one-time canonical snapshots for both untrusted inputs and adversarial
+  coverage for accessors, sparse arrays, forged brands, caller mutation, extra
+  fields, duplicates, unknown references, omissions, waivers, supersession, all
+  terminal dispositions, and all evidence policy modes.
+* Kept sensors, gates, candidates, task lifecycle state, persistence, and
+  adapter behavior outside this bounded slice.
+
+#### Validation
+
+Passed on 2026-08-12:
+
+* Focused completion accounting suite: 23 tests
+* Kernel package typecheck
+* Biome check for completion source, tests, and kernel exports
+* Architecture boundaries across 38 source files
+* Documentation links across 17 Markdown files
+* Owned-path `git diff --check`
+
+#### Remaining risks
+
+* A later Phase 2 slice must bind accounting assessments into exact phase
+  candidates and closure records without introducing mutable completion status.
+* Workflow configuration must produce criterion requiredness, evidence policies,
+  and canonical waiver authority facts that match these kernel contracts.
+
+### Bounded slice B: Sensor readings and gates
+
+#### Decisions
+
+* D-016 establishes content-addressed sensor facts, bounded three-valued
+  conditions, and fail-closed gate semantics.
+
+#### Scope
+
+* Added immutable successful and failed sensor reading records bound to exact
+  input and content digests.
+* Added `all`, `any`, `not`, `exists`, equality, inequality, and four numeric
+  comparison conditions over bounded JSON Pointers into exact reading data.
+* Added digest-addressed gate definitions with distinct blocking and advisory
+  rules and deterministic evaluations bound to candidate input, policy, and
+  sorted reading digests.
+* Added exact schemas, one-time untrusted input snapshots, typed errors, stale
+  and duplicate reading refusal, and fixed condition depth, node, pointer
+  segment, and pointer length budgets.
+* Kept sensor execution, retries, workflow consequences, completion,
+  candidates, and approvals outside this bounded slice.
+
+#### Validation
+
+Passed on 2026-08-12:
+
+* Focused gate suite: 35 tests
+* Kernel package typecheck
+* Biome check for gate source, tests, and kernel exports
+* Architecture boundaries across 38 source files
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+#### Remaining risks
+
+* Phase 6 configuration must validate sensor references before execution; a
+  missing referenced reading intentionally remains an `unknown` gate result.
+* Composition-layer SHA-256 adapters still require canonical-byte conformance
+  tests before persisted reading and evaluation digests become authority.
+
+### Bounded slices C and D: Candidate closure, budgets, and escalation
+
+#### Scope
+
+* Added phase candidates bound to exact graph, phase, active task set, graph-owned
+  completion policy, accepted assessments, barriers, and gate policy.
+* Added source-authoritative gate evidence, approval-only authority decisions,
+  exact closure records, independent finite budget ledgers, first-class
+  escalations, policy-bound additional allowances, and replay protection.
+* Added exact validators for every persisted record and cross-record digest.
+
+#### Review repairs
+
+* Recompute gate evaluations from exact definition and readings.
+* Reassess completion from graph-owned task policy rather than caller policy.
+* Track applied allowance decisions and verify exact authority, unit, and limit.
+* Snapshot exported validator inputs before property access.
+* Remove broad phase waivers.
+* Require the complete active direct-task set derived from graph supersession.
+
+### D-020 review repair: Graph-owned completion policy
+
+#### Decisions
+
+* D-020 makes the canonical graph the independent authority for task completion
+  criteria and evidence policy.
+
+#### Scope
+
+* Added a typed static completion policy to every task definition. The compiler
+  requires one exact criterion requirement for every criterion owned by the
+  task, rejects unknown and duplicate criteria, validates the evidence policy,
+  and includes the complete policy in the task definition digest and graph
+  revision.
+* Added exported completion-policy validation and graph-derived completion
+  requirement helpers while preserving context revision as a selected-task
+  input.
+* Removed completion requirements from accepted assessment entries and removed
+  caller authority over candidate evidence policy digests. Candidate creation
+  and validation now revalidate an exact canonical workflow graph, bind its
+  revision, verify phase and selected task generations against graph
+  definitions, derive context-bound requirements, reassess every submitted
+  assessment, and derive the aggregate evidence policy digest internally.
+* Threaded exact graph authority through closure validation and lifecycle
+  projection without adding completion commands, mutable lifecycle state, or
+  kernel effects.
+* Updated software-delivery, incident-response, run, candidate, and lifecycle
+  fixtures with explicit valid policies.
+* Added adversarial coverage in which a caller creates a self-consistent
+  assessment from empty criteria and a `none` evidence policy. Candidate
+  construction rejects it because the selected graph task requires a criterion
+  and evidence. Added exact graph revision, unrelated graph revision, stale
+  selected generation, and stale context coverage.
+
+#### Validation
+
+Passed on 2026-08-12:
+
+* Focused graph suite: 58 tests
+* Focused candidate suite: 20 tests
+* Completion, graph, candidate, run, and lifecycle integration slice: 128 tests
+* Kernel package typecheck
+* Clean workspace build and typecheck
+* Complete workspace suite: 11 files and 247 tests
+* Biome check across 40 intended source and configuration files
+* Architecture boundaries across 50 source files and negative fixtures
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+#### Remaining risks
+
+* Phase 6 workflow configuration must require explicit completion policy for
+  every normalized task and preserve the exact criterion-accounting contract.
+* Later amendment logic must treat a selected task policy change as a task
+  definition and graph revision change while retaining exact historical graph
+  authority for existing candidates.
+
+### Bounded slice E: Operational lifecycle projections
+
+#### Decisions
+
+* D-018 establishes immutable, digest-addressed lifecycle projections rebuilt
+  from exact current records rather than mutable status.
+
+#### Scope
+
+* Added a pure phase-generation projection over optional current candidate,
+  gate evaluation, authority decision, closure, and escalation records plus
+  exact approval and escalation policy inputs.
+* Added derived `awaiting-completion`, `awaiting-gate`, `gate-rejected`,
+  `awaiting-approval`, `approval-rejected`, `awaiting-closure`, `closed`, and
+  `escalated` states without accepting status as input.
+* Added immutable selected-task accounts, terminal-disposition counts,
+  completion summaries, source-record digests, approval needs, and escalation
+  context for human action.
+* Exported existing exact gate-evaluation and escalation validators and added an
+  exact closure validator that reconstructs closure from its candidate, gate,
+  policy, and authority source records.
+* Added candidate, gate-policy, approval-policy, authority, escalation-policy,
+  owner, context, and digest relation checks. Closure and active escalation in
+  one unordered snapshot are rejected as contradictory.
+* Kept commands, events, persistence, clocks, runtime effects, and escalation
+  resolution outside the kernel projection.
+
+#### Validation
+
+Passed on 2026-08-12:
+
+* Focused lifecycle suite: 8 tests
+* Candidate, budget, and lifecycle integration suites: 49 tests
+* Kernel package typecheck
+* Biome check for lifecycle source, tests, validators, and kernel exports
+* Clean workspace build and typecheck
+* Complete workspace suite: 11 files and 232 tests
+* Biome check across 40 intended source and configuration files
+* Architecture boundaries across 50 source files and negative fixtures
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+#### Remaining risks
+
+* A later ordered authority model must represent escalation resolution before a
+  historical escalation and closure can coexist in one projection input.
+* Runtime query assembly must provide one internally consistent current-record
+  snapshot and must not infer current records from timestamps alone.
+
+### Phase 2 final review and validation
+
+Independent review reproduced and drove repairs for forged gate evaluations,
+self-authorized completion requirements, allowance replay, unsafe exported
+validators, broad phase waivers, and omitted graph tasks. The final gate found no
+critical, high, medium, or low findings.
+
+Passed on 2026-08-12:
+
+* Clean workspace build and typecheck
+* Biome check across 40 intended files
+* Complete workspace suite: 11 files and 248 tests
+* Architecture boundaries across 50 source files and negative fixtures
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+The final adversarial gate verified exact active task-set coverage, supersession,
+graph-owned completion policy, source-authoritative gate evaluation, one-time
+policy-bound allowances, accessor-safe validators, approval-only phase closure,
+and closure/escalation contradiction handling.
 
 ## Entry template
 
