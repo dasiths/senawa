@@ -9,4 +9,4 @@ senawa --help
 
 Workflow commands will be documented as their implementation phases pass
 validation. The proposed command and authority model is tracked in the
-[comprehensive implementation plan](../design/wip/research/07-comprehensive-implementation-plan.md).
+[comprehensive implementation plan](../design/implementation-plan.md).

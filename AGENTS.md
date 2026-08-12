@@ -4,15 +4,12 @@ These instructions apply to the entire repository.
 
 ## Source of truth
 
-* `docs/design/wip/research/` contains the proposed redesign research.
-* `docs/design/wip/research/07-comprehensive-implementation-plan.md` governs the
-  autonomous implementation sequence.
-* `docs/design/wip/redesign-implementation-log.md` records decisions,
+* `docs/design/implementation-plan.md` governs the autonomous implementation
+  sequence and architecture.
+* `docs/design/implementation-log.md` records decisions,
   deviations, validation, commits, and pushes.
-* `docs/design/wip/probe-findings.md` remains authoritative only for what a
-  named probe measured in its recorded environment.
-* Old implementation decisions and package boundaries do not constrain the
-  redesign.
+* Old implementation decisions, research, package boundaries, and persisted
+  formats do not constrain the implementation.
 
 ## Architecture boundaries
 

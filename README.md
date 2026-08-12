@@ -5,8 +5,9 @@ consumer-defined software factory.
 
 The repository is in an alpha implementation reset. The current executable
 exposes version and help information only. Product direction and implementation
-phases are documented in the [redesign research](docs/design/wip/research/README.md)
-and [comprehensive plan](docs/design/wip/research/07-comprehensive-implementation-plan.md).
+phases are documented in the [comprehensive
+plan](docs/design/implementation-plan.md), with decisions and deviations in the
+[implementation log](docs/design/implementation-log.md).
 
 ## Development
 

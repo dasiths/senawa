@@ -1,11 +1,11 @@
 # Comprehensive Alpha Implementation Plan
 
-This plan governs the autonomous Senawa alpha reset and implementation. It uses
-the redesign research in this folder as its source and does not preserve current
-APIs, persisted runs, package boundaries, or implementation compatibility.
+This plan governs the autonomous Senawa alpha implementation. It is the active
+design and execution source and does not preserve former APIs, persisted runs,
+package boundaries, or implementation compatibility.
 
 Major decisions and deviations are recorded in
-[Redesign Implementation Log](../redesign-implementation-log.md).
+[Implementation Log](implementation-log.md).
 
 ## User requests
 
@@ -96,7 +96,7 @@ Dependency rules:
 
 For every phase:
 
-1. Read this plan, the relevant research documents, and the implementation log.
+1. Read this plan and the implementation log.
 2. Use scoped subagents for independent implementation tasks when file and state
    dependencies permit.
 3. Make the smallest grounded edit that can falsify the phase hypothesis.
@@ -124,7 +124,8 @@ cannot import legacy architecture.
 
 * `.git/`
 * `.devcontainer/`
-* `docs/design/wip/`
+* `docs/design/implementation-plan.md` and
+  `docs/design/implementation-log.md`
 * Relevant `experiments/probes/`
 * Repository history
 * Generic Markdown link checking
@@ -640,5 +641,5 @@ The autonomous implementation is complete only when:
   checks pass from a fresh install.
 * The no-credit end-to-end workflow passes after process restarts.
 * The current branch contains no Beads or legacy compatibility implementation.
-* The final WIP review states which research recommendations were accepted,
+* The final implementation review states which planned contracts were accepted,
   changed, disproved, or deferred.
