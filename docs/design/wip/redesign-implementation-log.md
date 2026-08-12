@@ -37,7 +37,7 @@ Each phase records:
 
 | Phase | State | Commit | Push |
 |-------|-------|--------|------|
-| 0. Preserve evidence and reset | Ready to commit | Pending | Pending |
+| 0. Preserve evidence and reset | Complete | `749c9c0` | Pushed |
 | 1. Canonical codec and graph kernel | Not started | Pending | Pending |
 | 2. Completion, gates, closure, and escalation | Not started | Pending | Pending |
 | 3. Protocol and in-memory command slice | Not started | Pending | Pending |
@@ -242,7 +242,8 @@ No unresolved critical, high, medium, or low findings remain before staging.
 
 ### Commit and push
 
-Pending atomic staging, staged-diff review, commit, and push.
+* Commit: `749c9c0 chore(build): reset repository for redesign`
+* Push: succeeded to `origin/redesign/workflow-state-machine` on 2026-08-12
 
 ### Remaining risks
 
