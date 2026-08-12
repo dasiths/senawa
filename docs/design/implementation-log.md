@@ -43,8 +43,8 @@ Each phase records:
 |-------|-------|--------|------|
 | 0. Preserve evidence and reset | Complete | `749c9c0` | Pushed |
 | 1. Canonical codec and graph kernel | Complete | `b1712fe` | Pushed |
-| 2. Completion, gates, closure, and escalation | Ready to commit | Pending | Pending |
-| 3. Protocol and in-memory command slice | Not started | Pending | Pending |
+| 2. Completion, gates, closure, and escalation | Complete | `d8a3d7a` | Pushed |
+| 3. Protocol and in-memory command slice | In progress | Pending | Pending |
 | 4. SQLite authority and immutable assets | Not started | Pending | Pending |
 | 5. Fenced runner and reconciliation | Not started | Pending | Pending |
 | 6. Workflow and sensor configuration | Not started | Pending | Pending |
@@ -989,6 +989,9 @@ The final adversarial gate verified exact active task-set coverage, supersession
 graph-owned completion policy, source-authoritative gate evaluation, one-time
 policy-bound allowances, accessor-safe validators, approval-only phase closure,
 and closure/escalation contradiction handling.
+
+Commit `d8a3d7a feat: add completion and escalation semantics` was pushed to
+`origin/redesign/workflow-state-machine` on 2026-08-12.
 
 ## Entry template
 
