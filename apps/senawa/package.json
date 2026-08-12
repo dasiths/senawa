@@ -1,31 +1,13 @@
 {
   "name": "senawa",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.0",
   "private": true,
   "type": "module",
   "bin": {
-    "senawa": "./dist/senawa.mjs"
+    "senawa": "./dist/main.js"
   },
-  "exports": {
-    ".": "./src/index.ts"
-  },
-  "dependencies": {
-    "@senawa/artifact-store": "workspace:*",
-    "@senawa/application": "workspace:*",
-    "@senawa/browser": "workspace:*",
-    "@senawa/configuration": "workspace:*",
-    "@senawa/domain": "workspace:*",
-    "@senawa/observability": "workspace:*",
-    "@senawa/reporting": "workspace:*",
-    "@senawa/runtime-beads": "workspace:*",
-    "@senawa/runtime-file": "workspace:*",
-    "@senawa/sensors": "workspace:*",
-    "@senawa/workers": "workspace:*",
-    "ajv": "8.17.1",
-    "ajv-formats": "3.0.1",
-    "commander": "14.0.2"
-  },
-  "devDependencies": {
-    "@senawa/testing": "workspace:*"
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false"
   }
 }

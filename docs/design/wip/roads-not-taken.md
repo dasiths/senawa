@@ -1,14 +1,18 @@
 # Roads Not Taken
 
 > [!NOTE]
-> This is decision history, not a list of current alternatives. Start with the
-> [numbered design guides](../README.md), then return here before reviving a
+> This is decision history, not a list of current alternatives. Start with
+> [Redesign Research](research/README.md), then return here before reviving a
 > discarded approach.
+>
+> A rejection under the current architecture is not an automatic rejection for
+> the redesign. Re-evaluate the original failure against the new product
+> boundary, authority model, and runtime assumptions before carrying it forward.
 
 ## Purpose
 
-The architecture document describes the shape we intend to build. It does not
-describe the shapes we tried first, and that omission is expensive. Without a
+The retired implementation and redesign research describe different
+architectural targets. Neither should hide the shapes tried before. Without a
 record, a discarded idea comes back looking new, gets argued for on the same
 grounds it was argued for the first time, and costs the same time to reject.
 

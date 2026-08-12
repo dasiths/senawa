@@ -43,6 +43,56 @@ Copy this section for each idea and update it in place as the idea matures.
 
 ## Decisions
 
+### 2026-08-12: Canonical executable-work model and product redesign
+
+* Status: `proposed`
+* Owner: `docs/design/01-system-model.md`,
+    `docs/design/02-workflows-and-lifecycle.md`,
+    `docs/design/04-sensors-gates-and-enforcement.md`,
+    `docs/design/05-runtime-and-state.md`, and
+    `docs/design/07-implementation-and-operations.md`
+* Question: Should Senawa compile consumer-owned workflow artifacts into one
+    revisioned, typed run graph whose explicit completion claims, evidence
+    attachments, gates, and approvals determine legal state transitions?
+* Context: Senawa is the deterministic spine of a software factory. Consumers
+    define delivery workflows, approval flows, and multi-step loops; the current
+    research-plan-implement workflow is one profile rather than the product
+    model. The implementation protects transition authority and records task
+    completion evidence, but it splits workflow phases, plan phases, and runtime
+    tasks across different representations. Plan phases compile away, active
+    phases cannot be proposed and approved, task revision is additive-only,
+    production requires Beads, and installation has no scaffolded first-run
+    experience.
+* Options: Preserve the current static workflow plus imported task frontier;
+    make model-authored plans the mutable runtime authority; or compile
+    workflow and domain artifacts into a Senawa-owned executable-work graph that
+    changes only through revision-checked commands.
+* Evidence needed: Prototype the canonical graph and completion-accounting
+    contracts; project the current standard workflow into them; exercise
+    additive phase and task amendments; prove an embedded Senawa-owned authority
+    and supervisor recovery; and test one software and one non-software consumer
+    schema.
+* Probe: `not started`
+* Outcome: `pending`; product direction is established for a consumer-defined
+    software factory, human-approved graph expansion, workflow-defined evidence
+    requirements, durable phase-level recovery, and a local supervisor used by
+    the CLI and portal as the normal control plane. Remote portals should connect
+    through an authenticated control plane while repository supervisors retain
+    execution authority locally. Beads is not the redesigned runtime authority.
+    Senawa is alpha software: the redesign does not preserve current APIs,
+    persisted runs, workflow formats, package boundaries, or compatibility
+    executables.
+    The consolidated findings and falsifiable migration slices are indexed in
+    [Redesign Research](research/README.md).
+* Promotion: `pending`
+
+> [!IMPORTANT]
+> Entries below this point primarily record decisions for the current
+> implementation. They remain useful evidence and history, but they do not
+> constrain the redesign. Reuse a conclusion only after checking whether its
+> question, substrate, and constraints still apply to the software-factory
+> direction in [Redesign Research](research/README.md).
+
 ### 2026-08-08: Advisory path scope and claimed task completion
 
 * Status: `accepted`

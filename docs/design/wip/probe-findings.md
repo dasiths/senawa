@@ -1,16 +1,20 @@
 # Senawa Probe Findings
 
 > [!NOTE]
-> This evidence record is maintained in the design working record. Use the
-> [numbered design guides](../README.md) for current architecture. Claims here
-> remain authoritative for what the corresponding probes measured.
+> This evidence record is maintained in the design working record. The numbered
+> guides are retired compatibility pages. Claims here remain authoritative only
+> for what the corresponding probes measured.
+>
+> Measurements describe the named versions, environment, and implementation
+> under test. They inform the redesign but do not require it to preserve Beads,
+> current worker hosts, current hooks, or current command shapes.
 
 ## Purpose
 
-[The design](multi-agent-orchestration.md) rests on a set of claims about what
-GitHub Copilot CLI, `@github/copilot-sdk`, and `bd` actually do. Most of those
-claims came from reading reference documentation. This document records what
-happened when each one was executed instead.
+The earlier design and current implementation rest on claims about what GitHub
+Copilot CLI, `@github/copilot-sdk`, and `bd` actually do. Most of those claims
+came from reading reference documentation. This document records what happened
+when each one was executed instead.
 
 Every result below was produced by a script in [`experiments/probes/`](../../../experiments/probes/README.md).
 The probes are independent: no shared state, no ordering requirement. Re-running

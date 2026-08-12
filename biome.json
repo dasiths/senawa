@@ -2,14 +2,15 @@
   "$schema": "https://biomejs.dev/schemas/2.2.4/schema.json",
   "files": {
     "includes": [
-      "**",
-      "!experiments/probes",
-      "!.copilot-tracking",
-      "!.agents/.copilot-tracking",
-      "!.beads",
-      "!.pnpm-store",
-      "!**/dist",
-      "!pnpm-lock.yaml"
+      "apps/*/src/**/*.ts",
+      "apps/*/package.json",
+      "apps/*/tsconfig.json",
+      "packages/*/src/**/*.ts",
+      "packages/*/package.json",
+      "packages/*/tsconfig.json",
+      "scripts/**/*.mjs",
+      "*.json",
+      "*.ts"
     ]
   },
   "formatter": {
@@ -19,14 +20,6 @@
   },
   "linter": {
     "enabled": true,
-    "rules": {
-      "recommended": true
-    }
-  },
-  "javascript": {
-    "formatter": {
-      "quoteStyle": "double",
-      "semicolons": "always"
-    }
+    "rules": { "recommended": true }
   }
 }
