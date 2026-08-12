@@ -44,8 +44,8 @@ Each phase records:
 | 0. Preserve evidence and reset | Complete | `749c9c0` | Pushed |
 | 1. Canonical codec and graph kernel | Complete | `b1712fe` | Pushed |
 | 2. Completion, gates, closure, and escalation | Complete | `d8a3d7a` | Pushed |
-| 3. Protocol and in-memory command slice | Ready to commit | Pending | Pending |
-| 4. SQLite authority and immutable assets | Not started | Pending | Pending |
+| 3. Protocol and in-memory command slice | Complete | `0f5f485` | Pushed |
+| 4. SQLite authority and immutable assets | In progress | Pending | Pending |
 | 5. Fenced runner and reconciliation | Not started | Pending | Pending |
 | 6. Workflow and sensor configuration | Not started | Pending | Pending |
 | 7. Context broker and serial workers | Not started | Pending | Pending |
@@ -587,6 +587,9 @@ Passed on 2026-08-12:
 * Architecture boundaries across 30 source files and negative fixtures
 * Documentation links across 17 Markdown files
 * `git diff --check`
+
+Commit `0f5f485 feat: add versioned command protocol` was pushed to
+`origin/redesign/workflow-state-machine` on 2026-08-12.
 * Exactly three active design files
 * No empty directories outside ignored dependency caches
 
