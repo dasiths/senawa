@@ -48,7 +48,7 @@ Each phase records:
 | 4. SQLite authority and immutable assets | Complete | `ef8580a` | Pushed |
 | 5. Fenced runner and reconciliation | Complete | `40b0de4` | Pushed |
 | 6. Workflow and sensor configuration | Complete | `4667ab0` | Pushed |
-| 7. Context broker and serial workers | In progress | Pending | Pending |
+| 7. Context broker and serial workers | Complete | `4009bd8` | Pushed |
 | 8. Local supervisor, HTTP, SSE, and CLI | Not started | Pending | Pending |
 | 9. Additive amendments | Not started | Pending | Pending |
 | 10. Parallel worktrees and integration | Not started | Pending | Pending |
@@ -3216,7 +3216,8 @@ Passed on 2026-08-13:
 
 ### Commit and push
 
-Pending final Phase 7 delivery.
+* Implementation commit: `4009bd8 feat: add scoped worker context`
+* Push: succeeded to `origin/redesign/workflow-state-machine`
 
 ## Entry template
 
