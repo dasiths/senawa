@@ -1930,6 +1930,11 @@ test-then-benchmark sequence subsequently measured 14.94 ms. The final clean
 sequence measured 15.69 ms. The isolated outlier was retained in this record and
 was not reproducible as a history-growth regression.
 
+#### Commit and push
+
+* Implementation commit: `40b0de4 feat: add fenced workflow runner`
+* Push: succeeded to `origin/redesign/workflow-state-machine`
+
 #### Remaining risks
 
 * A trusted planner must derive queued effect commands from canonical graph and
