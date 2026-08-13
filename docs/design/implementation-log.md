@@ -1241,6 +1241,7 @@ Commit `d8a3d7a feat: add completion and escalation semantics` was pushed to
   without repeatedly charging growing canonical-row checkpoints to command
   commits.
 
+
 ## Decision D-032: Transact through replay-validated canonical authority state
 
 * Date: 2026-08-12
@@ -1593,6 +1594,348 @@ Pending atomic staging, commit, and push.
 
 Commit `ef8580a feat: add transactional local authority` was pushed to
 `origin/redesign/workflow-state-machine` on 2026-08-12.
+
+## Decision D-038: Keep external effect commands in the runner boundary
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 5 bounded slice A
+* Phase: 5
+* Decision: Keep completed local protocol intents in the synchronous
+  `RuntimeCommandService`. Represent external work as a distinct typed
+  `QueuedEffectCommand` owned by the runtime runner, with one stable operation
+  identity, exact repository and run identity, context and input digests,
+  canonical input, finite reconciliation limit, deadline, and budget
+  reservation. Do not add a protocol dispatch intent in this slice.
+* Alternatives: Migrate every local command through the runner; add one generic
+  protocol dispatch command; let each effect adapter own its queue and retry
+  policy.
+* Rationale: Existing local intents have deterministic kernel outcomes and no
+  external uncertainty. Moving them would add recovery states without changing
+  authority. External effects need durable intent and inspection semantics, but
+  exposing generic dispatch to clients would grant an adapter-level capability
+  before Phase 7 defines scoped worker and context authority.
+* Consequence: Runtime scheduling consumes durable effect commands produced by
+  trusted engine planning. A later protocol command may request domain work, but
+  it must not let a client select an arbitrary effect host operation. Existing
+  completed local receipts and replay behavior remain unchanged.
+
+## Decision D-039: Fence engine-owned effect transactions
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 5 bounded slice A
+* Phase: 5
+* Decision: Make `runOnce` consume supplied time, attempt identity, and one live
+  owner and fence fact. The deterministic scheduler first reconciles one durable
+  nonterminal effect, then selects at most one queued command. An engine-owned
+  authority port reserves budget and persists intent before dispatch, then
+  fence-checks and atomically commits the outcome, receipt, event, budget
+  settlement, and projection. Effect hosts dispatch, inspect, and cancel by the
+  stable operation identity.
+* Alternatives: Let hosts persist their own outcomes; hold one database
+  transaction open around an external call; infer missing effects as failed;
+  apply outcomes under the fence that originally created the intent.
+* Rationale: The authority transaction must end before an unbounded external
+  call. A takeover can inspect the same operation and commit under its new fence
+  without trusting process memory. Missing inspection permits idempotent
+  dispatch only while the bound context remains current. Unknown inspection is
+  persisted and stops at the command's finite reconciliation limit.
+* Consequence: Exact attempt replay cannot append another transition. Terminal
+  reported usage settles the reservation; absent terminal usage is recorded and
+  charged as unreported reservation. Stale semantic outcomes remain durable but
+  do not enter the current projection. Direct foreground execution must compose
+  the same `FencedRunner` and authority port instead of bypassing fencing.
+
+## Decision D-040: Isolate runner authority from command snapshots
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 5 bounded slice B
+* Phase: 5
+* Decision: Implement `RunnerAuthorityPort` as a focused
+  `SqliteRunnerAuthority` over the authority database. Add migration v2 tables
+  for runner configuration, budgets, queued commands, intents, outcome attempts,
+  cancellations, escalations, receipts, events, and projections. Continue to use
+  the existing `leases` table and one shared acquisition transaction, with a
+  digest-derived resource key for each repository and run.
+* Alternatives: Store runner state in the canonical command authority snapshot;
+  attach runner-only rows to the normalized command `runs` table; repurpose the
+  Phase 4 placeholder effect tables; use a separate runner database.
+* Rationale: Canonical command rows are verified as an exact normalization of
+  `authority_state`. Runner-only rows in that graph would invalidate command
+  snapshots and connection caches. The placeholder effect tables also reference
+  normalized command runs and cannot represent runner configuration independently.
+  Separate v2 tables preserve those invariants while one database and lease table
+  retain atomic fencing and backup behavior.
+* Consequence: Runner reads and writes do not increment command authority
+  revisions or change canonical snapshots. Effect hosts remain outside storage.
+  The v1 placeholder effect, claim, and cancellation tables remain unused until a
+  future migration removes or assigns them a command-authority purpose.
+
+## Decision D-041: Let authority select and claim each effect action
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 5
+* Phase: 5
+* Decision: Before any effect-host call, atomically bind the exact run, durable
+  intent, live owner and fence, current context, attempt identity, and one
+  authority-selected action. The action is dispatch, inspection, cancellation,
+  or settlement. Same-fence overlap is busy, terminal state replays, and only a
+  higher takeover fence can replace a crashed claim.
+* Alternatives: Replay lookup before the host call; caller-selected action;
+  adapter-local claims; transaction around the external effect; rely only on the
+  operation identity for idempotency.
+* Rationale: A lookup followed by a host call leaves a race where two wakes can
+  cross the effect boundary. Caller-selected actions also let stale plans or
+  forged provenance dispatch when current authority requires inspection,
+  cancellation, settlement, or replay.
+* Consequence: Context cannot change under a current-fence claim. A delayed start
+  plan is resolved from current durable state, recovery of a prior-attempt intent
+  inspects instead of redispatching, and crashed claims require lease takeover.
+
+## Decision D-042: Settle bounded uncertainty conservatively
+
+* Date: 2026-08-12
+* Status: Accepted for Phase 5
+* Phase: 5
+* Decision: When active, unknown, or cancellation reconciliation reaches its
+  finite limit, commit one terminal failed settlement without another host call.
+  Release the reservation and charge it as unreported usage. Reject reported
+  usage above the reserved amount and roll back the complete settlement.
+* Alternatives: Leave exhausted effects nonterminal; retry cancellation without
+  a bound; release uncertain reservations without spend; accept provider usage
+  above the authorized reservation.
+* Rationale: An unattended runner must neither retry forever nor leak reserved
+  budget. A provider report cannot retroactively authorize spend beyond the
+  pre-dispatch ceiling.
+* Consequence: Uncertainty remains visible through its prior outcomes and final
+  reason, while budget state always reaches a bounded conservative result.
+
+## Phase 5 log
+
+### Bounded slice A: Effect-agnostic fenced runner core
+
+#### Decisions
+
+* D-038 separates trusted runner effect commands from synchronous local protocol
+  intents.
+* D-039 establishes one fenced authority contract for intent persistence,
+  dispatch, inspection, reconciliation, and atomic outcome commitment.
+
+#### Scope
+
+* Added typed worker, sensor, Git, asset, and time effect contracts with stable
+  operation identity, owner and fence, context and input digests, canonical
+  input, budget reservation, details, output digest, usage, deadline, and
+  intent, active, completed, failed, cancelled, and unknown states.
+* Added a pure deterministic scheduler that prioritizes durable nonterminal
+  effects and otherwise selects one queued command by sequence and command
+  identity.
+* Added `FencedRunner` over injected authority and effect-host ports. It persists
+  intent before dispatch, inspects after crashes or lost responses, redispatches
+  only a current missing operation under its stable identity, cancels deadlines
+  and requested work, and bounds both active and unknown reconciliation.
+* Added an in-memory runner authority with exact lease checks at both write
+  boundaries, independent budget reservation and escalation, reported and
+  unreported usage settlement, semantic freshness, exact attempt replay,
+  recursively immutable command and outcome snapshots, receipts, events, and
+  current projection updates in one commit method.
+* Added reusable authority conformance fixtures, a generic queued worker effect
+  path, a complete inspection-result matrix, and crash injection before and
+  after intent persistence and outcome commitment.
+* Preserved `RuntimeCommandService` behavior and protocol schemas. No Node API or
+  concrete adapter entered runtime.
+
+#### Narrowed scope
+
+* The SQLite effect-intent and outcome tables remain unchanged. A later Phase 5
+  slice implements `RunnerAuthorityPort` over those existing tables and their
+  lease fences after the in-memory transition contract is reviewed.
+* Kernel budget ledgers remain the workflow policy authority. This slice proves
+  independent runtime reservation and exhaustion behavior but does not yet
+  create kernel escalation records or allowance commands.
+* Supervisor wake-up and direct foreground composition remain Phase 8 work. Both
+  must call the same fenced runner contract established here.
+
+#### Validation
+
+Passed on 2026-08-12:
+
+* Runtime and testing package typechecks
+* Focused runner conformance and crash matrix: 23 tests
+* Targeted Biome formatting and import checks
+* Clean workspace build and typecheck
+* Biome check across 61 intended files
+* Complete workspace suite: 16 files and 345 tests
+* Architecture boundaries across 81 source files and negative fixtures
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+#### Review
+
+The bounded-slice diff audit found two authority defects and drove repairs:
+
+* Active host inspection could continue without a deadline. Active and unknown
+  outcomes now share the command's finite reconciliation limit.
+* Shallow freezing allowed nested command input or host outcome details to
+  change after persistence. The in-memory authority now canonical-snapshots and
+  recursively freezes both boundaries, with caller and host mutation tests.
+
+No unresolved critical or high findings remain in bounded slice A.
+
+#### Remaining risks
+
+* SQLite conformance must prove the same atomic receipt, event, outcome, budget,
+  and projection transaction under independent connections and lease takeover.
+* A future trusted planner must derive queued effect commands from canonical
+  graph and context authority rather than accepting arbitrary client dispatch.
+* Phase-wide independent review and later Phase 5 slices remain pending.
+
+### Bounded slice B: Durable SQLite runner authority
+
+#### Decisions
+
+* D-040 separates durable runner state from normalized command authority while
+  retaining the shared database, migration checksums, and lease fences.
+
+#### Scope
+
+* Added checksummed migration v2 with independent runner run configuration,
+  context, budget, queue, intent, outcome-attempt, cancellation, escalation,
+  receipt, event, and projection tables.
+* Added `SqliteRunnerAuthority` with durable `configureRun`, `enqueue`, load, and
+  query methods plus fenced context updates, cancellation requests, and lease
+  takeover.
+* Made intent persistence, budget reservation, outcome commitment, usage
+  settlement, budget release or spend, event and receipt append, and projection
+  update atomic under `BEGIN IMMEDIATE` transactions.
+* Required exact live owner, fence, expiry, and supplied time at every runner
+  write boundary. Consolidated command and runner lease acquisition on one
+  transaction implementation over the existing `leases` table.
+* Preserved every outcome attempt for exact replay, prevented terminal outcome
+  replacement, bounded active and unknown reconciliation, and excluded stale
+  semantic outcomes from the current projection.
+* Published Vitest-backed runner suite registration through an explicit testing
+  subpath while preserving test-framework-free runner fixtures at the package
+  root.
+* Registered the shared runner authority conformance suite against SQLite and
+  added close-and-reopen crash recovery at all four intent and outcome commit
+  boundaries.
+* Added stale-fence takeover, duplicate wake, exact active replay, terminal
+  immutability, active and unknown bounds, fenced cancellation, stale context,
+  budget escalation, and command-snapshot isolation coverage.
+
+#### Narrowed scope
+
+* Storage contains no effect host and never dispatches, inspects, or cancels an
+  external system directly. `FencedRunner` remains the only host composition
+  boundary.
+* Migration v2 does not repurpose the Phase 4 placeholder effect, claim, or
+  cancellation tables because their command-run foreign keys would couple the
+  two authority models.
+* Trusted command derivation, supervisor wake-up, foreground composition, and
+  worker dispatch remain later Phase 5 and Phase 8 work.
+* Kernel budget policy and allowance commands remain authoritative. SQLite
+  persists runner reservations, settlement, and budget-exhausted escalation
+  facts without introducing new kernel policy.
+
+#### Validation
+
+Passed on 2026-08-12:
+
+* Focused SQLite authority and runner suite: 43 tests
+* Clean workspace build and typecheck
+* Biome check across 62 files
+* Complete workspace suite: 16 files and 361 tests
+* Architecture boundaries across 83 source files
+* Documentation links across 17 Markdown files
+* `git diff --check`
+* SQLite command-authority benchmark: 18.53 ms p99 across 100 samples, below the
+  25 ms threshold
+
+#### Review
+
+The bounded-slice diff audit and executable checks found three local defects and
+drove repairs:
+
+* SQLite initially emitted `effect-queued` instead of the established
+  `effect-command-queued` event contract. Shared conformance caught the mismatch.
+* The future-schema fixture still treated schema version 2 as unsupported. It now
+  probes version 3.
+* The benchmark exposed Vitest suite registration behind the testing package
+  root's runner fixture export. Fixtures and fake hosts remain available at the
+  root, while suite registration now loads only through its explicit subpath.
+
+No unresolved critical or high findings remain in bounded slice B. The
+phase-wide review and its repairs are recorded below.
+
+#### Remaining risks
+
+* A trusted planner must still derive queued effect commands from canonical graph
+  and context authority rather than expose arbitrary effect dispatch.
+* Supervisor and foreground recovery must compose this same authority and runner
+  contract rather than introduce another execution path.
+* Trusted planning and supervisor composition remain later phases.
+
+### Phase-wide review and closure
+
+#### Independent review iterations
+
+The independent review rejected the phase four times before approval. Each
+rejection produced a discriminating conformance or adversarial test:
+
+* Stale owners could call effect hosts before commit-time fence rejection.
+  `RunnerAuthorityPort` now validates the live fence before every host operation,
+  and host adapters receive that fence. Memory and SQLite prove zero stale-owner
+  host calls.
+* Exhausted active and unknown effects became permanent nonterminal records with
+  leaked reservations. They now reach one terminal conservative settlement.
+* Context changes trusted commit-time freshness and rewrote projections without
+  advancing the cursor. Fenced context and cancellation mutations now append
+  durable transitions, and projection membership compares immutable outcome
+  context with current run context.
+* In-memory authority retained only the latest attempt and accepted unfenced
+  control mutations. It now retains exact historical attempts and shares the
+  fenced mutation contract with SQLite.
+* Exact attempt replay and uncertain cancellation still crossed the host boundary
+  before replay or finite settlement. Replay moved ahead of effects, cancellation
+  received one bounded host attempt, and synthetic settlement preserves the
+  configured reconciliation count.
+* SQLite could settle another run's intent under the wrong fence, usage could
+  exceed its reservation, and concurrent wakes could pass a non-linearizable
+  lookup. Exact run scoping, checked usage, and transactional effect claims fixed
+  those defects.
+* A stale start plan could still redispatch a terminal operation and callers could
+  forge claim origin. Authority now selects the action from current durable state
+  and terminal outcomes replay regardless of attempt identity.
+
+The final independent review reported no critical, high, medium, or low findings
+and approved Phase 5.
+
+#### Final validation
+
+Passed on 2026-08-12:
+
+* Clean workspace build and typecheck
+* Biome check across 62 files
+* Complete workspace suite: 16 files and 375 tests
+* Focused runner and SQLite authority suites: 80 tests
+* Architecture boundaries across 83 source files
+* Documentation links across 17 Markdown files
+* `git diff --check`
+* SQLite command-authority benchmark: 15.69 ms p99 across 100 samples, below the
+  25 ms threshold
+
+One benchmark run immediately after an earlier full test suite measured 27.67 ms
+p99. Two immediate isolated reruns measured 14.18 ms and 15.93 ms, and the exact
+test-then-benchmark sequence subsequently measured 14.94 ms. The final clean
+sequence measured 15.69 ms. The isolated outlier was retained in this record and
+was not reproducible as a history-growth regression.
+
+#### Remaining risks
+
+* A trusted planner must derive queued effect commands from canonical graph and
+  context authority rather than expose arbitrary effect dispatch.
+* Supervisor and foreground recovery must compose this same authority-selected
+  claim protocol rather than introduce another execution path.
 
 ## Entry template
 

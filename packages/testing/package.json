@@ -11,6 +11,10 @@
     "./authority-conformance": {
       "types": "./dist/authority-conformance.d.ts",
       "default": "./dist/authority-conformance.js"
+    },
+    "./runner-conformance": {
+      "types": "./dist/runner-authority-conformance.d.ts",
+      "default": "./dist/runner-authority-conformance.js"
     }
   },
   "scripts": {
