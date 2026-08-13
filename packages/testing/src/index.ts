@@ -1,8 +1,13 @@
 import {
   compileWorkflowGraph,
   consumerKey,
+  createWorkerContextBase,
+  createWorkerDispatch,
+  createWorkerModelRouteSelection,
   criterionId,
   definitionGeneration,
+  deriveCompletionRequirements,
+  runId as kernelRunId,
   phaseId,
   type Sha256,
   sha256Digest,
@@ -16,7 +21,7 @@ import {
   decodeCommandEnvelope,
   PROTOCOL_VERSION,
 } from "@senawa/protocol";
-import type { AdmissionFacts, AllocationKind } from "@senawa/runtime";
+import { type AdmissionFacts, type AllocationKind, renderPromptPack } from "@senawa/runtime";
 
 export interface DeterministicSequence {
   next(): string;
@@ -113,6 +118,74 @@ export function createRuntimeGraph(revision = 1) {
     },
     deterministicSha256,
   );
+}
+
+export function createWorkerExecutionFixture(graph = createRuntimeGraph()) {
+  const contextTask = {
+    taskId: runtimeFixture.task.taskId,
+    definitionGeneration: runtimeFixture.task.definitionGeneration,
+  };
+  const context = createWorkerContextBase(
+    {
+      task: contextTask,
+      graphRevisionDigest: graph.revisionDigest,
+      configurationSnapshotDigest: sha256Digest("d".repeat(64)),
+      contracts: [],
+      dependencyBarrier: { task: contextTask, dependencies: [] },
+      assets: [],
+      repositoryBase: {
+        commitDigest: sha256Digest("1".repeat(64)),
+        treeDigest: sha256Digest("2".repeat(64)),
+      },
+      modelPolicy: {
+        key: consumerKey("worker-policy"),
+        policyDigest: sha256Digest("3".repeat(64)),
+        orderedRoutesDigest: sha256Digest("4".repeat(64)),
+      },
+      role: { key: consumerKey("implementer"), roleDigest: sha256Digest("5".repeat(64)) },
+      capabilities: ["worker.submit.completion"],
+      budgets: [{ unit: "spend-nano", limit: 2_000 }],
+    },
+    deterministicSha256,
+  );
+  const dispatchInput = {
+    repositoryId: runtimeFixture.repositoryId,
+    runId: kernelRunId(runtimeFixture.runId),
+    ordinal: 1,
+    workerPrincipalId: "principal_worker",
+    roleKey: consumerKey("implementer"),
+    capabilities: ["worker.submit.completion"],
+    promptPackDigest: sha256Digest("0".repeat(64)),
+  };
+  const provisional = createWorkerDispatch(dispatchInput, context, deterministicSha256);
+  const prompt = renderPromptPack(context, provisional, deterministicSha256, 65_536);
+  const dispatch = createWorkerDispatch(
+    { ...dispatchInput, promptPackDigest: prompt.digest },
+    context,
+    deterministicSha256,
+  );
+  const routeSelection = createWorkerModelRouteSelection(
+    {
+      routeIndex: 0,
+      provider: "github-copilot",
+      model: "gpt-5-mini",
+      maxTurns: 4,
+      maxSubmissions: 4,
+      maxMillidollars: 2_000,
+      maxAiCredits: 1,
+    },
+    context,
+    dispatch,
+    deterministicSha256,
+  );
+  const completionRequirements = deriveCompletionRequirements(
+    graph,
+    [dispatch.task],
+    deterministicSha256,
+  )[0];
+  if (completionRequirements === undefined)
+    throw new Error("Missing fixture completion requirements");
+  return Object.freeze({ context, dispatch, routeSelection, completionRequirements });
 }
 
 export function createAdmissionFixture(): {

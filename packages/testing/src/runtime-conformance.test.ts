@@ -17,6 +17,7 @@ import {
 import {
   createRoleAuthorizationPolicy,
   InMemoryAuthority,
+  type PageQueryError,
   RuntimeCommandService,
   type RuntimeDependencies,
 } from "@senawa/runtime";
@@ -266,9 +267,88 @@ describe("transport-independent runtime command conformance", () => {
     expect(history.map((receipt) => receipt.cursor)).toEqual(
       Array.from({ length: 15 }, (_, index) => index + 1),
     );
+    expect(
+      service.queryReceiptPage(runtimeFixture.repositoryId, runtimeFixture.runId, 0, 4),
+    ).toEqual(
+      expect.objectContaining({
+        afterCursor: 0,
+        latestCursor: 15,
+        hasMore: true,
+        receipts: history.slice(0, 4),
+      }),
+    );
+    expect(
+      service.queryReceiptPage(runtimeFixture.repositoryId, runtimeFixture.runId, 4, 11),
+    ).toEqual(
+      expect.objectContaining({
+        afterCursor: 4,
+        latestCursor: 15,
+        hasMore: false,
+        receipts: history.slice(4),
+      }),
+    );
     expect(service.queryEvents(runtimeFixture.repositoryId, runtimeFixture.runId, 12)).toHaveLength(
       3,
     );
+    const eventPage = service.queryEventPage(
+      runtimeFixture.repositoryId,
+      runtimeFixture.runId,
+      12,
+      2,
+    );
+    expect(eventPage).toEqual(
+      expect.objectContaining({
+        afterCursor: 12,
+        earliestAvailableCursor: 1,
+        latestCursor: 15,
+        hasMore: true,
+      }),
+    );
+    expect(eventPage.events.map(({ cursor }) => cursor)).toEqual([13, 14]);
+    expect(service.queryEventPage("repository_missing", "run_missing")).toEqual(
+      expect.objectContaining({
+        earliestAvailableCursor: 0,
+        latestCursor: 0,
+        hasMore: false,
+        events: [],
+      }),
+    );
+    const sparseService = createService();
+    instantiate(sparseService, "command_sparse-terminal-page");
+    const sparseRun = [...sparseService.authority.runs.values()][0];
+    if (sparseRun === undefined) throw new Error("Expected sparse paging fixture run");
+    sparseRun.cursor = 8;
+    expect(
+      sparseService.queryEventPage(runtimeFixture.repositoryId, runtimeFixture.runId, 7),
+    ).toEqual(
+      expect.objectContaining({
+        afterCursor: 7,
+        earliestAvailableCursor: 1,
+        latestCursor: 8,
+        hasMore: false,
+        events: [],
+      }),
+    );
+    expect(() =>
+      service.queryReceiptPage(runtimeFixture.repositoryId, runtimeFixture.runId, 0, 0),
+    ).toThrow(TypeError);
+    expect(() =>
+      service.queryEventPage(runtimeFixture.repositoryId, runtimeFixture.runId, -1, 1_025),
+    ).toThrow(TypeError);
+    expect(() =>
+      service.queryReceiptPage(
+        runtimeFixture.repositoryId,
+        runtimeFixture.runId,
+        history.length + 1,
+      ),
+    ).toThrowError(expect.objectContaining<Partial<PageQueryError>>({ code: "cursor-ahead" }));
+    expect(() => service.queryEventPage("repository_missing", "run_missing", 1)).toThrowError(
+      expect.objectContaining<Partial<PageQueryError>>({ code: "cursor-ahead" }),
+    );
+    sparseRun.events.shift();
+    expect(() =>
+      sparseService.queryEventPage(runtimeFixture.repositoryId, runtimeFixture.runId, 0),
+    ).toThrowError(expect.objectContaining<Partial<PageQueryError>>({ code: "event-replay-gap" }));
 
     const serialized = service.authority.toCanonicalJson();
     const restarted = createService(

@@ -64,6 +64,8 @@ export interface CommandEnvelope {
   readonly expiresAt?: string;
 }
 
+export type CommandSubmission = Omit<CommandEnvelope, "principal" | "transport">;
+
 export type ReceiptStatus =
   | "queued"
   | "claimed"
@@ -95,6 +97,59 @@ export interface DurableReceipt {
   readonly error?: ErrorEnvelope;
 }
 
+export interface ReceiptPage {
+  readonly apiVersion: ProtocolVersion;
+  readonly repositoryId: RepositoryId;
+  readonly runId: RunId;
+  readonly afterCursor: number;
+  readonly latestCursor: number;
+  readonly hasMore: boolean;
+  readonly receipts: readonly DurableReceipt[];
+}
+
+export type SupervisorAllocationKind = "approval" | "stream-event";
+
+export interface SupervisorAllocationFact {
+  readonly kind: SupervisorAllocationKind;
+  readonly id: OpaqueIdentity;
+}
+
+export interface SupervisorAdmissionFacts {
+  readonly currentTime: string;
+  readonly facts: JsonValue;
+  readonly allocations: readonly SupervisorAllocationFact[];
+}
+
+export type SupervisorReceiptStatus = "queued" | "claimed" | "terminal";
+
+export interface SupervisorReceipt {
+  readonly sequence: number;
+  readonly commandId: CommandId;
+  readonly repositoryId: RepositoryId;
+  readonly runId: RunId;
+  readonly status: SupervisorReceiptStatus;
+  readonly recordedAt: string;
+  readonly terminalReceipt?: DurableReceipt;
+}
+
+export type SupervisorWakeReason = "command-accepted";
+
+export interface SupervisorWake {
+  readonly repositoryId: RepositoryId;
+  readonly runId: RunId;
+  readonly generation: number;
+  readonly acknowledgedGeneration: number;
+  readonly notBefore: string;
+  readonly reasons: readonly SupervisorWakeReason[];
+}
+
+export type SupervisorMode = "running" | "draining" | "drained" | "stopped";
+
+export interface SupervisorServiceRecord {
+  readonly mode: SupervisorMode;
+  readonly changedAt: string;
+}
+
 export interface EventStreamFrame {
   readonly apiVersion: ProtocolVersion;
   readonly cursor: number;
@@ -106,6 +161,18 @@ export interface EventStreamFrame {
   readonly payload: JsonValue;
   readonly payloadDigest: string;
   readonly commandId?: CommandId;
+}
+
+export interface EventReplayPage {
+  readonly apiVersion: ProtocolVersion;
+  readonly repositoryId: RepositoryId;
+  readonly runId: RunId;
+  readonly afterCursor: number;
+  readonly earliestAvailableCursor: number;
+  /** Latest workflow/run authority cursor, which may exceed the latest available event cursor. */
+  readonly latestCursor: number;
+  readonly hasMore: boolean;
+  readonly events: readonly EventStreamFrame[];
 }
 
 export interface ProjectionEnvelope {

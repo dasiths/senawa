@@ -1,4 +1,6 @@
 import type {
+  AsyncEffectHost,
+  AsyncEffectHostContext,
   EffectHost,
   EffectInspection,
   EffectIntent,
@@ -117,6 +119,33 @@ export class FakeEffectHost implements EffectHost {
     };
     this.observations.set(intent.command.operationId, observation);
     return observation;
+  }
+}
+
+export class FakeAsyncEffectHost implements AsyncEffectHost {
+  readonly host: FakeEffectHost;
+  readonly contexts: AsyncEffectHostContext[] = [];
+
+  constructor(options: FakeEffectHostOptions = {}) {
+    this.host = new FakeEffectHost(options);
+  }
+
+  async dispatch(
+    intent: EffectIntent,
+    context: AsyncEffectHostContext,
+  ): Promise<EffectObservation> {
+    this.contexts.push(context);
+    return this.host.dispatch(intent);
+  }
+
+  async inspect(intent: EffectIntent, context: AsyncEffectHostContext): Promise<EffectInspection> {
+    this.contexts.push(context);
+    return this.host.inspect(intent);
+  }
+
+  async cancel(intent: EffectIntent, context: AsyncEffectHostContext): Promise<EffectObservation> {
+    this.contexts.push(context);
+    return this.host.cancel(intent);
   }
 }
 

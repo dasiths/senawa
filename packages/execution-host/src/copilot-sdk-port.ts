@@ -91,4 +91,6 @@ export interface CopilotSdkPort {
     config: CopilotSdkResumeSessionConfig,
   ): Promise<CopilotSdkSessionPort | undefined>;
   createSession(config: CopilotSdkSessionConfig): Promise<CopilotSdkSessionPort>;
+  sessionMetadataExists?(sessionId: string): Promise<boolean>;
+  abortSession?(sessionId: string): Promise<boolean>;
 }

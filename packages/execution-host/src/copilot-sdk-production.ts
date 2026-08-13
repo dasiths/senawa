@@ -27,6 +27,7 @@ export class ProductionCopilotSdkPort implements CopilotSdkPort {
   readonly workingDirectory: string;
   readonly clientOwnership: "port-created" | "shared";
   readonly #client: CopilotClient;
+  readonly #activeSessions = new Map<string, ProductionCopilotSdkSession>();
 
   private constructor(
     client: CopilotClient,
@@ -75,7 +76,7 @@ export class ProductionCopilotSdkPort implements CopilotSdkPort {
   ): Promise<CopilotSdkSessionPort | undefined> {
     try {
       const session = await this.#client.resumeSession(sessionId, resumeConfig(config));
-      return new ProductionCopilotSdkSession(session);
+      return this.#track(session);
     } catch (error) {
       let metadata: Awaited<ReturnType<CopilotClient["getSessionMetadata"]>>;
       try {
@@ -90,7 +91,18 @@ export class ProductionCopilotSdkPort implements CopilotSdkPort {
 
   async createSession(config: CopilotSdkSessionConfig): Promise<CopilotSdkSessionPort> {
     const session = await this.#client.createSession(createConfig(config));
-    return new ProductionCopilotSdkSession(session);
+    return this.#track(session);
+  }
+
+  async sessionMetadataExists(sessionId: string): Promise<boolean> {
+    return (await this.#client.getSessionMetadata(sessionId)) !== undefined;
+  }
+
+  async abortSession(sessionId: string): Promise<boolean> {
+    const session = this.#activeSessions.get(sessionId);
+    if (session === undefined) return false;
+    await session.abort();
+    return true;
   }
 
   async stopOwnedClient(): Promise<readonly Error[]> {
@@ -99,10 +111,23 @@ export class ProductionCopilotSdkPort implements CopilotSdkPort {
     }
     return this.#client.stop();
   }
+
+  #track(session: CopilotSession): ProductionCopilotSdkSession {
+    const tracked = new ProductionCopilotSdkSession(session, () => {
+      if (this.#activeSessions.get(session.sessionId) === tracked) {
+        this.#activeSessions.delete(session.sessionId);
+      }
+    });
+    this.#activeSessions.set(session.sessionId, tracked);
+    return tracked;
+  }
 }
 
 class ProductionCopilotSdkSession implements CopilotSdkSessionPort {
-  constructor(readonly session: CopilotSession) {}
+  constructor(
+    readonly session: CopilotSession,
+    readonly onDisconnect: () => void,
+  ) {}
 
   get sessionId(): string {
     return this.session.sessionId;
@@ -117,7 +142,11 @@ class ProductionCopilotSdkSession implements CopilotSdkSessionPort {
   }
 
   async disconnect(): Promise<void> {
-    await this.session.disconnect();
+    try {
+      await this.session.disconnect();
+    } finally {
+      this.onDisconnect();
+    }
   }
 }
 

@@ -19,11 +19,20 @@ import {
 const execute = promisify(execFile);
 const EXPECTED_HELP = `Senawa ${SENAWA_VERSION}
 
-Usage: senawa <command> [path]
+Usage: senawa <command> [arguments]
 
 Commands:
-  doctor [path]  Validate a JSON workflow configuration (default: senawa.json)
-  init [path]    Create a versioned example configuration (default: senawa.json)
+  doctor [path]                         Validate workflow configuration
+  init [path]                           Create example workflow configuration
+  service start|run|status|drain|stop   Manage the local supervisor
+  service logs [after]                  Read bounded supervisor logs
+  service recover <repository> <run>    Recover a run under the service fence
+  command submit <json-path|->          Submit a command through local IPC
+  receipt get <command>                 Read the latest command receipt
+  receipt list <repository> <run>       List durable receipts
+  event list <repository> <run>         List durable events
+  projection get <repository> <run>     Read the phase projection
+  portal                                Create a one-time portal URL
 
 Options:
   -h, --help     Show help

@@ -29,6 +29,7 @@ import { canonicalStringify, PROTOCOL_VERSION } from "@senawa/protocol";
 import {
   createRoleAuthorizationPolicy,
   FencedRunner,
+  type PageQueryError,
   type RuntimeDependencies,
 } from "@senawa/runtime";
 import {
@@ -1548,6 +1549,96 @@ describe("SQLite runner durability and fencing", () => {
 });
 
 describe("SQLite authority durability", () => {
+  it("allows page reads inside an existing transaction on the same connection", () => {
+    const sandbox = createSandbox();
+    let receiptPage: ReturnType<SqliteAuthority["queryReceiptPage"]> | undefined;
+    let eventPage: ReturnType<SqliteAuthority["queryEventPage"]> | undefined;
+    let armed = true;
+    let authority!: SqliteAuthority;
+    authority = new SqliteAuthority({
+      ...sandbox.options,
+      faultInjector(point) {
+        if (armed && point === "after-command-execution") {
+          armed = false;
+          receiptPage = authority.queryReceiptPage(
+            runtimeFixture.repositoryId,
+            runtimeFixture.runId,
+          );
+          eventPage = authority.queryEventPage(runtimeFixture.repositoryId, runtimeFixture.runId);
+        }
+      },
+    });
+    try {
+      expect(
+        authority.submit(instantiateCommand("command_nested-page-read"), admission()).status,
+      ).toBe("completed");
+      expect(receiptPage).toMatchObject({ latestCursor: 0, receipts: [] });
+      expect(eventPage).toMatchObject({
+        earliestAvailableCursor: 0,
+        latestCursor: 0,
+        events: [],
+      });
+    } finally {
+      authority.close();
+      sandbox.dispose();
+    }
+  });
+
+  it.each([
+    ["receipt", "after-receipt-page-metadata-read"],
+    ["event", "after-event-page-metadata-read"],
+  ] as const)(
+    "reads one consistent %s page snapshot across an independent commit",
+    (kind, point) => {
+      const sandbox = createSandbox();
+      const writer = new SqliteAuthority(sandbox.options);
+      const snapshotAdmission = createAdmissionFixture();
+      expect(
+        writer.submit(
+          instantiateCommand(`command_${kind}-snapshot-initial`),
+          snapshotAdmission.at(),
+        ).status,
+      ).toBe("completed");
+      let armed = true;
+      let committed = false;
+      const reader = new SqliteAuthority({
+        ...sandbox.options,
+        faultInjector(candidate) {
+          if (armed && candidate === point) {
+            armed = false;
+            writer.submit(
+              instantiateCommand(`command_${kind}-snapshot-concurrent`),
+              snapshotAdmission.at(),
+            );
+            committed = true;
+          }
+        },
+      });
+      try {
+        const firstPage =
+          kind === "receipt"
+            ? reader.queryReceiptPage(runtimeFixture.repositoryId, runtimeFixture.runId, 0, 10)
+            : reader.queryEventPage(runtimeFixture.repositoryId, runtimeFixture.runId, 0, 10);
+        expect(committed).toBe(true);
+        expect(firstPage.latestCursor).toBe(3);
+        const firstItems = "receipts" in firstPage ? firstPage.receipts : firstPage.events;
+        expect(firstItems.map(({ cursor }) => cursor)).toEqual([1, 2, 3]);
+
+        const freshPage =
+          kind === "receipt"
+            ? reader.queryReceiptPage(runtimeFixture.repositoryId, runtimeFixture.runId, 0, 10)
+            : reader.queryEventPage(runtimeFixture.repositoryId, runtimeFixture.runId, 0, 10);
+        expect(freshPage.latestCursor).toBe(6);
+        const freshItems = "receipts" in freshPage ? freshPage.receipts : freshPage.events;
+        expect(freshItems.map(({ cursor }) => cursor)).toEqual([1, 2, 3, 4, 5, 6]);
+      } finally {
+        reader.close();
+        writer.close();
+        sandbox.dispose();
+      }
+    },
+  );
+
   it("allows two concurrent constructors to initialize one database", async () => {
     const sandbox = createSandbox();
     const workerSource = `const { parentPort, workerData } = require("node:worker_threads");
@@ -1632,6 +1723,25 @@ describe("SQLite authority durability", () => {
       await writerExit;
       expect(receipt.status).toBe("completed");
       expect(second.queryReceipt(receipt.commandId)).toEqual(receipt);
+      expect(
+        second.queryReceiptPage(runtimeFixture.repositoryId, runtimeFixture.runId, 0, 2),
+      ).toEqual(
+        expect.objectContaining({
+          latestCursor: 3,
+          hasMore: true,
+          receipts: expect.arrayContaining([expect.objectContaining({ cursor: 1 })]),
+        }),
+      );
+      expect(
+        second.queryEventPage(runtimeFixture.repositoryId, runtimeFixture.runId, 2, 1),
+      ).toEqual(
+        expect.objectContaining({
+          earliestAvailableCursor: 1,
+          latestCursor: 3,
+          hasMore: false,
+          events: [expect.objectContaining({ cursor: 3 })],
+        }),
+      );
       expect(() => second.compareAndSwapSnapshot(staleRevision, staleSnapshot)).toThrow(
         StaleAuthorityRevisionError,
       );
@@ -1739,6 +1849,71 @@ describe("SQLite authority durability", () => {
       expect(
         authority.queryReceiptHistory(runtimeFixture.repositoryId, runtimeFixture.runId),
       ).toHaveLength(12);
+      const firstReceiptPage = authority.queryReceiptPage(
+        runtimeFixture.repositoryId,
+        runtimeFixture.runId,
+        0,
+        5,
+      );
+      expect(firstReceiptPage.receipts.map(({ cursor }) => cursor)).toEqual([1, 2, 3, 4, 5]);
+      expect(firstReceiptPage).toEqual(
+        expect.objectContaining({ latestCursor: 12, hasMore: true }),
+      );
+      expect(
+        authority.queryReceiptPage(runtimeFixture.repositoryId, runtimeFixture.runId, 5, 7),
+      ).toEqual(expect.objectContaining({ latestCursor: 12, hasMore: false }));
+      expect(
+        authority.queryEventPage(runtimeFixture.repositoryId, runtimeFixture.runId, 10, 2),
+      ).toEqual(
+        expect.objectContaining({
+          earliestAvailableCursor: 1,
+          latestCursor: 12,
+          hasMore: false,
+        }),
+      );
+      expect(() =>
+        authority.queryReceiptPage(runtimeFixture.repositoryId, runtimeFixture.runId, 0, 1_025),
+      ).toThrow(TypeError);
+    } finally {
+      authority.close();
+      sandbox.dispose();
+    }
+  });
+
+  it("returns a sparse terminal event page and typed cursor boundary errors", () => {
+    const sandbox = createSandbox();
+    const authority = new SqliteAuthority(sandbox.options);
+    try {
+      expect(
+        authority.submit(instantiateCommand("command_sparse-terminal-page"), admission()).status,
+      ).toBe("completed");
+      const database = new Database(sandbox.options.databasePath);
+      database.exec("UPDATE runs SET cursor = 8");
+      database.exec("DELETE FROM event_frames WHERE cursor = 1");
+      database.close();
+
+      expect(
+        authority.queryEventPage(runtimeFixture.repositoryId, runtimeFixture.runId, 7),
+      ).toEqual(
+        expect.objectContaining({
+          afterCursor: 7,
+          earliestAvailableCursor: 2,
+          latestCursor: 8,
+          hasMore: false,
+          events: [],
+        }),
+      );
+      expect(() =>
+        authority.queryReceiptPage(runtimeFixture.repositoryId, runtimeFixture.runId, 9),
+      ).toThrowError(expect.objectContaining<Partial<PageQueryError>>({ code: "cursor-ahead" }));
+      expect(() =>
+        authority.queryEventPage(runtimeFixture.repositoryId, runtimeFixture.runId, 9),
+      ).toThrowError(expect.objectContaining<Partial<PageQueryError>>({ code: "cursor-ahead" }));
+      expect(() =>
+        authority.queryEventPage(runtimeFixture.repositoryId, runtimeFixture.runId, 0),
+      ).toThrowError(
+        expect.objectContaining<Partial<PageQueryError>>({ code: "event-replay-gap" }),
+      );
     } finally {
       authority.close();
       sandbox.dispose();
@@ -2142,7 +2317,7 @@ describe("SQLite authority durability", () => {
 
     const newerPath = join(sandbox.root, "newer.db");
     const newer = new Database(newerPath);
-    newer.pragma("user_version = 4");
+    newer.pragma("user_version = 5");
     newer.close();
     expect(
       () =>

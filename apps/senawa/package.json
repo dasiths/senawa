@@ -4,13 +4,22 @@
   "private": true,
   "type": "module",
   "bin": {
-    "senawa": "./dist/main.js"
+    "senawa": "./dist/main.js",
+    "senawa-service": "./dist/main-service.js"
   },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@senawa/configuration": "workspace:*"
+    "@senawa/configuration": "workspace:*",
+    "@senawa/execution-host": "workspace:*",
+    "@senawa/protocol": "workspace:*",
+    "@senawa/runtime": "workspace:*",
+    "@senawa/storage-sqlite": "workspace:*",
+    "@senawa/supervisor": "workspace:*"
+  },
+  "devDependencies": {
+    "@senawa/testing": "workspace:*"
   }
 }

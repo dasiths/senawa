@@ -28,8 +28,22 @@ import {
 import {
   canonicalStringify,
   type DurableReceipt,
+  decodeCanonicalJsonValue,
+  decodeCommandEnvelope,
+  decodeDurableReceipt,
+  decodeEventReplayPage,
+  decodeEventStreamFrame,
+  decodeReceiptPage,
+  decodeSupervisorAdmissionFacts,
+  decodeSupervisorReceipt,
+  decodeSupervisorServiceRecord,
+  decodeSupervisorWake,
+  type EventReplayPage,
   type EventStreamFrame,
+  PROTOCOL_LIMITS,
+  PROTOCOL_VERSION,
   type ProjectionEnvelope,
+  type ReceiptPage,
   validateOpaqueIdentity,
 } from "@senawa/protocol";
 import {
@@ -58,6 +72,7 @@ import {
   InMemoryAuthority,
   InMemoryContextAuthority,
   type InMemoryRunnerRunInput,
+  PageQueryError,
   type PersistIntentRequest,
   type PersistIntentResult,
   type QueuedEffectCommand,
@@ -83,7 +98,7 @@ import {
 } from "@senawa/runtime";
 import Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 const WAL_AUTOCHECKPOINT_PAGES = 16_384;
 const MIGRATIONS_DIRECTORY = fileURLToPath(new URL("../migrations", import.meta.url));
@@ -92,6 +107,8 @@ export type SqliteFaultPoint =
   | "after-command-execution"
   | "before-command-commit"
   | "after-command-commit-before-ack"
+  | "after-receipt-page-metadata-read"
+  | "after-event-page-metadata-read"
   | "after-asset-stage"
   | "after-asset-install"
   | "before-asset-descriptor-commit"
@@ -124,6 +141,15 @@ export interface AcquireLeaseInput {
   readonly ownerId: string;
   readonly currentTime: string;
   readonly expiresAt: string;
+}
+
+export interface RenewLeaseInput extends LeaseGrant {
+  readonly currentTime: string;
+  readonly newExpiresAt: string;
+}
+
+export interface ReleaseLeaseInput extends LeaseGrant {
+  readonly currentTime: string;
 }
 
 export interface CancellationPlaceholderInput {
@@ -392,15 +418,99 @@ export class SqliteAuthority
   }
 
   queryReceipt(commandId: string): DurableReceipt | undefined {
-    return this.#readService().queryReceipt(commandId);
+    validateOpaqueIdentity(commandId);
+    const row = this.#database
+      .prepare<[string], { terminal_receipt_json: string }>(
+        "SELECT terminal_receipt_json FROM commands WHERE command_id = ?",
+      )
+      .get(commandId);
+    return row === undefined ? undefined : decodeDurableReceipt(row.terminal_receipt_json);
   }
 
   queryReceiptHistory(repositoryId: string, runId: string): readonly DurableReceipt[] {
     return this.#readService().queryReceiptHistory(repositoryId, runId);
   }
 
+  queryReceiptPage(
+    repositoryId: string,
+    runId: string,
+    afterCursor = 0,
+    limit: number = PROTOCOL_LIMITS.maxPageItems,
+  ): ReceiptPage {
+    validateBoundedPageRequest(afterCursor, limit);
+    const runKey = canonicalStringify([repositoryId, runId]);
+    const readPage = this.#database.transaction(() => {
+      const latestCursor =
+        this.#database
+          .prepare<[string], { cursor: number }>("SELECT cursor FROM runs WHERE run_key = ?")
+          .get(runKey)?.cursor ?? 0;
+      validatePageCursor(afterCursor, latestCursor);
+      this.#fault("after-receipt-page-metadata-read");
+      const rows = this.#database
+        .prepare<[string, number, number], { canonical_receipt: string }>(
+          `SELECT canonical_receipt FROM receipt_history
+           WHERE run_key = ? AND cursor > ? ORDER BY cursor LIMIT ?`,
+        )
+        .all(runKey, afterCursor, limit + 1);
+      return { latestCursor, rows };
+    });
+    const { latestCursor, rows } = readPage.deferred();
+    return decodeReceiptPage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      afterCursor,
+      latestCursor,
+      hasMore: rows.length > limit,
+      receipts: rows.slice(0, limit).map((row) => decodeDurableReceipt(row.canonical_receipt)),
+    });
+  }
+
   queryEvents(repositoryId: string, runId: string, afterCursor = 0): readonly EventStreamFrame[] {
     return this.#readService().queryEvents(repositoryId, runId, afterCursor);
+  }
+
+  queryEventPage(
+    repositoryId: string,
+    runId: string,
+    afterCursor = 0,
+    limit: number = PROTOCOL_LIMITS.maxPageItems,
+  ): EventReplayPage {
+    validateBoundedPageRequest(afterCursor, limit);
+    const runKey = canonicalStringify([repositoryId, runId]);
+    const readPage = this.#database.transaction(() => {
+      const latestCursor =
+        this.#database
+          .prepare<[string], { cursor: number }>("SELECT cursor FROM runs WHERE run_key = ?")
+          .get(runKey)?.cursor ?? 0;
+      const earliestAvailableCursor =
+        this.#database
+          .prepare<[string], { earliest_cursor: number | null }>(
+            "SELECT MIN(cursor) AS earliest_cursor FROM event_frames WHERE run_key = ?",
+          )
+          .get(runKey)?.earliest_cursor ?? 0;
+      validatePageCursor(afterCursor, latestCursor);
+      validateReplayCursor(afterCursor, earliestAvailableCursor);
+      this.#fault("after-event-page-metadata-read");
+      const rows = this.#database
+        .prepare<[string, number, number], { canonical_frame: string }>(
+          `SELECT canonical_frame FROM event_frames
+           WHERE run_key = ? AND cursor > ? ORDER BY cursor LIMIT ?`,
+        )
+        .all(runKey, afterCursor, limit + 1);
+      return { earliestAvailableCursor, latestCursor, rows };
+    });
+    const { earliestAvailableCursor, latestCursor, rows } = readPage.deferred();
+    return decodeEventReplayPage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      afterCursor,
+      earliestAvailableCursor,
+      latestCursor,
+      hasMore: rows.length > limit,
+      events: rows.slice(0, limit).map((row) => decodeEventStreamFrame(row.canonical_frame)),
+    });
   }
 
   queryProjection(repositoryId: string, runId: string): ProjectionEnvelope | undefined {
@@ -439,6 +549,14 @@ export class SqliteAuthority
 
   acquireLease(input: AcquireLeaseInput): LeaseGrant {
     return acquireLeaseTransaction(this.#database, input);
+  }
+
+  renewLease(input: RenewLeaseInput): LeaseGrant {
+    return renewLeaseTransaction(this.#database, input);
+  }
+
+  releaseLease(input: ReleaseLeaseInput): void {
+    releaseLeaseTransaction(this.#database, input);
   }
 
   recordCancellationPlaceholder(input: CancellationPlaceholderInput): void {
@@ -1631,6 +1749,9 @@ function acquireLeaseTransaction(
       current.owner_id === input.ownerId &&
       Date.parse(current.expires_at) > Date.parse(input.currentTime)
     ) {
+      if (Date.parse(input.expiresAt) < Date.parse(current.expires_at)) {
+        throw new TypeError("Lease reacquisition must not shorten a live expiry");
+      }
       fence = current.fence;
       database
         .prepare("UPDATE leases SET expires_at = ? WHERE resource_key = ?")
@@ -1654,6 +1775,80 @@ function acquireLeaseTransaction(
       fence,
       expiresAt: input.expiresAt,
     };
+  } catch (error) {
+    if (database.inTransaction) database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function renewLeaseTransaction(database: Database.Database, input: RenewLeaseInput): LeaseGrant {
+  validateStorageIdentifier(input.resourceKey, "resourceKey");
+  validateStorageIdentifier(input.ownerId, "ownerId");
+  validateTimestamp(input.currentTime, "currentTime");
+  validateTimestamp(input.expiresAt, "expiresAt");
+  validateTimestamp(input.newExpiresAt, "newExpiresAt");
+  if (
+    !Number.isSafeInteger(input.fence) ||
+    input.fence <= 0 ||
+    Date.parse(input.newExpiresAt) <= Date.parse(input.expiresAt) ||
+    Date.parse(input.currentTime) >= Date.parse(input.expiresAt)
+  ) {
+    throw new TypeError("Lease renewal requires a live fence and a later expiry");
+  }
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const result = database
+      .prepare(
+        `UPDATE leases SET expires_at = ?
+         WHERE resource_key = ? AND owner_id = ? AND fence = ? AND expires_at = ?`,
+      )
+      .run(input.newExpiresAt, input.resourceKey, input.ownerId, input.fence, input.expiresAt);
+    if (result.changes !== 1) throw new StaleLeaseFenceError(input.resourceKey, input.fence);
+    database.exec("COMMIT");
+    return {
+      resourceKey: input.resourceKey,
+      ownerId: input.ownerId,
+      fence: input.fence,
+      expiresAt: input.newExpiresAt,
+    };
+  } catch (error) {
+    if (database.inTransaction) database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function releaseLeaseTransaction(database: Database.Database, input: ReleaseLeaseInput): void {
+  validateStorageIdentifier(input.resourceKey, "resourceKey");
+  validateStorageIdentifier(input.ownerId, "ownerId");
+  validateTimestamp(input.currentTime, "currentTime");
+  validateTimestamp(input.expiresAt, "expiresAt");
+  if (!Number.isSafeInteger(input.fence) || input.fence <= 0) {
+    throw new TypeError("Lease fence must be a positive safe integer");
+  }
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const current = database
+      .prepare<[string], LeaseRow>(
+        "SELECT resource_key, owner_id, fence, expires_at FROM leases WHERE resource_key = ?",
+      )
+      .get(input.resourceKey);
+    if (
+      current === undefined ||
+      current.owner_id !== input.ownerId ||
+      current.fence !== input.fence ||
+      current.expires_at !== input.expiresAt ||
+      Date.parse(input.currentTime) >= Date.parse(current.expires_at)
+    ) {
+      throw new StaleLeaseFenceError(input.resourceKey, input.fence);
+    }
+    const result = database
+      .prepare(
+        `UPDATE leases SET expires_at = ?
+         WHERE resource_key = ? AND owner_id = ? AND fence = ? AND expires_at = ?`,
+      )
+      .run(input.currentTime, input.resourceKey, input.ownerId, input.fence, input.expiresAt);
+    if (result.changes !== 1) throw new StaleLeaseFenceError(input.resourceKey, input.fence);
+    database.exec("COMMIT");
   } catch (error) {
     if (database.inTransaction) database.exec("ROLLBACK");
     throw error;
@@ -1910,6 +2105,14 @@ export class SqliteContextBroker {
     return this.#transact((broker) => broker.registerDispatch(input));
   }
 
+  loadWorkerDispatch(dispatchId: string) {
+    return this.#loadBroker().loadWorkerDispatch(dispatchId);
+  }
+
+  loadWorkerDispatchProgress(dispatchId: string) {
+    return this.#loadBroker().loadWorkerDispatchProgress(dispatchId);
+  }
+
   grantAssetAccess(input: ContextGrantInput) {
     return this.#transact((broker) => broker.grantAssetAccess(input));
   }
@@ -1975,6 +2178,13 @@ export class SqliteContextBroker {
     } finally {
       this.#deliveringSubmissionIds.delete(submissionId);
     }
+  }
+
+  deliverCompletionOutboxOnce(): boolean {
+    const pending = [...this.#loadAuthority().completionOutbox.entries()]
+      .filter(([, fact]) => !fact.delivered)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))[0];
+    return pending === undefined ? false : this.deliverCompletionFact(pending[0]);
   }
 
   putContextAsset(binding: HistoricalAssetBinding, input: Uint8Array): void {
@@ -2167,6 +2377,10 @@ export class SqliteContextBroker {
       if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  #loadBroker(): ContextBroker {
+    return new ContextBroker(this.assets, this.dependencies, this.#loadAuthority());
   }
 
   #readContextState(): string {
@@ -2572,6 +2786,7 @@ function verifyDatabase(
   InMemoryAuthority.fromCanonicalJson(state.canonical_json, dependencies);
   verifyNormalizedSnapshot(database, parseSnapshot(state.canonical_json), dependencies);
   verifyContextTables(database, dependencies);
+  verifySupervisorTables(database);
   if (!verifyAssets) return;
   for (const descriptor of readAssetDescriptors(database)) {
     verifyAssetBytes(
@@ -2599,6 +2814,425 @@ function verifyContextTables(
   verifyNormalizedContextAuthority(database, authority);
   verifyAllContextAssetManifests(database, dependencies.sha256);
   verifyDurableContextReads(database, authority);
+}
+
+function verifySupervisorTables(database: Database.Database): void {
+  const repositoryRows = database
+    .prepare("SELECT repository_id FROM supervisor_repositories ORDER BY repository_id")
+    .all() as { readonly repository_id: string }[];
+  const repositoryIds = new Set(repositoryRows.map((row) => row.repository_id));
+  const registryRows = database
+    .prepare(
+      `SELECT repository_id, canonical_path, config_snapshot_id
+       FROM supervisor_repository_registry ORDER BY repository_id`,
+    )
+    .all() as {
+    readonly repository_id: string;
+    readonly canonical_path: string;
+    readonly config_snapshot_id: string;
+  }[];
+  for (const row of registryRows) {
+    validateOpaqueIdentity(row.repository_id);
+    validateOpaqueIdentity(row.config_snapshot_id);
+    if (
+      !repositoryIds.has(row.repository_id) ||
+      resolve(row.canonical_path) !== row.canonical_path
+    ) {
+      throw new Error("Supervisor repository registry row is invalid");
+    }
+  }
+  const runRows = database
+    .prepare(
+      `SELECT run_key, repository_id, run_id
+       FROM supervisor_runs ORDER BY run_key`,
+    )
+    .all() as {
+    readonly run_key: string;
+    readonly repository_id: string;
+    readonly run_id: string;
+  }[];
+  const commandRows = database
+    .prepare(
+      `SELECT command_id, run_key, accepted_sequence, canonical_envelope,
+              canonical_admission, state, accepted_at, accepted_at_ms,
+              claim_owner_id, claim_fence, claim_expires_at, claim_expires_at_ms,
+              terminal_receipt_json
+       FROM supervisor_commands ORDER BY run_key, accepted_sequence`,
+    )
+    .all() as SupervisorCommandVerificationRow[];
+  const receiptRows = database
+    .prepare(
+      `SELECT run_key, sequence, command_id, status, recorded_at, recorded_at_ms,
+              canonical_receipt
+       FROM supervisor_receipts ORDER BY run_key, sequence`,
+    )
+    .all() as SupervisorReceiptVerificationRow[];
+  const wakeRows = database
+    .prepare(
+      `SELECT w.run_key, r.repository_id, r.run_id, w.generation, w.ack_generation,
+              w.not_before, w.not_before_ms, w.reasons_json
+       FROM supervisor_wakes w
+       JOIN supervisor_runs r ON r.run_key = w.run_key
+       ORDER BY w.run_key`,
+    )
+    .all() as SupervisorWakeVerificationRow[];
+  const authorityCommandRows = database
+    .prepare(
+      `SELECT command_id, run_key, canonical_envelope, terminal_receipt_json
+       FROM commands ORDER BY command_id`,
+    )
+    .all() as {
+    readonly command_id: string;
+    readonly run_key: string;
+    readonly canonical_envelope: string;
+    readonly terminal_receipt_json: string;
+  }[];
+
+  const repositories = new Set<string>();
+  for (const row of repositoryRows) {
+    validateStorageIdentifier(row.repository_id, "supervisor repository_id");
+    repositories.add(row.repository_id);
+  }
+  if (repositories.size !== repositoryRows.length) {
+    throw new Error("Supervisor repositories contain duplicate identities");
+  }
+
+  const runs = new Map<
+    string,
+    {
+      readonly repositoryId: string;
+      readonly runId: string;
+      readonly commands: SupervisorCommandVerificationRow[];
+    }
+  >();
+  const referencedRepositories = new Set<string>();
+  for (const row of runRows) {
+    validateStorageIdentifier(row.repository_id, "supervisor run repository_id");
+    validateStorageIdentifier(row.run_id, "supervisor run run_id");
+    const expectedRunKey = canonicalStringify([row.repository_id, row.run_id]);
+    if (row.run_key !== expectedRunKey || runs.has(row.run_key)) {
+      throw new Error("Supervisor run identity does not match its canonical run key");
+    }
+    referencedRepositories.add(row.repository_id);
+    runs.set(row.run_key, {
+      repositoryId: row.repository_id,
+      runId: row.run_id,
+      commands: [],
+    });
+  }
+  if ([...referencedRepositories].some((repositoryId) => !repositories.has(repositoryId))) {
+    throw new Error("Supervisor run references a missing repository row");
+  }
+
+  const authorityCommands = new Map(authorityCommandRows.map((row) => [row.command_id, row]));
+  const commands = new Map<string, SupervisorCommandVerificationRow>();
+  for (const row of commandRows) {
+    const run = runs.get(row.run_key);
+    if (run === undefined || commands.has(row.command_id)) {
+      throw new Error("Supervisor command references an invalid run or duplicate command identity");
+    }
+    const envelope = decodeCommandEnvelope(row.canonical_envelope);
+    const admission = decodeSupervisorAdmissionFacts(row.canonical_admission);
+    if (
+      envelope.commandId !== row.command_id ||
+      envelope.repositoryId !== run.repositoryId ||
+      envelope.runId !== run.runId ||
+      admission.currentTime !== row.accepted_at ||
+      timestampEpoch(row.accepted_at, "supervisor accepted_at") !== row.accepted_at_ms ||
+      !Number.isSafeInteger(row.accepted_sequence) ||
+      row.accepted_sequence <= 0
+    ) {
+      throw new Error("Supervisor command columns diverge from canonical command content");
+    }
+    verifySupervisorClaimColumns(row);
+    const authorityCommand = authorityCommands.get(row.command_id);
+    if (authorityCommand !== undefined) {
+      const authorityEnvelope = decodeCommandEnvelope(authorityCommand.canonical_envelope);
+      const authorityReceipt = decodeDurableReceipt(authorityCommand.terminal_receipt_json);
+      if (
+        authorityCommand.run_key !== row.run_key ||
+        authorityCommand.canonical_envelope !== row.canonical_envelope ||
+        authorityEnvelope.commandId !== row.command_id ||
+        authorityReceipt.commandId !== row.command_id ||
+        authorityReceipt.repositoryId !== run.repositoryId ||
+        authorityReceipt.runId !== run.runId ||
+        authorityReceipt.status === "queued" ||
+        authorityReceipt.status === "claimed"
+      ) {
+        throw new Error("Supervisor command diverges from its underlying authority command");
+      }
+      if (row.state === "queued") {
+        throw new Error("Queued supervisor command cannot already exist in command authority");
+      }
+    }
+    if (row.state === "terminal") {
+      if (
+        row.terminal_receipt_json === null ||
+        authorityCommand === undefined ||
+        row.terminal_receipt_json !== authorityCommand.terminal_receipt_json
+      ) {
+        throw new Error("Terminal supervisor command lacks its exact authority receipt");
+      }
+      const terminal = decodeDurableReceipt(row.terminal_receipt_json);
+      if (
+        terminal.commandId !== row.command_id ||
+        terminal.repositoryId !== run.repositoryId ||
+        terminal.runId !== run.runId ||
+        terminal.status === "queued" ||
+        terminal.status === "claimed"
+      ) {
+        throw new Error("Terminal supervisor command receipt identity or status is invalid");
+      }
+    } else if (row.terminal_receipt_json !== null) {
+      throw new Error("Nonterminal supervisor command stores a terminal receipt");
+    }
+    commands.set(row.command_id, row);
+    run.commands.push(row);
+  }
+
+  for (const [runKey, run] of runs) {
+    if (run.commands.length === 0) {
+      throw new Error("Supervisor run must contain at least one command");
+    }
+    for (const [index, command] of run.commands.entries()) {
+      if (command.accepted_sequence !== index + 1 || command.run_key !== runKey) {
+        throw new Error("Supervisor accepted command sequence is not contiguous within its run");
+      }
+    }
+  }
+
+  const receiptsByCommand = new Map<string, SupervisorReceiptVerificationRow[]>();
+  const nextReceiptSequence = new Map<string, number>();
+  for (const row of receiptRows) {
+    const command = commands.get(row.command_id);
+    const run = runs.get(row.run_key);
+    const expectedSequence = nextReceiptSequence.get(row.run_key) ?? 1;
+    const receipt = decodeSupervisorReceipt(row.canonical_receipt);
+    if (
+      command === undefined ||
+      run === undefined ||
+      command.run_key !== row.run_key ||
+      row.sequence !== expectedSequence ||
+      receipt.sequence !== row.sequence ||
+      receipt.commandId !== row.command_id ||
+      receipt.repositoryId !== run.repositoryId ||
+      receipt.runId !== run.runId ||
+      receipt.status !== row.status ||
+      receipt.recordedAt !== row.recorded_at ||
+      timestampEpoch(row.recorded_at, "supervisor recorded_at") !== row.recorded_at_ms ||
+      ((row.status === "queued" || row.status === "terminal") &&
+        (row.recorded_at !== command.accepted_at || row.recorded_at_ms !== command.accepted_at_ms))
+    ) {
+      throw new Error("Supervisor receipt columns diverge from canonical staged history");
+    }
+    nextReceiptSequence.set(row.run_key, expectedSequence + 1);
+    const history = receiptsByCommand.get(row.command_id) ?? [];
+    history.push(row);
+    receiptsByCommand.set(row.command_id, history);
+  }
+
+  for (const command of commandRows) {
+    const history = receiptsByCommand.get(command.command_id) ?? [];
+    const expectedStatuses =
+      command.state === "queued"
+        ? ["queued"]
+        : command.state === "claimed"
+          ? ["queued", "claimed"]
+          : ["queued", "claimed", "terminal"];
+    if (
+      canonicalStringify(history.map((row) => row.status)) !== canonicalStringify(expectedStatuses)
+    ) {
+      throw new Error("Supervisor command staged history does not match its latest state");
+    }
+    const latest = history.at(-1);
+    if (latest === undefined || latest.status !== command.state) {
+      throw new Error("Supervisor command latest staged receipt does not match command state");
+    }
+    if (command.state === "terminal") {
+      const receipt = decodeSupervisorReceipt(latest.canonical_receipt);
+      if (
+        receipt.terminalReceipt === undefined ||
+        canonicalStringify(receipt.terminalReceipt) !== command.terminal_receipt_json
+      ) {
+        throw new Error("Supervisor terminal staged receipt does not match authority receipt");
+      }
+    }
+  }
+
+  if (wakeRows.length !== runs.size) {
+    throw new Error("Supervisor wakes do not exactly cover supervisor runs");
+  }
+  for (const row of wakeRows) {
+    const run = runs.get(row.run_key);
+    const reasons = JSON.parse(row.reasons_json) as unknown;
+    const wake = decodeSupervisorWake({
+      repositoryId: row.repository_id,
+      runId: row.run_id,
+      generation: row.generation,
+      acknowledgedGeneration: row.ack_generation,
+      notBefore: row.not_before,
+      reasons,
+    });
+    const latestCommand = run?.commands.at(-1);
+    const hasPendingWork = run?.commands.some((command) => command.state !== "terminal") ?? false;
+    if (
+      run === undefined ||
+      wake.repositoryId !== run.repositoryId ||
+      wake.runId !== run.runId ||
+      row.reasons_json !== canonicalStringify(wake.reasons) ||
+      row.generation !== run.commands.length ||
+      latestCommand === undefined ||
+      wake.notBefore !== latestCommand.accepted_at ||
+      timestampEpoch(row.not_before, "supervisor wake not_before") !== row.not_before_ms ||
+      (hasPendingWork && row.ack_generation >= row.generation) ||
+      (!hasPendingWork && row.ack_generation !== row.generation)
+    ) {
+      throw new Error("Supervisor wake does not match its run command state");
+    }
+  }
+
+  const serviceRows = database
+    .prepare(
+      `SELECT singleton, desired_mode, updated_at, updated_at_ms
+       FROM supervisor_service_state ORDER BY singleton`,
+    )
+    .all() as {
+    readonly singleton: number;
+    readonly desired_mode: string;
+    readonly updated_at: string;
+    readonly updated_at_ms: number;
+  }[];
+  if (serviceRows.length !== 1 || serviceRows[0]?.singleton !== 1) {
+    throw new Error("Supervisor service state must contain exactly one singleton");
+  }
+  const service = decodeSupervisorServiceRecord({
+    mode: serviceRows[0].desired_mode,
+    changedAt: serviceRows[0].updated_at,
+  });
+  if (
+    timestampEpoch(service.changedAt, "supervisor service changedAt") !==
+    serviceRows[0].updated_at_ms
+  ) {
+    throw new Error("Supervisor service timestamp does not match its epoch value");
+  }
+
+  const logRows = database
+    .prepare(
+      `SELECT cursor, recorded_at, recorded_at_ms, level, event, message, fields_json
+       FROM supervisor_logs ORDER BY cursor`,
+    )
+    .all() as {
+    readonly cursor: number;
+    readonly recorded_at: string;
+    readonly recorded_at_ms: number;
+    readonly level: string;
+    readonly event: string;
+    readonly message: string;
+    readonly fields_json: string;
+  }[];
+  let previousCursor = 0;
+  for (const row of logRows) {
+    const fields = decodeCanonicalJsonValue(row.fields_json);
+    if (
+      !Number.isSafeInteger(row.cursor) ||
+      row.cursor <= previousCursor ||
+      timestampEpoch(row.recorded_at, "supervisor log recordedAt") !== row.recorded_at_ms ||
+      !["debug", "info", "warn", "error"].includes(row.level) ||
+      row.event.length === 0 ||
+      row.event.length > 128 ||
+      row.message.length === 0 ||
+      row.message.length > 2_048 ||
+      containsControlCharacter(row.event) ||
+      containsControlCharacter(row.message) ||
+      canonicalStringify(fields) !== row.fields_json
+    ) {
+      throw new Error("Supervisor log row is invalid");
+    }
+    previousCursor = row.cursor;
+  }
+}
+
+function containsControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)) return true;
+  }
+  return false;
+}
+
+interface SupervisorCommandVerificationRow {
+  readonly command_id: string;
+  readonly run_key: string;
+  readonly accepted_sequence: number;
+  readonly canonical_envelope: string;
+  readonly canonical_admission: string;
+  readonly state: "queued" | "claimed" | "terminal";
+  readonly accepted_at: string;
+  readonly accepted_at_ms: number;
+  readonly claim_owner_id: string | null;
+  readonly claim_fence: number | null;
+  readonly claim_expires_at: string | null;
+  readonly claim_expires_at_ms: number | null;
+  readonly terminal_receipt_json: string | null;
+}
+
+interface SupervisorReceiptVerificationRow {
+  readonly run_key: string;
+  readonly sequence: number;
+  readonly command_id: string;
+  readonly status: "queued" | "claimed" | "terminal";
+  readonly recorded_at: string;
+  readonly recorded_at_ms: number;
+  readonly canonical_receipt: string;
+}
+
+interface SupervisorWakeVerificationRow {
+  readonly run_key: string;
+  readonly repository_id: string;
+  readonly run_id: string;
+  readonly generation: number;
+  readonly ack_generation: number;
+  readonly not_before: string;
+  readonly not_before_ms: number;
+  readonly reasons_json: string;
+}
+
+function verifySupervisorClaimColumns(row: SupervisorCommandVerificationRow): void {
+  if (row.state !== "claimed") {
+    if (
+      row.claim_owner_id !== null ||
+      row.claim_fence !== null ||
+      row.claim_expires_at !== null ||
+      row.claim_expires_at_ms !== null
+    ) {
+      throw new Error("Nonclaimed supervisor command contains claim fields");
+    }
+    return;
+  }
+  if (
+    row.claim_owner_id === null ||
+    row.claim_fence === null ||
+    !Number.isSafeInteger(row.claim_fence) ||
+    row.claim_fence <= 0 ||
+    row.claim_expires_at === null ||
+    row.claim_expires_at_ms === null
+  ) {
+    throw new Error("Claimed supervisor command lacks exact claim fields");
+  }
+  validateStorageIdentifier(row.claim_owner_id, "supervisor claim owner");
+  if (timestampEpoch(row.claim_expires_at, "supervisor claim expiry") !== row.claim_expires_at_ms) {
+    throw new Error("Supervisor claim expiry does not match its epoch value");
+  }
+}
+
+function timestampEpoch(value: string, field: string): number {
+  validateTimestamp(value, field);
+  const epoch = Date.parse(value);
+  const normalized = value.includes(".") ? value : value.replace("Z", ".000Z");
+  if (!Number.isSafeInteger(epoch) || new Date(value).toISOString() !== normalized) {
+    throw new TypeError(`${field} must be an exact UTC timestamp`);
+  }
+  return epoch;
 }
 
 function normalizeContextAuthority(authority: InMemoryContextAuthority) {
@@ -3518,6 +4152,30 @@ function persistCommandDelta(
 
 function runtimeAuthorityRunKey(repositoryId: string, runId: string): string {
   return `${repositoryId}\u0000${runId}`;
+}
+
+function validateBoundedPageRequest(afterCursor: number, limit: number): void {
+  if (!Number.isSafeInteger(afterCursor) || afterCursor < 0) {
+    throw new TypeError("Page cursors must be non-negative safe integers");
+  }
+  if (!Number.isSafeInteger(limit) || limit <= 0 || limit > PROTOCOL_LIMITS.maxPageItems) {
+    throw new TypeError(`Page limits must be integers from 1 to ${PROTOCOL_LIMITS.maxPageItems}`);
+  }
+}
+
+function validatePageCursor(afterCursor: number, latestCursor: number): void {
+  if (afterCursor > latestCursor) {
+    throw new PageQueryError("cursor-ahead", "Page cursor exceeds the latest authority cursor");
+  }
+}
+
+function validateReplayCursor(afterCursor: number, earliestAvailableCursor: number): void {
+  if (earliestAvailableCursor > 0 && afterCursor < earliestAvailableCursor - 1) {
+    throw new PageQueryError(
+      "event-replay-gap",
+      "Event cursor precedes the available replay range",
+    );
+  }
 }
 
 class IncrementalCanonicalSnapshot {

@@ -47,25 +47,31 @@ import {
   type DurableReceipt,
   decodeCommandEnvelope,
   decodeDurableReceipt,
+  decodeEventReplayPage,
   decodeEventStreamFrame,
   decodeProjectionEnvelope,
+  decodeReceiptPage,
   type ErrorEnvelope,
+  type EventReplayPage,
   type EventStreamFrame,
   type JsonValue,
+  PROTOCOL_LIMITS,
   PROTOCOL_VERSION,
   type ProjectionEnvelope,
+  type ReceiptPage,
   type ReceiptStatus,
   validateOpaqueIdentity,
 } from "@senawa/protocol";
-import type {
-  AdmissionFacts,
-  AllocationKind,
-  AuthorityPort,
-  AuthorizationPolicy,
-  CommandServicePort,
-  RuntimeDependencies,
-  RuntimeQueryPort,
-  SerializableAuthorityPort,
+import {
+  type AdmissionFacts,
+  type AllocationKind,
+  type AuthorityPort,
+  type AuthorizationPolicy,
+  type CommandServicePort,
+  PageQueryError,
+  type RuntimeDependencies,
+  type RuntimeQueryPort,
+  type SerializableAuthorityPort,
 } from "./ports.js";
 
 const SNAPSHOT_VERSION = "senawa.dev/runtime-memory/v1alpha1" as const;
@@ -296,6 +302,27 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     ]);
   }
 
+  queryReceiptPage(
+    repositoryId: string,
+    runIdentity: string,
+    afterCursor = 0,
+    limit: number = PROTOCOL_LIMITS.maxPageItems,
+  ): ReceiptPage {
+    validatePageRequest(afterCursor, limit);
+    const run = this.authority.runs.get(runKey(repositoryId, runIdentity));
+    validatePageCursor(afterCursor, run?.cursor ?? 0);
+    const matching = run?.receiptHistory.filter((receipt) => receipt.cursor > afterCursor) ?? [];
+    return decodeReceiptPage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId: runIdentity,
+      afterCursor,
+      latestCursor: run?.cursor ?? 0,
+      hasMore: matching.length > limit,
+      receipts: matching.slice(0, limit),
+    });
+  }
+
   queryEvents(
     repositoryId: string,
     runIdentity: string,
@@ -306,6 +333,29 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     }
     const run = this.authority.runs.get(runKey(repositoryId, runIdentity));
     return Object.freeze(run?.events.filter((event) => event.cursor > afterCursor) ?? []);
+  }
+
+  queryEventPage(
+    repositoryId: string,
+    runIdentity: string,
+    afterCursor = 0,
+    limit: number = PROTOCOL_LIMITS.maxPageItems,
+  ): EventReplayPage {
+    validatePageRequest(afterCursor, limit);
+    const run = this.authority.runs.get(runKey(repositoryId, runIdentity));
+    validatePageCursor(afterCursor, run?.cursor ?? 0);
+    validateReplayCursor(afterCursor, run?.events[0]?.cursor ?? 0);
+    const matching = run?.events.filter((event) => event.cursor > afterCursor) ?? [];
+    return decodeEventReplayPage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId: runIdentity,
+      afterCursor,
+      earliestAvailableCursor: run?.events[0]?.cursor ?? 0,
+      latestCursor: run?.cursor ?? 0,
+      hasMore: matching.length > limit,
+      events: matching.slice(0, limit),
+    });
   }
 
   queryProjection(repositoryId: string, runIdentity: string): ProjectionEnvelope | undefined {
@@ -1105,6 +1155,30 @@ function assertReceiptTransition(previous: ReceiptStatus | undefined, next: Rece
 
 function isTerminalStatus(status: ReceiptStatus): boolean {
   return status !== "queued" && status !== "claimed";
+}
+
+function validatePageRequest(afterCursor: number, limit: number): void {
+  if (!Number.isSafeInteger(afterCursor) || afterCursor < 0) {
+    throw new TypeError("Page cursors must be non-negative safe integers");
+  }
+  if (!Number.isSafeInteger(limit) || limit <= 0 || limit > PROTOCOL_LIMITS.maxPageItems) {
+    throw new TypeError(`Page limits must be integers from 1 to ${PROTOCOL_LIMITS.maxPageItems}`);
+  }
+}
+
+function validatePageCursor(afterCursor: number, latestCursor: number): void {
+  if (afterCursor > latestCursor) {
+    throw new PageQueryError("cursor-ahead", "Page cursor exceeds the latest authority cursor");
+  }
+}
+
+function validateReplayCursor(afterCursor: number, earliestAvailableCursor: number): void {
+  if (earliestAvailableCursor > 0 && afterCursor < earliestAvailableCursor - 1) {
+    throw new PageQueryError(
+      "event-replay-gap",
+      "Event cursor precedes the available replay range",
+    );
+  }
 }
 
 function conflictReceipt(command: CommandEnvelope, cursor: number): DurableReceipt {

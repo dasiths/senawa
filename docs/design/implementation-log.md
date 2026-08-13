@@ -51,10 +51,11 @@ Each phase records:
 | 7. Context broker and serial workers | Complete | `4009bd8` | Pushed |
 | 8. Local supervisor, HTTP, SSE, and CLI | Not started | Pending | Pending |
 | 9. Additive amendments | Not started | Pending | Pending |
-| 10. Parallel worktrees and integration | Not started | Pending | Pending |
+| 10. Optional parallel workspaces and integration | Not started | Pending | Pending |
 | 11. Local portal | Not started | Pending | Pending |
 | 12. Remote control-plane protocol | Not started | Pending | Pending |
 | 13. Reporting, packaging, and hardening | Not started | Pending | Pending |
+| 14. Consumer documentation and adoption journeys | Not started | Pending | Pending |
 
 ## Decision D-001: Clean alpha implementation reset
 
@@ -3218,6 +3219,850 @@ Passed on 2026-08-13:
 
 * Implementation commit: `4009bd8 feat: add scoped worker context`
 * Push: succeeded to `origin/redesign/workflow-state-machine`
+
+## Decision D-051: Stage supervisor orchestration beside command authority
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 8 bounded Slice A
+* Phase: Phase 8
+* Decision: Add a durable SQLite supervisor queue and wake layer while retaining
+  `SqliteAuthority.submit` and its canonical terminal transaction as the sole
+  workflow mutation authority. The supervisor stores the exact attributed
+  command envelope and deterministic admission facts, claims under the shared
+  lease table, executes outside its queue transaction, and records the exact
+  command receipt in a separate terminal acknowledgement transaction.
+* Alternatives: Move command execution into a new supervisor transaction;
+  treat in-memory scheduling as authoritative; or duplicate workflow mutation
+  state in supervisor tables.
+* Rationale: Retrying the same canonical command after a crash between command
+  commit and queue acknowledgement returns the existing durable receipt. This
+  closes the supervisor crash window without split workflow authority or a
+  transaction held across execution.
+* Consequence: Supervisor recovery requires the stored ordered allocation facts
+  and a live run lease fence. Supervisor persistence DTOs use exact browser-safe
+  protocol codecs, while storage owns relational semantic verification without
+  importing the concrete supervisor adapter. Supervisor time predicates use
+  normalized epoch-millisecond columns; canonical timestamp strings remain in
+  receipts and records. A strictly higher live lease fence or natural claim
+  expiry can reclaim staged work without appending a second claimed receipt.
+  HTTP, SSE, IPC, CLI, SDK backup, and daemon lifecycle integration remain later
+  Phase 8 slices.
+
+## Phase 8 log
+
+Status: In progress. Bounded Slice A implements the durable local supervisor
+authority only.
+
+### Bounded Slice A: Durable supervisor command queue
+
+The slice adds:
+
+* A behavior-free `CommandSubmission` protocol codec that excludes principal
+  and transport attribution and rejects attempts to inject either field
+* A Node-local supervisor package with authenticated admission, exact canonical
+  admission replay, staged queued, claimed, and terminal receipts, one-command
+  deterministic draining, query APIs, wake scans, and foreground recovery
+* SQLite migration 004 with supervisor repository and run scope, command and
+  receipt history, durable generation wakes, and service desired mode
+* Shared lease renewal and guarded release while preserving monotonically
+  increasing takeover fences
+* Durable running, draining, drained, and stopped modes; draining continues to
+  accept and queue commands but claims no new work
+
+The existing runtime command service and normalized SQLite command-authority
+snapshot are unchanged. `SqliteSupervisorAuthority` uses one connection for
+queue transactions and composes `SqliteAuthority` on a separate connection to
+the same database. No queue transaction remains open across command execution.
+
+### Slice A focused validation
+
+Passed on 2026-08-13:
+
+* Supervisor package typecheck
+* Exact protocol submission and SQLite supervisor suites: 2 files and 41 tests
+* Recovery at queued commit, claimed commit, command submit, before terminal
+  commit, and after terminal commit fault points
+* Exact uninterrupted and recovered command receipt, event stream, projection,
+  canonical authority JSON, and queue terminal receipt comparisons
+* Lost response replay, conflict nonmutation, startup wake scan, duplicate scan,
+  wake acknowledgement race, draining behavior, lease renewal, guarded release,
+  live-owner exclusion, takeover, and stale-fence refusal
+
+Repository-wide validation passed on 2026-08-13:
+
+* Frozen workspace install across 10 projects
+* Root build, including the execution-host native helper
+* Clean workspace and supervisor package typechecks
+* Biome check across 102 files
+* Complete offline workspace suite: 24 files and 623 tests
+* Live Copilot service probe: 1 test skipped because explicit model, budget,
+  timeout, data/cost acknowledgement, and `SENAWA_COPILOT_LIVE=1` were not set
+* Architecture boundaries across 149 source files
+* Documentation links across 17 Markdown files
+* SQLite command-authority benchmark: p99 13.52 ms across 100 samples, below the
+  25 ms threshold
+* `git diff --check`
+
+No HTTP, SSE, local IPC, portal security, CLI, SDK session backup, daemon, commit,
+or push is included in bounded Slice A.
+
+### Slice A review repairs
+
+Review repairs RI1 through RI3 add:
+
+* Exact protocol codecs for supervisor admission facts, staged receipts, wakes,
+  and service records, including exact unknown-field refusal and durable receipt
+  decoding
+* Storage-owned global supervisor verification for canonical command and
+  admission fields, run identities, contiguous command and receipt cursors,
+  legal staged histories, claim fields, exact underlying terminal receipts,
+  wakes, service singleton state, and normalized timestamp columns
+* Startup, backup, and restore refusal for canonical-but-semantically-invalid
+  supervisor data
+* Guarded higher-fence claim takeover before the former claim expiry, with
+  same-or-lower fence exclusion and one claimed staged receipt
+* Integer epoch-millisecond authority for acceptance ordering, claim expiry,
+  wake scheduling, and service mode monotonicity; shared lease comparisons
+  continue to use validated `Date.parse` values in JavaScript
+
+Review repairs RI4 and RI5 add:
+
+* Guarded lease release under `BEGIN IMMEDIATE` with an exact row read, parsed
+  epoch liveness validation, and an exact resource, owner, fence, and expiry CAS;
+  release at exact expiry is stale, while an earlier mixed-precision release
+  permits immediate takeover at a higher fence
+* Exact queued and terminal staged receipt times against their command acceptance
+  timestamp and normalized epoch column; claimed receipt time remains canonical
+  and normalized because the command row does not persist a claim timestamp
+
+Focused review regression validation passed on 2026-08-13:
+
+* Exact protocol and supervisor suites: 2 files and 52 tests
+* Mixed-precision acceptance, wake, and service mode timestamp cases
+* Immediate higher-fence and natural-expiry command reclaim
+* Stale-fence refusal and single claimed history preservation
+* Canonical receipt corruption refusal during live backup, startup, and
+  manifest-valid restore
+* Command epoch, wake generation, command state/history, and service epoch
+  semantic corruption refusal on startup
+* Mixed-precision guarded release at a whole-second timestamp, immediate fence 2
+  reclaim, and stale or exact-expiry release refusal
+* Coordinated queued receipt canonical and normalized timestamp corruption
+  refusal during live backup, startup, and manifest-valid restore
+* Exact protocol, supervisor, and SQLite storage suites: 3 files and 142 tests
+
+RI4 and RI5 repository-wide validation on 2026-08-13:
+
+* Root build and clean workspace typecheck passed
+* Complete offline workspace suite passed: 24 files and 636 tests; the live
+  Copilot service test remained skipped without its explicit opt-in settings
+* Architecture boundaries passed across 151 source files
+* Documentation links passed across 17 Markdown files
+* Changed TypeScript files passed Biome, and `git diff --check` passed
+* SQLite command-authority benchmark passed on immediate rerun at p99 19.06 ms
+  across 100 samples, below the 25 ms threshold; the first run recorded a
+  transient p99 106.96 ms while p95 remained 18.25 ms
+* Full-workspace Biome remained blocked by pre-existing formatting in
+  `packages/supervisor/tsconfig.json` and `tsconfig.json`; RI4 and RI5 did not
+  modify those files
+
+Repository-wide review repair validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Clean workspace typecheck
+* Biome check across 103 files
+* Complete offline workspace suite: 24 files and 634 tests
+* Live Copilot service probe: 1 test skipped because explicit model, budget,
+  timeout, data/cost acknowledgement, and `SENAWA_COPILOT_LIVE=1` were not set
+* Architecture boundaries across 151 source files
+* Documentation links across 17 Markdown files
+* SQLite command-authority benchmark: p99 19.93 ms across 100 samples, below the
+  25 ms threshold
+* `git diff --check`
+
+## Decision D-052: Bound supervisor queries before adding listeners
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 8 bounded Slice B
+* Phase: Phase 8
+* Decision: Add behavior-free receipt and event page contracts, bounded runtime
+  query ports, normalized SQLite page reads, and a transport-neutral supervisor
+  API before implementing HTTP, IPC, or SSE listeners. Authenticated ingress
+  context owns principal, transport, request identity, time, facts, and ordered
+  allocation facts. Client submissions remain attribution-free.
+* Alternatives: Let each listener construct command envelopes and queries;
+  return unbounded histories; expose staged supervisor receipts as protocol
+  durable receipts; or load the canonical authority snapshot for every page.
+* Rationale: One exact API and one transport conformance suite keep attribution,
+  retry, conflict, error, and paging behavior independent of framing. SQLite
+  `LIMIT + 1` reads preserve bounded memory while retaining normalized tables as
+  query indexes and the canonical authority as workflow mutation truth.
+* Consequence: Command submission returns an exact local
+  `SupervisorCommandAcceptance` containing the latest staged receipt and its
+  command location. Durable receipt and event pages contain at most 1,024 items,
+  reject identity or cursor ambiguity, and remain sparse-cursor safe. The event
+  page `latestCursor` is the workflow/run authority cursor, not the latest
+  available event cursor, so a terminal page can be empty while
+  `afterCursor < latestCursor`. Command envelope identity is resolved before
+  trusted admission allocation, and exact durable replay returns without fresh
+  allocation facts. Draining accepts and wakes new commands without claiming
+  them; drained and stopped modes return a typed service-unavailable error.
+  Future HTTP, IPC, CLI, and SSE adapters must run the shared transport
+  conformance suite.
+
+### Bounded Slice B: Transport-neutral supervisor API and bounded queries
+
+The slice adds:
+
+* Exact `ReceiptPage` and `EventReplayPage` protocol codecs with canonical,
+  frozen outputs and bounded cursor validation
+* `RuntimeQueryPort` receipt and event page methods with retained legacy query
+  methods
+* In-memory slicing and SQLite normalized-table paging with `LIMIT + 1`, direct
+  terminal receipt lookup, latest run cursor, earliest event cursor, and fresh
+  visibility across independent connections
+* Server-derived authenticated ingress context and an exact transport-neutral
+  `SupervisorApi` for capabilities, submission, receipt lookup, bounded pages,
+  and projection lookup
+* Typed safe API errors and a reusable supervisor transport conformance
+  registrar exercised through an in-process serialized client/handler boundary
+
+No production dependency was added. The conformance registrar remains in the
+supervisor test surface, avoiding a production dependency cycle through
+`@senawa/testing`.
+
+### Slice B focused validation
+
+Passed on 2026-08-13:
+
+* Exact protocol codec suite: 1 file and 36 tests
+* Runtime conformance suite: 1 file and 15 tests
+* SQLite storage suite: 1 file and 88 tests
+* In-process supervisor transport conformance: 1 file and 6 tests
+* Protocol, runtime, storage, and supervisor package typechecks
+
+Repository-wide validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Clean workspace typecheck
+* Biome check across 105 files
+* Complete offline workspace suite: 25 files and 645 tests
+* Live Copilot service probe: 1 test skipped because its explicit model, budget,
+  timeout, data/cost acknowledgement, and `SENAWA_COPILOT_LIVE=1` settings were
+  not provided
+* Architecture boundaries across 155 source files
+* Documentation links across 17 Markdown files
+* SQLite command-authority benchmark: p99 15.96 ms across 100 samples, below the
+  25 ms threshold
+* `git diff --check`
+
+### Slice B review repairs
+
+The Slice B review found that SQLite page metadata and rows could observe
+different commits, protocol pages admitted cursor states that the query contract
+cannot represent, and transport conformance did not prove drained admission
+nonmutation.
+
+The repairs add:
+
+* Deferred SQLite read transactions around receipt and event metadata plus row
+  reads, with nested savepoint behavior when a page query runs inside an existing
+  same-connection transaction
+* Deterministic storage fault checkpoints that commit through an independent WAL
+  connection after metadata is read; the current page retains its original
+  snapshot and the next page observes the committed receipt and event rows
+* Receipt and event refusal when `afterCursor` exceeds `latestCursor`, event
+  replay-gap refusal before `earliestAvailableCursor - 1`, sparse terminal empty
+  event pages, and nonempty `hasMore` pages
+* Matching in-memory and SQLite query-boundary refusal for cursor positions that
+  cannot produce a valid page
+* Drained and stopped transport assertions for typed service unavailability,
+  unchanged pending wakes, and absence of a durable command row
+
+Focused review validation passed on 2026-08-13:
+
+* Protocol, runtime, SQLite storage, and supervisor transport suites: 4 files
+  and 148 tests
+* Receipt and event snapshot interleaves, nested same-connection page reads,
+  direct protocol invariant cases, and drained or stopped queue nonmutation
+
+Repository-wide review repair validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Clean workspace typecheck
+* Biome check across 105 files
+* Complete offline workspace suite: 25 files and 648 tests
+* Live Copilot service probe: 1 test skipped because its explicit opt-in settings
+  were not provided
+* Architecture boundaries across 155 source files
+* Documentation links across 17 Markdown files
+* SQLite command-authority benchmark: p99 24.80 ms across 100 samples, below the
+  25 ms threshold
+* `git diff --check`
+
+No subagent, commit, or push was run for these review repairs.
+
+#### Slice B follow-up review repairs
+
+A follow-up review found that `SupervisorApi` allocated trusted identifiers
+before the durable queue could identify an exact retry, the event codec treated
+the run authority cursor as if every cursor had an available event, and page
+cursor failures lost their meaning at the transport boundary.
+
+The repairs add:
+
+* Server-attributed command-envelope construction before trusted admission work
+* Queue admission under `BEGIN IMMEDIATE`, with exact canonical-envelope replay
+  or conflict before invoking a lazy admission callback
+* Allocation-free lost-response retry even when the allocator fails, plus
+  request and principal attribution conflicts before allocator invocation
+* Sparse terminal event pages where `afterCursor` is 7, `latestCursor` is 8,
+  and the event list is empty
+* Protocol-neutral `PageQueryError` codes for cursor-ahead and event replay-gap
+  failures in in-memory and SQLite query authorities
+* Stable supervisor mappings of cursor-ahead to safe `invalid-request` status
+  400 and event replay-gap to safe `event-replay-gap` status 409
+
+Follow-up focused validation passed on 2026-08-13:
+
+* Protocol, runtime, SQLite storage, supervisor queue, and transport suites: 5
+  files and 170 tests
+* Protocol, runtime, testing, SQLite storage, and supervisor package typechecks
+
+Repository-wide follow-up validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Clean workspace typecheck and Biome check across 105 files
+* Complete offline workspace suite: 25 files and 649 tests
+* Live Copilot service probe: 1 test skipped because its explicit opt-in settings
+  were not provided
+* Architecture boundaries across 155 source files
+* Documentation links across 17 Markdown files
+* SQLite command-authority benchmark: p99 13.73 ms across 100 samples, below the
+  25 ms threshold
+* `git diff --check`
+
+No subagent or commit was run for the follow-up repairs.
+
+HTTP, local IPC, SSE listeners, daemon integration, CLI conversion, commit, and
+push remain outside bounded Slice B.
+
+## Decision D-054: Share one hardened handler across local transports
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 8 bounded Slice C
+* Phase: Phase 8
+* Decision: Use one exact `SupervisorHttpHandler` over `SupervisorApi` for
+  authenticated HTTP over a Unix socket and session-authenticated HTTP bound
+  exactly to `127.0.0.1`. Derive ingress principals from transport-specific
+  server context. Authenticate Unix-socket requests with a private 32-byte
+  bearer credential, and authenticate loopback requests with one-time bootstrap
+  capabilities, host-only sessions, exact Origin checks, and separate CSRF
+  tokens. Register SSE wake notification before bounded replay reads and retain
+  no event backlog in memory.
+* Alternatives: Use separate IPC and portal routers; add a third-party web
+  framework; trust loopback without sessions; expose bootstrap or session
+  tokens in URLs after redirect; or poll into an in-memory SSE backlog.
+* Rationale: One handler and one conformance suite keep command semantics,
+  paging, attribution, canonical framing, and safe errors independent of the
+  listener. Private filesystem objects plus a credential provide the available
+  Node alpha boundary because Node does not expose `SO_PEERCRED`. Digest-only
+  one-time capabilities and sessions avoid retaining reusable raw portal
+  secrets server-side.
+* Consequence: The runtime directory must be current-user `0700`; credential and
+  socket must be current-user `0600`; symbolic links and live socket peers are
+  refused. Startup holds the lifetime lock while validating and recovering the
+  deterministic private binding socket, and refuses a live or insecure staging
+  peer. HTTP client request deadlines are absolute and cannot be extended by
+  response activity. Loopback binds only IPv4 `127.0.0.1` and requires exact
+  Host. Portal mutations require exact Origin and CSRF. SSE pages at 256 events,
+  heartbeats every 15 seconds, emits a typed gap before close, and bounds a
+  stalled write to 30 seconds. Daemon lifecycle, operational CLI, logs, static
+  portal files, and direct-recovery routes remain the next Phase 8 slice.
+  Decision D-053 remains future Phase 10 work.
+
+### Bounded Slice C: Local HTTP, IPC security, sessions, and SSE
+
+The slice adds:
+
+* Exact raw-target routing and one shared hardened HTTP handler over the
+  transport-neutral supervisor API
+* Real HTTP/1.1 listeners over authenticated Unix sockets and loopback TCP, plus
+  one canonical client supporting both connection forms
+* Private runtime directory, credential, stale socket, owner, mode, symbolic
+  link, and concurrent-listener enforcement
+* One-time portal bootstrap capabilities, host-only session cookies, one-time
+  CSRF delivery, exact Host and Origin checks, and no CORS response headers
+* Subscribe-before-replay SSE with canonical frames, sparse cursors,
+  heartbeats, typed gaps, bounded page reads, abort handling, and bounded
+  backpressure stalls
+* Shared transport conformance across in-process, authenticated UDS, and
+  loopback session clients, plus independent-client concurrent acceptance
+  regressions
+
+No third-party web framework, portal UI, daemon process, lifecycle CLI, worktree
+operation, commit, or push is included in bounded Slice C.
+
+### Slice C validation
+
+Focused validation passed on 2026-08-13:
+
+* Raw HTTP target and query hardening: 1 file and 19 tests
+* Private local credential and portal session security: 1 file and 4 tests
+* SSE replay race, canonical framing, heartbeat, gap, and bounded stall: 1 file
+  and 4 tests
+* Real-listener Host, Origin, session, CSRF, framing, socket mode, symbolic link,
+  and concurrent-start security: 1 file and 12 tests
+* Shared in-process, authenticated UDS, and loopback session transport
+  conformance plus independent-client acceptance races: 1 file and 20 tests
+* Supervisor queue, terminal notifier, security, HTTP, SSE, and transport suite:
+  6 files and 81 tests
+* Supervisor package typecheck and focused Biome checks across all Slice C files
+
+Repository-wide validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Clean workspace typecheck and Biome check across 117 files
+* Complete offline workspace suite: 29 files and 703 tests passed; the live
+  Copilot service probe remained skipped without its explicit opt-in settings
+* Architecture boundaries across 179 source files
+* Documentation links across 18 Markdown files
+* SQLite command-authority benchmark: p99 13.64 ms across 100 samples, below the
+  25 ms threshold
+* `git diff --check`
+
+No subagent, worktree operation, commit, or push was run for bounded Slice C.
+
+#### Slice C security review repairs
+
+A security review found that Unix socket stale inspection preceded singleton
+ownership, request bodies used replacement UTF-8 decoding, Node could emit
+automatic expectation responses, HTTP clients had no bounded transport timeout,
+and raw targets admitted percent-encoded control characters.
+
+The repairs add:
+
+* Exact current-user `0700` socket parents and canonical direct-child socket
+  paths with no traversal or symbolic-link components
+* A lifetime `O_CREAT|O_EXCL` current-user `0600` lock that binds PID to Linux
+  process start time, fsyncs its exact record, rejects live or malformed locks,
+  and removes stale locks only by held-descriptor inode and device identity
+* Lock-before-inspection stale socket cleanup, atomic publication from a private
+  bind path, and inode-checked socket and lock cleanup on startup failure or
+  close
+* Fatal UTF-8 request-body decoding before JSON or API submission
+* Authenticated `checkContinue` and `checkExpectation` handling with no interim
+  response and typed expectation rejection
+* A bounded HTTP client request timeout, settle-once response handling, typed
+  sanitized transport failures, and explicit aborted and oversized response
+  rejection
+* Raw and decoded C0 and DEL rejection in request paths, query keys, and query
+  values before route matching
+* Private-parent, lock mode, lock symlink, exact stale and live lock, socket
+  replacement, malformed UTF-8, expectation, client timeout, truncated response,
+  and 50-way stale socket race regressions
+
+Review-repair validation passed on 2026-08-13:
+
+* Focused Slice C security and conformance suite: 6 files and 97 tests
+* Full supervisor package suite: 6 files and 97 tests
+* Root build, including the execution-host native helper
+* Clean workspace typecheck and Biome check across 117 files
+* Complete offline workspace suite: 29 files and 719 tests; the live Copilot
+  service probe remained skipped without its explicit opt-in settings
+* Architecture boundaries across 179 source files
+* Documentation links across 18 Markdown files
+* SQLite command-authority benchmark: p99 13.58 ms across 100 samples, below the
+  25 ms threshold
+* `git diff --check`
+
+No subagent, worktree operation, commit, or push was run for these review
+repairs. Decision D-053 remains unchanged and assigned to Phase 10.
+
+#### Final Slice C private binding and client deadline repairs
+
+A final review found that an abrupt exit after private bind but before atomic
+publication could leave a staging socket that blocked the next owner, and the
+HTTP client's inactivity timeout could be extended indefinitely by response
+bytes.
+
+The repairs add:
+
+* A stable private binding path derived only while the newly acquired lifetime
+  lock is held
+* Current-user `0600` socket, no-symbolic-link, direct-private-parent, and live
+  peer validation before stale staging cleanup
+* Device-and-inode comparison across the liveness probe, exact stale unlink,
+  parent-directory fsync, live-peer refusal, and identity-checked cleanup on
+  startup failure or close
+* One settle-once wall-clock client deadline that starts with the request,
+  destroys the request on expiry, and is cleared by every resolve or reject path
+* A child-process crash regression that exits after private bind and before
+  publication, followed by reachable restart and complete artifact cleanup
+* A slow-drip response regression that sends data more frequently than the
+  deadline while proving bounded rejection and client-side socket closure
+
+Final-repair validation passed on 2026-08-13:
+
+* Focused crash-recovery and slow-drip deadline regressions: 2 tests
+* Full Slice C security and conformance suite: 6 files and 100 tests
+* Root build, including the execution-host native helper
+* Clean workspace typecheck and Biome check across 117 files
+* Complete offline workspace suite: 29 files and 722 tests passed; the live
+  Copilot service probe remained skipped without its explicit opt-in settings
+* Architecture boundaries across 179 source files
+* Documentation links across 18 Markdown files
+* SQLite command-authority benchmark: p99 18.17 ms across 100 samples, below the
+  25 ms threshold
+* `git diff --check`
+
+No subagent, worktree operation, commit, or push was run for these final repairs.
+Decision D-053 remains unchanged and assigned to Phase 10.
+
+#### Final Slice C session lifetime repair
+
+The final security review found that an already-open loopback SSE connection
+could outlive its authenticated portal session and continue receiving future
+events. Portal session security now returns the remaining lifetime from its
+trusted clock. The HTTP handler arms an independent wall-clock abort for that
+deadline and closes the stream before any event at or after expiry. A real
+loopback regression opens an empty stream with a 40 ms session, notifies an event
+after 60 ms, and proves the stream closes without delivering the event.
+
+Focused session, SSE, and HTTP security validation passed with 35 tests. No
+worktree operation was used, and Decision D-053 remains unchanged.
+
+A follow-up review demonstrated that an expiry timer alone cannot run while a
+synchronous replay query blocks the event loop. `SseEventSource` now evaluates a
+loopback authorization predicate before every replay query and immediately
+before every frame write. The handler supplies a trusted session validation
+closure in addition to the wall-clock abort timer. A real loopback regression
+lets preflight succeed, blocks subscribed replay for 80 ms across a 40 ms
+session lifetime, returns an event, and proves the event is suppressed. Focused
+session, SSE, and HTTP security validation now passes with 36 tests.
+
+## Decision D-053: Make worktree execution explicit and isolated
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 10 planning
+* Phase: Phase 10
+* Decision: Add the versioned configuration option
+  `execution.workspaceMode` with values `repository` and `worktree`. Omission
+  means `repository`. Repository mode creates no worktrees and permits one
+  effective writer. Worktree mode is an explicit opt-in that requires a verified
+  Git repository, immutable bases, isolated writers, and serialized integration.
+  Every worktree test must create a fresh temporary Git repository outside the
+  Senawa checkout. Tests must never add, remove, or mutate worktrees in the
+  mounted `/workspaces/senawa` repository.
+* Alternatives: Require a worktree for every writer; infer worktree support from
+  Git availability; enable parallel worktrees by default; run integration tests
+  against the active Senawa checkout.
+* Rationale: The Senawa checkout can be mounted into a devcontainer, where host
+  and container Git paths do not form a safe worktree test boundary. Most local
+  workflows do not require parallel writers. An explicit mode keeps default
+  execution portable and serial while retaining isolated parallel execution for
+  consumers that configure and validate it.
+* Consequence: Phase 10 must extend the exact configuration schema, bind the
+  selected workspace mode into the immutable configuration snapshot, and refuse
+  writer concurrency above one in repository mode. Worktree adapters remain in
+  execution-host but are never constructed or called unless worktree mode is
+  selected. Test fixtures own temporary repository creation, commits, worktrees,
+  cleanup, and containment checks.
+
+## Decision D-056: Finish with researched consumer documentation and one PR
+
+* Date: 2026-08-13
+* Status: Accepted for final delivery planning
+* Phase: Phase 14 and final delivery
+* Decision: Add Phase 14 after reporting, packaging, and hardening. Run a fresh
+  RPI research cycle against the final implementation, then publish
+  consumer-facing philosophy, architecture, getting-started, authoring,
+  operations, security, troubleshooting, limitation, and example documentation.
+  Commit and push that phase before generating and creating one pull request for
+  the complete implementation branch.
+* Alternatives: Expand README incrementally during implementation; publish only
+  generated API references; create the pull request before consumer docs; retain
+  research and PR chunk artifacts in the active tree.
+* Rationale: Consumer documentation must describe the final behavior rather than
+  plans or intermediate architecture. Fresh audience and journey research after
+  Phase 13 prevents stale commands, authority claims, and package boundaries
+  from becoming the adoption surface. One final pull request gives reviewers a
+  coherent redesign history after every phase has its own validated commit.
+* Consequence: Phase 14 is the last implementation phase. Its research artifacts
+  are temporary, worktree examples use fresh temporary repositories, and its
+  acceptance journey is no-credit by default. Final PR generation follows the
+  repository PR-reference workflow, full validation, parallel diff review,
+  branch push verification, PR creation, and temporary artifact cleanup.
+
+## Decision D-055: Compose one fenced local supervisor lifecycle
+
+* Date: 2026-08-13
+* Status: Accepted and implemented for Phase 8
+* Phase: Phase 8
+* Decision: Compose SQLite command, query, runner, wake, service-mode, log, and
+  repository authorities behind one `SupervisorService`. Use one serialized
+  operation queue for daemon cycles, direct recovery, quiescent backup, status,
+  logs, and stop. Bind supervisor queue claims and `FencedRunner` effects to the
+  existing runner lease resource.
+  Expose lifecycle and recovery only through authenticated Unix-socket routes;
+  loopback returns not found. Keep SDK session-store filesystem health and
+  backup in execution-host and combine it with SQLite backup in the app.
+* Alternatives: Retain a memory scheduler; give direct recovery a separate
+  effect path; dispatch the asynchronous Copilot worker as a synchronous effect
+  host; expose operational routes to loopback sessions; or copy SDK state into
+  SQLite.
+* Rationale: Durable scans and one lease fence preserve recovery after process
+  loss without making process memory authoritative. Reusing `FencedRunner`
+  avoids a second effect state machine. Structural health and backup ports keep
+  SDK filesystem details outside supervisor. Health checks bind only durable,
+  nonterminal worker intents to their exact dispatch session IDs, so a queued
+  worker can create its first session while missing metadata for a started
+  effect blocks uncertain redispatch.
+* Consequence: The lifecycle is `stopped` to `starting`, `running`, `draining`,
+  `drained`, `stopping`, and `stopped`, with degraded health as an overlay.
+  Startup failure and graceful stop exhaustively close started listeners in
+  reverse order, then owned closeables, runner authority, and supervisor
+  authority. Combined backup requires a serialized drained-state proof and
+  stops the owned Copilot client before either store is copied. Forced exit
+  leaves leases for expiry.
+  Synchronous hosts retain the original `FencedRunner` API. Production Copilot
+  execution uses `AsyncFencedRunner` through the same transition scheduler,
+  durable intent, authority-selected claim, inspection, and commit semantics.
+  Worker dispatch, inspection, and cancellation validate exact repository, run,
+  context, kind, route, and dispatch bindings before grants or SDK mutation.
+
+### Final Phase 8 review repairs
+
+The final P0 session-eligibility review replaced queued-dispatch health inputs
+with exact `startedSessionIds` derived from durable, nonterminal worker intents.
+Daemon composition now provides the production SDK metadata probe to the
+filesystem store. A real daemon composition test proves a first dispatch can
+create its session when metadata is initially absent, while a reopened durable
+intent with missing metadata remains undispatched and reports degraded health.
+
+The P1 repairs serialize cycles, wake pumping, direct recovery, quiescent
+operations, status, logs, and stop through one service operation queue. Worker
+effects load and validate their complete stored authority binding before every
+dispatch, inspection, and cancellation. Cross-kind, cross-repository,
+cross-run, and cross-context tests prove that rejected intents do not issue
+grants or call SDK create, metadata, or abort operations.
+
+The P2 repairs make listener startup failure and service stop cleanup
+exhaustive. Only successfully started listeners close, in reverse order,
+followed by closeables and both authorities even when an earlier close fails.
+Combined backup requires a serialized drained-state proof, stops the SDK client
+before either store copy, and does not restart it. Tests verify copied SQLite
+and SDK markers, reject backup while running, reject recovery during backup,
+and prove failed daemon listener startup leaves no Unix socket lock.
+
+Final review validation passed on 2026-08-13:
+
+* Focused eligibility, serialization, binding, lifecycle, daemon composition,
+  and backup suites: 6 files and 35 tests
+* Frozen dependency installation, root build, and workspace typecheck
+* Biome check across 135 files
+* Complete offline suite: 38 files and 755 tests passed; one live SDK test
+  remained skipped without opt-in settings
+* Architecture boundaries across 215 source files
+* Documentation links across 18 Markdown files
+* SQLite command-authority benchmark: p99 18.83 ms across 100 samples, below
+  the 25 ms threshold
+* `git diff --check` and process-residue check
+
+Decision D-053 remains unchanged and assigned to Phase 10. No worktree
+operation or live SDK invocation was used for these repairs.
+
+The final lifecycle review also moved complete status and log queries inside
+the serialized operation queue. A status request that has entered the queue
+finishes its snapshot, asynchronous SDK health check, mode read, and response
+decode before stop can close SQLite. Queries submitted after closure return a
+typed `service-unavailable` response. An authenticated Unix HTTP regression
+gates health, starts stop, proves stop remains pending, then releases health and
+verifies both the valid status response and subsequent typed refusal.
+
+Owned Copilot SDK shutdown failures now propagate as `AggregateError` while
+service cleanup continues through the context broker, runner authority,
+supervisor authority, and listener socket. Startup preserves its primary
+failure as the first aggregate entry when cleanup also fails. Composition
+failures before service ownership roll back any created SDK, context broker,
+and authority without double-closing resources after service construction.
+Real-path tests reopen both SQLite stores and reacquire the socket lock after
+SDK construction and shutdown failures.
+
+D-055 retains the 25 ms refusal p99 threshold. Its CI variance-resistant
+measurement protocol uses one excluded 100-submission conditioning database,
+then five independent fresh databases. Every measured window excludes 10
+warmups and records 100 unique refusal submissions with normal history growth.
+Acceptance requires at least four of five window p99 values below 25 ms and a
+median window p99 below 25 ms. One noisy window remains visible in the report;
+neither its samples nor a failed window are discarded or rerun.
+
+Final lifecycle validation passed on 2026-08-13:
+
+* Focused service, daemon composition, and operational HTTP suites: 3 files and
+  14 tests
+* Frozen dependency installation, root build, and workspace typecheck
+* Biome check across 135 files
+* Complete offline suite: 38 files and 759 tests passed; one live SDK test
+  remained skipped without opt-in settings
+* Architecture boundaries across 215 source files
+* Documentation links across 18 Markdown files
+* Two independent conditioned benchmark invocations passed 4 of 5 and 5 of 5
+  windows; median window p99 was 18.59 ms and 16.73 ms against the unchanged
+  25 ms threshold
+* `git diff --check` and process-residue check
+
+Decision D-053 and Decision D-056 remain unchanged. No worktree, subagent,
+commit, or live SDK invocation was used for these repairs.
+
+## Phase 8 bounded Slice D log
+
+Slice D adds:
+
+* Durable repository registration, desired mode, bounded sanitized logs, and
+  database-derived status counts and lease facts
+* Startup recovery, live wake pumping, drain and stop transitions, shared
+  direct recovery, 30-second leases, and 10-second renewal checks
+* Authenticated UDS status, drain, stop, recovery, logs, and portal bootstrap
+  routes with loopback operational-route refusal
+* XDG-private daemon composition, signal shutdown, detached readiness polling,
+  and thin CLI workflow and operational commands
+* SDK session-store health plus bounded manifest backup, verification, and
+  fresh-only restore, combined with SQLite under an outer manifest
+* Built-process status, submit, exact retry, receipt, event, drain, stop,
+  restart, and durable recovery coverage
+
+Focused Slice D validation passed on 2026-08-13:
+
+* Lifecycle, queue recovery, direct lease recovery, registry, and log tests: 25
+  tests
+* Operational router and authenticated UDS or loopback refusal tests: 26 tests
+* SDK session-store health and backup tests: 4 tests
+* CLI, combined backup, and built service journey tests: 15 tests
+* Shared in-process, UDS, and loopback transport conformance: 20 tests
+
+Repository-wide Slice D validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Clean workspace typecheck and Biome check across 129 files
+* Complete offline workspace suite: 34 files and 735 tests passed; the live
+  Copilot service probe remained skipped without its explicit opt-in settings
+* Architecture boundaries across 203 source files
+* Documentation links across 18 Markdown files
+* SQLite command-authority benchmark: p99 13.60 ms across 100 samples, below the
+  25 ms threshold
+* `git diff --check`
+
+Phase 8 production composition completed on 2026-08-13:
+
+* `AsyncFencedRunner` retains the synchronous runner's scheduling, durable
+  intent, claim, replay, reconciliation, and conservative accounting semantics.
+  It resolves trusted time and lease facts before every authority call. An
+  abort or lease-provider failure leaves the durable claim for takeover and
+  does not synthesize an outcome.
+* `SupervisorRunController.runOnceAsync` renews the 30-second run lease every 10
+  seconds while an asynchronous host is pending. Renewal failure aborts the
+  host synchronously and leaves the uncertain lease unreleased. Service cycles,
+  service recovery, and direct foreground recovery use this controller path.
+* `CopilotWorkerEffectHost` validates an exact durable effect input, reloads its
+  registered context and dispatch, issues fresh scoped grants, resumes by
+  dispatch identity, maps only sanitized adapter results, and inspects broker
+  completion facts plus SDK session metadata without treating an uncertain
+  missing session as permission to duplicate dispatch.
+* `CompletionFactCommandBridge` admits deterministic engine-service
+  `submit-completion` commands through `SqliteSupervisorAuthority.accept`.
+  Queue commit precedes context-outbox acknowledgement, and exact redelivery is
+  idempotent by the completion fact digest and submission identity.
+* The daemon opens the SQLite context broker and completion bridge. It composes
+  the production Copilot SDK only when `SENAWA_REPOSITORY_DIR` is explicit;
+  otherwise status is degraded and worker dispatch remains disabled. Graceful
+  stop closes the owned SDK client and broker before the shared authorities.
+* A seeded production composition test runs a worker effect through a fake SDK,
+  accepted broker completion, outbox bridge, supervisor queue, final workflow
+  assessment, and terminal effect outcome. Trusted planning that creates worker
+  effect commands remains a later workflow-planning concern, not a Phase 8
+  supervisor composition gap.
+
+Focused completion validation passed:
+
+* Async runner conformance, crash recovery, renewal, abort, and higher-fence
+  takeover: 38 tests
+* Supervisor delayed renewal, live-owner refusal, renewal abort, and takeover: 2
+  tests
+* Completion bridge queue-commit fault, exact redelivery, and command drain: 1
+  test
+* Seeded worker effect through production host and completion assessment: 1 test
+
+Repository-wide completion validation passed on 2026-08-13:
+
+* Root build, clean workspace typecheck, and Biome check across 134 files
+* Complete offline workspace suite: 37 files and 748 tests passed; the live
+  Copilot service probe remained skipped without its explicit opt-in settings
+* Architecture boundaries across 213 source files
+* Documentation links across 18 Markdown files
+* SQLite command-authority benchmark: p99 13.97 ms across 100 samples, below the
+  25 ms threshold
+* `git diff --check`
+
+Independent self-review found no additional Phase 8 production composition gap.
+
+The live Copilot SDK probe remains intentionally opt-in and was not run. No
+subagent or commit was used for this completion work.
+
+### Final Phase 8 independent approval
+
+Independent review rejected Phase 8 until the real daemon composition, not only
+an injected test composition, satisfied session recovery, serialization,
+binding, cleanup, and backup requirements. The final repairs:
+
+* Derive expected SDK sessions only from durable nonterminal worker intents.
+  Never-started effects can create their first session, while a started effect
+  whose session metadata disappeared remains degraded and cannot redispatch.
+* Serialize wake cycles, direct recovery, status, logs, quiescent backup, and
+  stop through one service operation queue.
+* Validate worker effect kind, repository, run, context, dispatch, and route
+  before issuing grants or invoking SDK create, inspect, or abort operations.
+* Close every started listener and owned resource on startup or shutdown
+  failure, propagate Copilot SDK shutdown errors, and roll back SQLite ownership
+  when composition fails before the service assumes ownership.
+* Require combined SQLite and SDK backup to run under serialized drained-state
+  proof after the owned SDK client stops.
+* Keep the 25 ms SQLite refusal threshold while measuring five independent
+  fresh-database windows after an excluded conditioning pass. Acceptance
+  requires at least four passing windows and a median window p99 below 25 ms.
+
+The final independent review reported no P0, P1, or P2 findings and approved
+Phase 8. One P3 cleanup was completed before delivery: duplicate foreground
+recovery modules were consolidated into `recovery.ts`, and the ignored
+`expiresAt` caller parameter was removed because `SupervisorRunController` owns
+the fixed lease duration.
+
+Final validation passed on 2026-08-13:
+
+* Frozen workspace install across 10 projects
+* Root build, including the execution-host native helper
+* Clean workspace typecheck
+* Biome check across 135 files
+* Complete offline workspace suite: 38 files and 759 tests passed
+* Live Copilot SDK probe: 1 test skipped without explicit service, model,
+  budget, timeout, and data/cost acknowledgement settings
+* Architecture boundaries across 215 source files
+* Documentation links across 18 Markdown files
+* Two conditioned benchmark invocations passed 4 of 5 and 5 of 5 windows, with
+  median window p99 values of 18.66 ms and 19.01 ms against the unchanged 25 ms
+  threshold
+* Canonical recovery API build, lint, service, CLI, and black-box tests: 20
+  focused tests
+* No active Senawa service or process-supervisor residue
+* `git diff --check`
+
+Decision D-053 remains assigned to Phase 10. No Git worktree operation was used
+in Phase 8. Decision D-056 remains final delivery planning for Phase 14 and the
+pull request.
+
+### Commit and push
+
+Pending final Phase 8 delivery.
 
 ## Entry template
 

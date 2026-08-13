@@ -1,0 +1,327 @@
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  type CopilotSdkPort,
+  type CopilotSdkSessionConfig,
+  type CopilotSdkSessionPort,
+  CopilotWorkerEffectHost,
+  FilesystemCopilotSessionStore,
+} from "@senawa/execution-host";
+import { canonicalBytes, decodeCanonicalJsonValue } from "@senawa/protocol";
+import {
+  type AsyncEffectHostContext,
+  createRoleAuthorizationPolicy,
+  type EffectIntent,
+  type RuntimeDependencies,
+} from "@senawa/runtime";
+import { SqliteContextBroker, SqliteRunnerAuthority } from "@senawa/storage-sqlite";
+import {
+  CompletionFactCommandBridge,
+  SqliteSupervisorAuthority,
+  SupervisorService,
+} from "@senawa/supervisor";
+import {
+  createRuntimeGraph,
+  createWorkerExecutionFixture,
+  deterministicSha256,
+  runtimeCommand,
+  runtimeFixture,
+  runtimePrincipal,
+} from "@senawa/testing";
+import { afterEach, describe, expect, it } from "vitest";
+
+const roots = new Set<string>();
+const dependencies: RuntimeDependencies = {
+  sha256: deterministicSha256,
+  authorization: createRoleAuthorizationPolicy([
+    { intent: "instantiate-run", roles: ["release-manager"] },
+    { intent: "submit-completion", roles: ["engine"] },
+  ]),
+};
+
+afterEach(() => {
+  for (const root of roots) rmSync(root, { recursive: true, force: true });
+  roots.clear();
+});
+
+describe("production worker composition", () => {
+  it("rejects cross-authority worker intents before broker or SDK mutation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "senawa-worker-binding-"));
+    roots.add(root);
+    const databasePath = join(root, "authority.db");
+    const broker = new SqliteContextBroker({
+      databasePath,
+      dependencies: {
+        sha256: deterministicSha256,
+        currentTime: () => runtimeFixture.currentTime,
+        issueGrantToken: () => new Uint8Array(32).fill(7),
+      },
+    });
+    const worker = createWorkerExecutionFixture();
+    broker.registerDispatch({
+      context: worker.context,
+      dispatch: worker.dispatch,
+      completionRequirements: worker.completionRequirements,
+    });
+    const sdk = new CompletingSdkPort();
+    const host = new CopilotWorkerEffectHost({
+      broker,
+      sdk,
+      workingDirectory: join(root, "work"),
+    });
+    const input = decodeCanonicalJsonValue({
+      dispatchId: worker.dispatch.dispatchId,
+      routeSelection: worker.routeSelection,
+      timeoutMs: 1_000,
+      grantPolicy: {
+        expiresAfterMs: 2_000,
+        maxOperations: 4,
+        maxBytes: 4_096,
+        maxChunkBytes: 1_024,
+      },
+    });
+    const baseIntent: EffectIntent = {
+      command: {
+        sequence: 1,
+        commandId: "command_binding-worker",
+        repositoryId: worker.dispatch.repositoryId,
+        runId: worker.dispatch.runId,
+        operationId: "operation_binding-worker",
+        kind: "worker",
+        contextDigest: worker.context.contextDigest,
+        inputDigest: deterministicSha256.digest(canonicalBytes(input)),
+        input,
+        budgetReservation: { unit: "model-millidollars", amount: 1 },
+        queuedAt: runtimeFixture.currentTime,
+        maxReconciliationAttempts: 1,
+      },
+      owner: "owner_binding",
+      fence: 1,
+      attemptId: "attempt_binding",
+      status: "intent",
+      persistedAt: runtimeFixture.currentTime,
+    };
+    const invalidIntents = [
+      { ...baseIntent, command: { ...baseIntent.command, kind: "sensor" as const } },
+      {
+        ...baseIntent,
+        command: { ...baseIntent.command, repositoryId: "repository_other" },
+      },
+      { ...baseIntent, command: { ...baseIntent.command, runId: "run_other" } },
+      { ...baseIntent, command: { ...baseIntent.command, contextDigest: "f".repeat(64) } },
+    ];
+    const context: AsyncEffectHostContext = {
+      lease: { owner: "owner_binding", fence: 1, expiresAt: "2026-08-12T12:00:30.000Z" },
+      signal: new AbortController().signal,
+    };
+    const grantsBefore = broker.authority.projection().grants;
+
+    for (const intent of invalidIntents) {
+      await expect(host.dispatch(intent, context)).rejects.toThrow(TypeError);
+      await expect(host.inspect(intent, context)).rejects.toThrow(TypeError);
+      await expect(host.cancel(intent, context)).rejects.toThrow(TypeError);
+    }
+
+    expect(broker.authority.projection().grants).toBe(grantsBefore);
+    expect(sdk.createCalls).toBe(0);
+    expect(sdk.metadataCalls).toBe(0);
+    expect(sdk.abortCalls).toBe(0);
+    broker.close();
+  });
+
+  it("drives a seeded worker effect through completion outbox to workflow assessment", async () => {
+    const root = mkdtempSync(join(tmpdir(), "senawa-production-composition-"));
+    roots.add(root);
+    const databasePath = join(root, "authority.db");
+    const sdkDirectory = join(root, "sdk");
+    mkdirSync(sdkDirectory, { mode: 0o700 });
+    const authority = new SqliteSupervisorAuthority({
+      databasePath,
+      assetDirectory: join(root, "assets"),
+      dependencies,
+    });
+    let broker: SqliteContextBroker;
+    const bridge = new CompletionFactCommandBridge({
+      authority,
+      broker: () => broker,
+      currentTime: () => runtimeFixture.currentTime,
+    });
+    broker = new SqliteContextBroker({
+      databasePath,
+      dependencies: {
+        sha256: deterministicSha256,
+        currentTime: () => runtimeFixture.currentTime,
+        issueGrantToken: () => new Uint8Array(32).fill(7),
+      },
+      completionFacts: bridge,
+    });
+    const graph = createRuntimeGraph();
+    const worker = createWorkerExecutionFixture(graph);
+    broker.registerDispatch({
+      context: worker.context,
+      dispatch: worker.dispatch,
+      completionRequirements: worker.completionRequirements,
+    });
+    authority.accept({
+      envelope: runtimeCommand({
+        commandId: "command_production-instantiate",
+        intent: "instantiate-run",
+        payload: {
+          workflowId: runtimeFixture.workflowId,
+          graph,
+          phase: runtimeFixture.phase,
+          approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
+          escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+        },
+      }),
+      createAdmission: () => ({
+        currentTime: runtimeFixture.currentTime,
+        facts: { source: "production-composition-test" },
+        allocations: [1, 2, 3].map((ordinal) => ({
+          kind: "stream-event" as const,
+          id: `stream-event-production-instantiate-${ordinal}`,
+        })),
+      }),
+    });
+    const effectInput = decodeCanonicalJsonValue({
+      dispatchId: worker.dispatch.dispatchId,
+      routeSelection: worker.routeSelection,
+      timeoutMs: 1_000,
+      grantPolicy: {
+        expiresAfterMs: 2_000,
+        maxOperations: 4,
+        maxBytes: 4_096,
+        maxChunkBytes: 1_024,
+      },
+    });
+    const seeder = new SqliteRunnerAuthority({ databasePath, dependencies });
+    seeder.configureRun({
+      repositoryId: runtimeFixture.repositoryId,
+      runId: runtimeFixture.runId,
+      contextDigest: worker.context.contextDigest,
+      budgets: [{ unit: "model-millidollars", limit: 2_000 }],
+      lease: {
+        owner: "owner_production",
+        fence: 1,
+        expiresAt: "2026-08-12T12:00:30.000Z",
+      },
+    });
+    seeder.enqueue({
+      sequence: 1,
+      commandId: "command_production-worker",
+      repositoryId: runtimeFixture.repositoryId,
+      runId: runtimeFixture.runId,
+      operationId: "operation_production-worker",
+      kind: "worker",
+      contextDigest: worker.context.contextDigest,
+      inputDigest: deterministicSha256.digest(canonicalBytes(effectInput)),
+      input: effectInput,
+      budgetReservation: { unit: "model-millidollars", amount: 2_000 },
+      queuedAt: runtimeFixture.currentTime,
+      maxReconciliationAttempts: 2,
+    });
+    seeder.close();
+
+    const sdk = new CompletingSdkPort();
+    const service = new SupervisorService({
+      authority,
+      clock: { now: () => Date.parse(runtimeFixture.currentTime) },
+      ownerId: "owner_production",
+      asyncEffectHost: new CopilotWorkerEffectHost({
+        broker,
+        sdk,
+        workingDirectory: "/tmp/senawa-production-work",
+      }),
+      deliverCompletionOutboxOnce: () => broker.deliverCompletionOutboxOnce(),
+      sessionStoreHealth: new FilesystemCopilotSessionStore({
+        baseDirectory: sdkDirectory,
+        metadata: sdk,
+      }),
+      closeables: [{ close: () => broker.close() }],
+    });
+
+    expect(authority.operationalSnapshot().startedSessionIds).toEqual([]);
+    await service.start();
+
+    const runnerQuery = new SqliteRunnerAuthority({ databasePath, dependencies });
+    expect(
+      runnerQuery.load({
+        repositoryId: runtimeFixture.repositoryId,
+        runId: runtimeFixture.runId,
+      }).effects[0],
+    ).toMatchObject({ outcome: { status: "completed", origin: "dispatch" } });
+    expect(sdk.createCalls).toBe(1);
+    runnerQuery.close();
+    const history = authority.queryHistory(runtimeFixture.repositoryId, runtimeFixture.runId);
+    expect(history).toHaveLength(6);
+    expect(history.filter(({ status }) => status === "terminal")).toHaveLength(2);
+    expect(history.at(-1)?.terminalReceipt).toMatchObject({
+      status: "completed",
+      result: {
+        assessment: {
+          submission: {
+            task: worker.dispatch.task,
+            disposition: "completed",
+            summary: "Completed by fake Copilot SDK",
+          },
+        },
+      },
+    });
+    await service.drain();
+    await service.stop();
+  });
+});
+
+class CompletingSdkPort implements CopilotSdkPort {
+  readonly workingDirectory = "/tmp/senawa-production-work";
+  createCalls = 0;
+  metadataCalls = 0;
+  abortCalls = 0;
+
+  async resumeSession(): Promise<undefined> {
+    return undefined;
+  }
+
+  async createSession(config: CopilotSdkSessionConfig): Promise<CopilotSdkSessionPort> {
+    this.createCalls += 1;
+    if (config.sessionId === undefined) throw new Error("Expected dispatch session identity");
+    return new CompletingSession(config.sessionId, config);
+  }
+
+  async sessionMetadataExists(): Promise<boolean> {
+    this.metadataCalls += 1;
+    return false;
+  }
+
+  async abortSession(): Promise<boolean> {
+    this.abortCalls += 1;
+    return false;
+  }
+}
+
+class CompletingSession implements CopilotSdkSessionPort {
+  constructor(
+    readonly sessionId: string,
+    readonly config: CopilotSdkSessionConfig,
+  ) {}
+
+  async sendAndWait(): Promise<void> {
+    const tool = this.config.tools.find(({ name }) => name === "submit_completion");
+    if (tool === undefined) throw new Error("Completion tool is missing");
+    const result = await tool.handler(
+      {
+        disposition: "completed",
+        summary: "Completed by fake Copilot SDK",
+        criteria: [{ criterionId: runtimeFixture.criterionId, disposition: "satisfied" }],
+        evidence: [],
+      },
+      { sessionId: this.sessionId, toolCallId: "completion", toolName: tool.name },
+    );
+    if (result.resultType !== "success") throw new Error("Completion submission was refused");
+  }
+
+  async abort(): Promise<void> {}
+
+  async disconnect(): Promise<void> {}
+}

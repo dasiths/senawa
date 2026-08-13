@@ -1,0 +1,29 @@
+{
+  "name": "@senawa/supervisor",
+  "version": "0.1.0-alpha.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.. packages/supervisor/src",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@senawa/protocol": "workspace:*",
+    "@senawa/runtime": "workspace:*",
+    "@senawa/storage-sqlite": "workspace:*",
+    "better-sqlite3": "12.11.1"
+  },
+  "devDependencies": {
+    "@senawa/testing": "workspace:*",
+    "@types/better-sqlite3": "9.6.0"
+  }
+}

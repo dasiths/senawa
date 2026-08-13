@@ -1,8 +1,16 @@
-import { FencedRunner, InMemoryRunnerAuthority, type RunnerFaultPoint } from "@senawa/runtime";
+import {
+  AsyncFencedRunner,
+  AsyncRunnerCancelledError,
+  FencedRunner,
+  InMemoryRunnerAuthority,
+  type RunnerFaultPoint,
+  type RunnerLeaseFact,
+} from "@senawa/runtime";
 import { describe, expect, it } from "vitest";
 import { registerRunnerAuthorityConformance } from "./runner-authority-conformance.js";
 import {
   configuredHarness,
+  FakeAsyncEffectHost,
   FakeEffectHost,
   runnerEffectCommand,
   runnerFixture,
@@ -497,6 +505,219 @@ describe("fenced runner crash and reconciliation matrix", () => {
       activeRunner.runOnce(runOnceInput({ attemptId: "runner-attempt-cancel" })),
     ).toMatchObject({ type: "committed", outcome: { status: "cancelled" } });
     expect(activeHost.cancelCalls).toBe(1);
+  });
+});
+
+describe("async fenced runner lease lifecycle", () => {
+  for (const point of [
+    "before-intent-persist",
+    "after-intent-persist",
+    "before-effect-commit",
+    "after-effect-commit",
+  ] as const) {
+    it(`recovers idempotently from async ${point}`, async () => {
+      let armed = true;
+      const authority = configuredHarness(
+        new InMemoryRunnerAuthority({
+          inject(candidate) {
+            if (armed && candidate === point) {
+              armed = false;
+              throw new Error(`crash at ${point}`);
+            }
+          },
+        }),
+      );
+      authority.enqueue(runnerEffectCommand());
+      const host = new FakeAsyncEffectHost();
+      const runner = new AsyncFencedRunner(authority, host);
+      const asyncInput = (
+        lease: RunnerLeaseFact,
+        attemptId: string,
+      ): Parameters<AsyncFencedRunner["runOnce"]>[0] => ({
+        repositoryId: runnerFixture.repositoryId,
+        runId: runnerFixture.runId,
+        attemptId,
+        signal: new AbortController().signal,
+        currentTime: () => runnerFixture.currentTime,
+        currentLease: () => lease,
+      });
+
+      await expect(
+        runner.runOnce(asyncInput(runnerFixture.lease, `runner-attempt-async-${point}`)),
+      ).rejects.toThrow(`crash at ${point}`);
+      const recoveryLease =
+        point === "before-effect-commit" ? takeoverLease() : runnerFixture.lease;
+      if (point === "before-effect-commit") {
+        authority.setLease(runnerFixture.repositoryId, runnerFixture.runId, recoveryLease);
+      }
+      const recovered = await runner.runOnce(
+        asyncInput(recoveryLease, `runner-attempt-async-recover-${point}`),
+      );
+
+      expect(recovered.type).toBe(point === "after-effect-commit" ? "idle" : "committed");
+      expect(authority.load(runOnceInput()).effects[0]?.outcome?.status).toBe("completed");
+      expect(host.host.dispatchCalls).toBe(1);
+      expect(
+        authority
+          .queryReceipts(runnerFixture.repositoryId, runnerFixture.runId)
+          .filter(({ status }) => status === "completed"),
+      ).toHaveLength(1);
+    });
+  }
+
+  it("commits with a renewed lease from the same fence after a delayed host result", async () => {
+    const authority = configuredHarness(new InMemoryRunnerAuthority());
+    authority.enqueue(runnerEffectCommand());
+    let releaseHost: (() => void) | undefined;
+    const hostStarted = new Promise<void>((resolve) => {
+      releaseHost = resolve;
+    });
+    let lease: RunnerLeaseFact = runnerFixture.lease;
+    const renewedLease = { ...lease, expiresAt: "2026-08-12T15:00:00.000Z" };
+    const runner = new AsyncFencedRunner(authority, {
+      async dispatch(intent) {
+        await hostStarted;
+        return {
+          status: "completed",
+          observedAt: runnerFixture.currentTime,
+          usage: { unit: intent.command.budgetReservation.unit, amount: 1 },
+        };
+      },
+      async inspect() {
+        return { status: "unknown", observedAt: runnerFixture.currentTime };
+      },
+      async cancel() {
+        return { status: "cancelled", observedAt: runnerFixture.currentTime };
+      },
+    });
+
+    const pending = runner.runOnce({
+      repositoryId: runnerFixture.repositoryId,
+      runId: runnerFixture.runId,
+      attemptId: "runner-attempt-renewed",
+      signal: new AbortController().signal,
+      currentTime: () => runnerFixture.currentTime,
+      currentLease: () => lease,
+    });
+    await Promise.resolve();
+    lease = renewedLease;
+    authority.setLease(runnerFixture.repositoryId, runnerFixture.runId, renewedLease);
+    releaseHost?.();
+
+    await expect(pending).resolves.toMatchObject({
+      type: "committed",
+      outcome: { status: "completed", fence: renewedLease.fence },
+    });
+  });
+
+  it("leaves a durable claim without an outcome when renewal aborts the host", async () => {
+    const authority = configuredHarness(new InMemoryRunnerAuthority());
+    authority.enqueue(runnerEffectCommand());
+    const abortController = new AbortController();
+    let hostStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      hostStarted = resolve;
+    });
+    const runner = new AsyncFencedRunner(authority, {
+      dispatch: async (_intent, { signal }) => {
+        hostStarted?.();
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("raw renewal failure")), {
+            once: true,
+          });
+        });
+        throw new Error("unreachable");
+      },
+      async inspect() {
+        throw new Error("inspect must not run after abort");
+      },
+      async cancel() {
+        throw new Error("cancel must not run after abort");
+      },
+    });
+    const pending = runner.runOnce({
+      repositoryId: runnerFixture.repositoryId,
+      runId: runnerFixture.runId,
+      attemptId: "runner-attempt-aborted",
+      signal: abortController.signal,
+      currentTime: () => runnerFixture.currentTime,
+      currentLease: () => runnerFixture.lease,
+    });
+    await started;
+    abortController.abort();
+
+    await expect(pending).rejects.toEqual(new AsyncRunnerCancelledError());
+    expect(authority.load(runOnceInput()).effects[0]?.outcome).toBeUndefined();
+  });
+
+  it("uses one inspection under a higher takeover fence after an aborted dispatch", async () => {
+    const authority = configuredHarness(new InMemoryRunnerAuthority());
+    authority.enqueue(runnerEffectCommand());
+    const abortController = new AbortController();
+    let started: (() => void) | undefined;
+    const dispatched = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const first = new AsyncFencedRunner(authority, {
+      dispatch: async (_intent, { signal }) => {
+        started?.();
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("lost response")), {
+            once: true,
+          });
+        });
+        throw new Error("unreachable");
+      },
+      async inspect() {
+        throw new Error("aborted owner must not inspect");
+      },
+      async cancel() {
+        throw new Error("unexpected cancellation");
+      },
+    }).runOnce({
+      repositoryId: runnerFixture.repositoryId,
+      runId: runnerFixture.runId,
+      attemptId: "runner-attempt-first-owner",
+      signal: abortController.signal,
+      currentTime: () => runnerFixture.currentTime,
+      currentLease: () => runnerFixture.lease,
+    });
+    await dispatched;
+    abortController.abort();
+    await expect(first).rejects.toBeInstanceOf(AsyncRunnerCancelledError);
+
+    const takeover = takeoverLease();
+    authority.setLease(runnerFixture.repositoryId, runnerFixture.runId, takeover);
+    let inspections = 0;
+    let dispatches = 0;
+    const result = await new AsyncFencedRunner(authority, {
+      async dispatch() {
+        dispatches += 1;
+        return { status: "completed", observedAt: runnerFixture.currentTime };
+      },
+      async inspect() {
+        inspections += 1;
+        return {
+          status: "completed",
+          observedAt: runnerFixture.currentTime,
+          outputDigest: runnerFixture.outputDigest,
+        };
+      },
+      async cancel() {
+        throw new Error("unexpected cancellation");
+      },
+    }).runOnce({
+      repositoryId: runnerFixture.repositoryId,
+      runId: runnerFixture.runId,
+      attemptId: "runner-attempt-takeover",
+      signal: new AbortController().signal,
+      currentTime: () => runnerFixture.currentTime,
+      currentLease: () => takeover,
+    });
+
+    expect(result).toMatchObject({ outcome: { status: "completed", origin: "inspection" } });
+    expect(inspections).toBe(1);
+    expect(dispatches).toBe(0);
   });
 });
 

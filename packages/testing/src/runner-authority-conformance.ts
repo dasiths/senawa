@@ -1,7 +1,8 @@
-import { FencedRunner, type RunnerAuthorityPort } from "@senawa/runtime";
+import { AsyncFencedRunner, FencedRunner, type RunnerAuthorityPort } from "@senawa/runtime";
 import { describe, expect, it } from "vitest";
 import {
   configuredHarness,
+  FakeAsyncEffectHost,
   FakeEffectHost,
   type RunnerAuthorityConformanceFactory,
   runnerEffectCommand,
@@ -62,6 +63,39 @@ export function registerRunnerAuthorityConformance(
         spent: 3,
         unreported: 0,
       });
+    });
+
+    it("produces the same authoritative outcome through the async fenced runner", async () => {
+      const harness = configuredHarness(createHarness());
+      const command = runnerEffectCommand();
+      harness.enqueue(command);
+      const host = new FakeAsyncEffectHost();
+      const controller = new AbortController();
+
+      const result = await new AsyncFencedRunner(harness.authority, host).runOnce({
+        repositoryId: runnerFixture.repositoryId,
+        runId: runnerFixture.runId,
+        attemptId: "runner-attempt-async",
+        signal: controller.signal,
+        currentTime: () => runnerFixture.currentTime,
+        currentLease: () => runnerFixture.lease,
+      });
+
+      expect(result).toMatchObject({
+        type: "committed",
+        outcome: {
+          status: "completed",
+          freshness: "current",
+          outputDigest: runnerFixture.outputDigest,
+          usage: { unit: "model-millidollars", reserved: 5, reported: 3, unreported: 0 },
+        },
+      });
+      expect(host.host.dispatchCalls).toBe(1);
+      expect(host.contexts).toHaveLength(1);
+      expect(host.contexts[0]?.lease).toEqual(runnerFixture.lease);
+      expect(
+        harness.queryReceipts(command.repositoryId, command.runId).map(({ status }) => status),
+      ).toEqual(["queued", "intent", "completed"]);
     });
 
     it("runs at most one queued effect and makes duplicate wakes idempotent", () => {

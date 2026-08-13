@@ -17,7 +17,8 @@ The implementation must deliver:
 * Human-approved agent proposals for additive phases and tasks
 * Durable restart from exact workflow boundaries
 * Zero to many scoped agents with immutable cross-agent context
-* Parallel task execution in isolated workspaces and serialized integration
+* Optional parallel task execution in isolated workspaces with serialized
+  integration
 * A Senawa-owned embedded transactional authority with no Beads dependency
 * A supervisor process with one API shared by CLI and portal
 * Local HTTP and SSE plus an authenticated remote control-plane protocol
@@ -25,6 +26,10 @@ The implementation must deliver:
   end-to-end tests
 * Major decisions and plan deviations recorded while implementation proceeds
 * A commit and push after the reset and after every implementation phase
+* A final research-backed consumer documentation phase covering philosophy,
+  architecture, usage, operations, security, and troubleshooting
+* One pull request for the complete implementation after every phase is
+  validated, committed, and pushed
 
 ## Scope boundary
 
@@ -38,6 +43,9 @@ Initial product limits:
 * One active run per repository
 * Additive phase and task amendments only
 * One serialized repository integration slot
+* Repository workspace execution by default, with one writer and no Git
+  worktree operations
+* Git worktree execution only through explicit consumer configuration
 * One supported live worker adapter plus deterministic simulated workers
 * npm distribution first
 * No old-run, Beads, file-runtime, CLI, or schema compatibility
@@ -72,7 +80,7 @@ Planned production boundaries:
 | `packages/runtime` | Ports, command service, runner, scheduler, intents, reconciliation, projections, and queries |
 | `packages/storage-sqlite` | Transactional authority, migrations, leases, claims, content-addressed assets, backup, integrity, and export |
 | `packages/configuration` | Workflow, sensor, schema, role, model-policy, initialization, and doctor contracts |
-| `packages/execution-host` | Worker, sensor, bounded-process, Git worktree, integration, and context-read adapters |
+| `packages/execution-host` | Worker, sensor, bounded-process, optional Git worktree, integration, and context-read adapters |
 | `packages/supervisor` | Repository registry, runner lifecycle, local IPC, loopback HTTP, SSE, wake-up, drain, and portal hosting |
 | `packages/portal` | Static browser client over protocol only |
 | `packages/reporting` | Deterministic reports, diagnostic bundles, and validated exports |
@@ -484,17 +492,23 @@ approval and quiescent application.
 
 `feat: add approved workflow amendments`
 
-## Phase 10: Parallel worktrees and integration
+## Phase 10: Optional parallel workspaces and integration
 
 ### Goal
 
-Execute dependency-ready tasks concurrently with snapshot isolation and one
-serialized integration slot.
+Execute dependency-ready tasks under a configured workspace mode with one
+serialized integration slot. The default repository mode is serial. Explicit
+worktree mode enables isolated parallel writers.
 
 ### Acceptance
 
 * Effective concurrency respects workflow, supervisor, host, and resource limits.
-* Every writer uses an isolated worktree and immutable base.
+* `execution.workspaceMode` accepts `repository` or `worktree` and defaults to
+  `repository` when omitted.
+* Repository mode creates no worktrees and limits effective writer concurrency
+  to one.
+* Worktree mode requires explicit configuration, a verified Git repository,
+  isolated worktrees, and an immutable base for every writer.
 * Siblings cannot observe partial work.
 * Integration is fenced, durable, restartable, and followed by configured gates.
 * Fan-in digest is independent of completion order.
@@ -502,12 +516,16 @@ serialized integration slot.
 
 ### Validation
 
+* Configuration default, explicit opt-in, invalid modes, and worktree-disabled
+  execution that never calls Git worktree operations
 * Disjoint edits, same-file conflicts, semantic conflicts, cancellation, and
-  task-local failure
+  task-local failure in explicit worktree mode
 * Post-integration failure and rework
 * Restart while integration owns the slot
 * Every sibling completion permutation
 * Resource and spend cap scheduling
+* Worktree tests create a fresh temporary Git repository outside the Senawa
+  checkout, including when Senawa is mounted into a devcontainer
 
 ### Disproof
 
@@ -515,6 +533,8 @@ serialized integration slot.
 * Late cancelled output reaches the target.
 * Fan-in depends on timing.
 * Parallel execution can mutate canonical state outside Senawa.
+* Default execution creates or requires a Git worktree.
+* A test adds, removes, or mutates a worktree in the Senawa repository.
 
 ### Commit
 
@@ -613,9 +633,9 @@ limits, and a no-credit end-to-end acceptance journey.
 * Deterministic report and export golden tests
 * Backup/restore and corruption journey
 * Hostile schema, artifact, output, archive, path, and network tests
-* Full no-credit workflow with completion, approval, amendment, parallel
-  integration, escalation, crash recovery, portal observation, and remote
-  simulation
+* Full no-credit workflow with completion, approval, amendment, configured
+  worktree integration in a temporary Git repository, escalation, crash
+  recovery, portal observation, and remote simulation
 * Opt-in live worker smoke test with cost warning
 
 ### Disproof
@@ -629,6 +649,108 @@ limits, and a no-credit end-to-end acceptance journey.
 
 `feat: complete senawa alpha`
 
+## Phase 14: Consumer documentation and adoption journeys
+
+### Goal
+
+Publish consumer-facing documentation that explains why Senawa exists, how its
+authority model works, how the major components fit together, and how to adopt,
+configure, operate, and troubleshoot the alpha without reading implementation
+history or source code.
+
+### Required research
+
+Run a fresh RPI research cycle after Phase 13. The research must:
+
+* Identify the primary consumer audiences and their first successful journeys.
+* Review the final CLI, configuration schema, examples, package exports,
+  operational limits, and security boundaries from the delivered code.
+* Compare the implemented terminology with common workflow-engine, software
+  factory, agent, and local-control-plane concepts without copying product
+  documentation.
+* Inventory questions that current README and reference pages do not answer.
+* Select a documentation information architecture and record rejected
+  alternatives in the implementation log.
+
+Research artifacts remain temporary. The active repository retains only the
+approved consumer documentation and the implementation log decision record.
+
+### Acceptance
+
+* A consumer overview explains the design philosophy: deterministic authority,
+  immutable context, proposal-only agents, evidence-backed transitions,
+  intent-before-effect execution, durable recovery, and local-first control.
+* An architecture guide explains protocol, kernel, configuration, runtime,
+  SQLite authority, execution host, supervisor, CLI, portal, control plane,
+  reporting, and testing responsibilities without exposing obsolete packages.
+* A getting-started journey covers installation, `senawa init`, configuration,
+  `senawa doctor`, service startup, command submission, status, events, and
+  shutdown using only implemented commands.
+* Workflow authoring documentation covers phases, work, criteria, completion,
+  schemas, roles, model routes, budgets, sensors, gates, projected work, and the
+  default `execution.workspaceMode: repository` behavior.
+* Optional worktree documentation states that `worktree` mode requires explicit
+  configuration. Its examples and tests use a fresh temporary Git repository,
+  never the mounted Senawa checkout.
+* Operations documentation covers private local paths, credentials, loopback
+  sessions, backup, restore, recovery, drain, logs, SDK session state, platform
+  requirements, live-probe opt-in, and failure handling.
+* Security documentation distinguishes principals, capabilities, grants,
+  approvals, proposals, stale results, local transport trust, and remote
+  control-plane trust.
+* Troubleshooting and limitations describe the alpha platform matrix, required
+  native build tools, JSON-only configuration, explicit live-model costs, and
+  unsupported or deferred behavior.
+* Examples are complete, bounded, link-checked, and executable without credits
+  unless explicitly labelled as opt-in live examples.
+* README becomes a concise entry point and links to the consumer documentation,
+  references, examples, and design records.
+* Documentation describes only behavior proven by the final implementation and
+  clearly labels optional, experimental, and future features.
+
+### Validation
+
+* Fresh-install documentation journey in a temporary directory
+* Command and configuration examples checked against built executables and exact
+  codecs
+* Documentation links, anchors, frontmatter, and terminology checks
+* Consumer review by independent subagents for onboarding, architecture,
+  operations, and security
+* Hostile-copy and secret-leak review of examples and diagnostic output
+* Desktop and narrow-width rendering checks for documentation pages where the
+  chosen publishing surface supports them
+* Final diff review proving no historical, WIP, or tracking artifacts remain
+
+### Disproof
+
+* A first-time consumer must inspect source code to complete the getting-started
+  journey.
+* Documentation advertises a command, option, authority, platform, or hosted
+  service that the alpha does not implement.
+* An example requires Git worktree support by default or mutates the Senawa
+  repository during validation.
+* Agent proposals, model text, central receipts, or prompt content are described
+  as workflow authority.
+* Backup, recovery, security, cost, or platform limits are omitted.
+
+### Commit
+
+`docs: add consumer adoption guides`
+
+## Final pull request
+
+After Phase 14 is independently approved, committed, and pushed:
+
+* Fetch and compare the branch with the remote base branch.
+* Generate a complete branch reference and review it in parallel chunks.
+* Run every repository validation check from a fresh install.
+* Generate a consumer-readable pull request description covering the complete
+  redesign, migrations, security model, validation, and known limits.
+* Create one pull request from the implementation branch to the repository's
+  default branch and report its URL.
+* Remove temporary PR reference XML and subagent chunk artifacts while retaining
+  the final PR analysis and description for local reference.
+
 ## Final completion criteria
 
 The autonomous implementation is complete only when:
@@ -641,5 +763,8 @@ The autonomous implementation is complete only when:
   checks pass from a fresh install.
 * The no-credit end-to-end workflow passes after process restarts.
 * The current branch contains no Beads or legacy compatibility implementation.
+* Phase 14 consumer documentation passes its fresh research, journey,
+  independent review, and link validation gates.
+* The complete implementation branch is pushed and has one final pull request.
 * The final implementation review states which planned contracts were accepted,
   changed, disproved, or deferred.

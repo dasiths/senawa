@@ -134,6 +134,8 @@ export interface SubmissionAdmissionResult {
 export interface ContextBrokerClient {
   readonly dependencies: ContextBrokerDependencies;
   registerDispatch(input: RegisterWorkerDispatchInput): WorkerDispatch;
+  loadWorkerDispatch(dispatchId: string): StoredDispatch | undefined;
+  loadWorkerDispatchProgress(dispatchId: string): WorkerDispatchProgress | undefined;
   grantAssetAccess(input: ContextGrantInput): ContextGrantEnvelope;
   readAsset(input: AssetReadInput): Promise<AssetReadResult>;
   admitSubmission(input: SubmissionAdmissionInput): SubmissionAdmissionResult;
@@ -167,6 +169,13 @@ export interface StoredDispatch {
   readonly context: WorkerContextBase;
   readonly dispatch: WorkerDispatch;
   readonly completionRequirements: CompletionRequirements;
+}
+
+export interface WorkerDispatchProgress {
+  readonly dispatchId: string;
+  readonly completionStatus: "pending" | "accepted";
+  readonly submissions: readonly SubmissionAdmissionResult[];
+  readonly sessionExpected: boolean;
 }
 
 export interface StoredGrant {
@@ -971,6 +980,34 @@ export class ContextBroker implements ContextBrokerClient {
       Object.freeze({ context, dispatch, completionRequirements }),
     );
     return dispatch;
+  }
+
+  loadWorkerDispatch(dispatchId: string): StoredDispatch | undefined {
+    const stored = this.authority.dispatches.get(dispatchId);
+    if (stored === undefined) return undefined;
+    return deepFreeze({
+      context: stored.context,
+      dispatch: stored.dispatch,
+      completionRequirements: stored.completionRequirements,
+    });
+  }
+
+  loadWorkerDispatchProgress(dispatchId: string): WorkerDispatchProgress | undefined {
+    const stored = this.authority.dispatches.get(dispatchId);
+    if (stored === undefined) return undefined;
+    const submissions = [...this.authority.submissions.values()]
+      .filter(({ submission }) => submission.dispatchId === dispatchId)
+      .map(({ result }) => deepFreeze({ ...result }));
+    return deepFreeze({
+      dispatchId,
+      completionStatus: submissions.some(
+        ({ type, status }) => type === "completion" && status !== "stale",
+      )
+        ? "accepted"
+        : "pending",
+      submissions,
+      sessionExpected: true,
+    });
   }
 
   grantAssetAccess(input: ContextGrantInput): ContextGrantEnvelope {

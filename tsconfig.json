@@ -20,6 +20,9 @@
       "path": "packages/storage-sqlite"
     },
     {
+      "path": "packages/supervisor"
+    },
+    {
       "path": "packages/testing"
     },
     {

@@ -4,15 +4,27 @@ import {
   type CapabilityHandshake,
   type CommandEnvelope,
   type CommandIntent,
+  type CommandSubmission,
   type DurableReceipt,
   type ErrorEnvelope,
+  type EventReplayPage,
   type EventStreamFrame,
   type JsonValue,
   type OpaqueIdentity,
   PROTOCOL_VERSION,
   type ProjectionEnvelope,
+  type ReceiptPage,
   type ReceiptStatus,
   type RunIdentity,
+  type SupervisorAdmissionFacts,
+  type SupervisorAllocationFact,
+  type SupervisorAllocationKind,
+  type SupervisorMode,
+  type SupervisorReceipt,
+  type SupervisorReceiptStatus,
+  type SupervisorServiceRecord,
+  type SupervisorWake,
+  type SupervisorWakeReason,
   type TransportAttribution,
   type TransportKind,
 } from "./contracts.js";
@@ -28,6 +40,7 @@ export const PROTOCOL_LIMITS = Object.freeze({
   maxMessageLength: 4_096,
   maxCapabilities: 64,
   maxSupportedVersions: 16,
+  maxPageItems: 1_024,
 });
 
 export type ProtocolValidationErrorCode =
@@ -84,6 +97,14 @@ const RECEIPT_STATUSES = new Set<ReceiptStatus>([
   "cancelled",
   "unknown-effect",
 ]);
+const SUPERVISOR_ALLOCATION_KINDS = new Set<SupervisorAllocationKind>(["approval", "stream-event"]);
+const SUPERVISOR_RECEIPT_STATUSES = new Set<SupervisorReceiptStatus>([
+  "queued",
+  "claimed",
+  "terminal",
+]);
+const SUPERVISOR_WAKE_REASONS = new Set<SupervisorWakeReason>(["command-accepted"]);
+const SUPERVISOR_MODES = new Set<SupervisorMode>(["running", "draining", "drained", "stopped"]);
 
 export function decodeCommandEnvelope(input: string | unknown): CommandEnvelope {
   const value = decodeWireValue(input);
@@ -137,6 +158,46 @@ export function decodeCommandEnvelope(input: string | unknown): CommandEnvelope 
 
 export function encodeCommandEnvelope(input: unknown): string {
   return canonicalStringify(decodeCommandEnvelope(input));
+}
+
+export function decodeCommandSubmission(input: string | unknown): CommandSubmission {
+  const value = decodeWireValue(input);
+  const object = exactObject(
+    value,
+    "$",
+    ["apiVersion", "commandId", "repositoryId", "runId", "intent", "payload", "payloadDigest"],
+    ["expectedDefinitionRevision", "expectedGraphRevision", "exactObjectDigest", "expiresAt"],
+  );
+
+  protocolVersion(object.apiVersion, "$.apiVersion");
+  commandId(object.commandId, "$.commandId");
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  const intent = commandIntent(object.intent, "$.intent");
+  const payload = jsonValue(object.payload, "$.payload");
+  digest(object.payloadDigest, "$.payloadDigest");
+  optional(object, "expectedDefinitionRevision", identity, "$.");
+  optional(object, "expectedGraphRevision", identity, "$.");
+  optional(object, "exactObjectDigest", digest, "$.");
+  optional(object, "expiresAt", timestamp, "$.");
+
+  return Object.freeze({
+    apiVersion: PROTOCOL_VERSION,
+    commandId: object.commandId as string,
+    repositoryId: object.repositoryId as string,
+    runId: object.runId as string,
+    intent,
+    payload,
+    payloadDigest: object.payloadDigest as string,
+    ...optionalField(object, "expectedDefinitionRevision"),
+    ...optionalField(object, "expectedGraphRevision"),
+    ...optionalField(object, "exactObjectDigest"),
+    ...optionalField(object, "expiresAt"),
+  });
+}
+
+export function encodeCommandSubmission(input: unknown): string {
+  return canonicalStringify(decodeCommandSubmission(input));
 }
 
 export function decodeAuthenticatedPrincipal(input: string | unknown): AuthenticatedPrincipal {
@@ -213,6 +274,191 @@ export function encodeDurableReceipt(input: unknown): string {
   return canonicalStringify(decodeDurableReceipt(input));
 }
 
+export function decodeReceiptPage(input: string | unknown): ReceiptPage {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "apiVersion",
+    "repositoryId",
+    "runId",
+    "afterCursor",
+    "latestCursor",
+    "hasMore",
+    "receipts",
+  ]);
+  protocolVersion(object.apiVersion, "$.apiVersion");
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  cursor(object.afterCursor, "$.afterCursor");
+  cursor(object.latestCursor, "$.latestCursor");
+  if ((object.afterCursor as number) > (object.latestCursor as number)) {
+    fail("invalid-value", "$.afterCursor", "must not exceed latestCursor");
+  }
+  booleanValue(object.hasMore, "$.hasMore");
+  const receipts = boundedCursorPageItems(
+    object.receipts,
+    "$.receipts",
+    object.repositoryId as string,
+    object.runId as string,
+    object.afterCursor as number,
+    object.latestCursor as number,
+    decodeDurableReceipt,
+  );
+  validatePageCompletion(
+    receipts,
+    object.afterCursor as number,
+    object.latestCursor as number,
+    object.hasMore,
+    "$.hasMore",
+  );
+  return Object.freeze({
+    apiVersion: PROTOCOL_VERSION,
+    repositoryId: object.repositoryId as string,
+    runId: object.runId as string,
+    afterCursor: object.afterCursor as number,
+    latestCursor: object.latestCursor as number,
+    hasMore: object.hasMore,
+    receipts,
+  });
+}
+
+export function encodeReceiptPage(input: unknown): string {
+  return canonicalStringify(decodeReceiptPage(input));
+}
+
+export function decodeSupervisorAdmissionFacts(input: string | unknown): SupervisorAdmissionFacts {
+  const object = exactObject(decodeWireValue(input), "$", ["currentTime", "facts", "allocations"]);
+  timestamp(object.currentTime, "$.currentTime");
+  const facts = jsonValue(object.facts, "$.facts");
+  if (!Array.isArray(object.allocations)) {
+    fail("invalid-type", "$.allocations", "must be an array");
+  }
+  const allocationIds = new Set<string>();
+  const allocations = object.allocations.map((value, index): SupervisorAllocationFact => {
+    const allocation = exactObject(value, `$.allocations[${index}]`, ["kind", "id"]);
+    enumValue(allocation.kind, `$.allocations[${index}].kind`, SUPERVISOR_ALLOCATION_KINDS);
+    identity(allocation.id, `$.allocations[${index}].id`);
+    if (allocationIds.has(allocation.id as string)) {
+      fail("invalid-value", `$.allocations[${index}].id`, "must not duplicate an allocation id");
+    }
+    allocationIds.add(allocation.id as string);
+    return Object.freeze({
+      kind: allocation.kind as SupervisorAllocationKind,
+      id: allocation.id as string,
+    });
+  });
+  return Object.freeze({
+    currentTime: object.currentTime as string,
+    facts,
+    allocations: Object.freeze(allocations),
+  });
+}
+
+export function encodeSupervisorAdmissionFacts(input: unknown): string {
+  return canonicalStringify(decodeSupervisorAdmissionFacts(input));
+}
+
+export function decodeSupervisorReceipt(input: string | unknown): SupervisorReceipt {
+  const object = exactObject(
+    decodeWireValue(input),
+    "$",
+    ["sequence", "commandId", "repositoryId", "runId", "status", "recordedAt"],
+    ["terminalReceipt"],
+  );
+  positiveSequence(object.sequence, "$.sequence");
+  commandId(object.commandId, "$.commandId");
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  enumValue(object.status, "$.status", SUPERVISOR_RECEIPT_STATUSES);
+  timestamp(object.recordedAt, "$.recordedAt");
+  const terminalReceipt = Object.hasOwn(object, "terminalReceipt")
+    ? decodeDurableReceipt(object.terminalReceipt)
+    : undefined;
+  if ((object.status === "terminal") !== (terminalReceipt !== undefined)) {
+    fail(
+      "invalid-value",
+      "$.terminalReceipt",
+      "must be present exactly for terminal supervisor receipts",
+    );
+  }
+  if (
+    terminalReceipt !== undefined &&
+    (terminalReceipt.commandId !== object.commandId ||
+      terminalReceipt.repositoryId !== object.repositoryId ||
+      terminalReceipt.runId !== object.runId ||
+      terminalReceipt.status === "queued" ||
+      terminalReceipt.status === "claimed")
+  ) {
+    fail(
+      "invalid-value",
+      "$.terminalReceipt",
+      "must be the exact terminal durable receipt for this supervisor receipt",
+    );
+  }
+  return Object.freeze({
+    sequence: object.sequence as number,
+    commandId: object.commandId as string,
+    repositoryId: object.repositoryId as string,
+    runId: object.runId as string,
+    status: object.status as SupervisorReceiptStatus,
+    recordedAt: object.recordedAt as string,
+    ...(terminalReceipt === undefined ? {} : { terminalReceipt }),
+  });
+}
+
+export function encodeSupervisorReceipt(input: unknown): string {
+  return canonicalStringify(decodeSupervisorReceipt(input));
+}
+
+export function decodeSupervisorWake(input: string | unknown): SupervisorWake {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "repositoryId",
+    "runId",
+    "generation",
+    "acknowledgedGeneration",
+    "notBefore",
+    "reasons",
+  ]);
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  cursor(object.generation, "$.generation");
+  cursor(object.acknowledgedGeneration, "$.acknowledgedGeneration");
+  if ((object.acknowledgedGeneration as number) > (object.generation as number)) {
+    fail("invalid-value", "$.acknowledgedGeneration", "must not exceed generation");
+  }
+  timestamp(object.notBefore, "$.notBefore");
+  const reasons = sortedStringSet(
+    object.reasons,
+    "$.reasons",
+    SUPERVISOR_WAKE_REASONS.size,
+    (value, path) => enumValue(value, path, SUPERVISOR_WAKE_REASONS),
+  ) as readonly SupervisorWakeReason[];
+  return Object.freeze({
+    repositoryId: object.repositoryId as string,
+    runId: object.runId as string,
+    generation: object.generation as number,
+    acknowledgedGeneration: object.acknowledgedGeneration as number,
+    notBefore: object.notBefore as string,
+    reasons,
+  });
+}
+
+export function encodeSupervisorWake(input: unknown): string {
+  return canonicalStringify(decodeSupervisorWake(input));
+}
+
+export function decodeSupervisorServiceRecord(input: string | unknown): SupervisorServiceRecord {
+  const object = exactObject(decodeWireValue(input), "$", ["mode", "changedAt"]);
+  enumValue(object.mode, "$.mode", SUPERVISOR_MODES);
+  timestamp(object.changedAt, "$.changedAt");
+  return Object.freeze({
+    mode: object.mode as SupervisorMode,
+    changedAt: object.changedAt as string,
+  });
+}
+
+export function encodeSupervisorServiceRecord(input: unknown): string {
+  return canonicalStringify(decodeSupervisorServiceRecord(input));
+}
+
 export function decodeEventStreamFrame(input: string | unknown): EventStreamFrame {
   const object = exactObject(
     decodeWireValue(input),
@@ -256,6 +502,68 @@ export function decodeEventStreamFrame(input: string | unknown): EventStreamFram
 
 export function encodeEventStreamFrame(input: unknown): string {
   return canonicalStringify(decodeEventStreamFrame(input));
+}
+
+export function decodeEventReplayPage(input: string | unknown): EventReplayPage {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "apiVersion",
+    "repositoryId",
+    "runId",
+    "afterCursor",
+    "earliestAvailableCursor",
+    "latestCursor",
+    "hasMore",
+    "events",
+  ]);
+  protocolVersion(object.apiVersion, "$.apiVersion");
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  cursor(object.afterCursor, "$.afterCursor");
+  cursor(object.earliestAvailableCursor, "$.earliestAvailableCursor");
+  cursor(object.latestCursor, "$.latestCursor");
+  if ((object.earliestAvailableCursor as number) > (object.latestCursor as number)) {
+    fail("invalid-value", "$.earliestAvailableCursor", "must not exceed latestCursor");
+  }
+  if ((object.afterCursor as number) > (object.latestCursor as number)) {
+    fail("invalid-value", "$.afterCursor", "must not exceed latestCursor");
+  }
+  if (
+    (object.earliestAvailableCursor as number) > 0 &&
+    (object.afterCursor as number) < (object.earliestAvailableCursor as number) - 1
+  ) {
+    fail("invalid-value", "$.afterCursor", "must not precede the available replay range");
+  }
+  booleanValue(object.hasMore, "$.hasMore");
+  const events = boundedCursorPageItems(
+    object.events,
+    "$.events",
+    object.repositoryId as string,
+    object.runId as string,
+    object.afterCursor as number,
+    object.latestCursor as number,
+    decodeEventStreamFrame,
+  );
+  validatePageCompletion(
+    events,
+    object.afterCursor as number,
+    object.latestCursor as number,
+    object.hasMore,
+    "$.hasMore",
+  );
+  return Object.freeze({
+    apiVersion: PROTOCOL_VERSION,
+    repositoryId: object.repositoryId as string,
+    runId: object.runId as string,
+    afterCursor: object.afterCursor as number,
+    earliestAvailableCursor: object.earliestAvailableCursor as number,
+    latestCursor: object.latestCursor as number,
+    hasMore: object.hasMore,
+    events,
+  });
+}
+
+export function encodeEventReplayPage(input: unknown): string {
+  return canonicalStringify(decodeEventReplayPage(input));
 }
 
 export function decodeProjectionEnvelope(input: string | unknown): ProjectionEnvelope {
@@ -637,6 +945,78 @@ function timestamp(value: unknown, path: string): void {
 function cursor(value: unknown, path: string): void {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     fail("invalid-value", path, "must be a non-negative safe integer");
+  }
+}
+
+function booleanValue(value: unknown, path: string): asserts value is boolean {
+  if (typeof value !== "boolean") {
+    fail("invalid-type", path, "must be a boolean");
+  }
+}
+
+function boundedCursorPageItems<
+  Item extends {
+    readonly cursor: number;
+    readonly repositoryId: string;
+    readonly runId: string;
+  },
+>(
+  value: unknown,
+  path: string,
+  repositoryId: string,
+  runId: string,
+  afterCursor: number,
+  latestCursor: number,
+  decoder: (input: unknown) => Item,
+): readonly Item[] {
+  if (!Array.isArray(value)) {
+    fail("invalid-type", path, "must be an array");
+  }
+  if (value.length > PROTOCOL_LIMITS.maxPageItems) {
+    fail("oversized", path, `must contain at most ${PROTOCOL_LIMITS.maxPageItems} entries`);
+  }
+  const items: Item[] = [];
+  let priorCursor = afterCursor;
+  for (const [index, entry] of value.entries()) {
+    const item = decoder(entry);
+    if (item.repositoryId !== repositoryId || item.runId !== runId) {
+      fail("invalid-value", `${path}[${index}]`, "must match the page repository and run identity");
+    }
+    if (item.cursor <= priorCursor) {
+      fail(
+        "invalid-value",
+        `${path}[${index}].cursor`,
+        "must be strictly increasing after afterCursor",
+      );
+    }
+    if (item.cursor > latestCursor) {
+      fail("invalid-value", `${path}[${index}].cursor`, "must not exceed latestCursor");
+    }
+    priorCursor = item.cursor;
+    items.push(item);
+  }
+  return Object.freeze(items);
+}
+
+function validatePageCompletion<Item extends { readonly cursor: number }>(
+  items: readonly Item[],
+  afterCursor: number,
+  latestCursor: number,
+  hasMore: boolean,
+  path: string,
+): void {
+  const finalCursor = items.at(-1)?.cursor;
+  if (hasMore && finalCursor === undefined) {
+    fail("invalid-value", path, "must be false for an empty page");
+  }
+  if (hasMore && (afterCursor >= latestCursor || finalCursor === latestCursor)) {
+    fail("invalid-value", path, "must be false when the page reaches latestCursor");
+  }
+}
+
+function positiveSequence(value: unknown, path: string): void {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    fail("invalid-value", path, "must be a positive safe integer");
   }
 }
 

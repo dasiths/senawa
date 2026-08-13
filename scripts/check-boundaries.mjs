@@ -66,6 +66,18 @@ if (storageDependencies.some((dependency) => !allowedStorageDependencies.has(dep
   );
 }
 
+const supervisorManifest = JSON.parse(await readFile("packages/supervisor/package.json", "utf8"));
+const supervisorDependencies = Object.keys(supervisorManifest.dependencies ?? {});
+const allowedSupervisorDependencies = new Set([
+  "@senawa/protocol",
+  "@senawa/runtime",
+  "@senawa/storage-sqlite",
+  "better-sqlite3",
+]);
+if (supervisorDependencies.some((dependency) => !allowedSupervisorDependencies.has(dependency))) {
+  violations.push("packages/supervisor/package.json: supervisor has an unsupported dependency");
+}
+
 for (const file of [...packageFiles, ...appFiles]) {
   const content = await readFile(file, "utf8");
   violations.push(...checkSource(file, content));

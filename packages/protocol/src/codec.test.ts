@@ -5,19 +5,29 @@ import {
   decodeAuthenticatedPrincipal,
   decodeCapabilityHandshake,
   decodeCommandEnvelope,
+  decodeCommandSubmission,
   decodeDurableReceipt,
   decodeErrorEnvelope,
+  decodeEventReplayPage,
   decodeEventStreamFrame,
   decodeProjectionEnvelope,
+  decodeReceiptPage,
   decodeRunIdentity,
+  decodeSupervisorAdmissionFacts,
+  decodeSupervisorReceipt,
+  decodeSupervisorServiceRecord,
+  decodeSupervisorWake,
   decodeTransportAttribution,
   encodeAuthenticatedPrincipal,
   encodeCapabilityHandshake,
   encodeCommandEnvelope,
+  encodeCommandSubmission,
   encodeDurableReceipt,
   encodeErrorEnvelope,
+  encodeEventReplayPage,
   encodeEventStreamFrame,
   encodeProjectionEnvelope,
+  encodeReceiptPage,
   encodeRunIdentity,
   encodeTransportAttribution,
   PROTOCOL_LIMITS,
@@ -110,6 +120,17 @@ describe("v1alpha command codec", () => {
     expect(new TextDecoder().decode(canonicalBytes(command))).toBe(GOLDEN_COMMAND_JSON);
     expect(decodeCommandEnvelope(encoded)).toEqual(command);
     expect(Object.isFrozen(decodeCommandEnvelope(encoded))).toBe(true);
+  });
+
+  it("round trips a submission while rejecting client-owned attribution", () => {
+    const { principal: _principal, transport: _transport, ...submission } = command;
+    expect(decodeCommandSubmission(encodeCommandSubmission(submission))).toEqual(submission);
+    expectProtocolError("unknown-field", "$.principal", () =>
+      decodeCommandSubmission({ ...submission, principal: command.principal }),
+    );
+    expectProtocolError("unknown-field", "$.transport", () =>
+      decodeCommandSubmission({ ...submission, transport: command.transport }),
+    );
   });
 
   it("rejects unknown fields that could create principal ambiguity", () => {
@@ -272,6 +293,196 @@ describe("v1alpha receipts", () => {
     }
     expectProtocolError("unknown-field", "$.sequence", () =>
       decodeDurableReceipt({ ...receipt, sequence: 8 }),
+    );
+  });
+});
+
+describe("v1alpha bounded query pages", () => {
+  const receiptPage = {
+    apiVersion: PROTOCOL_VERSION,
+    repositoryId: command.repositoryId,
+    runId: command.runId,
+    afterCursor: 2,
+    latestCursor: 7,
+    hasMore: false,
+    receipts: [{ ...receipt, cursor: 4 }, receipt],
+  } as const;
+  const eventPage = {
+    apiVersion: PROTOCOL_VERSION,
+    repositoryId: command.repositoryId,
+    runId: command.runId,
+    afterCursor: 2,
+    earliestAvailableCursor: 1,
+    latestCursor: 8,
+    hasMore: false,
+    events: [{ ...event, cursor: 5, eventId: "event_05" }, event],
+  } as const;
+
+  it("round trips exact sparse pages with frozen item arrays", () => {
+    const decodedReceipts = decodeReceiptPage(encodeReceiptPage(receiptPage));
+    const decodedEvents = decodeEventReplayPage(encodeEventReplayPage(eventPage));
+
+    expect(decodedReceipts).toEqual(receiptPage);
+    expect(decodedEvents).toEqual(eventPage);
+    expect(Object.isFrozen(decodedReceipts.receipts)).toBe(true);
+    expect(Object.isFrozen(decodedEvents.events)).toBe(true);
+  });
+
+  it("rejects extras, identity mismatches, invalid cursor bounds, and impossible hasMore", () => {
+    expectProtocolError("unknown-field", "$.limit", () =>
+      decodeReceiptPage({ ...receiptPage, limit: 2 }),
+    );
+    expectProtocolError("invalid-value", "$.receipts[0]", () =>
+      decodeReceiptPage({
+        ...receiptPage,
+        receipts: [{ ...receipt, cursor: 4, repositoryId: "repository_other" }],
+      }),
+    );
+    expectProtocolError("invalid-value", "$.events[1].cursor", () =>
+      decodeEventReplayPage({
+        ...eventPage,
+        events: [
+          { ...event, cursor: 5 },
+          { ...event, cursor: 5, eventId: "event_other" },
+        ],
+      }),
+    );
+    expectProtocolError("invalid-value", "$.receipts[0].cursor", () =>
+      decodeReceiptPage({ ...receiptPage, receipts: [{ ...receipt, cursor: 8 }] }),
+    );
+    expectProtocolError("invalid-value", "$.afterCursor", () =>
+      decodeReceiptPage({ ...receiptPage, afterCursor: -1 }),
+    );
+    expectProtocolError("invalid-value", "$.latestCursor", () =>
+      decodeReceiptPage({ ...receiptPage, latestCursor: -1 }),
+    );
+    expectProtocolError("invalid-value", "$.afterCursor", () =>
+      decodeReceiptPage({ ...receiptPage, afterCursor: 8 }),
+    );
+    expectProtocolError("invalid-value", "$.afterCursor", () =>
+      decodeEventReplayPage({ ...eventPage, afterCursor: 9 }),
+    );
+    expectProtocolError("invalid-value", "$.afterCursor", () =>
+      decodeEventReplayPage({ ...eventPage, afterCursor: 0, earliestAvailableCursor: 2 }),
+    );
+    expect(
+      decodeEventReplayPage({ ...eventPage, afterCursor: 0, earliestAvailableCursor: 1 }),
+    ).toEqual({ ...eventPage, afterCursor: 0, earliestAvailableCursor: 1 });
+    expectProtocolError("invalid-value", "$.hasMore", () =>
+      decodeEventReplayPage({ ...eventPage, hasMore: true }),
+    );
+    expectProtocolError("invalid-value", "$.hasMore", () =>
+      decodeEventReplayPage({ ...eventPage, events: [], hasMore: true }),
+    );
+    expect(decodeEventReplayPage({ ...eventPage, afterCursor: 7, events: [] })).toEqual({
+      ...eventPage,
+      afterCursor: 7,
+      events: [],
+    });
+    expectProtocolError("invalid-value", "$.hasMore", () =>
+      decodeEventReplayPage({
+        ...eventPage,
+        afterCursor: eventPage.latestCursor,
+        events: [],
+        hasMore: true,
+      }),
+    );
+    expectProtocolError("invalid-value", "$.earliestAvailableCursor", () =>
+      decodeEventReplayPage({ ...eventPage, earliestAvailableCursor: 9 }),
+    );
+  });
+
+  it("rejects oversized, sparse, and accessor-backed item arrays", () => {
+    expectProtocolError("oversized", "$.receipts", () =>
+      decodeReceiptPage({
+        ...receiptPage,
+        receipts: Array.from({ length: PROTOCOL_LIMITS.maxPageItems + 1 }, () => null),
+      }),
+    );
+
+    const sparseEvents = Array(2);
+    sparseEvents[0] = event;
+    expectProtocolError("invalid-type", "$.events", () =>
+      decodeEventReplayPage({ ...eventPage, events: sparseEvents }),
+    );
+
+    let invoked = false;
+    const adversarial = { ...receiptPage } as Record<string, unknown>;
+    Object.defineProperty(adversarial, "receipts", {
+      enumerable: true,
+      get() {
+        invoked = true;
+        return [];
+      },
+    });
+    expectProtocolError("invalid-type", "$.receipts", () => decodeReceiptPage(adversarial));
+    expect(invoked).toBe(false);
+  });
+});
+
+describe("v1alpha supervisor persistence codecs", () => {
+  it("decodes exact admission allocations and rejects unknown allocation fields", () => {
+    const admission = {
+      currentTime: "2026-08-12T12:00:00Z",
+      facts: { source: "test" },
+      allocations: [{ kind: "stream-event", id: "stream-event-1" }],
+    } as const;
+    expect(decodeSupervisorAdmissionFacts(admission)).toEqual(admission);
+    expectProtocolError("unknown-field", "$.allocations[0].bogus", () =>
+      decodeSupervisorAdmissionFacts({
+        ...admission,
+        allocations: [{ ...admission.allocations[0], bogus: true }],
+      }),
+    );
+  });
+
+  it("requires exact staged receipt shape and terminal durable receipt semantics", () => {
+    const queued = {
+      sequence: 1,
+      commandId: command.commandId,
+      repositoryId: command.repositoryId,
+      runId: command.runId,
+      status: "queued",
+      recordedAt: "2026-08-12T12:00:00Z",
+    } as const;
+    expect(decodeSupervisorReceipt(queued)).toEqual(queued);
+    expectProtocolError("unknown-field", "$.bogus", () =>
+      decodeSupervisorReceipt({ ...queued, bogus: true }),
+    );
+    expectProtocolError("invalid-value", "$.terminalReceipt", () =>
+      decodeSupervisorReceipt({ ...queued, status: "terminal" }),
+    );
+    expectProtocolError("invalid-value", "$.terminalReceipt", () =>
+      decodeSupervisorReceipt({
+        ...queued,
+        status: "terminal",
+        terminalReceipt: { ...receipt, commandId: "command_other" },
+      }),
+    );
+  });
+
+  it("enforces wake generations, canonical reasons, and exact service records", () => {
+    const wake = {
+      repositoryId: command.repositoryId,
+      runId: command.runId,
+      generation: 2,
+      acknowledgedGeneration: 1,
+      notBefore: "2026-08-12T12:00:00.500Z",
+      reasons: ["command-accepted"],
+    } as const;
+    expect(decodeSupervisorWake(wake)).toEqual(wake);
+    expectProtocolError("invalid-value", "$.acknowledgedGeneration", () =>
+      decodeSupervisorWake({ ...wake, acknowledgedGeneration: 3 }),
+    );
+    expectProtocolError("invalid-value", "$.reasons[0]", () =>
+      decodeSupervisorWake({ ...wake, reasons: ["unknown"] }),
+    );
+    expectProtocolError("unknown-field", "$.bogus", () =>
+      decodeSupervisorServiceRecord({
+        mode: "running",
+        changedAt: "2026-08-12T12:00:00Z",
+        bogus: true,
+      }),
     );
   });
 });

@@ -184,6 +184,26 @@ export interface EffectHost {
   cancel(intent: EffectIntent, lease: RunnerLeaseFact): EffectObservation;
 }
 
+export interface AsyncEffectHostContext {
+  readonly lease: RunnerLeaseFact;
+  readonly signal: AbortSignal;
+}
+
+export interface AsyncEffectHost {
+  dispatch(intent: EffectIntent, context: AsyncEffectHostContext): Promise<EffectObservation>;
+  inspect(intent: EffectIntent, context: AsyncEffectHostContext): Promise<EffectInspection>;
+  cancel(intent: EffectIntent, context: AsyncEffectHostContext): Promise<EffectObservation>;
+}
+
+export interface AsyncRunOnceInput {
+  readonly repositoryId: string;
+  readonly runId: string;
+  readonly attemptId: string;
+  readonly signal: AbortSignal;
+  currentTime(): string;
+  currentLease(): RunnerLeaseFact;
+}
+
 export type RunOnceResult =
   | { readonly type: "idle" }
   | { readonly type: "escalated"; readonly escalation: RunnerEscalation }
@@ -368,6 +388,192 @@ export class FencedRunner {
   }
 }
 
+export class AsyncRunnerCancelledError extends Error {
+  constructor() {
+    super("Asynchronous effect execution was cancelled");
+    this.name = "AsyncRunnerCancelledError";
+  }
+}
+
+export class AsyncFencedRunner {
+  readonly authority: RunnerAuthorityPort;
+  readonly host: AsyncEffectHost;
+
+  constructor(authority: RunnerAuthorityPort, host: AsyncEffectHost) {
+    this.authority = authority;
+    this.host = host;
+  }
+
+  async runOnce(input: AsyncRunOnceInput): Promise<RunOnceResult> {
+    validateAsyncRunOnceIdentity(input);
+    const initial = this.freshInput(input);
+    const snapshot = this.authority.load(initial);
+    const plan = scheduleRunnerTransition(snapshot);
+    if (plan.type === "none") return { type: "idle" };
+
+    let intent: EffectIntent;
+    if (plan.type === "start") {
+      const persisted = this.authority.persistIntent({
+        ...this.freshInput(input),
+        command: plan.command,
+      });
+      if (persisted.type === "escalated") {
+        return { type: "escalated", escalation: persisted.escalation };
+      }
+      intent = persisted.intent;
+    } else {
+      intent = plan.effect.intent;
+    }
+
+    const claim = this.authority.claimEffectAttempt({
+      ...this.freshInput(input),
+      intent,
+      contextDigest: snapshot.contextDigest,
+    });
+    if (claim.type === "busy") return { type: "idle" };
+    if (claim.type === "replay") return { type: "committed", outcome: claim.outcome };
+
+    const observation = await this.observeClaimedAction(
+      claim.action,
+      claim.effect,
+      input,
+      snapshot.contextDigest,
+    );
+    return {
+      type: "committed",
+      outcome: this.authority.commitEffect({
+        ...this.freshInput(input),
+        intent,
+        observation,
+      }),
+    };
+  }
+
+  private async observeClaimedAction(
+    action: EffectAttemptOrigin,
+    effect: RunnerEffectRecord,
+    input: AsyncRunOnceInput,
+    currentContextDigest: string,
+  ): Promise<EffectObservation> {
+    const { intent } = effect;
+    if (action === "settlement") {
+      const currentTime = this.freshInput(input).currentTime;
+      if (effect.outcome === undefined) {
+        return {
+          status: "cancelled",
+          observedAt: currentTime,
+          details: { reason: "deadline-reached-before-dispatch" },
+        };
+      }
+      const cancellationRequired =
+        effect.cancellationRequestedAt !== undefined ||
+        isAtOrAfter(currentTime, intent.command.deadline);
+      return {
+        status: "failed",
+        observedAt: currentTime,
+        details: {
+          reason: cancellationRequired
+            ? "cancellation-reconciliation-limit-reached"
+            : "reconciliation-limit-reached",
+          previousStatus: effect.outcome.status,
+        },
+      };
+    }
+
+    if (action === "dispatch" || action === "cancellation") {
+      try {
+        const context = this.hostContext(input);
+        const observation =
+          action === "dispatch"
+            ? await this.host.dispatch(intent, context)
+            : await this.host.cancel(intent, context);
+        this.throwIfAborted(input.signal);
+        return observation;
+      } catch (error) {
+        this.throwIfAborted(input.signal);
+        if (isFenceError(error)) throw error;
+        return this.inspectAfterLostResponse(intent, input, error);
+      }
+    }
+
+    let inspection: EffectInspection;
+    try {
+      inspection = await this.host.inspect(intent, this.hostContext(input));
+      this.throwIfAborted(input.signal);
+    } catch (error) {
+      this.throwIfAborted(input.signal);
+      if (isFenceError(error)) throw error;
+      return unknownObservation(this.freshInput(input).currentTime, "inspect-threw", error);
+    }
+    if (inspection.status !== "missing") return inspectionToObservation(inspection);
+    if (intent.command.contextDigest !== currentContextDigest) {
+      return {
+        status: "cancelled",
+        observedAt: this.freshInput(input).currentTime,
+        details: { reason: "stale-context-before-dispatch" },
+      };
+    }
+    try {
+      const observation = await this.host.dispatch(intent, this.hostContext(input));
+      this.throwIfAborted(input.signal);
+      return observation;
+    } catch (error) {
+      this.throwIfAborted(input.signal);
+      if (isFenceError(error)) throw error;
+      return this.inspectAfterLostResponse(intent, input, error);
+    }
+  }
+
+  private async inspectAfterLostResponse(
+    intent: EffectIntent,
+    input: AsyncRunOnceInput,
+    dispatchError: unknown,
+  ): Promise<EffectObservation> {
+    try {
+      const inspection = await this.host.inspect(intent, this.hostContext(input));
+      this.throwIfAborted(input.signal);
+      if (inspection.status !== "missing") return inspectionToObservation(inspection);
+    } catch (error) {
+      this.throwIfAborted(input.signal);
+      if (isFenceError(error)) throw error;
+    }
+    return unknownObservation(
+      this.freshInput(input).currentTime,
+      "effect-response-lost",
+      dispatchError,
+    );
+  }
+
+  private hostContext(input: AsyncRunOnceInput): AsyncEffectHostContext {
+    const current = this.freshInput(input);
+    this.authority.assertLease(current);
+    return { lease: current.lease, signal: input.signal };
+  }
+
+  private freshInput(input: AsyncRunOnceInput): RunOnceInput {
+    this.throwIfAborted(input.signal);
+    try {
+      const currentTime = input.currentTime();
+      const lease = input.currentLease();
+      const current = {
+        repositoryId: input.repositoryId,
+        runId: input.runId,
+        attemptId: input.attemptId,
+        currentTime,
+        lease,
+      };
+      validateRunOnceInput(current);
+      return current;
+    } catch {
+      throw new AsyncRunnerCancelledError();
+    }
+  }
+
+  private throwIfAborted(signal: AbortSignal): void {
+    if (signal.aborted) throw new AsyncRunnerCancelledError();
+  }
+}
+
 export function selectEffectAttemptAction(
   effect: RunnerEffectRecord,
   currentTime: string,
@@ -438,6 +644,12 @@ function validateRunOnceInput(input: RunOnceInput): void {
   validateTimestamp(input.lease.expiresAt, "lease.expiresAt");
   if (Date.parse(input.currentTime) >= Date.parse(input.lease.expiresAt)) {
     throw new TypeError("RunOnce requires a live lease fact");
+  }
+}
+
+function validateAsyncRunOnceIdentity(input: AsyncRunOnceInput): void {
+  if (input.repositoryId.length === 0 || input.runId.length === 0 || input.attemptId.length === 0) {
+    throw new TypeError("RunOnce identities must be non-empty");
   }
 }
 

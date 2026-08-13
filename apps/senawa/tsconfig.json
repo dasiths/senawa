@@ -8,6 +8,24 @@
   "references": [
     {
       "path": "../../packages/configuration"
+    },
+    {
+      "path": "../../packages/execution-host"
+    },
+    {
+      "path": "../../packages/protocol"
+    },
+    {
+      "path": "../../packages/runtime"
+    },
+    {
+      "path": "../../packages/storage-sqlite"
+    },
+    {
+      "path": "../../packages/supervisor"
+    },
+    {
+      "path": "../../packages/testing"
     }
   ]
 }

@@ -604,6 +604,14 @@ class CapturingBroker implements ContextBrokerClient {
     throw new Error("Not used by adapter tests");
   }
 
+  loadWorkerDispatch(): never {
+    throw new Error("Not used by adapter tests");
+  }
+
+  loadWorkerDispatchProgress(): never {
+    throw new Error("Not used by adapter tests");
+  }
+
   grantAssetAccess(): never {
     throw new Error("Not used by adapter tests");
   }

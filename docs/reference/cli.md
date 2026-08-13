@@ -1,11 +1,61 @@
 ---
 title: CLI Reference
-description: Commands for creating and validating Senawa alpha workflow configuration
+description: Local supervisor, workflow, and configuration commands for Senawa alpha
 ms.date: 2026-08-13
 ms.topic: reference
 ---
 
 ## Commands
+
+Start the local supervisor as a detached process, or retain foreground process
+ownership:
+
+```bash
+senawa service start
+senawa service run
+```
+
+`service start` passes no credential on the command line. It writes daemon
+stdout and stderr to a private `service.log`, then waits for an authenticated
+status response. Runtime files use `$XDG_RUNTIME_DIR/senawa`; durable state uses
+`$XDG_STATE_HOME/senawa`. Platform-safe user defaults apply when either variable
+is absent.
+
+Manage the running service through authenticated Unix-socket HTTP:
+
+```bash
+senawa service status
+senawa service drain
+senawa service stop
+senawa service logs [after]
+senawa service recover <repository-id> <run-id>
+senawa service recover <repository-id> <run-id> --direct
+```
+
+Drain stops new queue claims and effect dispatch. Stop drains before closing
+listeners and authorities. Direct recovery opens the same SQLite authority and
+run controller. It refuses a live foreign lease and can proceed with a higher
+fence only after expiry.
+
+Submit workflow commands and query durable results:
+
+```bash
+senawa command submit <json-path|->
+senawa receipt get <command-id>
+senawa receipt list <repository-id> <run-id> [after] [limit]
+senawa event list <repository-id> <run-id> [after] [limit]
+senawa projection get <repository-id> <run-id>
+```
+
+Command files and standard input contain attribution-free protocol submissions.
+The service derives principal, transport, request identity, current time, and
+allocation facts. Exact retries reuse the durable command identity.
+
+Create a one-time portal bootstrap URL when the service has a loopback listener:
+
+```bash
+senawa portal
+```
 
 Create a sensor-free `senawa.dev/workflow/v1alpha1` JSON example without
 overwriting an existing destination:
@@ -42,5 +92,6 @@ senawa --help
 senawa --version
 ```
 
-The supervisor and workflow runtime commands remain assigned to
-[Phase 8](../design/implementation-plan.md#phase-8-local-supervisor-http-sse-and-cli).
+The CLI never opens SQLite for normal service or workflow operations. The
+explicit `--direct` recovery path remains available when the service is not
+available and uses the same lease fence.
