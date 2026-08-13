@@ -49,7 +49,7 @@ Each phase records:
 | 5. Fenced runner and reconciliation | Complete | `40b0de4` | Pushed |
 | 6. Workflow and sensor configuration | Complete | `4667ab0` | Pushed |
 | 7. Context broker and serial workers | Complete | `4009bd8` | Pushed |
-| 8. Local supervisor, HTTP, SSE, and CLI | Not started | Pending | Pending |
+| 8. Local supervisor, HTTP, SSE, and CLI | Complete | `e580bad` | Pushed |
 | 9. Additive amendments | Not started | Pending | Pending |
 | 10. Optional parallel workspaces and integration | Not started | Pending | Pending |
 | 11. Local portal | Not started | Pending | Pending |
@@ -4062,7 +4062,8 @@ pull request.
 
 ### Commit and push
 
-Pending final Phase 8 delivery.
+Phase 8 was committed as `e580bad` (`feat: add local supervisor and cli`) and
+pushed to `origin/redesign/workflow-state-machine` on 2026-08-13.
 
 ## Entry template
 
