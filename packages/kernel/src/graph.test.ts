@@ -6,6 +6,7 @@ import {
   type CriterionDefinitionInput,
   compileWorkflowGraph,
   type DependsOnEdge,
+  diagnoseWorkflowGraph,
   GraphCompilationError,
   type GraphCompilationErrorCode,
   GraphValidationError,
@@ -551,6 +552,177 @@ describe("graph invariants", () => {
     };
 
     expectCompilationError("supersession-cycle", () =>
+      compileWorkflowGraph(input, deterministicSha256),
+    );
+  });
+
+  it("reports one immutable diagnostic for each disjoint dependency cycle", () => {
+    const input = incidentResponseFixture();
+    input.phases[0] = {
+      ...required(input.phases[0]),
+      dependsOn: [phaseId("phase_mitigate")],
+    };
+    input.phases[1] = {
+      ...required(input.phases[1]),
+      dependsOn: [phaseId("phase_triage")],
+    };
+    input.phases.push(
+      {
+        id: phaseId("phase_audit"),
+        key: consumerKey("audit"),
+        generation: definitionGeneration(1),
+        parentId: input.workflow.id,
+        dependsOn: [phaseId("phase_notify")],
+        source: source("incident", "/phases/audit"),
+      },
+      {
+        id: phaseId("phase_notify"),
+        key: consumerKey("notify"),
+        generation: definitionGeneration(1),
+        parentId: input.workflow.id,
+        dependsOn: [phaseId("phase_audit")],
+        source: source("incident", "/phases/notify"),
+      },
+    );
+
+    const result = diagnoseWorkflowGraph(input, deterministicSha256);
+
+    expect(result.graph).toBeUndefined();
+    expect(result.diagnostics).toEqual([
+      {
+        code: "dependency-cycle",
+        message: "dependency-cycle includes phase_audit",
+        subject: { kind: "phase", id: phaseId("phase_audit") },
+        field: "dependsOn",
+      },
+      {
+        code: "dependency-cycle",
+        message: "dependency-cycle includes phase_mitigate",
+        subject: { kind: "phase", id: phaseId("phase_mitigate") },
+        field: "dependsOn",
+      },
+    ]);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.diagnostics)).toBe(true);
+    expect(result.diagnostics.every((diagnostic) => Object.isFrozen(diagnostic))).toBe(true);
+  });
+
+  it("aggregates independent references and preserves throwing compatibility", () => {
+    const input = incidentResponseFixture();
+    input.phases[0] = {
+      ...required(input.phases[0]),
+      dependsOn: [phaseId("phase_missing")],
+    };
+    input.executableWork[0] = {
+      ...required(input.executableWork[0]),
+      dependsOn: [taskId("task_missing")],
+    };
+
+    const result = diagnoseWorkflowGraph(input, deterministicSha256);
+
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "unknown-reference",
+        subject: { kind: "phase", id: phaseId("phase_triage") },
+        field: "dependsOn",
+      }),
+      expect.objectContaining({
+        code: "unknown-reference",
+        subject: { kind: "task", id: taskId("task_assess") },
+        field: "dependsOn",
+      }),
+    ]);
+    try {
+      compileWorkflowGraph(input, deterministicSha256);
+    } catch (error) {
+      expect(error).toBeInstanceOf(GraphCompilationError);
+      expect(error).toMatchObject(result.diagnostics[0] as object);
+      return;
+    }
+    throw new Error("Expected graph compilation to fail");
+  });
+
+  it("aggregates independent definition diagnostics", () => {
+    const input = incidentResponseFixture();
+    setBoundaryField(required(input.phases[0]), "key", "Invalid Phase");
+    setBoundaryField(required(input.executableWork[0]), "generation", 0);
+    input.criteria[0] = {
+      ...required(input.criteria[0]),
+      source: { locator: "", pointer: "/criteria/contained" },
+    };
+
+    const result = diagnoseWorkflowGraph(input, deterministicSha256);
+
+    expect(
+      result.diagnostics.map(({ code, subject, field }) => ({ code, subject, field })),
+    ).toEqual([
+      {
+        code: "invalid-key",
+        subject: { kind: "phase", id: phaseId("phase_triage") },
+        field: undefined,
+      },
+      {
+        code: "invalid-generation",
+        subject: { kind: "task", id: taskId("task_assess") },
+        field: undefined,
+      },
+      {
+        code: "invalid-source",
+        subject: { kind: "criterion", id: criterionId("criterion_contained") },
+        field: "source",
+      },
+    ]);
+  });
+
+  it("continues relationship diagnosis across unrelated failed definitions", () => {
+    const invalidWorkflow = incidentResponseFixture();
+    setBoundaryField(invalidWorkflow.workflow, "key", "Invalid Workflow");
+    invalidWorkflow.executableWork[0] = {
+      ...required(invalidWorkflow.executableWork[0]),
+      dependsOn: [taskId("task_missing")],
+    };
+    const duplicatePhase = incidentResponseFixture();
+    duplicatePhase.phases[1] = {
+      ...required(duplicatePhase.phases[1]),
+      id: required(duplicatePhase.phases[0]).id,
+    };
+    duplicatePhase.executableWork[0] = {
+      ...required(duplicatePhase.executableWork[0]),
+      dependsOn: [taskId("task_missing")],
+    };
+
+    expect(
+      diagnoseWorkflowGraph(invalidWorkflow, deterministicSha256).diagnostics.map(
+        ({ code }) => code,
+      ),
+    ).toEqual(["invalid-key", "unknown-reference"]);
+    const duplicateDiagnostics = diagnoseWorkflowGraph(
+      duplicatePhase,
+      deterministicSha256,
+    ).diagnostics;
+    expect(duplicateDiagnostics.map(({ code }) => code)).toEqual([
+      "duplicate-id",
+      "unknown-reference",
+      "unknown-reference",
+    ]);
+    expect(duplicateDiagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "unknown-reference",
+        subject: { kind: "task", id: taskId("task_assess") },
+        field: "dependsOn",
+      }),
+    );
+  });
+
+  it("preserves legacy first-error ordering while diagnosis stays globally sorted", () => {
+    const input = incidentResponseFixture();
+    setBoundaryField(required(input.phases[0]), "generation", 0);
+    setBoundaryField(required(input.executableWork[0]), "key", "Invalid Task");
+
+    expect(diagnoseWorkflowGraph(input, deterministicSha256).diagnostics[0]?.code).toBe(
+      "invalid-key",
+    );
+    expectCompilationError("invalid-generation", () =>
       compileWorkflowGraph(input, deterministicSha256),
     );
   });

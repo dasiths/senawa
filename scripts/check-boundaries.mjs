@@ -1,5 +1,9 @@
 import { readdir, readFile } from "node:fs/promises";
+import { builtinModules, isBuiltin } from "node:module";
 import { join } from "node:path";
+import ts from "typescript";
+
+const NODE_BUILTINS = new Set(builtinModules.map((specifier) => specifier.replace(/^node:/u, "")));
 
 const packageFiles = await collect("packages");
 const appFiles = await collect("apps");
@@ -14,6 +18,29 @@ if (
 ) {
   violations.push(
     "packages/runtime/package.json: runtime may depend only on protocol and kernel packages",
+  );
+}
+
+const configurationManifest = JSON.parse(
+  await readFile("packages/configuration/package.json", "utf8"),
+);
+const configurationDependencies = Object.keys(configurationManifest.dependencies ?? {});
+const allowedConfigurationDependencies = new Set(["@senawa/kernel", "ajv", "json-schema-traverse"]);
+if (
+  configurationDependencies.some((dependency) => !allowedConfigurationDependencies.has(dependency))
+) {
+  violations.push(
+    "packages/configuration/package.json: configuration has an unsupported production dependency",
+  );
+}
+
+const executionHostManifest = JSON.parse(
+  await readFile("packages/execution-host/package.json", "utf8"),
+);
+const executionHostDependencies = Object.keys(executionHostManifest.dependencies ?? {});
+if (executionHostDependencies.length > 0) {
+  violations.push(
+    "packages/execution-host/package.json: execution-host must not have production dependencies",
   );
 }
 
@@ -52,6 +79,8 @@ function checkSource(file, content) {
   const isKernel = file.startsWith("packages/kernel/");
   const isProtocol = file.startsWith("packages/protocol/");
   const isRuntime = file.startsWith("packages/runtime/");
+  const isConfiguration = file.startsWith("packages/configuration/");
+  const isExecutionHost = file.startsWith("packages/execution-host/");
   const isPackage = file.startsWith("packages/");
   if (isPackage && /(?:from\s+|import\s*(?:\(\s*)?)["'][^"']*apps\//u.test(content)) {
     findings.push(`${file}: packages cannot import apps`);
@@ -59,8 +88,14 @@ function checkSource(file, content) {
   if (isPackage && !file.endsWith(".test.ts") && content.includes("@senawa/testing")) {
     findings.push(`${file}: production packages cannot import testing`);
   }
-  if ((isKernel || isProtocol || isRuntime) && hasNodeRuntimeImport(content)) {
-    const packageName = isKernel ? "kernel" : isProtocol ? "protocol" : "runtime";
+  if ((isKernel || isProtocol || isRuntime || isConfiguration) && hasNodeRuntimeImport(content)) {
+    const packageName = isKernel
+      ? "kernel"
+      : isProtocol
+        ? "protocol"
+        : isRuntime
+          ? "runtime"
+          : "configuration";
     findings.push(`${file}: ${packageName} cannot import Node modules`);
   }
   if (isProtocol && content.includes("@senawa/kernel")) {
@@ -75,6 +110,12 @@ function checkSource(file, content) {
   if (isRuntime && /@senawa\/(?!kernel(?:["'/]|$)|protocol(?:["'/]|$))[a-z0-9-]+/u.test(content)) {
     findings.push(`${file}: runtime may import only protocol and kernel packages`);
   }
+  if (isConfiguration && /@senawa\/(?!kernel(?:["'/]|$))[a-z0-9-]+/u.test(content)) {
+    findings.push(`${file}: configuration may import only the kernel package`);
+  }
+  if (isExecutionHost && /@senawa\/[a-z0-9-]+/u.test(content)) {
+    findings.push(`${file}: execution-host cannot import Senawa packages`);
+  }
   if (
     isKernel &&
     /@senawa\/(?:runtime|storage|execution-host|sensors|workers|git|supervisor|portal)/u.test(
@@ -87,9 +128,58 @@ function checkSource(file, content) {
 }
 
 function hasNodeRuntimeImport(content) {
-  return /(?:from\s+|import\s*(?:\(\s*)?)["'](?:node:|fs(?:\/promises)?["']|path["']|http["']|child_process["']|crypto["'])/u.test(
+  const source = ts.createSourceFile(
+    "boundary-probe.ts",
     content,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.TS,
   );
+  let found = false;
+  const visit = (node) => {
+    if (found) return;
+    const specifier = moduleSpecifier(node);
+    if (specifier !== undefined && isNodeBuiltin(specifier)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
+function moduleSpecifier(node) {
+  if (
+    (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+    node.moduleSpecifier !== undefined &&
+    ts.isStringLiteralLike(node.moduleSpecifier)
+  ) {
+    return node.moduleSpecifier.text;
+  }
+  if (
+    ts.isImportEqualsDeclaration(node) &&
+    ts.isExternalModuleReference(node.moduleReference) &&
+    node.moduleReference.expression !== undefined &&
+    ts.isStringLiteralLike(node.moduleReference.expression)
+  ) {
+    return node.moduleReference.expression.text;
+  }
+  if (
+    ts.isCallExpression(node) &&
+    (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+      (ts.isIdentifier(node.expression) && node.expression.text === "require")) &&
+    node.arguments.length >= 1 &&
+    ts.isStringLiteralLike(node.arguments[0])
+  ) {
+    return node.arguments[0].text;
+  }
+  return undefined;
+}
+
+function isNodeBuiltin(specifier) {
+  const normalized = specifier.replace(/^node:/u, "");
+  return NODE_BUILTINS.has(normalized) || isBuiltin(specifier) || isBuiltin(normalized);
 }
 
 function verifyRules() {
@@ -97,6 +187,51 @@ function verifyRules() {
     ["packages/kernel/src/bad.ts", 'import "node:fs";', "cannot import Node modules"],
     ["packages/protocol/src/bad.ts", 'import "node:http";', "cannot import Node modules"],
     ["packages/runtime/src/bad.ts", 'import "node:fs";', "cannot import Node modules"],
+    ["packages/configuration/src/bad.ts", 'import "node:fs";', "cannot import Node modules"],
+    ["packages/kernel/src/bad.ts", 'import os from "os";', "cannot import Node modules"],
+    [
+      "packages/kernel/src/bad.ts",
+      'import { promisify } from "node:util";',
+      "cannot import Node modules",
+    ],
+    ["packages/kernel/src/bad.ts", 'const bytes = import("buffer");', "cannot import Node modules"],
+    [
+      "packages/kernel/src/bad.ts",
+      'const streams = import("node:stream");',
+      "cannot import Node modules",
+    ],
+    ["packages/kernel/src/bad.ts", 'export { once } from "events";', "cannot import Node modules"],
+    ["packages/kernel/src/bad.ts", 'import "node:url";', "cannot import Node modules"],
+    [
+      "packages/kernel/src/bad.ts",
+      'const workers = import("worker_threads");',
+      "cannot import Node modules",
+    ],
+    [
+      "packages/kernel/src/bad.ts",
+      'import process from "node:process";',
+      "cannot import Node modules",
+    ],
+    [
+      "packages/kernel/src/bad.ts",
+      'import { test } from "node:test";',
+      "cannot import Node modules",
+    ],
+    ["packages/kernel/src/bad.ts", "await import(`node:fs`);", "cannot import Node modules"],
+    [
+      "packages/kernel/src/bad.ts",
+      'await import/* comment */("node:fs");',
+      "cannot import Node modules",
+    ],
+    ["packages/kernel/src/bad.ts", 'import/* comment */ "node:fs";', "cannot import Node modules"],
+    ["packages/kernel/src/bad.ts", 'import fs = require("node:fs");', "cannot import Node modules"],
+    ["packages/kernel/src/bad.ts", 'const fs = require("node:fs");', "cannot import Node modules"],
+    [
+      "packages/kernel/src/bad.ts",
+      'import("node:fs", { with: {} });',
+      "cannot import Node modules",
+    ],
+    ["packages/kernel/src/bad.ts", 'require("node:fs", undefined);', "cannot import Node modules"],
     ["packages/kernel/src/bad.ts", "Date.now();", "cannot observe runtime state"],
     ["packages/kernel/src/bad.ts", "Math.random();", "cannot observe runtime state"],
     ["packages/runtime/src/bad.ts", "const now = Date.now();", "must receive current time"],
@@ -118,6 +253,21 @@ function verifyRules() {
       'import "@senawa/storage-sqlite";',
       "may import only protocol and kernel",
     ],
+    [
+      "packages/configuration/src/bad.ts",
+      'import "@senawa/runtime";',
+      "may import only the kernel",
+    ],
+    [
+      "packages/execution-host/src/bad.ts",
+      'import "@senawa/storage-sqlite";',
+      "cannot import Senawa packages",
+    ],
+    [
+      "packages/execution-host/src/bad.ts",
+      'import "../../../apps/senawa/src/main.js";',
+      "packages cannot import apps",
+    ],
     ["packages/example/src/bad.ts", 'import "@senawa/testing";', "cannot import testing"],
     [
       "packages/example/src/bad.ts",
@@ -127,7 +277,7 @@ function verifyRules() {
   ];
   for (const [file, content, expected] of cases) {
     if (!checkSource(file, content).some((finding) => finding.includes(expected))) {
-      throw new Error(`Boundary self-test failed for ${file}: ${expected}`);
+      throw new Error(`Boundary self-test failed for ${file} (${content}): ${expected}`);
     }
   }
 }

@@ -334,7 +334,6 @@ describe("gate policy and evaluation", () => {
         } as never,
       ],
       ["invalid-pointer", { operator: "exists", accessor: accessor("truth") }],
-      ["invalid-pointer", { operator: "exists", accessor: accessor("/bad~2escape") }],
       [
         "invalid-condition",
         { operator: "greater-than", accessor: accessor("/count"), expected: "5" },
@@ -343,6 +342,11 @@ describe("gate policy and evaluation", () => {
     for (const [code, condition] of malformed) {
       expectGateError(code, () => gate([rule("malformed", condition)]));
     }
+    expectGateError(
+      "invalid-pointer",
+      () => gate([rule("malformed", { operator: "exists", accessor: accessor("/bad~2escape") })]),
+      ["blocking", 0, "condition", "accessor", "pointer"],
+    );
     expectGateError("invalid-policy", () =>
       gate([
         rule("sparse", {
@@ -384,9 +388,16 @@ describe("gate policy and evaluation", () => {
   });
 
   it("rejects duplicate rule keys and consequence fields", () => {
-    expectGateError("invalid-policy", () =>
-      gate([rule("same", equals("/truth", true))], [rule("same", equals("/truth", true))]),
-    );
+    try {
+      gate([rule("same", equals("/truth", true))], [rule("same", equals("/truth", true))]);
+      throw new Error("Expected duplicate gate rule error");
+    } catch (error) {
+      expect(error).toBeInstanceOf(GateError);
+      expect(error).toMatchObject({
+        code: "invalid-policy",
+        path: ["advisory", 0, "key"],
+      });
+    }
     expectGateError("invalid-policy", () =>
       defineGate(
         {
@@ -551,12 +562,20 @@ function evaluateSingle(condition: ConditionInput): TruthValue {
   return evaluation.blocking[0]?.result ?? "unknown";
 }
 
-function expectGateError(code: GateErrorCode, action: () => unknown): void {
+function expectGateError(
+  code: GateErrorCode,
+  action: () => unknown,
+  path?: readonly (string | number)[],
+): void {
   try {
     action();
   } catch (error) {
     expect(error).toBeInstanceOf(GateError);
     expect((error as GateError).code).toBe(code);
+    if (path !== undefined) {
+      expect((error as GateError).path).toEqual(path);
+      expect(Object.isFrozen((error as GateError).path)).toBe(true);
+    }
     return;
   }
   throw new Error(`Expected gate operation to fail with ${code}`);

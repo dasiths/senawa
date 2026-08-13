@@ -1,7 +1,7 @@
 ---
 title: Redesign Implementation Log
 description: Decisions, validation, and review outcomes for the Senawa alpha redesign
-ms.date: 2026-08-12
+ms.date: 2026-08-13
 ms.topic: reference
 ---
 
@@ -46,8 +46,8 @@ Each phase records:
 | 2. Completion, gates, closure, and escalation | Complete | `d8a3d7a` | Pushed |
 | 3. Protocol and in-memory command slice | Complete | `0f5f485` | Pushed |
 | 4. SQLite authority and immutable assets | Complete | `ef8580a` | Pushed |
-| 5. Fenced runner and reconciliation | In progress | Pending | Pending |
-| 6. Workflow and sensor configuration | Not started | Pending | Pending |
+| 5. Fenced runner and reconciliation | Complete | `40b0de4` | Pushed |
+| 6. Workflow and sensor configuration | In progress | Pending | Pending |
 | 7. Context broker and serial workers | Not started | Pending | Pending |
 | 8. Local supervisor, HTTP, SSE, and CLI | Not started | Pending | Pending |
 | 9. Additive amendments | Not started | Pending | Pending |
@@ -1941,6 +1941,609 @@ was not reproducible as a history-growth regression.
   context authority rather than expose arbitrary effect dispatch.
 * Supervisor and foreground recovery must compose this same authority-selected
   claim protocol rather than introduce another execution path.
+
+## Decision D-043: Normalize consumer configuration before kernel compilation
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 6 bounded slice A
+* Phase: 6
+* Decision: Accept one exact `senawa.dev/workflow/v1alpha1` unknown-input
+  boundary with flat phases and embedded executable work. Derive each branded
+  graph identity from its definition kind and the supplied SHA-256 digest of a
+  qualified consumer path, resolve consumer references before lowering one
+  `NormalizedWorkflowInput`, and delegate graph authority to
+  `compileWorkflowGraph`. Produce one recursively immutable
+  `senawa.dev/configuration-snapshot/v1alpha1` snapshot whose component digests
+  bind the graph and every sorted registry, and whose snapshot digest excludes
+  only itself.
+* Alternatives: Expose graph identities in consumer documents; allocate
+  identities by declaration order; duplicate graph and completion validation in
+  configuration; use JSON Schema as the semantic compiler; add YAML and file
+  loading to the package root.
+* Rationale: Qualified-path identities make property and declaration order
+  irrelevant while preserving scoped consumer keys. Kernel compilation remains
+  the single authority for graph references, cycles, completion policy, and
+  canonical graph digests. An unknown-input boundary with explicit diagnostics
+  isolates callers from mutation and keeps the package usable in browsers.
+* Consequence: Diagnostics retain source locator and pointer information, while
+  accepted graph source pointers use stable key-based paths. This slice emits
+  empty schemas, roles, model policies, sensors, gates, and projections. Their
+  registries and component digests reserve the complete snapshot shape without
+  implementing their later semantics.
+
+## Decision D-044: Bind workflow execution authority in the normalized snapshot
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 6 bounded slice B
+* Phase: 6
+* Decision: Extend the exact `senawa.dev/workflow/v1alpha1` document with
+  declaration-order-insensitive schema, role, model policy, sensor, and gate
+  registries plus in-memory top-level projected work records. Require executable
+  work to name an agent role and six positive finite loop budgets. Bind role,
+  budgets, optional input schema, and phase-owned gate references into canonical
+  task graph input. Compile gate conditions through kernel `defineGate`, and use
+  Ajv 8 draft 2020-12 only to validate consumer schema definitions and local
+  references, without validating runtime data.
+* Alternatives: Add a second projected-work compiler; let sensors select
+  lifecycle consequences; execute process sensors during doctor; permit human
+  or authority roles to execute work; use filesystem callbacks for projection;
+  hand-roll draft 2020-12 schema validation.
+* Rationale: One work parser and lowerer prevents embedded and projected work
+  from acquiring different authority semantics. Phase-bound gates keep process
+  sensors as measurement definitions while workflow structure owns consequence
+  attachment. Canonical task bindings and registry component digests make every
+  authority-bearing definition immutable and drift-visible. Ajv provides strict
+  browser-safe schema structure and reference validation without adding runtime
+  effects to configuration.
+* Consequence: `@senawa/configuration` may depend only on `@senawa/kernel`,
+  `ajv`, and `json-schema-traverse`. Registry declarations sort by key, while
+  model routes and sensor argv preserve semantic order. Projected work is
+  supplied as resolved `{ phase, work }` content and collides by the same
+  qualified phase/work key as embedded work. Amendments remain assigned to
+  Phase 9. YAML, filesystem, process, CLI, and init adapters remain deferred to
+  later Phase 6 slices.
+
+## Decision D-045: Bound process measurements and bootstrap file commands at adapters
+
+* Date: 2026-08-13
+* Status: Superseded by D-046
+* Phase: 6
+* Decision: Execute configured process sensors only through a dependency-free
+  `@senawa/execution-host` Node adapter that returns either a measurement or an
+  adapter failure. On Linux, spawn one literal argument vector without a shell
+  in a detached process group, inherit only explicitly named ambient variables,
+  bound output prefixes while draining both pipes, and terminate plus confirm
+  the complete group after timeout, cancellation, or leader exit. Keep CLI
+  doctor and init orchestration behind injected file and SHA-256 ports. Doctor
+  calls the pure configuration doctor, while init uses exclusive creation and
+  the pure versioned example renderer.
+* Alternatives: Execute sensors from configuration doctor; use shell command
+  strings; spread `process.env`; terminate only the leader; treat nonzero exits
+  as adapter failures; let init overwrite or truncate existing files; add model
+  or runner services to CLI bootstrap commands.
+* Rationale: Measurement outcomes preserve observed process facts without
+  granting sensors lifecycle authority. Literal argv, allowlisted environment,
+  realpath containment, bounded output, and group cleanup constrain host
+  effects. Injected CLI ports make it structurally impossible for doctor or init
+  to dispatch sensors, models, or runner work.
+* Consequence: Executable sensor measurement is currently available only on
+  POSIX Linux; other platforms return an explicit unsupported result. Linux
+  cleanup treats a group containing only dead zombie records as absent after
+  `/proc` confirms that no runnable member remains. Configuration amendments
+  remain assigned to Phase 9. Async runner integration and supervisor-backed
+  operational CLI commands remain assigned to Phase 8.
+
+## Decision D-046: Package a native Linux subreaper and preserve failed init paths
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 6 bounded slice C review repairs
+* Phase: 6
+* Decision: Replace detached Node process-group supervision with a packaged C17
+  Linux subreaper. Node opens the canonical root directory with no symlink
+  following, passes it as fd 4, drains bounded command output, reads a versioned
+  status record on fd 3, and sends timeout or cancellation `SIGTERM` only to its
+  owned helper process. The helper resolves cwd from fd 4 with `openat2`
+  containment, changes directory by descriptor, forks the exact argv and
+  allowlisted environment, records exec failures separately, and retains the
+  original leader unreaped until its initial process-group `SIGTERM`. It then
+  reaps every descendant as a child subreaper. After the grace interval it uses
+  pidfds for currently adopted direct children and never signals the numeric
+  process group again. Build the helper with strict `cc` flags into the package
+  `dist` directory and ship it in the package tarball; runtime compilation is
+  forbidden. Init syncs the exclusively created file and parent directory in
+  order, never unlinks a failed pathname, and reports that a partial owned path
+  may remain.
+* Alternatives: Retain detached Node process groups with `/proc` inspection;
+  treat zombies as successful cleanup; signal a numeric process group after its
+  leader is reaped; discover and compile helper source at runtime; remove an
+  init pathname after write or sync failure.
+* Rationale: A detached process group does not own or reap escaped descendants,
+  and a numeric PGID can be reused after its leader is reaped. Subreaper
+  adoption plus generation-bound pidfds proves descendant death and reaping,
+  including children that create a new session. Descriptor-relative cwd
+  resolution removes the checked-path-to-spawn pathname race. Preserving failed
+  init paths avoids deleting a replacement installed after exclusive creation.
+* Consequence: Executable sensors are an alpha feature for Linux x64 with glibc
+  2.34 or newer, matching the packaged helper's linked baseline. Source builds
+  require a C17 compiler available as `cc`; both root and execution-host builds
+  fail clearly when it is unavailable. The compiled helper is executable
+  package content, and no compiler is needed at runtime.
+  Configuration and execution adapters independently cap timers, output, and
+  retry controls. Failed init can leave a partial file for explicit operator
+  inspection or removal.
+
+## Phase 6 log
+
+### Bounded slice A: In-memory sensor-free workflow configuration
+
+#### Opening
+
+Phase 6 opened on 2026-08-13 after confirming the Phase 5 implementation,
+independent review, commit, and push were complete. The status table was updated
+to match that recorded closure.
+
+#### Scope
+
+* Add a pure browser-safe `@senawa/configuration` package over
+  `@senawa/kernel`.
+* Compile the exact v1alpha1 workflow, phase, embedded work, criterion,
+  dependency, completion policy, and canonical input boundary.
+* Aggregate sorted doctor diagnostics and make compilation throw the complete
+  diagnostic set without returning a partial snapshot.
+* Detect deterministic component and key drift between immutable snapshots.
+
+#### Deferred scope
+
+* YAML, filesystem and Node adapters, JSON Schema evaluation, projected work,
+  amendments, sensors, roles, model policy, gates, process execution, init, and
+  CLI doctor behavior remain outside bounded slice A.
+
+#### Review repairs
+
+Review repairs on 2026-08-13 retained kernel graph authority while adding an
+immutable structured diagnosis result. Kernel diagnosis now aggregates
+independent definition and reference failures, reports one deterministic
+diagnostic per cyclic strongly connected component, and returns a graph only
+when the diagnostic set is empty. `compileWorkflowGraph` retains its original
+validation order and throwing behavior for compatibility, with enriched subject
+and field context where available.
+
+Configuration doctor now translates every kernel diagnostic through lowered
+identity-to-source metadata. It no longer searches error messages or decides
+graph references before kernel diagnosis. Diagnostics derived from a definition
+that failed local compilation are suppressed because they cannot be established
+independently; unrelated valid definitions continue through reference and cycle
+analysis.
+
+Later independent review found that any failed workflow or duplicate identity
+still suppressed all relationship analysis, generic completion paths still
+relied on message text, and regular expressions left valid Node import syntax
+unclassified. Diagnosis now removes only ambiguous duplicate identities from
+relationship graphs and continues across unaffected valid definitions.
+Completion validation carries a structured path. The dependency-boundary script
+parses TypeScript syntax and inspects static imports, exports, dynamic imports,
+import-equals declarations, and `require` calls against Node's complete builtin
+module set.
+
+The final review also found an invalid mutable test type and cascading graph
+source errors when the external locator itself was invalid. The fixture now uses
+the production evidence-policy mode union, and doctor substitutes a valid
+internal source locator during diagnosis while returning exactly one
+`invalid-locator` diagnostic to the caller.
+
+A final boundary probe found that valid multi-argument dynamic imports and
+`require` calls bypassed the AST check because it required exactly one argument.
+The scanner now inspects the first literal argument whenever at least one exists,
+with explicit option-bearing import and require self-tests. Independent review
+then approved bounded slice A with no remaining findings.
+
+#### Validation
+
+Passed on 2026-08-13:
+
+* Focused configuration suite: 13 tests
+* Configuration package declaration build
+* Clean workspace build and typecheck
+* Biome check across 70 files
+* Complete workspace suite: 17 files and 388 tests
+* Architecture boundaries across 95 source files
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+Review repairs passed on 2026-08-13:
+
+* Focused kernel and configuration suites: 76 tests
+* Clean workspace build and typecheck
+* Biome check across 70 files
+* Complete workspace suite: 17 files and 393 tests
+* Architecture boundaries across 95 source files, including builtin import
+  self-tests
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+Final bounded-slice validation passed on 2026-08-13:
+
+* Focused kernel and configuration suites: 80 tests
+* Clean workspace build and typecheck
+* Biome check across 70 files
+* Complete workspace suite: 17 files and 397 tests
+* Architecture boundaries across 95 source files, including AST import syntax
+  self-tests
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+### Bounded slice B: Authority registries and projected work
+
+#### Scope
+
+* Extended the existing exact workflow document and immutable snapshot rather
+  than adding a second compiler or doctor path.
+* Added canonical schema entries with unique `$id` enforcement, exact draft
+  2020-12 declarations, local-only static `$ref`, precise undefined
+  local-reference diagnostics, strict Ajv compilation, sorted entries, and
+  per-entry and component digests.
+* Added agent, human, and authority role declarations; sorted finite
+  capabilities; required model policies for agents; explicit ordered model
+  routes with finite turn, submission, and millidollar bounds; and refusal of
+  human or authority work execution.
+* Added exact process sensor measurement definitions with argument vectors,
+  safe relative working directories, bounded timeout and output, unique
+  inherited environment names, attempt bounds, and reconciliation bounds.
+  Sensor definitions cannot declare lifecycle, action, approval, or authority
+  fields and do not execute processes.
+* Added phase-bound gate declarations, undefined sensor checks before kernel
+  lowering, sorted gate rules, and kernel-owned condition and pointer
+  validation through `defineGate`. Empty sensor and gate registries remain
+  valid.
+* Added resolved top-level projected work records. Embedded and projected work
+  use the same parser, semantic checks, identity derivation, task lowering, and
+  completion-policy lowering. Qualified collisions fail before snapshot
+  construction.
+* Added canonical task bindings for role, sorted finite budgets, optional input
+  schema, and sorted phase gate references. Populated every snapshot registry
+  with sorted immutable canonical entries and per-entry digests.
+
+#### Deferred scope
+
+* Additive amendments remain deferred to Phase 9.
+* YAML decoding, filesystem loading, process execution, process cleanup, CLI
+  doctor, init, and no-overwrite behavior remain deferred to later Phase 6
+  slices or execution-host adapters.
+* Consumer schemas are validated as definitions only. Runtime task input and
+  sensor output validation is not part of this slice.
+
+#### Review self-audit
+
+The bounded-slice self-audit traced every new authority-bearing field from the
+consumer boundary into either canonical graph input or a component-digested
+registry. It confirmed that projected and embedded work share one lowering
+function, gate consequences attach by phase, undefined sensor references are
+reported before gate definition, and configuration imports no Node, process,
+filesystem, runtime, protocol, or application modules. It also confirmed that
+Ajv was the only new production dependency at that point. The later review
+repair made the already-transitive `json-schema-traverse` library a direct
+dependency and updated the boundary allowlist.
+
+The audit repaired consumer gate types that leaked kernel-branded identities,
+made undefined local schema references point at their exact fields, and removed
+a replacement-tool append artifact before final validation. No unresolved
+critical or high findings remain. No subagent or independent review was run for
+this bounded slice because the implementation request explicitly prohibited
+subagents.
+
+#### Review repairs
+
+The Slice B review identified path portability, schema traversal, schema
+identity, gate reference, and diagnostic-location defects. Repairs on
+2026-08-13 made these changes:
+
+* Sensor working directories now reject case-insensitive Windows drive
+  designators for both absolute and drive-relative forms. Future execution-host
+  adapters remain responsible for resolving the accepted relative path against
+  their configured root and proving host containment before process execution.
+* Schema reference inspection now uses `json-schema-traverse` at schema-bearing
+  locations, with explicit draft 2020-12 locations for `prefixItems`,
+  `dependentSchemas`, unevaluated schemas, and `contentSchema`. Annotation data
+  in `default`, `examples`, `const`, and `enum` is never interpreted as schema.
+* Local URI fragments are percent-decoded before JSON Pointer unescaping and
+  resolution. Remote references, malformed fragments, and undefined local
+  pointers remain rejected before strict Ajv 2020-12 compilation.
+* Top-level schema resource identifiers are parsed and normalized with the
+  browser-safe WHATWG `URL` API. Empty fragments identify the same resource,
+  malformed absolute identifiers are rejected, and duplicate detection uses
+  normalized resource identity.
+* Gate sensor discovery now follows only the typed condition grammar and never
+  traverses comparison `expected` data.
+* Kernel `GateError` values retain their existing codes and messages while
+  optionally carrying immutable structured parse paths. Configuration maps
+  those paths, including sorted blocking or advisory rule indexes, back to the
+  exact consumer accessor field.
+* A second review found unresolved named dynamic anchors, malformed JSON Pointer
+  tilde escapes, percent-equivalent resource identifiers, and root-only
+  duplicate-rule diagnostics. Schema diagnosis now collects `$anchor` and
+  `$dynamicAnchor` declarations from schema locations before resolving named
+  local references, rejects invalid RFC 6901 escapes, and canonicalizes URI
+  percent triplets by decoding unreserved bytes and uppercasing reserved bytes.
+  Duplicate gate rules now identify the later blocking or advisory rule key.
+* The final Slice B anchor review found that the anchor collection remained
+  document-wide and JSON Pointer fragments still resolved from the document
+  root. Schema locations now bind to their nearest resource root and normalized
+  resource identity. The root resource uses the normalized top-level `$id`;
+  every nested `$id` starts an embedded resource and must remain an absolute URI
+  without a non-empty fragment. Relative embedded identifiers are rejected at
+  their declaration rather than resolved against a parent identifier.
+* `$anchor` and `$dynamicAnchor` names share a resource-local namespace for
+  static `$ref` targets.
+  Duplicate names fail at the later declaration path, while the same name may
+  appear in separate resources. Named and JSON Pointer fragments resolve only
+  from the reference location's nearest resource. This rejects root access to
+  embedded anchors and embedded access to root-only pointers while accepting
+  references internal to either resource.
+* Ajv 8.17.1 meta-schema validation accepts `$anchor`, and its resolver indexes
+  static anchors, but strict compilation reports `$anchor` as an unknown
+  keyword because the 2020 vocabulary does not register it. Registering the
+  keyword makes root static anchors compile, but representative embedded
+  resource references overflow Ajv's compiler stack. The configuration package
+  therefore validates resource and reference semantics with its explicit index,
+  retains Ajv meta-schema validation on the original declaration, and compiles
+  an equivalent deep copy. That copy removes anchor declarations and embedded
+  identifiers, then rewrites every validated local reference to the exact
+  document JSON Pointer for its resource-local target. Ajv compilation thus
+  exercises every static reference target without silently treating named
+  fragments as document-wide.
+* The subsequent adversarial review demonstrated that rewriting `$dynamicRef`
+  to a static pointer cannot preserve dynamic-scope semantics. Workflow
+  configuration v1alpha1 now rejects `$dynamicRef` explicitly until runtime
+  schema evaluation can implement and test its dynamic scope. It does not claim
+  static equivalence for stored schemas.
+* Schema analysis now rejects definitions beyond 128 container levels or 10,000
+  container nodes before recursive schema-library traversal, returning an
+  `invalid-schema` diagnostic instead of exposing doctor to stack overflow.
+  Static JSON Pointer targets must remain in the reference location's nearest
+  resource, and root plus embedded resource identifiers participate in one
+  registry-wide uniqueness index across every schema entry.
+
+#### Validation
+
+Passed on 2026-08-13:
+
+* Frozen workspace install after locking Ajv 8.17.1
+* Focused configuration typecheck
+* Focused configuration suite: 31 tests
+* Clean workspace build and typecheck
+* Biome check across 71 files
+* Complete workspace suite: 17 files and 411 tests
+* Architecture boundaries across 97 source files
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+Review repairs passed on 2026-08-13:
+
+* Frozen workspace install with direct `json-schema-traverse` 1.0.0 ownership
+* Focused kernel and configuration suites: 81 tests
+* Clean workspace build and typecheck
+* Biome check across 71 files
+* Complete workspace suite: 17 files and 423 tests
+* Architecture boundaries across 97 source files
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+Second review repairs passed on 2026-08-13:
+
+* Focused kernel gate and configuration suites: 86 tests
+* Clean workspace build and typecheck
+* Biome check across 71 files
+* Complete workspace suite: 17 files and 428 tests
+* Architecture boundaries across 97 source files
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+Final anchor review repair focused validation passed on 2026-08-13:
+
+* Focused configuration suite: 57 tests
+* Focused configuration typecheck
+* Biome check for the modified schema validator and configuration tests
+* Clean workspace build and typecheck
+* Biome check across 71 files
+* Complete workspace suite: 17 files and 437 tests
+* Architecture boundaries across 97 source files
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+Static-only resource policy validation passed on 2026-08-13:
+
+* Focused configuration suite: 61 tests
+* Clean workspace build and typecheck
+* Biome check across 71 files
+* Complete workspace suite: 17 files and 441 tests
+* Architecture boundaries across 97 source files
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+#### Commit and push
+
+No commit or push was performed for bounded slice B, as requested.
+
+### Bounded slice C: Process measurement and bootstrap CLI
+
+#### Scope
+
+* Added a recursively immutable, sensor-free v1alpha1 example factory and
+  deterministic JSON renderer to the browser-safe configuration package.
+* Added the real `@senawa/execution-host` package with zero production
+  dependencies. Its public API returns discriminated measurement and failure
+  outcomes for bounded executable sensors.
+* Preserved argv bytes as literal strings and constructed a null-prototype
+  environment from only configured inherited names and supplied ambient values.
+  Bare executables require an inherited `PATH`.
+* Added bounded stdout and stderr capture with complete pipe draining, timeout,
+  `AbortSignal` cancellation, and explicit measurement or failure outcomes.
+* The initial detached Node process-group and pathname-based cwd implementation
+  was rejected during review and replaced by D-046's native descriptor-relative
+  supervisor before Phase 6 approval.
+* Added async CLI `doctor` and `init` commands with injected file and SHA-256
+  ports. Doctor parses JSON and aggregates pure configuration diagnostics. Init
+  uses exclusive `wx` creation, syncs the file and parent directory, never
+  overwrites an existing or partial file, and never removes a failed pathname.
+* Updated package references, workspace locking, architecture boundaries, CLI
+  help, and the CLI reference.
+
+#### Limitations and deferred scope
+
+* Executable process measurement returns `unsupported-platform` outside Linux.
+  No shell, Windows process-tree, or macOS process-group adapter is claimed.
+* Consumer YAML loading is not implemented; alpha doctor accepts JSON only.
+* Configuration amendments remain assigned to Phase 9.
+* Runner integration, sensor supervision, and supervisor-backed operational CLI
+  commands remain assigned to Phase 8.
+
+#### Review notes
+
+Focused self-review added a null-prototype environment so inherited names cannot
+select ambient prototype properties and forced-cleanup coverage for a process
+that ignores `SIGTERM`. The later independent review rejected zombie-tolerant
+process-group confirmation and led to D-046's subreaper and complete reaping
+requirements.
+
+#### Slice C review repairs
+
+The detached Node process-group implementation and its zombie-only `/proc`
+success rule were rejected. A packaged Linux x64/glibc native helper now owns
+the command as a child subreaper, preserves the leader PID until the sole
+process-group signal, and uses pidfds for generation-bound forced cleanup of
+adopted children. Tests require actual descendant `/proc` disappearance,
+setsid escape cleanup, repeated tree reaping, no surviving helper process, and
+bounded UTF-8 prefix behavior.
+
+Configuration and execution-host validation now cap timeout at `2147483647`,
+each output prefix at 64 MiB, and sensor attempt controls at `10000`. Init now
+syncs file content and the parent directory before success. Failures close the
+owned descriptor without unlinking the pathname, preserving replacements, and
+doctor reports normalized JSON locations and safe filesystem error codes.
+
+Independent native-boundary review approved descriptor containment, subreaper
+ownership, leader-preserving group termination, pidfd forced cleanup, complete
+reaping, status and exec-error protocols, output draining, packaging, and
+durable init. It found two Node listener-order races: a missing supervisor could
+emit `error` while the root descriptor was still closing, and cancellation
+during asynchronous root setup could be missed. The adapter now latches abort
+before its first await, rechecks at every setup boundary, installs child error
+and close listeners immediately after `spawn`, and treats post-spawn root-handle
+close as non-authoritative because the helper owns its duplicated descriptor.
+Deterministic regressions prove an absent helper settles as `spawn-failed`
+without an uncaught event and setup-time cancellation returns before root open
+or helper spawn.
+
+Final phase-wide stress review found one remaining native startup race: a queued
+cancellation could signal the helper before it installed signal handlers. The
+helper now emits one `SENAWA1 result=ready` status frame only after subreaper,
+signal, cwd, fork, process-group, and exec setup succeeds. Node queues timeout or
+cancellation until that frame and accepts exactly one optional ready frame before
+the terminal status. A deterministic post-spawn hook aborts in the former race
+window across 25 consecutive attempts; every attempt returns a cancelled
+measurement and no helper survives.
+
+The readiness review then found that the status parser filtered duplicate,
+reordered, blank, unterminated, and over-limit frames instead of rejecting them.
+Fd 3 is now an exact framed protocol: setup failure is one newline-terminated
+error frame, while a launched command is exactly one ready frame followed by one
+newline-terminated command or error frame and EOF. Truncated capture, duplicate
+readiness, out-of-order readiness, blank frames, and missing terminal newlines
+all fail closed as setup errors. Public adapter tests generate each malformed
+stream through a temporary supervisor executable.
+
+#### Review repair validation
+
+Passed on 2026-08-13:
+
+* Frozen workspace install across 9 projects
+* Root build with strict native helper compilation through `cc`
+* Focused configuration suite: 63 tests
+* Focused execution-host suite: 19 tests
+* Focused CLI suite, including the built executable: 13 tests
+* Workspace typecheck and Biome check across 79 files
+* Complete workspace suite: 18 files and 471 tests
+* Architecture boundaries across 107 source files
+* Documentation links across 17 Markdown files
+* Package inspection with the helper present as executable mode `0755`
+* `git diff --check`
+
+#### Final independent review and validation
+
+Independent phase-wide review rejected Slice C until all process and bootstrap
+guarantees were executable. The final reviewed implementation includes:
+
+* Practical timer, output, attempt, and reconciliation ceilings shared by
+  configuration and the execution adapter
+* Descriptor-relative `openat2` cwd containment with no pathname check-to-spawn
+  gap
+* A packaged Linux subreaper that preserves the leader generation, adopts and
+  reaps descendants, and uses pidfds for forced cleanup
+* Bounded UTF-8 output semantics that omit incomplete trailing sequences
+* Durable exclusive init with file and parent-directory sync and no pathname
+  unlink on failure
+* Safe filesystem and JSON syntax diagnostics from doctor
+* Immediate child lifecycle listeners, setup-time abort latching, and a native
+  readiness handshake before timeout or cancellation signals
+* Exact fd 3 frame cardinality, order, termination, and truncation validation
+
+The final independent review reported no critical, high, medium, or low
+findings and approved Phase 6.
+
+Passed on 2026-08-13:
+
+* Frozen workspace install across 9 projects
+* Root build and execution-host native build with strict C17 compilation
+* Clean workspace typecheck
+* Biome check across 79 files
+* Complete workspace suite: 18 files and 479 tests
+* Focused configuration suite: 63 tests
+* Focused execution-host suite: 27 tests
+* Focused CLI suite: 13 tests
+* Architecture boundaries across 107 source files
+* Documentation links across 17 Markdown files
+* Execution-host tarball contains the supervisor as executable mode `0755`
+* No live `senawa-process-supervisor` after validation
+* `git diff --check`
+
+The process-table baseline before broad validation contained 656 pre-existing
+zombies and no Senawa supervisor. Subsequent broad-suite snapshots contained
+657 and 658 zombies with no Senawa supervisor; each added record was
+`[esbuild] <defunct>` reparented to PID 1, not a helper-owned command. No attempt
+was made to clean these unrelated zombies. Execution-host tests separately
+proved that every recorded descendant path disappeared from `/proc`, five
+repeated trees did not grow the test process's direct zombie count, and no
+helper child remained.
+
+No commit or push was performed during bounded-slice implementation.
+
+The full suite initially exposed a test-only startup race because a 100 ms
+timeout could fire before a grandchild wrote its PID proof under parallel load.
+The test now allows one second for tree construction while retaining a separate
+500 ms termination grace and the same descendant absence assertions. Independent
+phase-wide review followed the bounded implementation and drove the repairs
+recorded above.
+
+#### Validation
+
+Passed on 2026-08-13:
+
+* Frozen workspace install across 9 projects after lockfile update
+* Focused configuration suite: 62 tests
+* Focused execution-host suite: 12 tests
+* Focused CLI suite, including the built executable: 8 tests
+* Execution-host package declaration typecheck
+* Clean workspace build and typecheck
+* Biome check across 78 files
+* Complete workspace suite: 18 files and 458 tests
+* Architecture boundaries across 107 source files
+* Documentation links across 17 Markdown files
+* Process-table check with no live execution-host helper commands
+* `git diff --check`
+
+#### Commit and push
+
+No commit or push was performed for bounded slice C, as requested.
 
 ## Entry template
 

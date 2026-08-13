@@ -1,0 +1,24 @@
+{
+  "name": "@senawa/execution-host",
+  "version": "0.1.0-alpha.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "executableFiles": [
+      "dist/senawa-process-supervisor"
+    ]
+  },
+  "scripts": {
+    "build": "tsc -b && pnpm build:native",
+    "build:native": "node ../../scripts/build-process-supervisor.mjs",
+    "typecheck": "tsc -b --pretty false"
+  }
+}

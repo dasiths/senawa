@@ -8,6 +8,12 @@
       "path": "packages/kernel"
     },
     {
+      "path": "packages/configuration"
+    },
+    {
+      "path": "packages/execution-host"
+    },
+    {
       "path": "packages/runtime"
     },
     {

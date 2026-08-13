@@ -194,13 +194,17 @@ export type GateErrorCode =
   | "condition-depth-limit"
   | "condition-node-limit";
 
+export type GateErrorPathSegment = string | number;
+
 export class GateError extends Error {
   readonly code: GateErrorCode;
+  readonly path?: readonly GateErrorPathSegment[];
 
-  constructor(code: GateErrorCode, message: string) {
+  constructor(code: GateErrorCode, message: string, path?: readonly GateErrorPathSegment[]) {
     super(message);
     this.name = "GateError";
     this.code = code;
+    if (path !== undefined) this.path = Object.freeze([...path]);
   }
 }
 
@@ -372,12 +376,17 @@ function gateContent(
   }
   const blocking = gateRules(value.blocking, "blocking", budget, limits);
   const advisory = gateRules(value.advisory, "advisory", budget, limits);
-  const keys = new Set<string>();
-  for (const rule of [...blocking, ...advisory]) {
-    if (keys.has(rule.key)) {
-      fail("invalid-policy", `Gate rule key ${rule.key} is duplicated`);
+  const keys = new Map<string, readonly GateErrorPathSegment[]>();
+  for (const [kind, rules] of [
+    ["blocking", blocking],
+    ["advisory", advisory],
+  ] as const) {
+    for (const [index, rule] of rules.entries()) {
+      if (keys.has(rule.key)) {
+        fail("invalid-policy", `Gate rule key ${rule.key} is duplicated`, [kind, index, "key"]);
+      }
+      keys.set(rule.key, [kind, index, "key"]);
     }
-    keys.add(rule.key);
   }
   return { key: value.key, blocking, advisory };
 }
@@ -389,16 +398,26 @@ function gateRules(
   limits: GateEvaluationLimits,
 ): readonly GateRule[] {
   if (!Array.isArray(value)) {
-    fail("invalid-policy", `Gate ${kind} rules must be an array`);
+    fail("invalid-policy", `Gate ${kind} rules must be an array`, [kind]);
   }
   return value.map((rule, index) => {
-    assertExactKeys(rule, `${kind} rule ${index}`, ["key", "condition"], "invalid-policy");
+    const rulePath: readonly GateErrorPathSegment[] = [kind, index];
+    assertExactKeys(
+      rule,
+      `${kind} rule ${index}`,
+      ["key", "condition"],
+      "invalid-policy",
+      rulePath,
+    );
     if (!isConsumerKey(rule.key)) {
-      fail("invalid-policy", `Gate ${kind} rule ${index} must use a consumer key`);
+      fail("invalid-policy", `Gate ${kind} rule ${index} must use a consumer key`, [
+        ...rulePath,
+        "key",
+      ]);
     }
     return {
       key: rule.key,
-      condition: validateCondition(rule.condition, 1, budget, limits),
+      condition: validateCondition(rule.condition, 1, budget, limits, [...rulePath, "condition"]),
     };
   });
 }
@@ -408,22 +427,25 @@ function validateCondition(
   depth: number,
   budget: { nodes: number },
   limits: GateEvaluationLimits,
+  path: readonly GateErrorPathSegment[],
 ): Condition {
   budget.nodes += 1;
   if (budget.nodes > limits.maxConditionNodes) {
     fail(
       "condition-node-limit",
       `Gate conditions exceed the ${limits.maxConditionNodes} node limit`,
+      path,
     );
   }
   if (depth > limits.maxConditionDepth) {
     fail(
       "condition-depth-limit",
       `Gate conditions exceed the ${limits.maxConditionDepth} depth limit`,
+      path,
     );
   }
   if (!isRecord(value) || typeof value.operator !== "string") {
-    fail("invalid-condition", "Gate conditions must be objects with an operator");
+    fail("invalid-condition", "Gate conditions must be objects with an operator", path);
   }
 
   if (value.operator === "all" || value.operator === "any") {
@@ -432,27 +454,37 @@ function validateCondition(
       `${value.operator} condition`,
       ["operator", "conditions"],
       "invalid-condition",
+      path,
     );
     if (!Array.isArray(value.conditions)) {
-      fail("invalid-condition", `${value.operator} conditions must contain a conditions array`);
+      fail("invalid-condition", `${value.operator} conditions must contain a conditions array`, [
+        ...path,
+        "conditions",
+      ]);
     }
     return {
       operator: value.operator,
-      conditions: value.conditions.map((condition) =>
-        validateCondition(condition, depth + 1, budget, limits),
+      conditions: value.conditions.map((condition, index) =>
+        validateCondition(condition, depth + 1, budget, limits, [...path, "conditions", index]),
       ),
     };
   }
   if (value.operator === "not") {
-    assertExactKeys(value, "not condition", ["operator", "condition"], "invalid-condition");
+    assertExactKeys(value, "not condition", ["operator", "condition"], "invalid-condition", path);
     return {
       operator: value.operator,
-      condition: validateCondition(value.condition, depth + 1, budget, limits),
+      condition: validateCondition(value.condition, depth + 1, budget, limits, [
+        ...path,
+        "condition",
+      ]),
     };
   }
   if (value.operator === "exists") {
-    assertExactKeys(value, "exists condition", ["operator", "accessor"], "invalid-condition");
-    return { operator: value.operator, accessor: validateAccessor(value.accessor, limits) };
+    assertExactKeys(value, "exists condition", ["operator", "accessor"], "invalid-condition", path);
+    return {
+      operator: value.operator,
+      accessor: validateAccessor(value.accessor, limits, [...path, "accessor"]),
+    };
   }
   if (isComparisonOperator(value.operator)) {
     assertExactKeys(
@@ -460,28 +492,42 @@ function validateCondition(
       `${value.operator} condition`,
       ["operator", "accessor", "expected"],
       "invalid-condition",
+      path,
     );
     if (isNumberComparisonOperator(value.operator) && typeof value.expected !== "number") {
-      fail("invalid-condition", `${value.operator} conditions require a numeric expected value`);
+      fail("invalid-condition", `${value.operator} conditions require a numeric expected value`, [
+        ...path,
+        "expected",
+      ]);
     }
     return {
       operator: value.operator,
-      accessor: validateAccessor(value.accessor, limits),
+      accessor: validateAccessor(value.accessor, limits, [...path, "accessor"]),
       expected: value.expected as CanonicalValue,
     };
   }
-  fail("invalid-condition", `Unknown gate condition operator: ${value.operator}`);
+  fail("invalid-condition", `Unknown gate condition operator: ${value.operator}`, [
+    ...path,
+    "operator",
+  ]);
 }
 
-function validateAccessor(value: unknown, limits: GateEvaluationLimits): ReadingAccessor {
-  assertExactKeys(value, "reading accessor", ["sensorKey", "pointer"], "invalid-condition");
+function validateAccessor(
+  value: unknown,
+  limits: GateEvaluationLimits,
+  path: readonly GateErrorPathSegment[],
+): ReadingAccessor {
+  assertExactKeys(value, "reading accessor", ["sensorKey", "pointer"], "invalid-condition", path);
   if (!isConsumerKey(value.sensorKey)) {
-    fail("invalid-condition", "Reading accessors must use a sensor consumer key");
+    fail("invalid-condition", "Reading accessors must use a sensor consumer key", [
+      ...path,
+      "sensorKey",
+    ]);
   }
   if (typeof value.pointer !== "string") {
-    fail("invalid-pointer", "Reading accessor pointers must be strings");
+    fail("invalid-pointer", "Reading accessor pointers must be strings", [...path, "pointer"]);
   }
-  parsePointer(value.pointer, limits);
+  parsePointer(value.pointer, limits, [...path, "pointer"]);
   return { sensorKey: value.sensorKey, pointer: value.pointer };
 }
 
@@ -652,21 +698,33 @@ function resolveAccessor(
   return { kind: "found", value: current };
 }
 
-function parsePointer(pointer: string, limits: GateEvaluationLimits): readonly string[] {
+function parsePointer(
+  pointer: string,
+  limits: GateEvaluationLimits,
+  path?: readonly GateErrorPathSegment[],
+): readonly string[] {
   if (pointer.length > limits.maxPointerLength) {
-    fail("invalid-pointer", `JSON Pointers cannot exceed ${limits.maxPointerLength} characters`);
+    fail(
+      "invalid-pointer",
+      `JSON Pointers cannot exceed ${limits.maxPointerLength} characters`,
+      path,
+    );
   }
   if (pointer === "") return [];
   if (!pointer.startsWith("/")) {
-    fail("invalid-pointer", "JSON Pointers must be empty or begin with /");
+    fail("invalid-pointer", "JSON Pointers must be empty or begin with /", path);
   }
   const encoded = pointer.slice(1).split("/");
   if (encoded.length > limits.maxPointerSegments) {
-    fail("invalid-pointer", `JSON Pointers cannot exceed ${limits.maxPointerSegments} segments`);
+    fail(
+      "invalid-pointer",
+      `JSON Pointers cannot exceed ${limits.maxPointerSegments} segments`,
+      path,
+    );
   }
   return encoded.map((segment) => {
     if (/~(?:[^01]|$)/.test(segment)) {
-      fail("invalid-pointer", "JSON Pointer escapes must use ~0 or ~1");
+      fail("invalid-pointer", "JSON Pointer escapes must use ~0 or ~1", path);
     }
     return segment.replace(/~1/g, "/").replace(/~0/g, "~");
   });
@@ -702,14 +760,15 @@ function assertExactKeys(
   subject: string,
   expectedKeys: readonly string[],
   code: GateErrorCode,
+  path?: readonly GateErrorPathSegment[],
 ): asserts value is Record<string, unknown> {
   if (!isRecord(value)) {
-    fail(code, `${subject} must be an object`);
+    fail(code, `${subject} must be an object`, path);
   }
   const actual = Object.keys(value).sort(compareText);
   const expected = [...expectedKeys].sort(compareText);
   if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-    fail(code, `${subject} fields must be exactly: ${expected.join(", ")}`);
+    fail(code, `${subject} fields must be exactly: ${expected.join(", ")}`, path);
   }
 }
 
@@ -730,6 +789,6 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function fail(code: GateErrorCode, message: string): never {
-  throw new GateError(code, message);
+function fail(code: GateErrorCode, message: string, path?: readonly GateErrorPathSegment[]): never {
+  throw new GateError(code, message, path);
 }

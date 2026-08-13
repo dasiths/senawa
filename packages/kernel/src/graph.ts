@@ -164,13 +164,45 @@ export type GraphCompilationErrorCode =
   | "invalid-completion-policy"
   | "invalid-source";
 
+export type GraphCompilationDiagnosticField =
+  | "completionPolicy"
+  | "evidencePolicy"
+  | "dependsOn"
+  | "parentId"
+  | "supersedes"
+  | "source";
+
+export interface GraphCompilationDiagnostic {
+  readonly code: GraphCompilationErrorCode;
+  readonly message: string;
+  readonly subject?: Readonly<{ readonly kind: GraphNode["kind"]; readonly id: string }>;
+  readonly field?: GraphCompilationDiagnosticField;
+}
+
+export type WorkflowGraphDiagnosis = Readonly<
+  | { readonly diagnostics: readonly GraphCompilationDiagnostic[]; readonly graph?: never }
+  | { readonly diagnostics: readonly []; readonly graph: WorkflowGraph }
+>;
+
 export class GraphCompilationError extends Error {
   readonly code: GraphCompilationErrorCode;
+  readonly subject?: GraphCompilationDiagnostic["subject"];
+  readonly field?: GraphCompilationDiagnosticField;
 
-  constructor(code: GraphCompilationErrorCode, message: string) {
+  constructor(
+    code: GraphCompilationErrorCode,
+    message: string,
+    context: Pick<GraphCompilationDiagnostic, "subject" | "field"> = {},
+  ) {
     super(message);
     this.name = "GraphCompilationError";
     this.code = code;
+    if (context.subject !== undefined) {
+      this.subject = context.subject;
+    }
+    if (context.field !== undefined) {
+      this.field = context.field;
+    }
   }
 }
 
@@ -182,6 +214,359 @@ export class GraphValidationError extends Error {
 }
 
 export function compileWorkflowGraph(
+  input: NormalizedWorkflowInput,
+  sha256: Sha256,
+): WorkflowGraph {
+  return compileWorkflowGraphInternal(input, sha256);
+}
+
+export function diagnoseWorkflowGraph(
+  input: NormalizedWorkflowInput,
+  sha256: Sha256,
+): WorkflowGraphDiagnosis {
+  let submittedInput: NormalizedWorkflowInput;
+  try {
+    submittedInput = snapshotWorkflowInput(input);
+  } catch (error) {
+    if (!(error instanceof GraphCompilationError)) {
+      throw error;
+    }
+    return diagnosisFailure([diagnosticFromError(error)]);
+  }
+
+  if (!hasDefinitionArrays(submittedInput)) {
+    return diagnosisFailure([
+      createDiagnostic(
+        "invalid-relation",
+        "Normalized workflow input must contain phase, task, and criterion arrays",
+      ),
+    ]);
+  }
+
+  const diagnostics: GraphCompilationDiagnostic[] = [];
+  const declaredIds = collectDeclaredIds(submittedInput);
+  const workflow = diagnoseDefinition("workflow", submittedInput.workflow, sha256, diagnostics);
+  const phases = submittedInput.phases.flatMap((definition) => {
+    const compiled = diagnoseDefinition("phase", definition, sha256, diagnostics);
+    return compiled === undefined ? [] : [compiled];
+  });
+  const tasks = submittedInput.executableWork.flatMap((definition) => {
+    const compiled = diagnoseDefinition("task", definition, sha256, diagnostics);
+    return compiled === undefined ? [] : [compiled];
+  });
+  const criteria = submittedInput.criteria.flatMap((definition) => {
+    const compiled = diagnoseDefinition("criterion", definition, sha256, diagnostics);
+    return compiled === undefined ? [] : [compiled];
+  });
+  const criterionOwnersWithCompilationErrors = collectCriterionOwnersWithCompilationErrors(
+    submittedInput.criteria,
+    criteria,
+  );
+
+  const duplicateIds = collectUniqueIdDiagnostics(
+    workflow === undefined ? [] : [workflow],
+    phases,
+    tasks,
+    criteria,
+    diagnostics,
+  );
+  collectUniqueKeyDiagnostics(phases, tasks, criteria, diagnostics);
+  const unambiguousPhases = phases.filter(({ id }) => !duplicateIds.has(id));
+  const unambiguousTasks = tasks.filter(({ id }) => !duplicateIds.has(id));
+  const unambiguousCriteria = criteria.filter(({ id }) => !duplicateIds.has(id));
+  collectReferenceDiagnostics(
+    workflow,
+    unambiguousPhases,
+    unambiguousTasks,
+    unambiguousCriteria,
+    declaredIds,
+    criterionOwnersWithCompilationErrors,
+    diagnostics,
+  );
+  collectCycleDiagnostics(
+    unambiguousPhases,
+    (phase) => phase.parentId,
+    "containment-cycle",
+    "parentId",
+    diagnostics,
+  );
+  collectCycleDiagnostics(
+    unambiguousPhases,
+    (phase) => phase.dependsOn,
+    "dependency-cycle",
+    "dependsOn",
+    diagnostics,
+  );
+  collectCycleDiagnostics(
+    unambiguousTasks,
+    (task) => task.dependsOn,
+    "dependency-cycle",
+    "dependsOn",
+    diagnostics,
+  );
+  collectCycleDiagnostics(
+    unambiguousPhases,
+    (phase) => phase.supersedes,
+    "supersession-cycle",
+    "supersedes",
+    diagnostics,
+  );
+  collectCycleDiagnostics(
+    unambiguousTasks,
+    (task) => task.supersedes,
+    "supersession-cycle",
+    "supersedes",
+    diagnostics,
+  );
+  collectCycleDiagnostics(
+    unambiguousCriteria,
+    (criterion) => criterion.supersedes,
+    "supersession-cycle",
+    "supersedes",
+    diagnostics,
+  );
+  collectSupersessionDiagnostics(unambiguousPhases, diagnostics);
+  collectSupersessionDiagnostics(unambiguousTasks, diagnostics);
+  collectSupersessionDiagnostics(unambiguousCriteria, diagnostics);
+
+  if (diagnostics.length > 0) {
+    return diagnosisFailure(diagnostics);
+  }
+  return Object.freeze({
+    diagnostics: Object.freeze([]) as readonly [],
+    graph: compileWorkflowGraphInternal(submittedInput, sha256),
+  });
+}
+
+function hasDefinitionArrays(input: unknown): input is NormalizedWorkflowInput {
+  return (
+    typeof input === "object" &&
+    input !== null &&
+    Array.isArray((input as Partial<NormalizedWorkflowInput>).phases) &&
+    Array.isArray((input as Partial<NormalizedWorkflowInput>).executableWork) &&
+    Array.isArray((input as Partial<NormalizedWorkflowInput>).criteria)
+  );
+}
+
+function collectDeclaredIds(input: NormalizedWorkflowInput): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const definition of [
+    input.workflow,
+    ...input.phases,
+    ...input.executableWork,
+    ...input.criteria,
+  ]) {
+    if (
+      typeof definition === "object" &&
+      definition !== null &&
+      typeof definition.id === "string"
+    ) {
+      ids.add(definition.id);
+    }
+  }
+  return ids;
+}
+
+function collectCriterionOwnersWithCompilationErrors(
+  declared: readonly CriterionDefinitionInput[],
+  compiled: readonly CriterionDefinition[],
+): ReadonlySet<TaskId> {
+  const compiledIds = new Set(compiled.map((criterion) => criterion.id));
+  const owners = new Set<TaskId>();
+  for (const criterion of declared) {
+    if (
+      typeof criterion === "object" &&
+      criterion !== null &&
+      isCriterionId(criterion.id) &&
+      isTaskId(criterion.parentId) &&
+      !compiledIds.has(criterion.id)
+    ) {
+      owners.add(criterion.parentId);
+    }
+  }
+  return owners;
+}
+
+function diagnoseDefinition(
+  kind: "workflow",
+  input: WorkflowDefinitionInput,
+  sha256: Sha256,
+  diagnostics: GraphCompilationDiagnostic[],
+): WorkflowDefinition | undefined;
+function diagnoseDefinition(
+  kind: "phase",
+  input: PhaseDefinitionInput,
+  sha256: Sha256,
+  diagnostics: GraphCompilationDiagnostic[],
+): PhaseDefinition | undefined;
+function diagnoseDefinition(
+  kind: "task",
+  input: TaskDefinitionInput,
+  sha256: Sha256,
+  diagnostics: GraphCompilationDiagnostic[],
+): TaskDefinition | undefined;
+function diagnoseDefinition(
+  kind: "criterion",
+  input: CriterionDefinitionInput,
+  sha256: Sha256,
+  diagnostics: GraphCompilationDiagnostic[],
+): CriterionDefinition | undefined;
+function diagnoseDefinition(
+  kind: GraphNode["kind"],
+  input:
+    | WorkflowDefinitionInput
+    | PhaseDefinitionInput
+    | TaskDefinitionInput
+    | CriterionDefinitionInput,
+  sha256: Sha256,
+  diagnostics: GraphCompilationDiagnostic[],
+): WorkflowDefinition | PhaseDefinition | TaskDefinition | CriterionDefinition | undefined {
+  try {
+    switch (kind) {
+      case "workflow": {
+        const definition = input as WorkflowDefinitionInput;
+        assertDefinitionScalars(kind, definition, isWorkflowId);
+        return compileWorkflow(definition, sha256);
+      }
+      case "phase": {
+        const definition = input as PhaseDefinitionInput;
+        assertDefinitionScalars(kind, definition, isPhaseId);
+        if (!isWorkflowId(definition.parentId) && !isPhaseId(definition.parentId)) {
+          invalidParent(definition.id, definition.parentId, "workflow or phase", kind);
+        }
+        assertRelationIdentities(kind, definition.id, "dependsOn", definition.dependsOn, isPhaseId);
+        assertRelationIdentities(
+          kind,
+          definition.id,
+          "supersedes",
+          definition.supersedes,
+          isPhaseId,
+        );
+        return compilePhase(definition, sha256);
+      }
+      case "task": {
+        const definition = input as TaskDefinitionInput;
+        assertDefinitionScalars(kind, definition, isTaskId);
+        if (!isPhaseId(definition.parentId)) {
+          invalidParent(definition.id, definition.parentId, "phase", kind);
+        }
+        assertRelationIdentities(kind, definition.id, "dependsOn", definition.dependsOn, isTaskId);
+        assertRelationIdentities(
+          kind,
+          definition.id,
+          "supersedes",
+          definition.supersedes,
+          isTaskId,
+        );
+        return compileTask(definition, sha256);
+      }
+      case "criterion": {
+        const definition = input as CriterionDefinitionInput;
+        assertDefinitionScalars(kind, definition, isCriterionId);
+        if (!isTaskId(definition.parentId)) {
+          invalidParent(definition.id, definition.parentId, "task", kind);
+        }
+        assertRelationIdentities(
+          kind,
+          definition.id,
+          "supersedes",
+          definition.supersedes,
+          isCriterionId,
+        );
+        return compileCriterion(definition, sha256);
+      }
+    }
+  } catch (error) {
+    if (!(error instanceof GraphCompilationError)) {
+      throw error;
+    }
+    diagnostics.push(diagnosticFromError(error, definitionSubject(kind, input)));
+    return undefined;
+  }
+}
+
+function definitionSubject(
+  kind: GraphNode["kind"],
+  input: unknown,
+): GraphCompilationDiagnostic["subject"] {
+  if (typeof input !== "object" || input === null || !("id" in input)) {
+    return undefined;
+  }
+  const id = input.id;
+  const isExpected =
+    kind === "workflow"
+      ? isWorkflowId(id)
+      : kind === "phase"
+        ? isPhaseId(id)
+        : kind === "task"
+          ? isTaskId(id)
+          : isCriterionId(id);
+  return isExpected && typeof id === "string" ? Object.freeze({ kind, id }) : undefined;
+}
+
+function diagnosisFailure(
+  diagnostics: readonly GraphCompilationDiagnostic[],
+): WorkflowGraphDiagnosis {
+  return Object.freeze({ diagnostics: sortCompilationDiagnostics(diagnostics) });
+}
+
+function diagnosticFromError(
+  error: GraphCompilationError,
+  fallbackSubject?: GraphCompilationDiagnostic["subject"],
+): GraphCompilationDiagnostic {
+  return createDiagnostic(error.code, error.message, error.subject ?? fallbackSubject, error.field);
+}
+
+function createDiagnostic(
+  code: GraphCompilationErrorCode,
+  message: string,
+  subject?: GraphCompilationDiagnostic["subject"],
+  field?: GraphCompilationDiagnosticField,
+): GraphCompilationDiagnostic {
+  return Object.freeze({
+    code,
+    message,
+    ...(subject === undefined ? {} : { subject: Object.freeze({ ...subject }) }),
+    ...(field === undefined ? {} : { field }),
+  });
+}
+
+function sortCompilationDiagnostics(
+  diagnostics: readonly GraphCompilationDiagnostic[],
+): readonly GraphCompilationDiagnostic[] {
+  return Object.freeze(
+    [...diagnostics].sort(
+      (left, right) =>
+        compilationDiagnosticPriority(left.code) - compilationDiagnosticPriority(right.code) ||
+        compareText(left.subject?.id ?? "", right.subject?.id ?? "") ||
+        compareText(left.field ?? "", right.field ?? "") ||
+        compareText(left.code, right.code) ||
+        compareText(left.message, right.message),
+    ),
+  );
+}
+
+function compilationDiagnosticPriority(code: GraphCompilationErrorCode): number {
+  return [
+    "invalid-input",
+    "invalid-relation",
+    "invalid-identity",
+    "invalid-key",
+    "invalid-generation",
+    "invalid-parent",
+    "invalid-source",
+    "invalid-completion-policy",
+    "duplicate-id",
+    "duplicate-key",
+    "unknown-reference",
+    "containment-cycle",
+    "dependency-cycle",
+    "supersession-cycle",
+    "invalid-supersession",
+  ].indexOf(code);
+}
+
+function compileWorkflowGraphInternal(
   input: NormalizedWorkflowInput,
   sha256: Sha256,
 ): WorkflowGraph {
@@ -631,16 +1016,20 @@ function assertRelationIdentities(
     return;
   }
   if (!Array.isArray(values)) {
+    const subject = definitionSubject(kind, { id: ownerId });
     throw new GraphCompilationError(
       "invalid-relation",
       `${kind} ${relation} relationships must be arrays`,
+      { ...(subject === undefined ? {} : { subject }), field: relation },
     );
   }
   for (let index = 0; index < values.length; index += 1) {
     if (!Object.hasOwn(values, index) || !isExpectedIdentity(values[index])) {
+      const subject = definitionSubject(kind, { id: ownerId });
       throw new GraphCompilationError(
         "invalid-relation",
         `${kind} ${String(ownerId)} has a ${relation} identity of the wrong kind`,
+        { ...(subject === undefined ? {} : { subject }), field: relation },
       );
     }
   }
@@ -686,7 +1075,9 @@ function compileCompletionPolicy(value: unknown): CompletionPolicy {
     return validateCompletionPolicy(value);
   } catch (error) {
     if (error instanceof CompletionAccountingError) {
-      throw new GraphCompilationError("invalid-completion-policy", error.message);
+      throw new GraphCompilationError("invalid-completion-policy", error.message, {
+        field: error.path?.includes(".evidencePolicy") ? "evidencePolicy" : "completionPolicy",
+      });
     }
     throw error;
   }
@@ -738,13 +1129,347 @@ function sourcePointer(input: SourcePointerInput): SourcePointer {
 
 function assertSourcePointer(input: SourcePointerInput): void {
   if (typeof input !== "object" || input === null) {
-    throw new GraphCompilationError("invalid-source", "Sources must be objects");
+    throw new GraphCompilationError("invalid-source", "Sources must be objects", {
+      field: "source",
+    });
   }
   if (typeof input.locator !== "string" || input.locator.length === 0) {
-    throw new GraphCompilationError("invalid-source", "Source locators must be non-empty strings");
+    throw new GraphCompilationError("invalid-source", "Source locators must be non-empty strings", {
+      field: "source",
+    });
   }
   if (typeof input.pointer !== "string") {
-    throw new GraphCompilationError("invalid-source", "Source pointers must be strings");
+    throw new GraphCompilationError("invalid-source", "Source pointers must be strings", {
+      field: "source",
+    });
+  }
+}
+
+function collectUniqueIdDiagnostics(
+  workflows: readonly WorkflowDefinition[],
+  phases: readonly PhaseDefinition[],
+  tasks: readonly TaskDefinition[],
+  criteria: readonly CriterionDefinition[],
+  diagnostics: GraphCompilationDiagnostic[],
+): ReadonlySet<string> {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const [kind, definitions] of [
+    ["workflow", workflows],
+    ["phase", phases],
+    ["task", tasks],
+    ["criterion", criteria],
+  ] as const) {
+    for (const definition of definitions) {
+      if (seen.has(definition.id)) {
+        duplicates.add(definition.id);
+        diagnostics.push(
+          createDiagnostic("duplicate-id", `Duplicate definition identity: ${definition.id}`, {
+            kind,
+            id: definition.id,
+          }),
+        );
+      }
+      seen.add(definition.id);
+    }
+  }
+  return duplicates;
+}
+
+function collectUniqueKeyDiagnostics(
+  phases: readonly PhaseDefinition[],
+  tasks: readonly TaskDefinition[],
+  criteria: readonly CriterionDefinition[],
+  diagnostics: GraphCompilationDiagnostic[],
+): void {
+  const seen = new Set<string>();
+  for (const [kind, definitions] of [
+    ["phase", phases],
+    ["task", tasks],
+    ["criterion", criteria],
+  ] as const) {
+    for (const definition of definitions) {
+      const scopedKey = `${kind}\u0000${definition.parentId}\u0000${definition.key}`;
+      if (seen.has(scopedKey)) {
+        diagnostics.push(
+          createDiagnostic(
+            "duplicate-key",
+            `Duplicate ${kind} key ${definition.key} under ${definition.parentId}`,
+            { kind, id: definition.id },
+          ),
+        );
+      }
+      seen.add(scopedKey);
+    }
+  }
+}
+
+function collectReferenceDiagnostics(
+  workflow: WorkflowDefinition | undefined,
+  phases: readonly PhaseDefinition[],
+  tasks: readonly TaskDefinition[],
+  criteria: readonly CriterionDefinition[],
+  declaredIds: ReadonlySet<string>,
+  criterionOwnersWithCompilationErrors: ReadonlySet<TaskId>,
+  diagnostics: GraphCompilationDiagnostic[],
+): void {
+  const phaseById = indexById(phases);
+  const taskById = indexById(tasks);
+  const criterionById = indexById(criteria);
+
+  for (const phase of phases) {
+    if (
+      phase.parentId !== workflow?.id &&
+      !phaseById.has(phase.parentId as PhaseId) &&
+      !declaredIds.has(phase.parentId)
+    ) {
+      diagnostics.push(unknownReferenceDiagnostic("phase", phase.id, phase.parentId, "parentId"));
+    }
+    collectKnownReferenceDiagnostics(
+      "phase",
+      phase.id,
+      phase.dependsOn,
+      phaseById,
+      "dependsOn",
+      declaredIds,
+      diagnostics,
+    );
+    collectKnownReferenceDiagnostics(
+      "phase",
+      phase.id,
+      phase.supersedes,
+      phaseById,
+      "supersedes",
+      declaredIds,
+      diagnostics,
+    );
+  }
+  for (const task of tasks) {
+    if (!phaseById.has(task.parentId) && !declaredIds.has(task.parentId)) {
+      diagnostics.push(unknownReferenceDiagnostic("task", task.id, task.parentId, "parentId"));
+    }
+    collectKnownReferenceDiagnostics(
+      "task",
+      task.id,
+      task.dependsOn,
+      taskById,
+      "dependsOn",
+      declaredIds,
+      diagnostics,
+    );
+    collectKnownReferenceDiagnostics(
+      "task",
+      task.id,
+      task.supersedes,
+      taskById,
+      "supersedes",
+      declaredIds,
+      diagnostics,
+    );
+  }
+  for (const criterion of criteria) {
+    if (!taskById.has(criterion.parentId) && !declaredIds.has(criterion.parentId)) {
+      diagnostics.push(
+        unknownReferenceDiagnostic("criterion", criterion.id, criterion.parentId, "parentId"),
+      );
+    }
+    collectKnownReferenceDiagnostics(
+      "criterion",
+      criterion.id,
+      criterion.supersedes,
+      criterionById,
+      "supersedes",
+      declaredIds,
+      diagnostics,
+    );
+  }
+
+  const criteriaByTask = new Map<TaskId, CriterionId[]>();
+  for (const criterion of criteria) {
+    const owned = criteriaByTask.get(criterion.parentId) ?? [];
+    owned.push(criterion.id);
+    criteriaByTask.set(criterion.parentId, owned);
+  }
+  for (const task of tasks) {
+    if (criterionOwnersWithCompilationErrors.has(task.id)) {
+      continue;
+    }
+    const owned = [...(criteriaByTask.get(task.id) ?? [])].sort(compareText);
+    const declared = task.completionPolicy.criteria
+      .map((requirement) => requirement.criterionId)
+      .sort(compareText);
+    if (
+      owned.length !== declared.length ||
+      owned.some((criterionId, index) => criterionId !== declared[index])
+    ) {
+      diagnostics.push(
+        createDiagnostic(
+          "invalid-completion-policy",
+          `Task ${task.id} completion policy must declare every owned criterion exactly once`,
+          { kind: "task", id: task.id },
+          "completionPolicy",
+        ),
+      );
+    }
+  }
+}
+
+function collectKnownReferenceDiagnostics<Id extends string, DefinitionType extends Definition<Id>>(
+  kind: GraphNode["kind"],
+  ownerId: string,
+  references: readonly Id[],
+  index: ReadonlyMap<Id, DefinitionType>,
+  field: "dependsOn" | "supersedes",
+  declaredIds: ReadonlySet<string>,
+  diagnostics: GraphCompilationDiagnostic[],
+): void {
+  for (const reference of references) {
+    if (!index.has(reference) && !declaredIds.has(reference)) {
+      diagnostics.push(unknownReferenceDiagnostic(kind, ownerId, reference, field));
+    }
+  }
+}
+
+function unknownReferenceDiagnostic(
+  kind: GraphNode["kind"],
+  ownerId: string,
+  reference: string,
+  field: "dependsOn" | "parentId" | "supersedes",
+): GraphCompilationDiagnostic {
+  return createDiagnostic(
+    "unknown-reference",
+    `${ownerId} references unknown definition ${reference}`,
+    { kind, id: ownerId },
+    field,
+  );
+}
+
+function collectCycleDiagnostics<Id extends string, DefinitionType extends Definition<Id>>(
+  definitions: readonly DefinitionType[],
+  references: (definition: DefinitionType) => Id | readonly Id[],
+  code: "containment-cycle" | "dependency-cycle" | "supersession-cycle",
+  field: "dependsOn" | "parentId" | "supersedes",
+  diagnostics: GraphCompilationDiagnostic[],
+): void {
+  const index = indexById(definitions);
+  const discovery = new Map<Id, number>();
+  const lowLink = new Map<Id, number>();
+  const stack: Id[] = [];
+  const onStack = new Set<Id>();
+  let nextIndex = 0;
+
+  const visit = (id: Id): void => {
+    discovery.set(id, nextIndex);
+    lowLink.set(id, nextIndex);
+    nextIndex += 1;
+    stack.push(id);
+    onStack.add(id);
+    const definition = index.get(id);
+    const related = definition === undefined ? [] : references(definition);
+    const relatedIds = (Array.isArray(related) ? related : [related])
+      .filter((relatedId): relatedId is Id => index.has(relatedId as Id))
+      .sort(compareText);
+    for (const relatedId of relatedIds) {
+      if (!discovery.has(relatedId)) {
+        visit(relatedId);
+        lowLink.set(
+          id,
+          Math.min(requiredNumber(lowLink.get(id)), requiredNumber(lowLink.get(relatedId))),
+        );
+      } else if (onStack.has(relatedId)) {
+        lowLink.set(
+          id,
+          Math.min(requiredNumber(lowLink.get(id)), requiredNumber(discovery.get(relatedId))),
+        );
+      }
+    }
+    if (lowLink.get(id) !== discovery.get(id)) {
+      return;
+    }
+    const component: Id[] = [];
+    let member: Id;
+    do {
+      member = stack.pop() as Id;
+      onStack.delete(member);
+      component.push(member);
+    } while (member !== id);
+    component.sort(compareText);
+    const subjectId = component[0];
+    const isSelfCycle =
+      component.length === 1 &&
+      definition !== undefined &&
+      (Array.isArray(related) ? related : [related]).includes(subjectId as Id);
+    if (subjectId !== undefined && (component.length > 1 || isSelfCycle)) {
+      const subjectDefinition = index.get(subjectId);
+      const kind = graphKindForDefinition(subjectDefinition);
+      diagnostics.push(
+        createDiagnostic(code, `${code} includes ${subjectId}`, { kind, id: subjectId }, field),
+      );
+    }
+  };
+
+  const sortedIds = [...index.keys()] as Id[];
+  sortedIds.sort((left, right) => compareText(left, right));
+  for (const id of sortedIds) {
+    if (!discovery.has(id)) {
+      visit(id);
+    }
+  }
+}
+
+function graphKindForDefinition(definition: Definition<string> | undefined): GraphNode["kind"] {
+  if (definition !== undefined && "completionPolicy" in definition) {
+    return "task";
+  }
+  if (definition !== undefined && "dependsOn" in definition) {
+    return "phase";
+  }
+  return "criterion";
+}
+
+function requiredNumber(value: number | undefined): number {
+  if (value === undefined) {
+    throw new Error("Cycle analysis index is missing");
+  }
+  return value;
+}
+
+function collectSupersessionDiagnostics<
+  Id extends string,
+  DefinitionType extends Definition<Id> & {
+    readonly parentId: string;
+    readonly supersedes: readonly Id[];
+  },
+>(definitions: readonly DefinitionType[], diagnostics: GraphCompilationDiagnostic[]): void {
+  const index = indexById(definitions);
+  for (const definition of definitions) {
+    for (const supersededId of definition.supersedes) {
+      const superseded = index.get(supersededId);
+      if (superseded === undefined) {
+        continue;
+      }
+      const kind = graphKindForDefinition(definition);
+      if (definition.parentId !== superseded.parentId) {
+        diagnostics.push(
+          createDiagnostic(
+            "invalid-supersession",
+            `${definition.id} cannot supersede ${superseded.id} under a different parent`,
+            { kind, id: definition.id },
+            "supersedes",
+          ),
+        );
+      }
+      if (definition.generation <= superseded.generation) {
+        diagnostics.push(
+          createDiagnostic(
+            "invalid-supersession",
+            `${definition.id} must have a newer generation than ${superseded.id}`,
+            { kind, id: definition.id },
+            "supersedes",
+          ),
+        );
+      }
+    }
   }
 }
 
@@ -810,29 +1535,29 @@ function assertReferences(
       invalidParent(phase.id, phase.parentId, "workflow or phase");
     }
     if (phase.parentId !== workflow.id && !phaseById.has(phase.parentId)) {
-      unknownReference(phase.id, phase.parentId);
+      unknownReference("phase", phase.id, phase.parentId, "parentId");
     }
-    assertKnown(phase.id, phase.dependsOn, phaseById);
-    assertKnown(phase.id, phase.supersedes, phaseById);
+    assertKnown("phase", phase.id, phase.dependsOn, phaseById, "dependsOn");
+    assertKnown("phase", phase.id, phase.supersedes, phaseById, "supersedes");
   }
   for (const task of tasks) {
     if (!isPhaseId(task.parentId)) {
       invalidParent(task.id, task.parentId, "phase");
     }
     if (!phaseById.has(task.parentId)) {
-      unknownReference(task.id, task.parentId);
+      unknownReference("task", task.id, task.parentId, "parentId");
     }
-    assertKnown(task.id, task.dependsOn, taskById);
-    assertKnown(task.id, task.supersedes, taskById);
+    assertKnown("task", task.id, task.dependsOn, taskById, "dependsOn");
+    assertKnown("task", task.id, task.supersedes, taskById, "supersedes");
   }
   for (const criterion of criteria) {
     if (!isTaskId(criterion.parentId)) {
       invalidParent(criterion.id, criterion.parentId, "task");
     }
     if (!taskById.has(criterion.parentId)) {
-      unknownReference(criterion.id, criterion.parentId);
+      unknownReference("criterion", criterion.id, criterion.parentId, "parentId");
     }
-    assertKnown(criterion.id, criterion.supersedes, criterionById);
+    assertKnown("criterion", criterion.id, criterion.supersedes, criterionById, "supersedes");
   }
 
   const criteriaByTask = new Map<TaskId, CriterionId[]>();
@@ -859,28 +1584,46 @@ function assertReferences(
 }
 
 function assertKnown<Id extends string, DefinitionType extends Definition<Id>>(
+  kind: GraphNode["kind"],
   ownerId: string,
   references: readonly Id[],
   index: ReadonlyMap<Id, DefinitionType>,
+  field: "dependsOn" | "supersedes",
 ): void {
   for (const reference of references) {
     if (!index.has(reference)) {
-      unknownReference(ownerId, reference);
+      unknownReference(kind, ownerId, reference, field);
     }
   }
 }
 
-function invalidParent(ownerId: string, parentId: string, expected: string): never {
+function invalidParent(
+  ownerId: string,
+  parentId: string,
+  expected: string,
+  kind?: GraphNode["kind"],
+): never {
+  const subject = kind === undefined ? undefined : definitionSubject(kind, { id: ownerId });
   throw new GraphCompilationError(
     "invalid-parent",
     `${ownerId} must be owned by a ${expected}, received ${parentId}`,
+    {
+      ...(subject === undefined ? {} : { subject }),
+      field: "parentId",
+    },
   );
 }
 
-function unknownReference(ownerId: string, reference: string): never {
+function unknownReference(
+  kind: GraphNode["kind"],
+  ownerId: string,
+  reference: string,
+  field: "dependsOn" | "parentId" | "supersedes",
+): never {
   throw new GraphCompilationError(
     "unknown-reference",
     `${ownerId} references unknown definition ${reference}`,
+    { subject: { kind, id: ownerId }, field },
   );
 }
 

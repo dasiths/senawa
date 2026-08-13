@@ -112,11 +112,13 @@ export type CompletionAccountingErrorCode =
 
 export class CompletionAccountingError extends Error {
   readonly code: CompletionAccountingErrorCode;
+  readonly path?: string;
 
-  constructor(code: CompletionAccountingErrorCode, message: string) {
+  constructor(code: CompletionAccountingErrorCode, message: string, path?: string) {
     super(message);
     this.name = "CompletionAccountingError";
     this.code = code;
+    if (path !== undefined) this.path = path;
   }
 }
 
@@ -346,16 +348,20 @@ function evidencePolicy(value: unknown, path: string): EvidencePolicy {
     value.mode !== "required-criteria" &&
     value.mode !== "all-satisfied"
   ) {
-    fail("invalid-requirements", "Evidence policy mode is not recognized");
+    fail("invalid-requirements", "Evidence policy mode is not recognized", path);
   }
   if (!Array.isArray(value.requirements)) {
-    fail("invalid-requirements", "Evidence policy requirements must be an array");
+    fail("invalid-requirements", "Evidence policy requirements must be an array", path);
   }
   if (value.mode === "none" && value.requirements.length !== 0) {
-    fail("invalid-requirements", "The none evidence policy cannot declare requirements");
+    fail("invalid-requirements", "The none evidence policy cannot declare requirements", path);
   }
   if (value.mode !== "none" && value.requirements.length === 0) {
-    fail("invalid-requirements", "Evidence policies other than none require at least one kind");
+    fail(
+      "invalid-requirements",
+      "Evidence policies other than none require at least one kind",
+      path,
+    );
   }
 
   const seenKinds = new Set<string>();
@@ -371,6 +377,7 @@ function evidencePolicy(value: unknown, path: string): EvidencePolicy {
       fail(
         "invalid-requirements",
         `${requirementPath}.minimumCount must be a positive safe integer`,
+        requirementPath,
       );
     }
     const serializedKind = canonicalSerialize(requirement.kind as CanonicalValue);
@@ -378,6 +385,7 @@ function evidencePolicy(value: unknown, path: string): EvidencePolicy {
       fail(
         "invalid-requirements",
         `${requirementPath}.kind duplicates another evidence requirement`,
+        requirementPath,
       );
     }
     seenKinds.add(serializedKind);
@@ -611,7 +619,7 @@ function assertAllowedKeys(
   code: CompletionAccountingErrorCode,
 ): asserts value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    fail(code, `${path} must be an object`);
+    fail(code, `${path} must be an object`, path);
   }
   const actual = Object.keys(value);
   const allowed = new Set([...requiredKeys, ...optionalKeys]);
@@ -624,10 +632,11 @@ function assertAllowedKeys(
       `${path} fields must be exactly ${requiredKeys.join(", ")}${
         optionalKeys.length === 0 ? "" : ` with optional ${optionalKeys.join(", ")}`
       }`,
+      path,
     );
   }
 }
 
-function fail(code: CompletionAccountingErrorCode, message: string): never {
-  throw new CompletionAccountingError(code, message);
+function fail(code: CompletionAccountingErrorCode, message: string, path?: string): never {
+  throw new CompletionAccountingError(code, message, path);
 }
