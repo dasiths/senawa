@@ -18,12 +18,12 @@ import { PROTOCOL_VERSION, ProtocolValidationError } from "@senawa/protocol";
 import {
   type CompletionFactPort,
   type ContextAssetPort,
+  type ContextAuthorityPort,
   type ContextAuthoritySnapshot,
   ContextBroker,
   type ContextBrokerClient,
   type ContextBrokerDependencies,
   ContextBrokerError,
-  type ContextBrokerProjection,
   InMemoryContextAuthority,
   renderPromptPack,
   SimulatedSerialWorkerAdapter,
@@ -131,11 +131,10 @@ export class FakeGrantTokenIssuer {
 }
 
 export interface ContextBrokerHarness {
-  readonly authority: {
+  readonly authority: Pick<ContextAuthorityPort, "snapshot" | "toCanonicalJson" | "projection"> & {
     snapshot(): ContextAuthoritySnapshot;
-    toCanonicalJson(): string;
-    projection(): ContextBrokerProjection;
     toDurableCanonicalJson(): string;
+    installTaskScopeFences?: ContextAuthorityPort["installTaskScopeFences"];
   };
   readonly assetPort: {
     put(binding: HistoricalAssetBinding, bytes: Uint8Array): void;
@@ -566,8 +565,6 @@ export function registerContextBrokerConformance(
             contextDigest: limited.context.contextDigest,
             task: limited.dispatch.task,
           },
-          currentContextDigest: limited.context.contextDigest,
-          currentTask: limited.dispatch.task,
         }),
       ).toThrowError(expect.objectContaining({ code: "capability-denied" }));
     });
@@ -668,13 +665,31 @@ export function registerContextBrokerConformance(
         admit(harness, { ...current, completion: { ...current.completion, summary: "Changed" } }),
       ).toThrowError(expect.objectContaining({ code: "submission-conflict" }));
 
-      const stale = harness.broker.admitSubmission({
-        submission: completionSubmission(harness, "submission_stale", "completed"),
-        currentContextDigest: OTHER_DIGEST,
-        currentTask: harness.dispatch.task,
-      });
-      expect(stale.status).toBe("stale");
-      expect(stale.completionFact).toBeUndefined();
+      const staleHarness = createHarness();
+      if (staleHarness.authority.installTaskScopeFences !== undefined) {
+        staleHarness.authority.installTaskScopeFences({
+          repositoryId: staleHarness.dispatch.repositoryId,
+          runId: staleHarness.dispatch.runId,
+          installedAt: CURRENT_TIME,
+          fences: [
+            {
+              scope: {
+                runId: staleHarness.dispatch.runId,
+                taskId: staleHarness.dispatch.task.taskId,
+                definitionGeneration: staleHarness.dispatch.task.definitionGeneration,
+              },
+              expectedFenceGeneration: 1,
+              expectedAcceptedContextDigest: staleHarness.context.contextDigest,
+            },
+          ],
+        });
+        const stale = staleHarness.broker.admitSubmission({
+          submission: completionSubmission(staleHarness, "submission_stale", "completed"),
+        });
+        expect(stale.status).toBe("stale");
+        expect(stale.completionFact).toBeUndefined();
+        expect(staleHarness.completionFacts).toHaveLength(0);
+      }
       expect(harness.completionFacts).toHaveLength(1);
 
       const blocked = admit(
@@ -690,12 +705,116 @@ export function registerContextBrokerConformance(
           closePhase: true,
         }),
       ).toThrow(ProtocolValidationError);
-      expect(harness.authority.snapshot().submissions).toHaveLength(3);
+      expect(harness.authority.snapshot().submissions).toHaveLength(2);
       expect(harness.authority.snapshot().terminalCompletions).toEqual([
         {
           dispatchId: harness.dispatch.dispatchId,
           submissionId: current.submissionId,
         },
+      ]);
+    });
+
+    it("keeps unrelated dispatch completion current when an affected task scope is fenced", () => {
+      const harness = createHarness();
+      if (harness.authority.installTaskScopeFences === undefined) return;
+      const unaffected = registerBoundDispatch(
+        harness.broker,
+        harness.assetPort,
+        harness.bytes,
+        2,
+        "b",
+        ALL_CAPABILITIES,
+      );
+      expect(() =>
+        harness.authority.installTaskScopeFences?.({
+          repositoryId: harness.dispatch.repositoryId,
+          runId: harness.dispatch.runId,
+          installedAt: CURRENT_TIME,
+          fences: [
+            {
+              scope: {
+                runId: harness.dispatch.runId,
+                taskId: harness.dispatch.task.taskId,
+                definitionGeneration: harness.dispatch.task.definitionGeneration,
+              },
+              expectedFenceGeneration: 1,
+              expectedAcceptedContextDigest: harness.context.contextDigest,
+            },
+            {
+              scope: {
+                runId: unaffected.dispatch.runId,
+                taskId: unaffected.dispatch.task.taskId,
+                definitionGeneration: unaffected.dispatch.task.definitionGeneration,
+              },
+              expectedFenceGeneration: 9,
+              expectedAcceptedContextDigest: unaffected.context.contextDigest,
+            },
+          ],
+        }),
+      ).toThrow("expectation is stale");
+      expect(harness.authority.snapshot().taskScopes).toEqual([
+        expect.objectContaining({
+          taskId: "task_worker",
+          fenceGeneration: 1,
+          claimsAccepted: true,
+        }),
+        expect.objectContaining({
+          taskId: "task_worker-2",
+          fenceGeneration: 1,
+          claimsAccepted: true,
+        }),
+      ]);
+      harness.authority.installTaskScopeFences({
+        repositoryId: harness.dispatch.repositoryId,
+        runId: harness.dispatch.runId,
+        installedAt: CURRENT_TIME,
+        fences: [
+          {
+            scope: {
+              runId: harness.dispatch.runId,
+              taskId: harness.dispatch.task.taskId,
+              definitionGeneration: harness.dispatch.task.definitionGeneration,
+            },
+            expectedFenceGeneration: 1,
+            expectedAcceptedContextDigest: harness.context.contextDigest,
+          },
+        ],
+      });
+
+      const stale = admit(
+        harness,
+        completionSubmission(harness, "submission_mixed-stale", "completed"),
+      );
+      expect(stale).toMatchObject({ status: "stale" });
+      expect(stale.completionFact).toBeUndefined();
+      const unaffectedSubmission = {
+        ...completionSubmission(harness, "submission_mixed-current", "completed"),
+        dispatchId: unaffected.dispatch.dispatchId,
+        task: unaffected.dispatch.task,
+        contextId: unaffected.context.contextId,
+        contextDigest: unaffected.context.contextDigest,
+        principalId: unaffected.dispatch.worker.principalId,
+        completion: {
+          ...completionSubmission(harness, "submission_unused", "completed").completion,
+          task: unaffected.dispatch.task,
+        },
+      };
+      expect(harness.broker.admitSubmission({ submission: unaffectedSubmission })).toMatchObject({
+        status: "accepted",
+        completionFact: { dispatchId: unaffected.dispatch.dispatchId },
+      });
+      expect(harness.completionFacts).toHaveLength(1);
+      expect(harness.authority.snapshot().taskScopes).toEqual([
+        expect.objectContaining({
+          taskId: "task_worker",
+          fenceGeneration: 2,
+          claimsAccepted: false,
+        }),
+        expect.objectContaining({
+          taskId: "task_worker-2",
+          fenceGeneration: 1,
+          claimsAccepted: true,
+        }),
       ]);
     });
 
@@ -718,8 +837,6 @@ export function registerContextBrokerConformance(
       expect(() =>
         broker.admitSubmission({
           submission: completion,
-          currentContextDigest: harness.context.contextDigest,
-          currentTask: harness.dispatch.task,
         }),
       ).toThrow("simulated completion delivery loss");
       expect(harness.authority.snapshot()).toMatchObject({
@@ -733,8 +850,6 @@ export function registerContextBrokerConformance(
       expect(
         broker.admitSubmission({
           submission: completion,
-          currentContextDigest: harness.context.contextDigest,
-          currentTask: harness.dispatch.task,
         }),
       ).toMatchObject({ replayed: true, status: "accepted" });
       expect(delivered.size).toBe(1);
@@ -748,8 +863,6 @@ export function registerContextBrokerConformance(
       const adapter = new SimulatedSerialWorkerAdapter(harness.broker);
       const runInput = {
         dispatch: harness.dispatch,
-        currentContextDigest: harness.context.contextDigest,
-        currentTask: harness.dispatch.task,
       };
       const journey = await adapter.run(runInput, async (session) => {
         await expect(adapter.run(runInput, () => undefined)).rejects.toThrow(
@@ -800,25 +913,42 @@ export function registerContextBrokerConformance(
       expect(duplicate).toMatchObject({ status: "missing-completion" });
       expect(duplicate.submissions[0]).toMatchObject({ status: "duplicate" });
 
-      const stale = await adapter.run(
-        { ...runInput, currentContextDigest: OTHER_DIGEST },
-        (session) => {
-          session.complete(
-            "submission_journey-stale",
-            completionSubmission(harness, "submission_unused", "completed").completion,
-          );
-        },
-      );
-      expect(stale).toMatchObject({ status: "missing-completion" });
-      expect(stale.submissions[0]).toMatchObject({ status: "stale" });
+      const staleHarness = createHarness();
+      if (staleHarness.authority.installTaskScopeFences !== undefined) {
+        staleHarness.authority.installTaskScopeFences({
+          repositoryId: staleHarness.dispatch.repositoryId,
+          runId: staleHarness.dispatch.runId,
+          installedAt: CURRENT_TIME,
+          fences: [
+            {
+              scope: {
+                runId: staleHarness.dispatch.runId,
+                taskId: staleHarness.dispatch.task.taskId,
+                definitionGeneration: staleHarness.dispatch.task.definitionGeneration,
+              },
+              expectedFenceGeneration: 1,
+              expectedAcceptedContextDigest: staleHarness.context.contextDigest,
+            },
+          ],
+        });
+        const stale = await new SimulatedSerialWorkerAdapter(staleHarness.broker).run(
+          { dispatch: staleHarness.dispatch },
+          (session) => {
+            session.complete(
+              "submission_journey-stale",
+              completionSubmission(staleHarness, "submission_unused", "completed").completion,
+            );
+          },
+        );
+        expect(stale).toMatchObject({ status: "missing-completion" });
+        expect(stale.submissions[0]).toMatchObject({ status: "stale" });
+      }
 
       const blockedHarness = createHarness();
       const blockedAdapter = new SimulatedSerialWorkerAdapter(blockedHarness.broker);
       const blockedRun = await blockedAdapter.run(
         {
           dispatch: blockedHarness.dispatch,
-          currentContextDigest: blockedHarness.context.contextDigest,
-          currentTask: blockedHarness.dispatch.task,
         },
         (session) => {
           session.complete(
@@ -833,8 +963,6 @@ export function registerContextBrokerConformance(
       const malformed = await malformedAdapter.run(
         {
           dispatch: malformedHarness.dispatch,
-          currentContextDigest: malformedHarness.context.contextDigest,
-          currentTask: malformedHarness.dispatch.task,
         },
         (session) => {
           const completion = completionSubmission(
@@ -884,7 +1012,10 @@ function registerBoundDispatch(
   graphCharacter: string,
   capabilities: readonly string[],
 ): { context: WorkerContextBase; dispatch: WorkerDispatch } {
-  const task = { taskId: taskId("task_worker"), definitionGeneration: definitionGeneration(1) };
+  const task = {
+    taskId: taskId(ordinal === 1 ? "task_worker" : `task_worker-${ordinal}`),
+    definitionGeneration: definitionGeneration(1),
+  };
   const context = createWorkerContextBase(
     {
       task,
@@ -942,6 +1073,13 @@ function registerBoundDispatch(
   broker.registerDispatch({
     context,
     dispatch,
+    taskScope: {
+      runId: dispatch.runId,
+      taskId: dispatch.task.taskId,
+      definitionGeneration: dispatch.task.definitionGeneration,
+      acceptedContextDigest: context.contextDigest,
+      fenceGeneration: 1,
+    },
     completionRequirements: {
       task: dispatch.task,
       criteria: [{ criterionId: criterionId("criterion_done"), required: true }],
@@ -1051,8 +1189,6 @@ function completionSubmission(
 function admit(harness: ContextBrokerHarness, value: unknown) {
   return harness.broker.admitSubmission({
     submission: value,
-    currentContextDigest: harness.context.contextDigest,
-    currentTask: harness.dispatch.task,
   });
 }
 

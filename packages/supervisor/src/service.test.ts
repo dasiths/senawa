@@ -176,10 +176,18 @@ describe("SupervisorService lifecycle", () => {
     for (const suffix of ["a", "b"] as const) {
       const repositoryId = `repository_serial-${suffix}`;
       const runId = `run_serial-${suffix}`;
+      const taskScope = {
+        runId,
+        taskId: `task_serial-${suffix}`,
+        definitionGeneration: 1,
+        acceptedContextDigest: "a".repeat(64),
+        fenceGeneration: 1,
+      } as const;
       runner.configureRun({
         repositoryId,
         runId,
         contextDigest: "a".repeat(64),
+        taskScopes: [{ ...taskScope, claimsAccepted: true }],
         budgets: [{ unit: "model-millidollars", limit: 10 }],
         lease: {
           owner: "owner_serialized",
@@ -194,6 +202,7 @@ describe("SupervisorService lifecycle", () => {
         runId,
         operationId: `operation_serial-${suffix}`,
         kind: "worker",
+        taskScope,
         contextDigest: "a".repeat(64),
         inputDigest: "b".repeat(64),
         input: { dispatchId: `dispatch_serial-${suffix}` },

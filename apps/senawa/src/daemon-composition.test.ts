@@ -2,7 +2,11 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CopilotSdkSessionConfig, CopilotSdkSessionPort } from "@senawa/execution-host";
-import { canonicalBytes, decodeCanonicalJsonValue } from "@senawa/protocol";
+import {
+  canonicalBytes,
+  decodeAuthenticatedPrincipal,
+  decodeCanonicalJsonValue,
+} from "@senawa/protocol";
 import type { QueuedEffectCommand, RuntimeDependencies } from "@senawa/runtime";
 import { SqliteContextBroker, SqliteRunnerAuthority } from "@senawa/storage-sqlite";
 import {
@@ -27,6 +31,34 @@ afterEach(() => {
 });
 
 describe("daemon worker composition", () => {
+  it("reserves amendment application for the trusted supervisor", () => {
+    const releaseManager = decodeAuthenticatedPrincipal({
+      issuer: "senawa.local",
+      subject: "local-user",
+      tenant: "local",
+      assurance: "single-factor",
+      roles: ["release-manager"],
+    });
+    const trustedSupervisor = decodeAuthenticatedPrincipal({
+      issuer: "senawa.local",
+      subject: "supervisor",
+      tenant: "local",
+      assurance: "hardware-backed",
+      roles: ["trusted-supervisor"],
+    });
+
+    expect(
+      runtimeDependencies.authorization.authorize(releaseManager, {
+        type: "apply-approved-amendment",
+      }),
+    ).toBe(false);
+    expect(
+      runtimeDependencies.authorization.authorize(trustedSupervisor, {
+        type: "apply-approved-amendment",
+      }),
+    ).toBe(true);
+  });
+
   it("allows first dispatch but blocks missing-metadata durable recovery after reopen", async () => {
     const { environment } = sandbox("senawa-daemon-worker-");
     const dependencies: RuntimeDependencies = {
@@ -56,6 +88,7 @@ describe("daemon worker composition", () => {
       context: worker.context,
       dispatch: worker.dispatch,
       completionRequirements: worker.completionRequirements,
+      taskScope: workerTaskScope(worker),
     });
     broker.close();
     const firstCommand = workerCommand(worker, 1, "first");
@@ -67,6 +100,7 @@ describe("daemon worker composition", () => {
       repositoryId: runtimeFixture.repositoryId,
       runId: runtimeFixture.runId,
       contextDigest: worker.context.contextDigest,
+      taskScopes: [{ ...workerTaskScope(worker), claimsAccepted: true }],
       budgets: [{ unit: "model-millidollars", limit: 10 }],
       lease: {
         owner: `service-${process.pid}`,
@@ -319,6 +353,7 @@ function workerCommand(
     runId: runtimeFixture.runId,
     operationId: `operation_daemon-${suffix}`,
     kind: "worker",
+    taskScope: workerTaskScope(worker),
     contextDigest: worker.context.contextDigest,
     inputDigest: deterministicSha256.digest(canonicalBytes(input)),
     input,
@@ -326,6 +361,16 @@ function workerCommand(
     queuedAt: runtimeFixture.currentTime,
     maxReconciliationAttempts: 2,
   };
+}
+
+function workerTaskScope(worker: ReturnType<typeof createWorkerExecutionFixture>) {
+  return {
+    runId: worker.dispatch.runId,
+    taskId: worker.dispatch.task.taskId,
+    definitionGeneration: worker.dispatch.task.definitionGeneration,
+    acceptedContextDigest: worker.context.contextDigest,
+    fenceGeneration: 1,
+  } as const;
 }
 
 class FakeOwnedSdk implements OwnedCopilotSdkPort {

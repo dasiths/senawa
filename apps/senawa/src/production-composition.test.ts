@@ -2,6 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  compileWorkflowAmendment,
+  compileWorkflowConfiguration,
+  createExampleWorkflowConfiguration,
+  WORKFLOW_AMENDMENT_API_VERSION,
+} from "@senawa/configuration";
+import {
   type CopilotSdkPort,
   type CopilotSdkSessionConfig,
   type CopilotSdkSessionPort,
@@ -46,6 +52,211 @@ afterEach(() => {
 });
 
 describe("production worker composition", () => {
+  it("recovers an approved amendment after restart and applies the exact reviewed graph", async () => {
+    const root = mkdtempSync(join(tmpdir(), "senawa-amendment-recovery-"));
+    roots.add(root);
+    const databasePath = join(root, "authority.db");
+    const amendmentDependencies: RuntimeDependencies = {
+      sha256: deterministicSha256,
+      authorization: createRoleAuthorizationPolicy([
+        { intent: "instantiate-run", roles: ["release-manager"] },
+        { intent: "submit-amendment-proposal", roles: ["release-manager"] },
+        { intent: "record-amendment-decision", roles: ["release-manager"] },
+        { intent: "apply-approved-amendment", roles: ["trusted-supervisor"] },
+      ]),
+    };
+    const authority = new SqliteSupervisorAuthority({
+      databasePath,
+      assetDirectory: join(root, "assets"),
+      dependencies: amendmentDependencies,
+    });
+    const baseSnapshot = compileWorkflowConfiguration(
+      createExampleWorkflowConfiguration(),
+      "fixture://amendment-recovery-base",
+      deterministicSha256,
+    );
+    const baseContextDigest = "a".repeat(64);
+    const compilation = compileWorkflowAmendment(
+      {
+        document: {
+          apiVersion: WORKFLOW_AMENDMENT_API_VERSION,
+          kind: "WorkflowAmendment",
+          baseSnapshotDigest: baseSnapshot.snapshotDigest,
+          baseContextDigest,
+          operations: [
+            {
+              kind: "add-phase",
+              phase: {
+                key: "audit",
+                generation: 1,
+                dependsOn: ["work"],
+                input: { purpose: "Review the release" },
+              },
+            },
+          ],
+        },
+        locator: "fixture://amendment-recovery",
+        baseSnapshot,
+        phaseCandidateHistory: [],
+      },
+      deterministicSha256,
+    );
+    const staleCompilation = compileWorkflowAmendment(
+      {
+        document: {
+          apiVersion: WORKFLOW_AMENDMENT_API_VERSION,
+          kind: "WorkflowAmendment",
+          baseSnapshotDigest: baseSnapshot.snapshotDigest,
+          baseContextDigest,
+          operations: [
+            {
+              kind: "add-phase",
+              phase: {
+                key: "package",
+                generation: 1,
+                dependsOn: ["work"],
+                input: { purpose: "Package the release" },
+              },
+            },
+          ],
+        },
+        locator: "fixture://amendment-recovery-stale",
+        baseSnapshot,
+        phaseCandidateHistory: [],
+      },
+      deterministicSha256,
+    );
+    authority.commandAuthority.putConfigurationSnapshot(baseSnapshot);
+    authority.commandAuthority.putConfigurationSnapshot(compilation.resultSnapshot);
+    authority.commandAuthority.putConfigurationSnapshot(staleCompilation.resultSnapshot);
+    const phase = baseSnapshot.graph.nodes.find(({ kind }) => kind === "phase");
+    if (phase === undefined || phase.kind !== "phase") {
+      throw new Error("Example workflow phase is missing");
+    }
+    let allocationSequence = 0;
+    const admission = (currentTime: string) => {
+      return {
+        currentTime,
+        facts: { source: "amendment-restart-fixture" },
+        allocateId(kind: "approval" | "stream-event") {
+          allocationSequence += 1;
+          return kind === "approval"
+            ? `approval_amendment-restart-${allocationSequence}`
+            : `stream-event-amendment-restart-${allocationSequence}`;
+        },
+      };
+    };
+    expect(
+      authority.commandAuthority.submit(
+        runtimeCommand({
+          commandId: "command_amendment-restart-instantiate",
+          intent: "instantiate-run",
+          payload: {
+            workflowId: baseSnapshot.graph.workflowId,
+            graph: baseSnapshot.graph,
+            phase: {
+              phaseId: phase.definition.id,
+              definitionGeneration: phase.definition.generation,
+            },
+            approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
+            escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+          },
+        }),
+        admission("2026-08-13T12:00:00.000Z"),
+      ).status,
+    ).toBe("completed");
+    expect(
+      authority.commandAuthority.submit(
+        runtimeCommand({
+          commandId: "command_amendment-restart-submit-stale",
+          intent: "submit-amendment-proposal",
+          payload: { proposal: staleCompilation.proposal },
+          expectedGraphRevision: baseSnapshot.graph.revisionDigest,
+          exactObjectDigest: staleCompilation.proposal.proposalDigest,
+        }),
+        admission("2026-08-13T12:00:01.500Z"),
+      ).status,
+    ).toBe("completed");
+    expect(
+      authority.commandAuthority.submit(
+        runtimeCommand({
+          commandId: "command_amendment-restart-submit",
+          intent: "submit-amendment-proposal",
+          payload: { proposal: compilation.proposal },
+          expectedGraphRevision: baseSnapshot.graph.revisionDigest,
+          exactObjectDigest: compilation.proposal.proposalDigest,
+        }),
+        admission("2026-08-13T12:00:01.000Z"),
+      ).status,
+    ).toBe("completed");
+    const approvalReceipt = authority.commandAuthority.submit(
+      runtimeCommand({
+        commandId: "command_amendment-restart-approve",
+        intent: "record-amendment-decision",
+        payload: {
+          amendmentId: compilation.proposal.amendmentId,
+          proposalDigest: compilation.proposal.proposalDigest,
+          decision: "approve",
+          reviewedResultGraphRevisionDigest:
+            compilation.proposal.reviewedResultGraph.revisionDigest,
+        },
+        expectedGraphRevision: baseSnapshot.graph.revisionDigest,
+        exactObjectDigest: compilation.proposal.proposalDigest,
+      }),
+      admission("2026-08-13T12:00:02.000Z"),
+    );
+    expect(approvalReceipt).toMatchObject({ status: "completed" });
+    expect(
+      authority.commandAuthority.submit(
+        runtimeCommand({
+          commandId: "command_amendment-restart-approve-stale",
+          intent: "record-amendment-decision",
+          payload: {
+            amendmentId: staleCompilation.proposal.amendmentId,
+            proposalDigest: staleCompilation.proposal.proposalDigest,
+            decision: "approve",
+            reviewedResultGraphRevisionDigest:
+              staleCompilation.proposal.reviewedResultGraph.revisionDigest,
+          },
+          expectedGraphRevision: baseSnapshot.graph.revisionDigest,
+          exactObjectDigest: staleCompilation.proposal.proposalDigest,
+        }),
+        admission("2026-08-13T12:00:02.500Z"),
+      ).status,
+    ).toBe("completed");
+    expect(authority.listApprovedAmendmentRecoveries()).toHaveLength(2);
+
+    const service = new SupervisorService({
+      authority,
+      clock: { now: () => Date.parse("2026-08-13T12:00:03.000Z") },
+      ownerId: "owner_amendment-restart",
+    });
+    await service.start();
+
+    expect(authority.listApprovedAmendmentRecoveries()).toEqual([]);
+    const records = authority.queryAmendments(runtimeFixture.repositoryId, runtimeFixture.runId);
+    expect(records.map(({ lifecycle }) => (lifecycle as { status: string }).status).sort()).toEqual(
+      ["applied", "stale"],
+    );
+    const applied = records.find(
+      ({ lifecycle }) => (lifecycle as { status: string }).status === "applied",
+    );
+    if (applied === undefined) throw new Error("Recovered amendment was not applied");
+    const appliedProposal = applied.proposal as {
+      proposalDigest: string;
+      reviewedResultGraph: { revisionDigest: string };
+    };
+    expect(applied.application).toMatchObject({
+      afterGraphRevisionDigest: appliedProposal.reviewedResultGraph.revisionDigest,
+    });
+    const applyCommandId = `command_amendment-apply-${appliedProposal.proposalDigest.slice(0, 20)}-1`;
+    expect(authority.queryLatest(applyCommandId)?.terminalReceipt).toMatchObject({
+      status: "completed",
+    });
+    await service.drain();
+    await service.stop();
+  });
+
   it("rejects cross-authority worker intents before broker or SDK mutation", async () => {
     const root = mkdtempSync(join(tmpdir(), "senawa-worker-binding-"));
     roots.add(root);
@@ -63,6 +274,7 @@ describe("production worker composition", () => {
       context: worker.context,
       dispatch: worker.dispatch,
       completionRequirements: worker.completionRequirements,
+      taskScope: workerTaskScope(worker),
     });
     const sdk = new CompletingSdkPort();
     const host = new CopilotWorkerEffectHost({
@@ -89,6 +301,7 @@ describe("production worker composition", () => {
         runId: worker.dispatch.runId,
         operationId: "operation_binding-worker",
         kind: "worker",
+        taskScope: workerTaskScope(worker),
         contextDigest: worker.context.contextDigest,
         inputDigest: deterministicSha256.digest(canonicalBytes(input)),
         input,
@@ -162,6 +375,7 @@ describe("production worker composition", () => {
       context: worker.context,
       dispatch: worker.dispatch,
       completionRequirements: worker.completionRequirements,
+      taskScope: workerTaskScope(worker),
     });
     authority.accept({
       envelope: runtimeCommand({
@@ -200,6 +414,7 @@ describe("production worker composition", () => {
       repositoryId: runtimeFixture.repositoryId,
       runId: runtimeFixture.runId,
       contextDigest: worker.context.contextDigest,
+      taskScopes: [{ ...workerTaskScope(worker), claimsAccepted: true }],
       budgets: [{ unit: "model-millidollars", limit: 2_000 }],
       lease: {
         owner: "owner_production",
@@ -214,6 +429,7 @@ describe("production worker composition", () => {
       runId: runtimeFixture.runId,
       operationId: "operation_production-worker",
       kind: "worker",
+      taskScope: workerTaskScope(worker),
       contextDigest: worker.context.contextDigest,
       inputDigest: deterministicSha256.digest(canonicalBytes(effectInput)),
       input: effectInput,
@@ -272,6 +488,16 @@ describe("production worker composition", () => {
     await service.stop();
   });
 });
+
+function workerTaskScope(worker: ReturnType<typeof createWorkerExecutionFixture>) {
+  return {
+    runId: worker.dispatch.runId,
+    taskId: worker.dispatch.task.taskId,
+    definitionGeneration: worker.dispatch.task.definitionGeneration,
+    acceptedContextDigest: worker.context.contextDigest,
+    fenceGeneration: 1,
+  } as const;
+}
 
 class CompletingSdkPort implements CopilotSdkPort {
   readonly workingDirectory = "/tmp/senawa-production-work";

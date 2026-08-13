@@ -52,6 +52,8 @@ describe("supervisor operational HTTP", () => {
           wakes: 0,
           runnerEffects: 0,
           completionOutbox: 0,
+          amendmentProposalOutbox: 0,
+          approvedAmendments: 0,
         },
         leases: [],
         sdkSessionStore: {

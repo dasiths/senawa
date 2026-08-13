@@ -37,6 +37,7 @@ import {
   SqliteSupervisorAuthority,
   type SqliteSupervisorAuthorityOptions,
 } from "./command-queue.js";
+import { type AmendmentReviewRecord, decodeAmendmentReviewRecords } from "./contracts.js";
 import { HttpSupervisorClient } from "./http-client.js";
 import { SupervisorHttpHandler } from "./http-handler.js";
 import { startLoopbackSupervisorServer, startUnixSupervisorServer } from "./http-server.js";
@@ -52,6 +53,8 @@ interface TransportClient {
   listReceipts(input: string | unknown): Promise<ReceiptPage>;
   listEvents(input: string | unknown): Promise<EventReplayPage>;
   getProjection(input: string | unknown): Promise<ProjectionEnvelope>;
+  listAmendments(input: string | unknown): Promise<readonly AmendmentReviewRecord[]>;
+  getAmendment(input: string | unknown): Promise<AmendmentReviewRecord>;
 }
 
 export interface SupervisorTransportConformanceHarness {
@@ -195,6 +198,19 @@ export function registerSupervisorTransportConformance(
         await expectApiError("not-found", 404, () =>
           harness.client.getReceipt({ commandId: "command_transport-missing" }),
         );
+        expect(
+          await harness.client.listAmendments({
+            repositoryId: runtimeFixture.repositoryId,
+            runId: runtimeFixture.runId,
+          }),
+        ).toEqual([]);
+        await expectApiError("not-found", 404, () =>
+          harness.client.getAmendment({
+            repositoryId: runtimeFixture.repositoryId,
+            runId: runtimeFixture.runId,
+            amendmentId: "amendment-missing",
+          }),
+        );
         await expectApiError("not-found", 404, () =>
           harness.client.getProjection({
             repositoryId: "repository_missing",
@@ -297,6 +313,7 @@ export function registerSupervisorTransportConformance(
       const harness = await createHarness();
       try {
         expect((await harness.client.capabilities()).capabilities).toEqual([
+          "amendment-review",
           "command-submit",
           "event-replay",
           "projection-read",
@@ -409,6 +426,10 @@ function createInProcessHarness(): SupervisorTransportConformanceHarness {
       return decodeEventReplayPage(encodeEventReplayPage(api.listEvents(input)));
     },
     getProjection: async (input) => api.getProjection(input),
+    async listAmendments(input) {
+      return decodeAmendmentReviewRecords(api.listAmendments(input));
+    },
+    getAmendment: async (input) => api.getAmendment(input),
   };
   return {
     client,
@@ -571,6 +592,8 @@ async function createHttpHarness(
     listReceipts: (input) => baseClient.listReceipts(input),
     listEvents: (input) => baseClient.listEvents(input),
     getProjection: (input) => baseClient.getProjection(input),
+    listAmendments: (input) => baseClient.listAmendments(input),
+    getAmendment: (input) => baseClient.getAmendment(input),
   };
   return {
     client,

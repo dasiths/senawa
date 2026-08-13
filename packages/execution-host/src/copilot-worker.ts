@@ -1,7 +1,6 @@
 import {
   type CompletionSubmission,
   type Sha256,
-  type TaskGenerationReference,
   validateWorkerContextBase,
   validateWorkerDispatch,
   validateWorkerModelRouteSelection,
@@ -55,8 +54,6 @@ export interface CopilotWorkerRunInput {
   readonly sessionBaseDirectory?: string;
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
-  currentContextDigest(): string;
-  currentTask(): TaskGenerationReference;
 }
 
 export type CopilotWorkerRunResult =
@@ -491,8 +488,6 @@ function submissionTool(
             type,
             ...payload,
           },
-          currentContextDigest: input.currentContextDigest(),
-          currentTask: input.currentTask(),
         });
         state.submissions.push(result);
         if (

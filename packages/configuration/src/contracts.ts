@@ -1,14 +1,19 @@
 import type {
+  AmendmentErrorCode,
+  AmendmentProposal,
   BudgetUnit,
   CanonicalValue,
   ConsumerKey,
   GraphCompilationErrorCode,
+  NormalizedAmendmentOperation,
+  PhaseGenerationReference,
   Sha256Digest,
   WorkflowGraph,
 } from "@senawa/kernel";
 
 export const WORKFLOW_CONFIGURATION_API_VERSION = "senawa.dev/workflow/v1alpha1";
 export const CONFIGURATION_SNAPSHOT_API_VERSION = "senawa.dev/configuration-snapshot/v1alpha1";
+export const WORKFLOW_AMENDMENT_API_VERSION = "senawa.dev/workflow-amendment/v1alpha1";
 
 export interface WorkflowConfigurationDocument {
   readonly apiVersion: typeof WORKFLOW_CONFIGURATION_API_VERSION;
@@ -22,6 +27,25 @@ export interface WorkflowConfigurationDocument {
   readonly phases: readonly PhaseDeclaration[];
   readonly projectedWork: readonly ProjectedWorkDeclaration[];
 }
+
+export interface WorkflowAmendmentDocument {
+  readonly apiVersion: typeof WORKFLOW_AMENDMENT_API_VERSION;
+  readonly kind: "WorkflowAmendment";
+  readonly baseSnapshotDigest: Sha256Digest;
+  readonly baseContextDigest: Sha256Digest;
+  readonly operations: readonly WorkflowAmendmentOperationDeclaration[];
+}
+
+export type WorkflowAmendmentOperationDeclaration =
+  | {
+      readonly kind: "add-phase";
+      readonly phase: Omit<PhaseDeclaration, "work">;
+    }
+  | {
+      readonly kind: "add-task";
+      readonly phase: string;
+      readonly work: ExecutableWorkDeclaration;
+    };
 
 export interface WorkflowDeclaration {
   readonly key: string;
@@ -152,6 +176,7 @@ export interface EvidenceRequirementDeclaration {
 }
 
 export type ConfigurationDiagnosticCode =
+  | AmendmentErrorCode
   | GraphCompilationErrorCode
   | "authority-widening"
   | "duplicate-schema-id"
@@ -222,6 +247,29 @@ export type ConfigurationDoctorResult =
       readonly diagnostics: readonly ConfigurationDiagnostic[];
       readonly snapshot?: never;
     };
+
+export interface ConfigurationAmendmentCompilation {
+  readonly operations: readonly NormalizedAmendmentOperation[];
+  readonly resultSnapshot: ConfigurationSnapshot;
+  readonly proposal: AmendmentProposal;
+}
+
+export type ConfigurationAmendmentDoctorResult =
+  | {
+      readonly diagnostics: readonly ConfigurationDiagnostic[];
+      readonly compilation: ConfigurationAmendmentCompilation;
+    }
+  | {
+      readonly diagnostics: readonly ConfigurationDiagnostic[];
+      readonly compilation?: never;
+    };
+
+export interface WorkflowAmendmentCompilationInput {
+  readonly document: unknown;
+  readonly locator: string;
+  readonly baseSnapshot: ConfigurationSnapshot;
+  readonly phaseCandidateHistory: readonly PhaseGenerationReference[];
+}
 
 export interface ConfigurationDrift {
   readonly hasDrift: boolean;

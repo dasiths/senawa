@@ -1,3 +1,4 @@
+export * from "./amendment-proposal-command-bridge.js";
 export * from "./api.js";
 export * from "./command-queue.js";
 export * from "./completion-fact-command-bridge.js";

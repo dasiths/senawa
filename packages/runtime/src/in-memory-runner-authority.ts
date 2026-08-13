@@ -19,6 +19,14 @@ import type {
   RunnerLeaseFact,
 } from "./runner.js";
 import { selectEffectAttemptAction } from "./runner.js";
+import {
+  type InstallTaskScopeFencesInput,
+  type TaskScope,
+  type TaskScopeCurrentness,
+  type TaskScopeFence,
+  taskScopeFence,
+  taskScopeKey,
+} from "./task-currentness.js";
 
 export type RunnerFaultPoint =
   | "before-intent-persist"
@@ -49,6 +57,7 @@ export interface RunnerEffectReceipt {
     | "intent"
     | EffectOutcome["status"]
     | "context-updated"
+    | "scope-fenced"
     | "cancellation-requested";
   readonly occurredAt: string;
   readonly attemptId?: string;
@@ -76,6 +85,7 @@ export interface RunnerProjection {
 }
 
 export interface InMemoryRunnerRunInput {
+  readonly taskScopes: readonly TaskScopeCurrentness[];
   readonly repositoryId: string;
   readonly runId: string;
   readonly contextDigest: string;
@@ -92,10 +102,10 @@ interface MutableBudgetState {
 }
 
 interface InMemoryEffectClaim {
+  readonly taskScope: TaskScopeFence;
   readonly attemptId: string;
   readonly owner: string;
   readonly fence: number;
-  readonly contextDigest: string;
   readonly origin: EffectAttemptOrigin;
 }
 
@@ -103,6 +113,7 @@ interface InMemoryRunnerRun {
   repositoryId: string;
   runId: string;
   contextDigest: string;
+  taskScopes: Map<string, TaskScopeCurrentness>;
   lease: RunnerLeaseFact;
   queuedCommands: QueuedEffectCommand[];
   effects: Map<string, RunnerEffectRecord>;
@@ -128,6 +139,13 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
     validateIdentity(input.repositoryId, "repositoryId");
     validateIdentity(input.runId, "runId");
     validateDigest(input.contextDigest, "contextDigest");
+    const taskScopes = new Map<string, TaskScopeCurrentness>();
+    for (const scope of input.taskScopes) {
+      validateTaskScopeCurrentness(scope, input.runId);
+      const scopeKey = taskScopeKey(scope);
+      if (taskScopes.has(scopeKey)) throw new TypeError("Runner task scopes must be unique");
+      taskScopes.set(scopeKey, deepFreeze({ ...scope }));
+    }
     validateLease(input.lease);
     const key = runKey(input.repositoryId, input.runId);
     if (this.runs.has(key)) throw new TypeError("Runner run is already configured");
@@ -148,6 +166,7 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
       repositoryId: input.repositoryId,
       runId: input.runId,
       contextDigest: input.contextDigest,
+      taskScopes,
       lease: Object.freeze({ ...input.lease }),
       queuedCommands: [],
       effects: new Map(),
@@ -210,7 +229,11 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
     return Object.freeze({
       repositoryId: run.repositoryId,
       runId: run.runId,
-      contextDigest: run.contextDigest,
+      taskScopes: Object.freeze(
+        [...run.taskScopes.values()]
+          .sort(compareTaskScope)
+          .map((scope) => deepFreeze({ ...scope })),
+      ),
       queuedCommands: Object.freeze([...run.queuedCommands]),
       effects: Object.freeze([...run.effects.values()]),
       escalations: Object.freeze([...run.escalations]),
@@ -222,12 +245,62 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
     this.assertFence(run, input.lease, input.currentTime);
   }
 
+  installTaskScopeFences(input: InstallTaskScopeFencesInput): readonly TaskScopeCurrentness[] {
+    const run = this.requiredRun(input.repositoryId, input.runId);
+    validateTimestamp(input.installedAt, "installedAt");
+    const installations = [...input.fences].sort((left, right) =>
+      compareTaskScope(left.scope, right.scope),
+    );
+    const seen = new Set<string>();
+    const current = installations.map((installation) => {
+      if (installation.scope.runId !== input.runId)
+        throw new TypeError("Runner fence scope does not match the target run");
+      const key = taskScopeKey(installation.scope);
+      if (seen.has(key)) throw new TypeError("Runner fence installations must be unique");
+      seen.add(key);
+      const scope = run.taskScopes.get(key);
+      if (scope === undefined) throw new TypeError("Runner fence names an unknown task scope");
+      if (
+        scope.fenceGeneration !== installation.expectedFenceGeneration ||
+        scope.acceptedContextDigest !== installation.expectedAcceptedContextDigest
+      )
+        throw new TypeError("Runner fence expectation is stale");
+      if (!scope.claimsAccepted) throw new TypeError("Runner task scope is already fenced");
+      return scope;
+    });
+    const installed = current.map((scope) => {
+      const next = deepFreeze({
+        ...scope,
+        fenceGeneration: scope.fenceGeneration + 1,
+        claimsAccepted: false,
+      });
+      run.taskScopes.set(taskScopeKey(scope), next);
+      for (const [operationId, record] of run.effects) {
+        if (
+          (record.outcome === undefined || !isTerminal(record.outcome.status)) &&
+          sameTaskScope(record.intent.command.taskScope, scope) &&
+          record.cancellationRequestedAt === undefined
+        )
+          run.effects.set(
+            operationId,
+            Object.freeze({ ...record, cancellationRequestedAt: input.installedAt }),
+          );
+      }
+      return next;
+    });
+    for (const scope of installed)
+      this.appendRunTransition(run, "scope-fenced", input.installedAt, {
+        taskId: scope.taskId,
+        definitionGeneration: scope.definitionGeneration,
+        acceptedContextDigest: scope.acceptedContextDigest,
+        fenceGeneration: scope.fenceGeneration,
+      });
+    return Object.freeze(installed);
+  }
+
   claimEffectAttempt(request: ClaimEffectAttemptRequest): ClaimEffectAttemptResult {
     const run = this.requiredRun(request.repositoryId, request.runId);
     this.assertFence(run, request.lease, request.currentTime);
-    if (request.contextDigest !== run.contextDigest) {
-      throw new TypeError("Runner context changed before effect attempt claim");
-    }
     const record = run.effects.get(request.intent.command.operationId);
     if (
       record === undefined ||
@@ -242,16 +315,26 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
     if (record.outcome !== undefined && isTerminal(record.outcome.status)) {
       return { type: "replay", outcome: record.outcome };
     }
+    const currentness = run.taskScopes.get(taskScopeKey(record.intent.command.taskScope));
+    if (currentness === undefined) throw new TypeError("Effect claim names an unknown task scope");
+    if (!sameTaskScopeFence(request.taskScope, currentness))
+      throw new TypeError("Effect claim task scope does not match durable currentness");
+    const action = selectEffectAttemptAction(record, request.currentTime, request.attemptId);
+    if (
+      action === "dispatch" &&
+      (!currentness.claimsAccepted ||
+        !sameTaskScopeFence(record.intent.command.taskScope, currentness))
+    )
+      return { type: "fenced", currentness };
     const existing = run.claims.get(request.intent.command.operationId);
     if (existing !== undefined && existing.fence === request.lease.fence) return { type: "busy" };
-    const action = selectEffectAttemptAction(record, request.currentTime, request.attemptId);
     run.claims.set(
       request.intent.command.operationId,
       Object.freeze({
         attemptId: request.attemptId,
         owner: request.lease.owner,
         fence: request.lease.fence,
-        contextDigest: request.contextDigest,
+        taskScope: deepFreeze({ ...request.taskScope }),
         origin: action,
       }),
     );
@@ -277,9 +360,13 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
     }
     const existing = run.effects.get(queued.operationId);
     if (existing !== undefined) return { type: "persisted", intent: existing.intent };
-    if (queued.contextDigest !== run.contextDigest) {
-      throw new TypeError("Runner command context is stale before effect intent persistence");
-    }
+    const currentness = run.taskScopes.get(taskScopeKey(queued.taskScope));
+    if (
+      currentness === undefined ||
+      !currentness.claimsAccepted ||
+      !sameTaskScopeFence(queued.taskScope, currentness)
+    )
+      throw new TypeError("Runner command task scope is fenced before effect intent persistence");
 
     const budget = run.budgets.get(queued.budgetReservation.unit);
     if (budget === undefined) throw new TypeError("Runner command names an unknown budget unit");
@@ -358,7 +445,7 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
       claim.attemptId !== request.attemptId ||
       claim.owner !== request.lease.owner ||
       claim.fence !== request.lease.fence ||
-      claim.contextDigest !== run.contextDigest
+      !sameTaskScope(claim.taskScope, request.intent.command.taskScope)
     ) {
       throw new TypeError("Effect outcome does not match the live durable attempt claim");
     }
@@ -382,10 +469,14 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
       owner: request.lease.owner,
       fence: request.lease.fence,
       attemptId: request.attemptId,
+      commandTaskScope: record.intent.command.taskScope,
+      claimTaskScope: claim.taskScope,
       contextDigest: record.intent.command.contextDigest,
       inputDigest: record.intent.command.inputDigest,
       status: observation.status,
-      freshness: record.intent.command.contextDigest === run.contextDigest ? "current" : "stale",
+      freshness: isCurrentOutcome(run, record.intent.command.taskScope, claim.taskScope)
+        ? "current"
+        : "stale",
       observedAt: observation.observedAt,
       reconciliationAttempts,
       usage,
@@ -541,7 +632,7 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
 
   private appendRunTransition(
     run: InMemoryRunnerRun,
-    status: "context-updated",
+    status: "context-updated" | "scope-fenced",
     occurredAt: string,
     payload: JsonValue,
   ): void {
@@ -572,7 +663,11 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
   private project(run: InMemoryRunnerRun): RunnerProjection {
     const effects = [...run.effects.values()]
       .flatMap(({ outcome }) => {
-        if (outcome === undefined || outcome.contextDigest !== run.contextDigest) return [];
+        if (
+          outcome === undefined ||
+          !isCurrentOutcome(run, outcome.commandTaskScope, outcome.claimTaskScope)
+        )
+          return [];
         return [
           Object.freeze({
             operationId: outcome.operationId,
@@ -639,6 +734,9 @@ function validateCommand(command: QueuedEffectCommand): void {
   validateIdentity(command.repositoryId, "repositoryId");
   validateIdentity(command.runId, "runId");
   validateIdentity(command.operationId, "operationId");
+  validateTaskScopeFence(command.taskScope, command.runId);
+  if (command.contextDigest !== command.taskScope.acceptedContextDigest)
+    throw new TypeError("Runner command context must equal its accepted task scope context");
   if (!["worker", "sensor", "git", "asset", "time"].includes(command.kind)) {
     throw new TypeError("Runner command effect kind is invalid");
   }
@@ -725,6 +823,69 @@ function validateTimestamp(value: string, field: string): void {
 
 function isTerminal(status: EffectOutcome["status"]): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function validateTaskScopeFence(scope: TaskScopeFence, runId: string): void {
+  if (
+    Object.keys(scope).sort().join(",") !==
+    "acceptedContextDigest,definitionGeneration,fenceGeneration,runId,taskId"
+  )
+    throw new TypeError("Task scope fence must contain exactly its five authority fields");
+  if (scope.runId !== runId) throw new TypeError("Task scope run does not match its command run");
+  validateIdentity(scope.taskId, "taskScope.taskId");
+  if (!Number.isSafeInteger(scope.definitionGeneration) || scope.definitionGeneration < 1)
+    throw new TypeError("Task scope definition generation must be a positive safe integer");
+  validateDigest(scope.acceptedContextDigest, "taskScope.acceptedContextDigest");
+  if (!Number.isSafeInteger(scope.fenceGeneration) || scope.fenceGeneration < 1)
+    throw new TypeError("Task scope fence generation must be a positive safe integer");
+}
+
+function validateTaskScopeCurrentness(scope: TaskScopeCurrentness, runId: string): void {
+  if (
+    Object.keys(scope).sort().join(",") !==
+    "acceptedContextDigest,claimsAccepted,definitionGeneration,fenceGeneration,runId,taskId"
+  )
+    throw new TypeError("Task scope currentness must contain exactly its six authority fields");
+  validateTaskScopeFence(taskScopeFence(scope), runId);
+  if (typeof scope.claimsAccepted !== "boolean")
+    throw new TypeError("Task scope claimsAccepted must be boolean");
+}
+
+function sameTaskScope(left: TaskScopeFence, right: TaskScopeFence): boolean {
+  return (
+    left.runId === right.runId &&
+    left.taskId === right.taskId &&
+    left.definitionGeneration === right.definitionGeneration
+  );
+}
+
+function sameTaskScopeFence(left: TaskScopeFence, right: TaskScopeFence): boolean {
+  return (
+    sameTaskScope(left, right) &&
+    left.acceptedContextDigest === right.acceptedContextDigest &&
+    left.fenceGeneration === right.fenceGeneration
+  );
+}
+
+function compareTaskScope(left: TaskScope, right: TaskScope): number {
+  return (
+    compareText(left.runId, right.runId) ||
+    compareText(left.taskId, right.taskId) ||
+    left.definitionGeneration - right.definitionGeneration
+  );
+}
+
+function isCurrentOutcome(
+  run: InMemoryRunnerRun,
+  commandScope: TaskScopeFence,
+  claimScope: TaskScopeFence,
+): boolean {
+  const currentness = run.taskScopes.get(taskScopeKey(commandScope));
+  return (
+    currentness?.claimsAccepted === true &&
+    sameTaskScopeFence(commandScope, currentness) &&
+    sameTaskScopeFence(claimScope, currentness)
+  );
 }
 
 function runKey(repositoryId: string, runId: string): string {

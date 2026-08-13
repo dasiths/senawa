@@ -31,6 +31,13 @@ import {
   type WorkerSubmission,
 } from "@senawa/protocol";
 import { DEFAULT_PROMPT_PACK_MAX_BYTES, renderPromptPack } from "./prompt-renderer.js";
+import {
+  type InstallTaskScopeFencesInput,
+  type TaskScope,
+  type TaskScopeCurrentness,
+  type TaskScopeFence,
+  taskScopeKey,
+} from "./task-currentness.js";
 
 export const WORKER_CAPABILITIES = Object.freeze({
   assetRead: "asset.read",
@@ -115,12 +122,11 @@ export interface RegisterWorkerDispatchInput {
   readonly context: unknown;
   readonly dispatch: unknown;
   readonly completionRequirements: unknown;
+  readonly taskScope: TaskScopeFence;
 }
 
 export interface SubmissionAdmissionInput {
   readonly submission: string | unknown;
-  readonly currentContextDigest: string;
-  readonly currentTask: TaskGenerationReference;
 }
 
 export interface SubmissionAdmissionResult {
@@ -169,6 +175,7 @@ export interface StoredDispatch {
   readonly context: WorkerContextBase;
   readonly dispatch: WorkerDispatch;
   readonly completionRequirements: CompletionRequirements;
+  readonly taskScope: TaskScopeFence;
 }
 
 export interface WorkerDispatchProgress {
@@ -222,6 +229,7 @@ interface StoredCompletionFact {
 export interface ContextAuthoritySnapshot {
   readonly version: "senawa.dev/context-authority-memory/v1alpha1";
   readonly contexts: readonly WorkerContextBase[];
+  readonly taskScopes: readonly TaskScopeCurrentness[];
   readonly dispatches: readonly WorkerDispatch[];
   readonly grants: readonly {
     readonly tokenDigest: string;
@@ -265,6 +273,7 @@ export interface DurableRead {
 
 export interface DurableContextAuthoritySnapshot {
   readonly version: "senawa.dev/context-authority-durable/v1alpha1";
+  readonly taskScopes: readonly TaskScopeCurrentness[];
   readonly dispatches: readonly StoredDispatch[];
   readonly grants: readonly StoredGrant[];
   readonly reads: readonly DurableRead[];
@@ -310,6 +319,7 @@ export class ContextBrokerTransactionAbortError extends Error {
 
 export interface ContextAuthorityPort {
   readonly contexts: Map<string, WorkerContextBase>;
+  readonly taskScopes: Map<string, TaskScopeCurrentness>;
   readonly dispatches: Map<string, StoredDispatch>;
   readonly grants: Map<string, StoredGrant>;
   readonly reads: Map<string, StoredRead>;
@@ -321,6 +331,7 @@ export interface ContextAuthorityPort {
   readonly questions: WorkerSubmission[];
   readonly events: ContextBrokerEvent[];
   cursor: number;
+  installTaskScopeFences(input: InstallTaskScopeFencesInput): readonly TaskScopeCurrentness[];
   snapshot(): ContextAuthoritySnapshot;
   toCanonicalJson(): string;
   projection(): ContextBrokerProjection;
@@ -328,6 +339,7 @@ export interface ContextAuthorityPort {
 
 export class InMemoryContextAuthority implements ContextAuthorityPort {
   readonly contexts = new Map<string, WorkerContextBase>();
+  readonly taskScopes = new Map<string, TaskScopeCurrentness>();
   readonly dispatches = new Map<string, StoredDispatch>();
   readonly grants = new Map<string, StoredGrant>();
   readonly reads = new Map<string, StoredRead>();
@@ -365,6 +377,7 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
     return deepFreeze({
       version: "senawa.dev/context-authority-memory/v1alpha1",
       contexts,
+      taskScopes: [...this.taskScopes.values()].sort(compareTaskScope),
       dispatches,
       grants,
       receipts: [...this.receipts],
@@ -381,6 +394,40 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
       events: [...this.events],
       projection: this.projection(),
     });
+  }
+
+  installTaskScopeFences(input: InstallTaskScopeFencesInput): readonly TaskScopeCurrentness[] {
+    validateTimestamp(input.installedAt, "installedAt");
+    const installations = [...input.fences].sort((left, right) =>
+      compareTaskScope(left.scope, right.scope),
+    );
+    const seen = new Set<string>();
+    const current = installations.map((installation) => {
+      if (installation.scope.runId !== input.runId)
+        throw new TypeError("Context fence scope does not match the target run");
+      const key = taskScopeKey(installation.scope);
+      if (seen.has(key)) throw new TypeError("Context fence installations must be unique");
+      seen.add(key);
+      const scope = this.taskScopes.get(key);
+      if (scope === undefined) throw new TypeError("Context fence names an unknown task scope");
+      if (
+        scope.fenceGeneration !== installation.expectedFenceGeneration ||
+        scope.acceptedContextDigest !== installation.expectedAcceptedContextDigest
+      )
+        throw new TypeError("Context fence expectation is stale");
+      if (!scope.claimsAccepted) throw new TypeError("Context task scope is already fenced");
+      return scope;
+    });
+    const installed = current.map((scope) => {
+      const next = deepFreeze({
+        ...scope,
+        fenceGeneration: scope.fenceGeneration + 1,
+        claimsAccepted: false,
+      });
+      this.taskScopes.set(taskScopeKey(scope), next);
+      return next;
+    });
+    return Object.freeze(installed);
   }
 
   toCanonicalJson(): string {
@@ -415,6 +462,7 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
   durableSnapshot(): DurableContextAuthoritySnapshot {
     return deepFreeze({
       version: "senawa.dev/context-authority-durable/v1alpha1",
+      taskScopes: [...this.taskScopes.values()].sort(compareTaskScope),
       dispatches: [...this.dispatches.values()],
       grants: [...this.grants.values()].map((grant) => ({ ...grant })),
       reads: [...this.reads].map(([requestId, read]) => {
@@ -452,8 +500,15 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
   }
 
   static fromDurableCanonicalJson(serialized: string, sha256: Sha256): InMemoryContextAuthority {
-    const parsed = exactDurableObject(decodeCanonicalJsonValue(serialized), "snapshot", [
+    const decoded = decodeCanonicalJsonValue(serialized);
+    const hasTaskScopes =
+      decoded !== null &&
+      typeof decoded === "object" &&
+      !Array.isArray(decoded) &&
+      Object.hasOwn(decoded, "taskScopes");
+    const parsed = exactDurableObject(decoded, "snapshot", [
       "version",
+      ...(hasTaskScopes ? ["taskScopes"] : []),
       "dispatches",
       "grants",
       "reads",
@@ -470,6 +525,9 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
       throw new TypeError("Unsupported durable context authority version");
     assertNoGrantTokenField(parsed, "snapshot");
     const dispatchRecords = durableArray(parsed.dispatches, "dispatches");
+    if (!hasTaskScopes && dispatchRecords.length > 0)
+      durableFailure("nonempty context authority snapshots require taskScopes");
+    const taskScopeRecords = hasTaskScopes ? durableArray(parsed.taskScopes, "taskScopes") : [];
     const grantRecords = durableArray(parsed.grants, "grants");
     const readRecords = durableArray(parsed.reads, "reads");
     const receiptRecords = durableArray(parsed.receipts, "receipts");
@@ -481,15 +539,24 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
     const eventRecords = durableArray(parsed.events, "events");
     const cursor = nonNegativeSafeInteger(parsed.cursor, "cursor");
     const authority = new InMemoryContextAuthority();
+    for (const [index, value] of taskScopeRecords.entries()) {
+      const scope = decodeTaskScopeCurrentness(value, `taskScopes[${index}]`);
+      const key = taskScopeKey(scope);
+      if (authority.taskScopes.has(key))
+        durableFailure(`taskScopes[${index}] duplicates a task scope`);
+      authority.taskScopes.set(key, scope);
+    }
     for (const [index, value] of dispatchRecords.entries()) {
       const record = exactDurableObject(value, `dispatches[${index}]`, [
         "context",
         "dispatch",
         "completionRequirements",
+        "taskScope",
       ]);
       const context = validateWorkerContextBase(record.context, sha256);
       const dispatch = validateWorkerDispatch(record.dispatch, context, sha256);
       const completionRequirements = validateCompletionRequirements(record.completionRequirements);
+      const taskScope = validateDispatchTaskScope(record.taskScope, dispatch, context);
       if (!sameTask(dispatch.task, completionRequirements.task))
         durableFailure(`dispatches[${index}] completion requirements do not match the dispatch`);
       const priorContext = authority.contexts.get(context.contextId);
@@ -500,7 +567,10 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
         durableFailure(`dispatches[${index}] conflicts with its context identity`);
       if (authority.dispatches.has(dispatch.dispatchId))
         durableFailure(`dispatches[${index}] duplicates a dispatch identity`);
-      const stored = deepFreeze({ context, dispatch, completionRequirements });
+      const currentness = authority.taskScopes.get(taskScopeKey(taskScope));
+      if (currentness === undefined || !isHistoricalTaskScopeFence(taskScope, currentness))
+        durableFailure(`dispatches[${index}] task fence is not present in scope currentness`);
+      const stored = deepFreeze({ context, dispatch, completionRequirements, taskScope });
       authority.contexts.set(context.contextId, context);
       authority.dispatches.set(dispatch.dispatchId, stored);
     }
@@ -932,6 +1002,7 @@ export class ContextBroker implements ContextBrokerClient {
     const context = validateWorkerContextBase(input.context, this.dependencies.sha256);
     const dispatch = validateWorkerDispatch(input.dispatch, context, this.dependencies.sha256);
     const completionRequirements = validateCompletionRequirements(input.completionRequirements);
+    const taskScope = validateDispatchTaskScope(input.taskScope, dispatch, context);
     if (!sameTask(dispatch.task, completionRequirements.task)) {
       throw new ContextBrokerError(
         "binding-mismatch",
@@ -965,7 +1036,8 @@ export class ContextBroker implements ContextBrokerClient {
         canonicalStringify(existing.context) !== canonicalStringify(context) ||
         canonicalStringify(existing.dispatch) !== canonicalStringify(dispatch) ||
         canonicalStringify(existing.completionRequirements) !==
-          canonicalStringify(completionRequirements)
+          canonicalStringify(completionRequirements) ||
+        canonicalStringify(existing.taskScope) !== canonicalStringify(taskScope)
       ) {
         throw new ContextBrokerError(
           "binding-mismatch",
@@ -974,10 +1046,20 @@ export class ContextBroker implements ContextBrokerClient {
       }
       return existing.dispatch;
     }
+    const scopeKey = taskScopeKey(taskScope);
+    const currentness = this.authority.taskScopes.get(scopeKey);
+    if (currentness === undefined) {
+      this.authority.taskScopes.set(scopeKey, deepFreeze({ ...taskScope, claimsAccepted: true }));
+    } else if (!currentness.claimsAccepted || !sameTaskScopeFence(taskScope, currentness)) {
+      throw new ContextBrokerError(
+        "binding-mismatch",
+        "Dispatch task scope is not current and accepting claims",
+      );
+    }
     this.authority.contexts.set(context.contextId, context);
     this.authority.dispatches.set(
       dispatch.dispatchId,
-      Object.freeze({ context, dispatch, completionRequirements }),
+      Object.freeze({ context, dispatch, completionRequirements, taskScope }),
     );
     return dispatch;
   }
@@ -989,6 +1071,7 @@ export class ContextBroker implements ContextBrokerClient {
       context: stored.context,
       dispatch: stored.dispatch,
       completionRequirements: stored.completionRequirements,
+      taskScope: stored.taskScope,
     });
   }
 
@@ -1288,9 +1371,11 @@ export class ContextBroker implements ContextBrokerClient {
     const stored = this.requiredDispatch(submission.dispatchId);
     this.assertSubmissionBinding(submission, stored);
     this.requireCapability(stored.dispatch, capabilityForSubmission(submission.type));
+    const currentness = this.authority.taskScopes.get(taskScopeKey(stored.taskScope));
     const stale =
-      submission.contextDigest !== input.currentContextDigest ||
-      !sameTask(submission.task as TaskGenerationReference, input.currentTask);
+      currentness === undefined ||
+      !currentness.claimsAccepted ||
+      !sameTaskScopeFence(stored.taskScope, currentness);
     let completionFact: CompletionFact | undefined;
     const duplicateCompletion =
       !stale &&
@@ -1683,6 +1768,108 @@ function sameTask(left: TaskGenerationReference, right: TaskGenerationReference)
     left.taskId === right.taskId &&
     left.definitionGeneration === right.definitionGeneration &&
     left.contextRevisionDigest === right.contextRevisionDigest
+  );
+}
+
+function validateDispatchTaskScope(
+  value: unknown,
+  dispatch: WorkerDispatch,
+  context: WorkerContextBase,
+): TaskScopeFence {
+  const object = exactDurableObject(value, "taskScope", [
+    "runId",
+    "taskId",
+    "definitionGeneration",
+    "acceptedContextDigest",
+    "fenceGeneration",
+  ]);
+  const scope = deepFreeze({
+    runId: durableString(object.runId, "taskScope.runId"),
+    taskId: durableString(object.taskId, "taskScope.taskId"),
+    definitionGeneration: nonNegativeSafeInteger(
+      object.definitionGeneration,
+      "taskScope.definitionGeneration",
+    ),
+    acceptedContextDigest: sha256DigestValue(
+      object.acceptedContextDigest,
+      "taskScope.acceptedContextDigest",
+    ),
+    fenceGeneration: nonNegativeSafeInteger(object.fenceGeneration, "taskScope.fenceGeneration"),
+  });
+  if (
+    scope.runId !== dispatch.runId ||
+    scope.taskId !== dispatch.task.taskId ||
+    scope.definitionGeneration !== dispatch.task.definitionGeneration ||
+    scope.acceptedContextDigest !== context.contextDigest ||
+    scope.definitionGeneration < 1 ||
+    scope.fenceGeneration < 1
+  )
+    throw new ContextBrokerError(
+      "binding-mismatch",
+      "Dispatch task scope does not match its run, task generation, and accepted context",
+    );
+  return scope;
+}
+
+function decodeTaskScopeCurrentness(value: unknown, path: string): TaskScopeCurrentness {
+  const object = exactDurableObject(value, path, [
+    "runId",
+    "taskId",
+    "definitionGeneration",
+    "acceptedContextDigest",
+    "fenceGeneration",
+    "claimsAccepted",
+  ]);
+  const definitionGeneration = nonNegativeSafeInteger(
+    object.definitionGeneration,
+    `${path}.definitionGeneration`,
+  );
+  const fenceGeneration = nonNegativeSafeInteger(object.fenceGeneration, `${path}.fenceGeneration`);
+  if (definitionGeneration < 1 || fenceGeneration < 1)
+    durableFailure(`${path} generations must be positive`);
+  if (typeof object.claimsAccepted !== "boolean")
+    durableFailure(`${path}.claimsAccepted must be a boolean`);
+  return deepFreeze({
+    runId: durableString(object.runId, `${path}.runId`),
+    taskId: durableString(object.taskId, `${path}.taskId`),
+    definitionGeneration,
+    acceptedContextDigest: sha256DigestValue(
+      object.acceptedContextDigest,
+      `${path}.acceptedContextDigest`,
+    ),
+    fenceGeneration,
+    claimsAccepted: object.claimsAccepted,
+  });
+}
+
+function sameTaskScopeFence(left: TaskScopeFence, right: TaskScopeFence): boolean {
+  return (
+    left.runId === right.runId &&
+    left.taskId === right.taskId &&
+    left.definitionGeneration === right.definitionGeneration &&
+    left.acceptedContextDigest === right.acceptedContextDigest &&
+    left.fenceGeneration === right.fenceGeneration
+  );
+}
+
+function isHistoricalTaskScopeFence(
+  dispatch: TaskScopeFence,
+  currentness: TaskScopeCurrentness,
+): boolean {
+  return (
+    dispatch.runId === currentness.runId &&
+    dispatch.taskId === currentness.taskId &&
+    dispatch.definitionGeneration === currentness.definitionGeneration &&
+    dispatch.acceptedContextDigest === currentness.acceptedContextDigest &&
+    dispatch.fenceGeneration <= currentness.fenceGeneration
+  );
+}
+
+function compareTaskScope(left: TaskScope, right: TaskScope): number {
+  return (
+    compareText(left.runId, right.runId) ||
+    compareText(left.taskId, right.taskId) ||
+    left.definitionGeneration - right.definitionGeneration
   );
 }
 

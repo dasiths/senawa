@@ -4,6 +4,7 @@ import {
   canonicalStringify,
   decodeCanonicalJsonValue,
   type ErrorEnvelope,
+  type JsonValue,
   PROTOCOL_LIMITS,
   PROTOCOL_VERSION,
 } from "@senawa/protocol";
@@ -165,6 +166,42 @@ export class SupervisorHttpHandler {
             200,
             this.#api.getProjection({ repositoryId: route.repositoryId, runId: route.runId }),
           );
+        case "amendment-list":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#api.listAmendments({ repositoryId: route.repositoryId, runId: route.runId }),
+          );
+        case "amendment-record":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#api.getAmendment({
+              repositoryId: route.repositoryId,
+              runId: route.runId,
+              amendmentId: requiredValue(route.amendmentId),
+            }),
+          );
+        case "amendment-source": {
+          requireNoBody(request);
+          const amendmentId = requiredValue(route.amendmentId);
+          const amendment = this.#api.getAmendment({
+            repositoryId: route.repositoryId,
+            runId: route.runId,
+            amendmentId,
+          });
+          return sendJson(response, 200, {
+            repositoryId: amendment.repositoryId,
+            runId: amendment.runId,
+            amendmentId,
+            source: amendment.workerSource ?? localProposalSource(amendment.proposal),
+            ...(amendment.bridgeOutcome === undefined
+              ? {}
+              : { bridgeOutcome: amendment.bridgeOutcome }),
+          });
+        }
         case "portal-session-bootstrap": {
           requireIpc(this.#transport);
           requireNoBody(request);
@@ -406,6 +443,13 @@ function recoveryRequest(input: string): { readonly repositoryId: string; readon
     throw invalidRecovery();
   }
   return { repositoryId: object.repositoryId, runId: object.runId };
+}
+
+function localProposalSource(proposal: JsonValue): JsonValue {
+  if (proposal === null || typeof proposal !== "object" || Array.isArray(proposal)) {
+    throw new Error("Amendment proposal source is unavailable");
+  }
+  return (proposal as Readonly<Record<string, JsonValue>>).source as JsonValue;
 }
 
 function invalidRecovery(): SupervisorApiError {

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { fchmodSync, mkdirSync, openSync, readFileSync } from "node:fs";
-import { canonicalStringify } from "@senawa/protocol";
+import { canonicalBytes, canonicalStringify, PROTOCOL_VERSION } from "@senawa/protocol";
 import {
   HttpSupervisorClient,
   readPrivateCredential,
@@ -96,6 +96,89 @@ export async function runOperationalCli(
       canonicalStringify(await client.getProjection({ repositoryId: rest[0], runId: rest[1] })),
     );
   }
+  if (group === "amendment" && action === "list" && rest.length === 2) {
+    return success(
+      canonicalStringify(await client.listAmendments({ repositoryId: rest[0], runId: rest[1] })),
+    );
+  }
+  if (group === "amendment" && action === "get" && rest.length === 3) {
+    return success(
+      canonicalStringify(
+        await client.getAmendment({
+          repositoryId: rest[0],
+          runId: rest[1],
+          amendmentId: rest[2],
+        }),
+      ),
+    );
+  }
+  if (group === "amendment" && action === "source" && rest.length === 3) {
+    return success(
+      canonicalStringify(
+        await client.getAmendmentSource({
+          repositoryId: rest[0],
+          runId: rest[1],
+          amendmentId: rest[2],
+        }),
+      ),
+    );
+  }
+  if (group === "amendment" && action === "status" && rest.length === 3) {
+    const amendment = await client.getAmendment({
+      repositoryId: rest[0],
+      runId: rest[1],
+      amendmentId: rest[2],
+    });
+    return success(canonicalStringify(amendment.lifecycle));
+  }
+  if (
+    group === "amendment" &&
+    (action === "withdraw" || action === "approve" || action === "reject") &&
+    rest.length === 3
+  ) {
+    const [repositoryId, runId, amendmentId] = rest as [string, string, string];
+    const amendment = await client.getAmendment({ repositoryId, runId, amendmentId });
+    const proposal = exactRecord(amendment.proposal, "amendment proposal");
+    const proposalDigest = exactDigest(proposal.proposalDigest, "proposalDigest");
+    const baseGraph = exactRecord(proposal.baseGraph, "base graph");
+    const baseGraphRevision = exactDigest(baseGraph.revisionDigest, "base graph revision");
+    const reviewedResultGraph = exactRecord(proposal.reviewedResultGraph, "reviewed result graph");
+    const reviewedResultGraphRevisionDigest = exactDigest(
+      reviewedResultGraph.revisionDigest,
+      "reviewed result graph revision",
+    );
+    const payload =
+      action === "withdraw"
+        ? { amendmentId, proposalDigest }
+        : {
+            amendmentId,
+            proposalDigest,
+            decision: action,
+            reviewedResultGraphRevisionDigest,
+          };
+    const submission = {
+      apiVersion: PROTOCOL_VERSION,
+      commandId: `command_amendment-${action}-${proposalDigest.slice(0, 24)}`,
+      repositoryId,
+      runId,
+      intent: {
+        type:
+          action === "withdraw"
+            ? ("withdraw-amendment-proposal" as const)
+            : ("record-amendment-decision" as const),
+      },
+      payload,
+      payloadDigest: runtimeDependencies.sha256.digest(canonicalBytes(payload)),
+      expectedGraphRevision: baseGraphRevision,
+      exactObjectDigest: proposalDigest,
+    };
+    return success(canonicalStringify(await client.submitCommand(submission)));
+  }
+  if (group === "amendment" && action === "recover" && rest.length === 2) {
+    return success(
+      canonicalStringify(await client.recover({ repositoryId: rest[0], runId: rest[1] })),
+    );
+  }
   if (group === "portal" && action === undefined) {
     const bootstrap = await client.createPortalSession();
     const status = await client.status();
@@ -155,6 +238,20 @@ function pageRequest(arguments_: readonly string[]) {
 function integer(value: string, label: string): number {
   if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) throw new TypeError(`${label} must be an integer`);
   return Number(value);
+}
+
+function exactRecord(value: unknown, label: string): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function exactDigest(value: unknown, label: string): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new TypeError(`${label} must be a digest`);
+  }
+  return value;
 }
 
 async function readStdin(): Promise<string> {

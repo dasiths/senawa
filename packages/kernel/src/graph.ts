@@ -656,6 +656,16 @@ export function validateWorkflowGraph(value: unknown, sha256: Sha256): WorkflowG
   }
 }
 
+export function normalizedWorkflowInputFromGraph(
+  value: unknown,
+  sha256: Sha256,
+): NormalizedWorkflowInput {
+  const graph = validateWorkflowGraph(value, sha256);
+  return canonicalValue(
+    workflowInputFromGraphSnapshot(canonicalValue(graph)),
+  ) as unknown as NormalizedWorkflowInput;
+}
+
 type ValidatedNodeInput =
   | { readonly kind: "workflow"; readonly definition: WorkflowDefinitionInput }
   | { readonly kind: "phase"; readonly definition: PhaseDefinitionInput }

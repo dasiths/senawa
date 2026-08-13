@@ -147,7 +147,7 @@ export function registerRunnerAuthorityConformance(
       ).toMatchObject({ reserved: 0, spent: 5, unreported: 5 });
     });
 
-    it("reprojects terminal outcomes when fenced context authority changes", () => {
+    it("keeps exact task-scoped outcomes current across a run-global context change", () => {
       const harness = configuredHarness(createHarness());
       harness.enqueue(runnerEffectCommand());
       expect(
@@ -174,7 +174,13 @@ export function registerRunnerAuthorityConformance(
       expect(harness.queryProjection(runnerFixture.repositoryId, runnerFixture.runId)).toEqual({
         cursor: 4,
         contextDigest: "f".repeat(64),
-        effects: [],
+        effects: [
+          {
+            operationId: "operation_runner-effect",
+            outputDigest: runnerFixture.outputDigest,
+            status: "completed",
+          },
+        ],
       });
       expect(
         harness.queryReceipts(runnerFixture.repositoryId, runnerFixture.runId).at(-1),
@@ -268,6 +274,7 @@ export function registerRunnerAuthorityConformance(
       const delayedAuthority: RunnerAuthorityPort = {
         load: harness.authority.load.bind(harness.authority),
         assertLease: harness.authority.assertLease.bind(harness.authority),
+        installTaskScopeFences: harness.authority.installTaskScopeFences.bind(harness.authority),
         claimEffectAttempt: harness.authority.claimEffectAttempt.bind(harness.authority),
         persistIntent(request) {
           if (!interleaved) {

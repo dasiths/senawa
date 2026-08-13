@@ -1,4 +1,9 @@
 import type { JsonValue } from "@senawa/protocol";
+import type {
+  InstallTaskScopeFencesInput,
+  TaskScopeCurrentness,
+  TaskScopeFence,
+} from "./task-currentness.js";
 
 export type EffectKind = "worker" | "sensor" | "git" | "asset" | "time";
 
@@ -34,6 +39,7 @@ export interface QueuedEffectCommand {
   readonly runId: string;
   readonly operationId: string;
   readonly kind: EffectKind;
+  readonly taskScope: TaskScopeFence;
   readonly contextDigest: string;
   readonly inputDigest: string;
   readonly input: JsonValue;
@@ -75,6 +81,8 @@ export interface EffectOutcome {
   readonly owner: string;
   readonly fence: number;
   readonly attemptId: string;
+  readonly commandTaskScope: TaskScopeFence;
+  readonly claimTaskScope: TaskScopeFence;
   readonly contextDigest: string;
   readonly inputDigest: string;
   readonly status: Exclude<EffectStatus, "intent">;
@@ -106,7 +114,7 @@ export interface RunnerEffectRecord {
 export interface RunnerAuthoritySnapshot {
   readonly repositoryId: string;
   readonly runId: string;
-  readonly contextDigest: string;
+  readonly taskScopes: readonly TaskScopeCurrentness[];
   readonly queuedCommands: readonly QueuedEffectCommand[];
   readonly effects: readonly RunnerEffectRecord[];
   readonly escalations: readonly RunnerEscalation[];
@@ -158,7 +166,7 @@ export type EffectAttemptOrigin = "dispatch" | "inspection" | "cancellation" | "
 
 export interface ClaimEffectAttemptRequest extends RunOnceInput {
   readonly intent: EffectIntent;
-  readonly contextDigest: string;
+  readonly taskScope: TaskScopeFence;
 }
 
 export type ClaimEffectAttemptResult =
@@ -168,11 +176,13 @@ export type ClaimEffectAttemptResult =
       readonly effect: RunnerEffectRecord;
     }
   | { readonly type: "busy" }
+  | { readonly type: "fenced"; readonly currentness: TaskScopeCurrentness }
   | { readonly type: "replay"; readonly outcome: EffectOutcome };
 
 export interface RunnerAuthorityPort {
   load(input: Pick<RunOnceInput, "repositoryId" | "runId">): RunnerAuthoritySnapshot;
   assertLease(input: RunOnceInput): void;
+  installTaskScopeFences(input: InstallTaskScopeFencesInput): readonly TaskScopeCurrentness[];
   claimEffectAttempt(request: ClaimEffectAttemptRequest): ClaimEffectAttemptResult;
   persistIntent(request: PersistIntentRequest): PersistIntentResult;
   commitEffect(request: CommitEffectRequest): EffectOutcome;
@@ -224,7 +234,13 @@ export function scheduleRunnerTransition(snapshot: RunnerAuthoritySnapshot): Run
   const escalatedCommandIds = new Set(snapshot.escalations.map(({ commandId }) => commandId));
   const command = snapshot.queuedCommands
     .filter(
-      ({ commandId }) => !startedCommandIds.has(commandId) && !escalatedCommandIds.has(commandId),
+      (candidate) =>
+        !startedCommandIds.has(candidate.commandId) &&
+        !escalatedCommandIds.has(candidate.commandId) &&
+        snapshot.taskScopes.some(
+          (currentness) =>
+            currentness.claimsAccepted && sameTaskScopeFence(candidate.taskScope, currentness),
+        ),
     )
     .sort(
       (left, right) =>
@@ -256,15 +272,16 @@ export class FencedRunner {
       const claim = this.authority.claimEffectAttempt({
         ...input,
         intent: persisted.intent,
-        contextDigest: snapshot.contextDigest,
+        taskScope: persisted.intent.command.taskScope,
       });
       if (claim.type === "busy") return { type: "idle" };
+      if (claim.type === "fenced") return { type: "idle" };
       if (claim.type === "replay") return { type: "committed", outcome: claim.outcome };
       const observation = this.observeClaimedAction(
         claim.action,
         claim.effect,
         input,
-        snapshot.contextDigest,
+        claim.effect.intent.command.contextDigest,
       );
       return {
         type: "committed",
@@ -275,15 +292,19 @@ export class FencedRunner {
     const claim = this.authority.claimEffectAttempt({
       ...input,
       intent: plan.effect.intent,
-      contextDigest: snapshot.contextDigest,
+      taskScope:
+        snapshot.taskScopes.find((scope) =>
+          sameTaskScope(scope, plan.effect.intent.command.taskScope),
+        ) ?? plan.effect.intent.command.taskScope,
     });
     if (claim.type === "busy") return { type: "idle" };
+    if (claim.type === "fenced") return { type: "idle" };
     if (claim.type === "replay") return { type: "committed", outcome: claim.outcome };
     const observation = this.observeClaimedAction(
       claim.action,
       claim.effect,
       input,
-      snapshot.contextDigest,
+      claim.effect.intent.command.contextDigest,
     );
     return {
       type: "committed",
@@ -428,16 +449,19 @@ export class AsyncFencedRunner {
     const claim = this.authority.claimEffectAttempt({
       ...this.freshInput(input),
       intent,
-      contextDigest: snapshot.contextDigest,
+      taskScope:
+        snapshot.taskScopes.find((scope) => sameTaskScope(scope, intent.command.taskScope)) ??
+        intent.command.taskScope,
     });
     if (claim.type === "busy") return { type: "idle" };
+    if (claim.type === "fenced") return { type: "idle" };
     if (claim.type === "replay") return { type: "committed", outcome: claim.outcome };
 
     const observation = await this.observeClaimedAction(
       claim.action,
       claim.effect,
       input,
-      snapshot.contextDigest,
+      claim.effect.intent.command.contextDigest,
     );
     return {
       type: "committed",
@@ -668,4 +692,20 @@ function validateTimestamp(value: string, field: string): void {
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function sameTaskScope(left: TaskScopeFence, right: TaskScopeFence): boolean {
+  return (
+    left.runId === right.runId &&
+    left.taskId === right.taskId &&
+    left.definitionGeneration === right.definitionGeneration
+  );
+}
+
+function sameTaskScopeFence(left: TaskScopeFence, right: TaskScopeFence): boolean {
+  return (
+    sameTaskScope(left, right) &&
+    left.acceptedContextDigest === right.acceptedContextDigest &&
+    left.fenceGeneration === right.fenceGeneration
+  );
 }

@@ -1,3 +1,4 @@
+export * from "./amendments.js";
 export * from "./budgets.js";
 export * from "./candidates.js";
 export * from "./canonical.js";

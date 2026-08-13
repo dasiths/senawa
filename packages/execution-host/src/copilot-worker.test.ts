@@ -644,11 +644,7 @@ class CapturingBroker implements ContextBrokerClient {
     };
   }
 
-  admitSubmission(input: {
-    readonly submission: unknown;
-    readonly currentContextDigest: string;
-    readonly currentTask: Parameters<ContextBrokerClient["admitSubmission"]>[0]["currentTask"];
-  }): SubmissionAdmissionResult {
+  admitSubmission(input: { readonly submission: unknown }): SubmissionAdmissionResult {
     const submission = decodeWorkerSubmission(input.submission);
     this.submissions.push(submission);
     const base = {
@@ -658,6 +654,7 @@ class CapturingBroker implements ContextBrokerClient {
       replayed: false,
     } as const;
     if (submission.type !== "completion" || this.admission !== "accepted") return base;
+    const task = submission.completion.task as unknown as CompletionSubmission["task"];
     return {
       ...base,
       completionFact: {
@@ -667,13 +664,13 @@ class CapturingBroker implements ContextBrokerClient {
         dispatchId: submission.dispatchId,
         assessment: assessCompletionAccounting(
           {
-            task: input.currentTask,
+            task,
             criteria: [],
             evidencePolicy: { mode: "none", requirements: [] },
           },
           {
             ...submission.completion,
-            task: input.currentTask,
+            task,
           } as unknown as CompletionSubmission,
         ),
       },
@@ -775,8 +772,6 @@ function harness(
     sessionBaseDirectory: sdk.baseDirectory,
     timeoutMs: options.timeoutMs ?? 1_000,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
-    currentContextDigest: () => context.contextDigest,
-    currentTask: () => dispatch.task,
   };
   return {
     adapter: new CopilotSerialWorkerAdapter(sdk, sha256),

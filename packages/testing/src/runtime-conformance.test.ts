@@ -1,11 +1,17 @@
 import {
   type AccountingAssessment,
   consumerKey,
+  createAmendmentProposal,
+  createAmendmentQuiescenceFact,
   createPhaseCandidate,
   createSensorReading,
   defineGate,
+  definitionGeneration,
   digestAccountingAssessment,
   digestSelectedTaskSet,
+  phaseId,
+  sha256Digest,
+  taskId,
 } from "@senawa/kernel";
 import {
   canonicalBytes,
@@ -38,14 +44,18 @@ const ALLOWED_INTENTS = [
   "evaluate-gate",
   "record-authority-decision",
   "close-phase",
+  "submit-amendment-proposal",
+  "withdraw-amendment-proposal",
+  "record-amendment-decision",
 ] as const;
 
 function createDependencies(): RuntimeDependencies {
   return {
     sha256: deterministicSha256,
-    authorization: createRoleAuthorizationPolicy(
-      ALLOWED_INTENTS.map((intent) => ({ intent, roles: ["release-manager"] })),
-    ),
+    authorization: createRoleAuthorizationPolicy([
+      ...ALLOWED_INTENTS.map((intent) => ({ intent, roles: ["release-manager"] })),
+      { intent: "apply-approved-amendment", roles: ["trusted-supervisor"] },
+    ]),
   };
 }
 
@@ -819,7 +829,399 @@ describe("transport-independent runtime command conformance", () => {
     expect(restarted.queryReceipt(otherRepository.commandId)).toEqual(runMismatch);
     expect(restarted.authority.toCanonicalJson()).toBe(serialized);
   });
+
+  it("records, approves, and applies an exact amendment with replay-equivalent projections", () => {
+    const service = createService();
+    const { graph, admission } = instantiate(service);
+    const proposal = amendmentProposal(graph, "audit");
+
+    const submitted = submitProposal(service, admission, proposal, "command_amendment-submit");
+    expect(submitted.status).toBe("completed");
+    expect(
+      service.queryProjection(runtimeFixture.repositoryId, runtimeFixture.runId)?.payload,
+    ).toMatchObject({
+      amendments: [{ amendmentId: proposal.amendmentId, status: "reviewable" }],
+      phaseLifecycles: [{ phase: runtimeFixture.phase }],
+    });
+
+    const duplicate = submitProposal(service, admission, proposal, "command_amendment-duplicate");
+    expect(duplicate.error?.code).toBe("amendment-proposal-exists");
+
+    const decision = service.submit(
+      runtimeCommand({
+        commandId: "command_amendment-approve",
+        intent: "record-amendment-decision",
+        payload: {
+          amendmentId: proposal.amendmentId,
+          proposalDigest: proposal.proposalDigest,
+          decision: "approve",
+          reviewedResultGraphRevisionDigest: proposal.reviewedResultGraph.revisionDigest,
+        },
+        expectedGraphRevision: proposal.baseGraph.revisionDigest,
+        exactObjectDigest: proposal.proposalDigest,
+      }),
+      admission.at("2026-08-13T12:01:00.000Z"),
+    );
+    expect(decision.status).toBe("completed");
+    const decisionRecord = decision.result as { decisionDigest: string };
+    expect(
+      service.queryProjection(runtimeFixture.repositoryId, runtimeFixture.runId)?.payload,
+    ).toMatchObject({ amendments: [{ status: "approved-awaiting-quiescence" }] });
+
+    const quiescence = createAmendmentQuiescenceFact(
+      {
+        occurredAt: "2026-08-13T12:02:00.000Z",
+        affectedTaskScopes: proposal.impact.affectedTaskScopes,
+        liveClaimCount: 0,
+        nonterminalEffectCount: 0,
+      },
+      proposal,
+      deterministicSha256,
+    );
+    const untrustedApply = service.submit(
+      runtimeCommand({
+        commandId: "command_amendment-untrusted-apply",
+        intent: "apply-approved-amendment",
+        payload: {
+          amendmentId: proposal.amendmentId,
+          proposalDigest: proposal.proposalDigest,
+          decisionDigest: decisionRecord.decisionDigest,
+          reviewedResultGraphRevisionDigest: proposal.reviewedResultGraph.revisionDigest,
+        },
+        expectedGraphRevision: proposal.baseGraph.revisionDigest,
+        exactObjectDigest: decisionRecord.decisionDigest,
+      }),
+      admission.at("2026-08-13T12:02:30.000Z"),
+    );
+    expect(untrustedApply.error?.code).toBe("unauthorized");
+    const applied = service.submitWithTrustedFacts(
+      runtimeCommand({
+        commandId: "command_amendment-apply",
+        intent: "apply-approved-amendment",
+        payload: {
+          amendmentId: proposal.amendmentId,
+          proposalDigest: proposal.proposalDigest,
+          decisionDigest: decisionRecord.decisionDigest,
+          reviewedResultGraphRevisionDigest: proposal.reviewedResultGraph.revisionDigest,
+        },
+        expectedGraphRevision: proposal.baseGraph.revisionDigest,
+        exactObjectDigest: decisionRecord.decisionDigest,
+        roles: ["trusted-supervisor"],
+      }),
+      admission.at("2026-08-13T12:03:00.000Z"),
+      { amendmentQuiescence: quiescence },
+    );
+    expect(applied.status).toBe("completed");
+    expect(applied.result).toMatchObject({
+      graphRevision: proposal.reviewedResultGraph.revisionDigest,
+      application: { graph: proposal.reviewedResultGraph },
+    });
+    const projection = service.queryProjection(runtimeFixture.repositoryId, runtimeFixture.runId);
+    expect(projection?.payload).toMatchObject({
+      amendments: [{ status: "applied" }],
+      amendmentEventDigests: expect.arrayContaining([expect.any(String)]),
+    });
+
+    const serialized = service.authority.toCanonicalJson();
+    const restarted = createService(
+      InMemoryAuthority.fromCanonicalJson(serialized, createDependencies()),
+    );
+    expect(restarted.authority.toCanonicalJson()).toBe(serialized);
+    expect(restarted.queryProjection(runtimeFixture.repositoryId, runtimeFixture.runId)).toEqual(
+      projection,
+    );
+  });
+
+  it("allows unrelated phase candidate progress while an additive phase proposal is pending", () => {
+    const service = createService();
+    const { graph, admission } = instantiate(service);
+    const proposal = createAmendmentProposal(
+      {
+        source: { kind: "human", request: "release" },
+        baseGraph: graph,
+        baseContextDigest: runtimeFixture.task.contextRevisionDigest,
+        baseConfigurationSnapshotDigest: sha256Digest("d".repeat(64)),
+        resultConfigurationSnapshotDigest: sha256Digest("e".repeat(64)),
+        operations: [
+          {
+            kind: "add-phase",
+            phase: {
+              id: phaseId("phase_release"),
+              key: consumerKey("release"),
+              generation: definitionGeneration(1),
+              parentId: graph.workflowId,
+              source: { locator: "fixture://amendment", pointer: "/phases/release" },
+            },
+          },
+        ],
+        phaseCandidateHistory: [],
+      },
+      deterministicSha256,
+    );
+    expect(submitProposal(service, admission, proposal, "command_amendment-add-phase").status).toBe(
+      "completed",
+    );
+
+    const completion = service.submit(
+      runtimeCommand({
+        commandId: "command_amendment-unrelated-completion",
+        intent: "submit-completion",
+        payload: completionPayload(),
+        expectedDefinitionRevision: runtimeFixture.task.contextRevisionDigest,
+        expectedGraphRevision: graph.revisionDigest,
+      }),
+      admission.at(),
+    );
+    const assessment = (completion.result as unknown as { assessment: AccountingAssessment })
+      .assessment;
+    const { candidate, gateDefinition, reading } = acceptedCandidate(graph, assessment);
+    expect(
+      service.submit(
+        runtimeCommand({
+          commandId: "command_amendment-unrelated-gate",
+          intent: "evaluate-gate",
+          payload: {
+            phase: runtimeFixture.phase,
+            dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
+            gateDefinition,
+            readings: [reading],
+          },
+          expectedGraphRevision: graph.revisionDigest,
+          exactObjectDigest: candidate.candidateDigest,
+        }),
+        admission.at(),
+      ).status,
+    ).toBe("completed");
+    expect(
+      service.queryProjection(runtimeFixture.repositoryId, runtimeFixture.runId)?.payload,
+    ).toMatchObject({ amendments: [{ status: "reviewable" }], status: "awaiting-approval" });
+  });
+
+  it("enforces overlap, withdrawal, decision, stale, and quiescence races", () => {
+    const service = createService();
+    const { graph, admission } = instantiate(service);
+    const first = amendmentProposal(graph, "audit");
+    const second = amendmentProposal(graph, "package");
+    expect(submitProposal(service, admission, first, "command_amendment-first").status).toBe(
+      "completed",
+    );
+    expect(submitProposal(service, admission, second, "command_amendment-second").status).toBe(
+      "completed",
+    );
+
+    const proposalConflict = service.submit(
+      runtimeCommand({
+        commandId: "command_amendment-proposal-conflict",
+        intent: "withdraw-amendment-proposal",
+        payload: { amendmentId: first.amendmentId, proposalDigest: "f".repeat(64) },
+        exactObjectDigest: first.proposalDigest,
+      }),
+      admission.at("2026-08-13T12:03:00.000Z"),
+    );
+    expect(proposalConflict.error?.code).toBe("amendment-proposal-conflict");
+    const resultConflict = service.submit(
+      runtimeCommand({
+        commandId: "command_amendment-result-conflict",
+        intent: "record-amendment-decision",
+        payload: {
+          amendmentId: first.amendmentId,
+          proposalDigest: first.proposalDigest,
+          decision: "approve",
+          reviewedResultGraphRevisionDigest: "f".repeat(64),
+        },
+        expectedGraphRevision: first.baseGraph.revisionDigest,
+        exactObjectDigest: first.proposalDigest,
+      }),
+      admission.at("2026-08-13T12:03:30.000Z"),
+    );
+    expect(resultConflict.error?.code).toBe("stale-result-graph");
+
+    const overlappingApproval = decideAmendment(
+      service,
+      admission,
+      first,
+      "approve",
+      "command_amendment-overlap",
+    );
+    expect(overlappingApproval.error?.code).toBe("overlapping-proposal");
+    const withdrawal = service.submit(
+      runtimeCommand({
+        commandId: "command_amendment-withdraw",
+        intent: "withdraw-amendment-proposal",
+        payload: { amendmentId: second.amendmentId, proposalDigest: second.proposalDigest },
+        exactObjectDigest: second.proposalDigest,
+      }),
+      admission.at("2026-08-13T12:04:00.000Z"),
+    );
+    expect(withdrawal.status).toBe("completed");
+    const approved = decideAmendment(
+      service,
+      admission,
+      first,
+      "approve",
+      "command_amendment-approved",
+    );
+    expect(approved.status).toBe("completed");
+    expect(
+      service.submit(
+        runtimeCommand({
+          commandId: "command_amendment-late-withdraw",
+          intent: "withdraw-amendment-proposal",
+          payload: { amendmentId: first.amendmentId, proposalDigest: first.proposalDigest },
+          exactObjectDigest: first.proposalDigest,
+        }),
+        admission.at("2026-08-13T12:05:00.000Z"),
+      ).error?.code,
+    ).toBe("conflicting-lifecycle");
+
+    const decisionRecord = approved.result as { decisionDigest: string };
+    const busy = createAmendmentQuiescenceFact(
+      {
+        occurredAt: "2026-08-13T12:06:00.000Z",
+        affectedTaskScopes: first.impact.affectedTaskScopes,
+        liveClaimCount: 1,
+        nonterminalEffectCount: 0,
+      },
+      first,
+      deterministicSha256,
+    );
+    const nonquiescent = service.submitWithTrustedFacts(
+      runtimeCommand({
+        commandId: "command_amendment-busy-apply",
+        intent: "apply-approved-amendment",
+        payload: {
+          amendmentId: first.amendmentId,
+          proposalDigest: first.proposalDigest,
+          decisionDigest: decisionRecord.decisionDigest,
+          reviewedResultGraphRevisionDigest: first.reviewedResultGraph.revisionDigest,
+        },
+        expectedGraphRevision: first.baseGraph.revisionDigest,
+        exactObjectDigest: decisionRecord.decisionDigest,
+        roles: ["trusted-supervisor"],
+      }),
+      admission.at("2026-08-13T12:07:00.000Z"),
+      { amendmentQuiescence: busy },
+    );
+    expect(nonquiescent.error?.code).toBe("invalid-quiescence");
+
+    const staleService = createService();
+    const staleRun = instantiate(staleService, "command_stale-amendment-run");
+    const staleProposal = amendmentProposal(staleRun.graph, "audit");
+    submitProposal(
+      staleService,
+      staleRun.admission,
+      staleProposal,
+      "command_stale-amendment-submit",
+    );
+    const revisedGraph = createRuntimeGraph(2);
+    expect(
+      staleService.submit(
+        runtimeCommand({
+          commandId: "command_stale-amendment-revision",
+          intent: "accept-graph-revision",
+          payload: { workflowId: runtimeFixture.workflowId, graph: revisedGraph },
+          expectedGraphRevision: staleRun.graph.revisionDigest,
+        }),
+        staleRun.admission.at(),
+      ).status,
+    ).toBe("completed");
+    expect(
+      staleService.queryProjection(runtimeFixture.repositoryId, runtimeFixture.runId)?.payload,
+    ).toMatchObject({ amendments: [{ status: "stale" }] });
+    expect(
+      decideAmendment(
+        staleService,
+        staleRun.admission,
+        staleProposal,
+        "approve",
+        "command_stale-amendment-approve",
+      ).error?.code,
+    ).toBe("stale-base");
+    expect(
+      decideAmendment(
+        staleService,
+        staleRun.admission,
+        staleProposal,
+        "reject",
+        "command_stale-amendment-reject",
+      ).status,
+    ).toBe("completed");
+  });
 });
+
+function amendmentProposal(graph: ReturnType<typeof createRuntimeGraph>, suffix: string) {
+  return createAmendmentProposal(
+    {
+      source: { kind: "human", request: suffix },
+      baseGraph: graph,
+      baseContextDigest: runtimeFixture.task.contextRevisionDigest,
+      baseConfigurationSnapshotDigest: sha256Digest("d".repeat(64)),
+      resultConfigurationSnapshotDigest: sha256Digest("e".repeat(64)),
+      operations: [
+        {
+          kind: "add-task",
+          task: {
+            id: taskId(`task_${suffix}`),
+            key: consumerKey(suffix),
+            generation: definitionGeneration(1),
+            parentId: runtimeFixture.phase.phaseId,
+            dependsOn: [runtimeFixture.task.taskId],
+            source: { locator: "fixture://amendment", pointer: `/tasks/${suffix}` },
+            completionPolicy: {
+              criteria: [],
+              evidencePolicy: { mode: "none", requirements: [] },
+            },
+          },
+          criteria: [],
+        },
+      ],
+      phaseCandidateHistory: [],
+    },
+    deterministicSha256,
+  );
+}
+
+function submitProposal(
+  service: RuntimeCommandService,
+  admission: ReturnType<typeof createAdmissionFixture>,
+  proposal: ReturnType<typeof amendmentProposal>,
+  commandId: string,
+) {
+  return service.submit(
+    runtimeCommand({
+      commandId,
+      intent: "submit-amendment-proposal",
+      payload: { proposal },
+      expectedGraphRevision: proposal.baseGraph.revisionDigest,
+      exactObjectDigest: proposal.proposalDigest,
+    }),
+    admission.at("2026-08-13T12:00:00.000Z"),
+  );
+}
+
+function decideAmendment(
+  service: RuntimeCommandService,
+  admission: ReturnType<typeof createAdmissionFixture>,
+  proposal: ReturnType<typeof amendmentProposal>,
+  decision: "approve" | "reject",
+  commandId: string,
+) {
+  return service.submit(
+    runtimeCommand({
+      commandId,
+      intent: "record-amendment-decision",
+      payload: {
+        amendmentId: proposal.amendmentId,
+        proposalDigest: proposal.proposalDigest,
+        decision,
+        reviewedResultGraphRevisionDigest: proposal.reviewedResultGraph.revisionDigest,
+      },
+      expectedGraphRevision: proposal.baseGraph.revisionDigest,
+      exactObjectDigest: proposal.proposalDigest,
+    }),
+    admission.at("2026-08-13T12:04:30.000Z"),
+  );
+}
 
 function instantiatePayload() {
   return {

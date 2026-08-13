@@ -95,13 +95,6 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
           : { sessionBaseDirectory: this.sessionBaseDirectory }),
         timeoutMs: input.timeoutMs,
         signal: AbortSignal.any([context.signal, localAbort.signal]),
-        currentContextDigest: () =>
-          this.broker.loadWorkerDispatch(input.dispatchId)?.context.contextDigest ?? "",
-        currentTask: () => {
-          const current = this.broker.loadWorkerDispatch(input.dispatchId);
-          if (current === undefined) throw new TypeError("Worker dispatch authority disappeared");
-          return current.dispatch.task;
-        },
       });
       return this.resultObservation(result);
     } finally {

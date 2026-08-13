@@ -113,6 +113,13 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
       broker.registerDispatch({
         context,
         dispatch,
+        taskScope: {
+          runId: dispatch.runId,
+          taskId: dispatch.task.taskId,
+          definitionGeneration: dispatch.task.definitionGeneration,
+          acceptedContextDigest: context.contextDigest,
+          fenceGeneration: 1,
+        },
         completionRequirements: {
           task: dispatch.task,
           criteria: [],
@@ -128,8 +135,6 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
         workingDirectory,
         sessionBaseDirectory: baseDirectory,
         timeoutMs,
-        currentContextDigest: () => context.contextDigest,
-        currentTask: () => dispatch.task,
       });
       expect(result.status).toBe("completed");
     } catch {

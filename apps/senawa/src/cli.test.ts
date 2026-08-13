@@ -32,6 +32,9 @@ Commands:
   receipt list <repository> <run>       List durable receipts
   event list <repository> <run>         List durable events
   projection get <repository> <run>     Read the phase projection
+  amendment list|get|source|status      Review additive amendment proposals
+  amendment withdraw|approve|reject     Submit an exact human amendment command
+  amendment recover <repository> <run>  Trigger fenced amendment recovery
   portal                                Create a one-time portal URL
 
 Options:

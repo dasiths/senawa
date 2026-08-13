@@ -1,4 +1,6 @@
 import {
+  type AmendmentDecisionKind,
+  type ApplyApprovedAmendmentPayload,
   type AssuranceLevel,
   type AuthenticatedPrincipal,
   type CapabilityHandshake,
@@ -15,7 +17,9 @@ import {
   type ProjectionEnvelope,
   type ReceiptPage,
   type ReceiptStatus,
+  type RecordAmendmentDecisionPayload,
   type RunIdentity,
+  type SubmitAmendmentProposalPayload,
   type SupervisorAdmissionFacts,
   type SupervisorAllocationFact,
   type SupervisorAllocationKind,
@@ -27,6 +31,7 @@ import {
   type SupervisorWakeReason,
   type TransportAttribution,
   type TransportKind,
+  type WithdrawAmendmentProposalPayload,
 } from "./contracts.js";
 
 export const PROTOCOL_LIMITS = Object.freeze({
@@ -41,6 +46,7 @@ export const PROTOCOL_LIMITS = Object.freeze({
   maxCapabilities: 64,
   maxSupportedVersions: 16,
   maxPageItems: 1_024,
+  maxAmendmentTaskScopes: 1_024,
 });
 
 export type ProtocolValidationErrorCode =
@@ -85,6 +91,10 @@ const INTENT_TYPES = new Set<CommandIntent["type"]>([
   "evaluate-gate",
   "record-authority-decision",
   "close-phase",
+  "submit-amendment-proposal",
+  "withdraw-amendment-proposal",
+  "record-amendment-decision",
+  "apply-approved-amendment",
   "create-escalation",
   "grant-allowance",
 ]);
@@ -198,6 +208,85 @@ export function decodeCommandSubmission(input: string | unknown): CommandSubmiss
 
 export function encodeCommandSubmission(input: unknown): string {
   return canonicalStringify(decodeCommandSubmission(input));
+}
+
+export function decodeSubmitAmendmentProposalPayload(
+  input: string | unknown,
+): SubmitAmendmentProposalPayload {
+  const object = exactObject(decodeWireValue(input), "$", ["proposal"]);
+  return Object.freeze({ proposal: jsonValue(object.proposal, "$.proposal") });
+}
+
+export function encodeSubmitAmendmentProposalPayload(input: unknown): string {
+  return canonicalStringify(decodeSubmitAmendmentProposalPayload(input));
+}
+
+export function decodeWithdrawAmendmentProposalPayload(
+  input: string | unknown,
+): WithdrawAmendmentProposalPayload {
+  const object = exactObject(decodeWireValue(input), "$", ["amendmentId", "proposalDigest"]);
+  identity(object.amendmentId, "$.amendmentId");
+  digest(object.proposalDigest, "$.proposalDigest");
+  return Object.freeze({
+    amendmentId: object.amendmentId as string,
+    proposalDigest: object.proposalDigest as string,
+  });
+}
+
+export function encodeWithdrawAmendmentProposalPayload(input: unknown): string {
+  return canonicalStringify(decodeWithdrawAmendmentProposalPayload(input));
+}
+
+export function decodeRecordAmendmentDecisionPayload(
+  input: string | unknown,
+): RecordAmendmentDecisionPayload {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "amendmentId",
+    "proposalDigest",
+    "decision",
+    "reviewedResultGraphRevisionDigest",
+  ]);
+  identity(object.amendmentId, "$.amendmentId");
+  digest(object.proposalDigest, "$.proposalDigest");
+  if (object.decision !== "approve" && object.decision !== "reject") {
+    fail("invalid-value", "$.decision", "must be approve or reject");
+  }
+  digest(object.reviewedResultGraphRevisionDigest, "$.reviewedResultGraphRevisionDigest");
+  return Object.freeze({
+    amendmentId: object.amendmentId as string,
+    proposalDigest: object.proposalDigest as string,
+    decision: object.decision as AmendmentDecisionKind,
+    reviewedResultGraphRevisionDigest: object.reviewedResultGraphRevisionDigest as string,
+  });
+}
+
+export function encodeRecordAmendmentDecisionPayload(input: unknown): string {
+  return canonicalStringify(decodeRecordAmendmentDecisionPayload(input));
+}
+
+export function decodeApplyApprovedAmendmentPayload(
+  input: string | unknown,
+): ApplyApprovedAmendmentPayload {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "amendmentId",
+    "proposalDigest",
+    "decisionDigest",
+    "reviewedResultGraphRevisionDigest",
+  ]);
+  identity(object.amendmentId, "$.amendmentId");
+  digest(object.proposalDigest, "$.proposalDigest");
+  digest(object.decisionDigest, "$.decisionDigest");
+  digest(object.reviewedResultGraphRevisionDigest, "$.reviewedResultGraphRevisionDigest");
+  return Object.freeze({
+    amendmentId: object.amendmentId as string,
+    proposalDigest: object.proposalDigest as string,
+    decisionDigest: object.decisionDigest as string,
+    reviewedResultGraphRevisionDigest: object.reviewedResultGraphRevisionDigest as string,
+  });
+}
+
+export function encodeApplyApprovedAmendmentPayload(input: unknown): string {
+  return canonicalStringify(decodeApplyApprovedAmendmentPayload(input));
 }
 
 export function decodeAuthenticatedPrincipal(input: string | unknown): AuthenticatedPrincipal {

@@ -5,6 +5,7 @@ import {
   InMemoryRunnerAuthority,
   type RunnerFaultPoint,
   type RunnerLeaseFact,
+  taskScopeFence,
 } from "@senawa/runtime";
 import { describe, expect, it } from "vitest";
 import { registerRunnerAuthorityConformance } from "./runner-authority-conformance.js";
@@ -14,6 +15,7 @@ import {
   FakeEffectHost,
   runnerEffectCommand,
   runnerFixture,
+  runnerTaskScope,
   runOnceInput,
   takeoverLease,
 } from "./runner-conformance.js";
@@ -25,6 +27,7 @@ registerRunnerAuthorityConformance("in-memory", () => {
     configureRun: authority.configureRun.bind(authority),
     enqueue: authority.enqueue.bind(authority),
     updateContext: authority.updateContext.bind(authority),
+    installTaskScopeFences: authority.installTaskScopeFences.bind(authority),
     requestCancellation: authority.requestCancellation.bind(authority),
     queryReceipts: authority.queryReceipts.bind(authority),
     queryEvents: authority.queryEvents.bind(authority),
@@ -34,6 +37,99 @@ registerRunnerAuthorityConformance("in-memory", () => {
 });
 
 describe("fenced runner crash and reconciliation matrix", () => {
+  it("preserves late affected output as stale while unrelated work remains current", () => {
+    const authority = new InMemoryRunnerAuthority();
+    const unaffectedScope = Object.freeze({
+      ...runnerTaskScope,
+      taskId: "task_runner-unaffected",
+      acceptedContextDigest: "e".repeat(64),
+    });
+    authority.configureRun({
+      repositoryId: runnerFixture.repositoryId,
+      runId: runnerFixture.runId,
+      contextDigest: runnerFixture.contextDigest,
+      taskScopes: [runnerTaskScope, unaffectedScope],
+      budgets: [{ unit: "model-millidollars", limit: 20 }],
+      lease: runnerFixture.lease,
+    });
+    authority.enqueue(runnerEffectCommand());
+    authority.enqueue(
+      runnerEffectCommand({
+        sequence: 2,
+        commandId: "runner-command-unaffected",
+        operationId: "operation_runner-unaffected",
+        taskScope: taskScopeFence(unaffectedScope),
+        contextDigest: unaffectedScope.acceptedContextDigest,
+      }),
+    );
+    const host = new FakeEffectHost({
+      dispatch(intent) {
+        if (intent.command.operationId === "operation_runner-effect") {
+          authority.installTaskScopeFences({
+            repositoryId: runnerFixture.repositoryId,
+            runId: runnerFixture.runId,
+            installedAt: runnerFixture.currentTime,
+            fences: [
+              {
+                scope: {
+                  runId: runnerTaskScope.runId,
+                  taskId: runnerTaskScope.taskId,
+                  definitionGeneration: runnerTaskScope.definitionGeneration,
+                },
+                expectedFenceGeneration: runnerTaskScope.fenceGeneration,
+                expectedAcceptedContextDigest: runnerTaskScope.acceptedContextDigest,
+              },
+            ],
+          });
+        }
+        return {
+          status: "completed",
+          observedAt: runnerFixture.currentTime,
+          outputDigest: runnerFixture.outputDigest,
+          usage: { unit: intent.command.budgetReservation.unit, amount: 1 },
+        };
+      },
+    });
+    const runner = new FencedRunner(authority, host);
+
+    expect(runner.runOnce(runOnceInput())).toMatchObject({
+      outcome: {
+        operationId: "operation_runner-effect",
+        status: "completed",
+        freshness: "stale",
+        commandTaskScope: { fenceGeneration: 1 },
+        claimTaskScope: { fenceGeneration: 1 },
+      },
+    });
+    expect(runner.runOnce(runOnceInput({ attemptId: "runner-attempt-unaffected" }))).toMatchObject({
+      outcome: {
+        operationId: "operation_runner-unaffected",
+        status: "completed",
+        freshness: "current",
+      },
+    });
+    authority.enqueue(
+      runnerEffectCommand({
+        sequence: 3,
+        commandId: "runner-command-affected-after-fence",
+        operationId: "operation_runner-affected-after-fence",
+      }),
+    );
+    expect(runner.runOnce(runOnceInput({ attemptId: "runner-attempt-after-fence" }))).toEqual({
+      type: "idle",
+    });
+    expect(authority.load(runOnceInput()).effects).toHaveLength(2);
+    expect(
+      authority.queryProjection(runnerFixture.repositoryId, runnerFixture.runId).effects,
+    ).toEqual([
+      {
+        operationId: "operation_runner-unaffected",
+        status: "completed",
+        outputDigest: runnerFixture.outputDigest,
+      },
+    ]);
+  });
+
   for (const point of [
     "before-intent-persist",
     "after-intent-persist",
@@ -394,12 +490,21 @@ describe("fenced runner crash and reconciliation matrix", () => {
     expect(() => runner.runOnce(runOnceInput())).toThrow("crash before outcome commit");
     const takeover = takeoverLease();
     authority.setLease(runnerFixture.repositoryId, runnerFixture.runId, takeover);
-    authority.updateContext({
+    authority.installTaskScopeFences({
       repositoryId: runnerFixture.repositoryId,
       runId: runnerFixture.runId,
-      lease: takeover,
-      currentTime: runnerFixture.currentTime,
-      contextDigest: "d".repeat(64),
+      installedAt: runnerFixture.currentTime,
+      fences: [
+        {
+          scope: {
+            runId: runnerTaskScope.runId,
+            taskId: runnerTaskScope.taskId,
+            definitionGeneration: runnerTaskScope.definitionGeneration,
+          },
+          expectedFenceGeneration: 1,
+          expectedAcceptedContextDigest: runnerTaskScope.acceptedContextDigest,
+        },
+      ],
     });
 
     expect(
@@ -416,12 +521,21 @@ describe("fenced runner crash and reconciliation matrix", () => {
     const host = new FakeEffectHost();
     const runner = new FencedRunner(authority, host);
     expect(() => runner.runOnce(runOnceInput())).toThrow("crash after durable intent");
-    authority.updateContext({
+    authority.installTaskScopeFences({
       repositoryId: runnerFixture.repositoryId,
       runId: runnerFixture.runId,
-      lease: runnerFixture.lease,
-      currentTime: runnerFixture.currentTime,
-      contextDigest: "e".repeat(64),
+      installedAt: runnerFixture.currentTime,
+      fences: [
+        {
+          scope: {
+            runId: runnerTaskScope.runId,
+            taskId: runnerTaskScope.taskId,
+            definitionGeneration: runnerTaskScope.definitionGeneration,
+          },
+          expectedFenceGeneration: 1,
+          expectedAcceptedContextDigest: runnerTaskScope.acceptedContextDigest,
+        },
+      ],
     });
 
     expect(
@@ -431,7 +545,9 @@ describe("fenced runner crash and reconciliation matrix", () => {
       outcome: {
         status: "cancelled",
         freshness: "stale",
-        details: { reason: "stale-context-before-dispatch" },
+        details: { reason: "deadline-reached-before-dispatch" },
+        commandTaskScope: { fenceGeneration: 1 },
+        claimTaskScope: { fenceGeneration: 2 },
       },
     });
     expect(host.dispatchCalls).toBe(0);

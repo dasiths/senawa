@@ -20,6 +20,7 @@ export interface SupervisorRunControllerOptions {
   readonly asyncEffectHost?: AsyncEffectHost;
   readonly runnerAuthority?: RunnerAuthorityPort;
   readonly deliverCompletionOutboxOnce?: () => boolean;
+  readonly deliverAmendmentProposalOutboxOnce?: () => boolean;
   readonly timer?: SupervisorTimer;
 }
 
@@ -44,6 +45,8 @@ export interface SupervisorRunControllerResult {
   readonly lease: LeaseGrant;
   readonly receipt?: SupervisorReceipt;
   readonly completionDelivered: boolean;
+  readonly amendmentProposalDelivered: boolean;
+  readonly amendmentApplyQueued: boolean;
   readonly runner?: RunOnceResult;
   readonly worked: boolean;
 }
@@ -53,6 +56,7 @@ export class SupervisorRunController {
   readonly #runner: FencedRunner | undefined;
   readonly #asyncRunner: AsyncFencedRunner | undefined;
   readonly #deliverCompletionOutboxOnce: (() => boolean) | undefined;
+  readonly #deliverAmendmentProposalOutboxOnce: (() => boolean) | undefined;
   readonly #timer: SupervisorTimer;
 
   constructor(options: SupervisorRunControllerOptions) {
@@ -74,6 +78,7 @@ export class SupervisorRunController {
         ? undefined
         : new AsyncFencedRunner(required(options.runnerAuthority), options.asyncEffectHost);
     this.#deliverCompletionOutboxOnce = options.deliverCompletionOutboxOnce;
+    this.#deliverAmendmentProposalOutboxOnce = options.deliverAmendmentProposalOutboxOnce;
     this.#timer = options.timer ?? systemTimer;
   }
 
@@ -98,6 +103,17 @@ export class SupervisorRunController {
         currentTime: input.currentTime(),
       });
       const completionDelivered = this.#deliverCompletionOutboxOnce?.() ?? false;
+      const amendmentProposalDelivered = this.#deliverAmendmentProposalOutboxOnce?.() ?? false;
+      const amendmentRecovery = this.authority
+        .listApprovedAmendmentRecoveries()
+        .find(
+          (candidate) =>
+            candidate.repositoryId === input.repositoryId && candidate.runId === input.runId,
+        );
+      const amendmentApplyQueued =
+        amendmentRecovery === undefined
+          ? false
+          : this.authority.queueApprovedAmendmentApply(amendmentRecovery, input.currentTime());
       const runnerTime = input.currentTime();
       if (Date.parse(lease.expiresAt) - Date.parse(runnerTime) <= LEASE_RENEWAL_WINDOW_MS) {
         lease = this.authority.renewRunLease(
@@ -122,12 +138,16 @@ export class SupervisorRunController {
       const worked =
         receipt !== undefined ||
         completionDelivered ||
+        amendmentProposalDelivered ||
+        amendmentApplyQueued ||
         (runner !== undefined && runner.type !== "idle");
       completed = true;
       return {
         lease,
         ...(receipt === undefined ? {} : { receipt }),
         completionDelivered,
+        amendmentProposalDelivered,
+        amendmentApplyQueued,
         ...(runner === undefined ? {} : { runner }),
         worked,
       };
@@ -177,6 +197,17 @@ export class SupervisorRunController {
         currentTime: input.currentTime(),
       });
       const completionDelivered = this.#deliverCompletionOutboxOnce?.() ?? false;
+      const amendmentProposalDelivered = this.#deliverAmendmentProposalOutboxOnce?.() ?? false;
+      const amendmentRecovery = this.authority
+        .listApprovedAmendmentRecoveries()
+        .find(
+          (candidate) =>
+            candidate.repositoryId === input.repositoryId && candidate.runId === input.runId,
+        );
+      const amendmentApplyQueued =
+        amendmentRecovery === undefined
+          ? false
+          : this.authority.queueApprovedAmendmentApply(amendmentRecovery, input.currentTime());
       const runnable = this.authority
         .listRunnableRuns()
         .some((run) => run.repositoryId === input.repositoryId && run.runId === input.runId);
@@ -224,12 +255,16 @@ export class SupervisorRunController {
       const worked =
         receipt !== undefined ||
         completionDelivered ||
+        amendmentProposalDelivered ||
+        amendmentApplyQueued ||
         (runner !== undefined && runner.type !== "idle");
       completed = true;
       return {
         lease,
         ...(receipt === undefined ? {} : { receipt }),
         completionDelivered,
+        amendmentProposalDelivered,
+        amendmentApplyQueued,
         ...(runner === undefined ? {} : { runner }),
         worked,
       };

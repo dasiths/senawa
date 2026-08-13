@@ -29,6 +29,7 @@ import {
   SupervisorCommandConflictError,
   SupervisorServiceUnavailableError,
 } from "./command-queue.js";
+import type { AmendmentReviewRecord } from "./contracts.js";
 
 export type SupervisorIngressTransportKind = "cli" | "http";
 
@@ -106,6 +107,8 @@ export interface SupervisorApiClient {
   listReceipts(request: string | unknown): ReceiptPage;
   listEvents(request: string | unknown): EventReplayPage;
   getProjection(request: string | unknown): ProjectionEnvelope;
+  listAmendments(request: string | unknown): readonly AmendmentReviewRecord[];
+  getAmendment(request: string | unknown): AmendmentReviewRecord;
 }
 
 export class SupervisorApi implements SupervisorApiClient {
@@ -120,7 +123,13 @@ export class SupervisorApi implements SupervisorApiClient {
       apiVersion: PROTOCOL_VERSION,
       peerId,
       supportedVersions: [PROTOCOL_VERSION],
-      capabilities: ["command-submit", "event-replay", "projection-read", "receipt-read"],
+      capabilities: [
+        "amendment-review",
+        "command-submit",
+        "event-replay",
+        "projection-read",
+        "receipt-read",
+      ],
     });
   }
 
@@ -219,6 +228,36 @@ export class SupervisorApi implements SupervisorApiClient {
         throw new SupervisorApiError("not-found", 404, "Projection was not found");
       }
       return projection;
+    } catch (error) {
+      throw mapApiError(error);
+    }
+  }
+
+  listAmendments(input: string | unknown): readonly AmendmentReviewRecord[] {
+    try {
+      const request = projectionQueryRequest(input);
+      return this.authority.queryAmendments(request.repositoryId, request.runId);
+    } catch (error) {
+      throw mapApiError(error);
+    }
+  }
+
+  getAmendment(input: string | unknown): AmendmentReviewRecord {
+    try {
+      const object = exactLocalObject(input, ["repositoryId", "runId", "amendmentId"]);
+      const identity = decodeRunIdentity({
+        repositoryId: object.repositoryId,
+        runId: object.runId,
+      });
+      const amendment = this.authority.queryAmendment(
+        identity.repositoryId,
+        identity.runId,
+        validateOpaqueIdentity(object.amendmentId),
+      );
+      if (amendment === undefined) {
+        throw new SupervisorApiError("not-found", 404, "Amendment proposal was not found");
+      }
+      return amendment;
     } catch (error) {
       throw mapApiError(error);
     }

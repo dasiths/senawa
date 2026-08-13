@@ -2,6 +2,7 @@ import { request as httpRequest, type IncomingHttpHeaders, type RequestOptions }
 import {
   type CapabilityHandshake,
   canonicalStringify,
+  decodeCanonicalJsonValue,
   decodeCapabilityHandshake,
   decodeErrorEnvelope,
   decodeEventReplayPage,
@@ -9,6 +10,7 @@ import {
   decodeReceiptPage,
   decodeSupervisorReceipt,
   type EventReplayPage,
+  type JsonValue,
   PROTOCOL_LIMITS,
   type ProjectionEnvelope,
   type ReceiptPage,
@@ -20,6 +22,9 @@ import {
   type SupervisorCommandAcceptance,
 } from "./api.js";
 import {
+  type AmendmentReviewRecord,
+  decodeAmendmentReviewRecord,
+  decodeAmendmentReviewRecords,
   decodeSupervisorLogPage,
   decodeSupervisorServiceStatus,
   type SupervisorLogPage,
@@ -132,6 +137,33 @@ export class HttpSupervisorClient {
       await this.#json(
         "GET",
         `/api/v1alpha1/repositories/${segment(request.repositoryId)}/runs/${segment(request.runId)}/projections/phase-lifecycle`,
+      ),
+    );
+  }
+
+  async listAmendments(input: string | unknown): Promise<readonly AmendmentReviewRecord[]> {
+    const request = exactClientObject(input, ["repositoryId", "runId"]);
+    return decodeAmendmentReviewRecords(
+      await this.#json("GET", amendmentPath(request.repositoryId, request.runId)),
+    );
+  }
+
+  async getAmendment(input: string | unknown): Promise<AmendmentReviewRecord> {
+    const request = exactClientObject(input, ["repositoryId", "runId", "amendmentId"]);
+    return decodeAmendmentReviewRecord(
+      await this.#json(
+        "GET",
+        `${amendmentPath(request.repositoryId, request.runId)}/${segment(request.amendmentId)}`,
+      ),
+    );
+  }
+
+  async getAmendmentSource(input: string | unknown): Promise<JsonValue> {
+    const request = exactClientObject(input, ["repositoryId", "runId", "amendmentId"]);
+    return decodeCanonicalJsonValue(
+      await this.#json(
+        "GET",
+        `${amendmentPath(request.repositoryId, request.runId)}/${segment(request.amendmentId)}/source`,
       ),
     );
   }
@@ -353,6 +385,10 @@ function pagePath(input: string | unknown, resource: "receipts" | "events"): str
   if (request.limit !== undefined) query.set("limit", String(request.limit));
   const suffix = query.size === 0 ? "" : `?${query}`;
   return `/api/v1alpha1/repositories/${segment(request.repositoryId)}/runs/${segment(request.runId)}/${resource}${suffix}`;
+}
+
+function amendmentPath(repositoryId: unknown, runId: unknown): string {
+  return `/api/v1alpha1/repositories/${segment(repositoryId)}/runs/${segment(runId)}/amendments`;
 }
 
 function localObject(input: string | unknown): Record<string, unknown> {

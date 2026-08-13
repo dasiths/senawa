@@ -20,14 +20,22 @@ import {
 import { basename, dirname, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  type AmendmentApplication,
+  type AmendmentDecision,
+  type AmendmentProposal,
+  type AmendmentWithdrawal,
   canonicalDigest,
   canonicalValue,
+  createAmendmentQuiescenceFact,
   type HistoricalAssetBinding,
   isSha256Digest,
+  type PhaseGenerationReference,
+  validateWorkflowGraph,
 } from "@senawa/kernel";
 import {
   canonicalStringify,
   type DurableReceipt,
+  decodeApplyApprovedAmendmentPayload,
   decodeCanonicalJsonValue,
   decodeCommandEnvelope,
   decodeDurableReceipt,
@@ -72,6 +80,7 @@ import {
   InMemoryAuthority,
   InMemoryContextAuthority,
   type InMemoryRunnerRunInput,
+  type InstallTaskScopeFencesInput,
   PageQueryError,
   type PersistIntentRequest,
   type PersistIntentResult,
@@ -95,16 +104,20 @@ import {
   type SubmissionAdmissionInput,
   type SubmissionAdmissionResult,
   selectEffectAttemptAction,
+  type TaskScopeCurrentness,
+  taskScopeKey,
 } from "@senawa/runtime";
 import Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 const WAL_AUTOCHECKPOINT_PAGES = 16_384;
 const MIGRATIONS_DIRECTORY = fileURLToPath(new URL("../migrations", import.meta.url));
 
 export type SqliteFaultPoint =
   | "after-command-execution"
+  | "after-amendment-fences"
+  | "after-amendment-application"
   | "before-command-commit"
   | "after-command-commit-before-ack"
   | "after-receipt-page-metadata-read"
@@ -192,6 +205,19 @@ export interface SqliteRunnerAuthorityOptions {
   readonly faultInjector?: (point: SqliteRunnerFaultPoint) => void;
 }
 
+export interface WorkerAmendmentOutboxClaim {
+  readonly submissionId: string;
+  readonly sourceDigest: string;
+  readonly ownerId: string;
+  readonly fence: number;
+  readonly expiresAt: string;
+}
+
+export interface WorkerAmendmentProposalSource {
+  readonly submission: unknown;
+  readonly context: unknown;
+}
+
 interface Migration {
   readonly version: number;
   readonly name: string;
@@ -269,6 +295,26 @@ interface NormalizedSnapshot {
   readonly commands: readonly Record<string, unknown>[];
   readonly receiptHistory: readonly Record<string, unknown>[];
   readonly eventFrames: readonly Record<string, unknown>[];
+}
+
+interface ConfigurationSnapshotValue {
+  readonly snapshotDigest: string;
+  readonly graph: ReturnType<typeof validateWorkflowGraph>;
+  readonly canonical: Record<string, unknown>;
+}
+
+interface AmendmentLifecycleValue {
+  readonly proposal: AmendmentProposal;
+  readonly decision?: AmendmentDecision;
+  readonly withdrawal?: AmendmentWithdrawal;
+  readonly application?: AmendmentApplication;
+}
+
+interface NormalizedAmendmentRows {
+  readonly proposals: readonly Record<string, unknown>[];
+  readonly decisions: readonly Record<string, unknown>[];
+  readonly withdrawals: readonly Record<string, unknown>[];
+  readonly applications: readonly Record<string, unknown>[];
 }
 
 export class UnsupportedSchemaVersionError extends Error {
@@ -350,6 +396,7 @@ export class SqliteAuthority
   }
 
   submit(input: string | unknown, admission: AdmissionFacts): DurableReceipt {
+    const command = decodeCommandEnvelope(input);
     this.#database.exec("BEGIN IMMEDIATE");
     let committed = false;
     try {
@@ -365,7 +412,19 @@ export class SqliteAuthority
         this.#cachedService = new RuntimeCommandService(this.dependencies, this.#cachedAuthority);
         this.#cachedRevision = before.revision;
       }
-      const receipt = this.#cachedService.submit(input, admission);
+      const trustedFacts =
+        command.intent.type === "apply-approved-amendment"
+          ? {
+              amendmentQuiescence: buildTrustedAmendmentQuiescence(
+                this.#database,
+                before.canonical_json,
+                command,
+                admission.currentTime,
+                this.dependencies,
+              ),
+            }
+          : {};
+      const receipt = this.#cachedService.submitWithTrustedFacts(input, admission, trustedFacts);
       let after = before.canonical_json;
       if (!this.#cachedCanonicalSnapshot.hasCommand(receipt.commandId)) {
         const run = this.#cachedAuthority.runs.get(
@@ -392,6 +451,26 @@ export class SqliteAuthority
           before.revision,
           this.dependencies,
         );
+        persistAmendmentProjections(this.#database, parseSnapshot(after), this.dependencies);
+        if (
+          command.intent.type === "record-amendment-decision" &&
+          receipt.status === "completed" &&
+          isApprovedAmendmentDecision(receipt.result)
+        ) {
+          installApprovedAmendmentFences(
+            this.#database,
+            parseSnapshot(after),
+            command.repositoryId,
+            command.runId,
+            receipt.result.amendmentId,
+            admission.currentTime,
+            this.dependencies,
+          );
+          this.#fault("after-amendment-fences");
+        }
+        if (command.intent.type === "apply-approved-amendment" && receipt.status === "completed") {
+          this.#fault("after-amendment-application");
+        }
         this.#cachedRevision = before.revision + 1;
       }
       this.#fault("before-command-commit");
@@ -539,6 +618,7 @@ export class SqliteAuthority
         expectedRevision,
         this.dependencies,
       );
+      persistAmendmentProjections(this.#database, parseSnapshot(validated), this.dependencies);
       this.#database.exec("COMMIT");
       return expectedRevision + 1;
     } catch (error) {
@@ -557,6 +637,91 @@ export class SqliteAuthority
 
   releaseLease(input: ReleaseLeaseInput): void {
     releaseLeaseTransaction(this.#database, input);
+  }
+
+  putConfigurationSnapshot(input: unknown): string {
+    const snapshot = validateConfigurationSnapshot(input, this.dependencies);
+    const canonicalSnapshot = canonicalStringify(snapshot.canonical);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.#database
+        .prepare<[string], { graph_revision_digest: string; canonical_snapshot: string }>(
+          `SELECT graph_revision_digest, canonical_snapshot
+           FROM configuration_snapshots WHERE snapshot_digest = ?`,
+        )
+        .get(snapshot.snapshotDigest);
+      if (current === undefined) {
+        this.#database
+          .prepare(
+            `INSERT INTO configuration_snapshots(
+               snapshot_digest, graph_revision_digest, canonical_snapshot
+             ) VALUES (?, ?, ?)`,
+          )
+          .run(snapshot.snapshotDigest, snapshot.graph.revisionDigest, canonicalSnapshot);
+      } else if (
+        current.graph_revision_digest !== snapshot.graph.revisionDigest ||
+        current.canonical_snapshot !== canonicalSnapshot
+      ) {
+        throw new TypeError("Configuration snapshot digest is bound to different content");
+      }
+      this.#database.exec("COMMIT");
+      return snapshot.snapshotDigest;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getConfigurationSnapshot(snapshotDigest: string): unknown | undefined {
+    if (!isSha256Digest(snapshotDigest))
+      throw new TypeError("Configuration snapshot digest is invalid");
+    const row = this.#database
+      .prepare<[string], { canonical_snapshot: string }>(
+        "SELECT canonical_snapshot FROM configuration_snapshots WHERE snapshot_digest = ?",
+      )
+      .get(snapshotDigest);
+    return row === undefined ? undefined : decodeCanonicalJsonValue(row.canonical_snapshot);
+  }
+
+  queryPhaseCandidateHistory(
+    repositoryId: string,
+    runId: string,
+  ): readonly PhaseGenerationReference[] {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    const authority = InMemoryAuthority.fromCanonicalJson(
+      this.#readAuthorityRow().canonical_json,
+      this.dependencies,
+    );
+    const run = [...authority.runs.values()].find(
+      (candidate) => candidate.repositoryId === repositoryId && candidate.runId === runId,
+    );
+    if (run?.records === undefined) return Object.freeze([]);
+    const records = run.records as unknown as {
+      readonly phase: PhaseGenerationReference;
+      readonly candidate?: unknown;
+      readonly phaseLifecycles?: readonly {
+        readonly phase: PhaseGenerationReference;
+        readonly candidate?: unknown;
+      }[];
+    };
+    const lifecycles = records.phaseLifecycles ?? [records];
+    const history = lifecycles
+      .filter((lifecycle) => lifecycle.candidate !== undefined)
+      .map(({ phase }) => phase)
+      .sort((left, right) => {
+        const leftKey = `${left.phaseId}@${left.definitionGeneration}`;
+        const rightKey = `${right.phaseId}@${right.definitionGeneration}`;
+        return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+      });
+    return Object.freeze(
+      history.filter(
+        (reference, index) =>
+          index === 0 ||
+          reference.phaseId !== history[index - 1]?.phaseId ||
+          reference.definitionGeneration !== history[index - 1]?.definitionGeneration,
+      ),
+    );
   }
 
   recordCancellationPlaceholder(input: CancellationPlaceholderInput): void {
@@ -819,6 +984,7 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
          ) VALUES (?, ?, ?, 0, 0, 0)`,
       );
       for (const [unit, limit] of budgets) insertBudget.run(runKey, unit, limit);
+      insertInitialTaskScopes(this.#database, input.repositoryId, input.runId, input.taskScopes);
       this.#database
         .prepare("INSERT INTO runner_projections(run_key, canonical_projection) VALUES (?, ?)")
         .run(
@@ -910,10 +1076,11 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
       )
       .all(run.run_key)
       .map((row) => parseRunnerValue<RunnerEscalation>(row.canonical_escalation));
+    const taskScopes = readTaskScopeCurrentness(this.#database, run.run_key);
     return deepFreezeRunnerValue({
       repositoryId: run.repository_id,
       runId: run.run_id,
-      contextDigest: run.context_digest,
+      taskScopes,
       queuedCommands: commands,
       effects,
       escalations,
@@ -932,15 +1099,25 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
     }
   }
 
+  installTaskScopeFences(input: InstallTaskScopeFencesInput): readonly TaskScopeCurrentness[] {
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#requireRunnerRun(input.repositoryId, input.runId);
+      const installed = installDurableTaskScopeFences(this.#database, input, this.dependencies);
+      this.#database.exec("COMMIT");
+      return installed;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   claimEffectAttempt(request: ClaimEffectAttemptRequest): ClaimEffectAttemptResult {
     validateRunnerAttempt(request);
     this.#database.exec("BEGIN IMMEDIATE");
     try {
       const run = this.#requireRunnerRun(request.repositoryId, request.runId);
       this.#assertRunnerFence(run.run_key, request.lease, request.currentTime);
-      if (request.contextDigest !== run.context_digest) {
-        throw new TypeError("Runner context changed before effect attempt claim");
-      }
       const intentRow = this.#database
         .prepare<[string, string], { canonical_intent: string }>(
           `SELECT canonical_intent FROM runner_effect_intents
@@ -977,6 +1154,22 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
         return { type: "replay", outcome: effect.outcome };
       }
       const action = selectEffectAttemptAction(effect, request.currentTime, request.attemptId);
+      const currentness = requireTaskScopeCurrentness(
+        this.#database,
+        run.run_key,
+        request.intent.command.taskScope,
+      );
+      if (!sameDurableTaskScopeFence(request.taskScope, currentness)) {
+        throw new TypeError("Effect claim task scope does not match durable currentness");
+      }
+      if (
+        action === "dispatch" &&
+        (!currentness.claimsAccepted ||
+          !sameDurableTaskScopeFence(request.intent.command.taskScope, currentness))
+      ) {
+        this.#database.exec("COMMIT");
+        return { type: "fenced", currentness };
+      }
       const existing = this.#database
         .prepare<[string, string], { owner_id: string; fence: number }>(
           `SELECT owner_id, fence FROM runner_effect_claims
@@ -993,8 +1186,9 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
       this.#database
         .prepare(
           `INSERT INTO runner_effect_claims(
-             intent_id, run_key, owner_id, fence, attempt_id, context_digest, origin
-           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+             intent_id, run_key, owner_id, fence, attempt_id, context_digest, origin,
+             task_id, definition_generation, scope_fence_generation
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           request.intent.command.operationId,
@@ -1002,8 +1196,11 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
           request.lease.owner,
           request.lease.fence,
           request.attemptId,
-          request.contextDigest,
+          request.taskScope.acceptedContextDigest,
           action,
+          request.taskScope.taskId,
+          request.taskScope.definitionGeneration,
+          request.taskScope.fenceGeneration,
         );
       this.#database.exec("COMMIT");
       return { type: "claimed", action, effect };
@@ -1058,6 +1255,17 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
       }
       if (command.contextDigest !== run.context_digest) {
         throw new TypeError("Runner command context is stale before effect intent persistence");
+      }
+      const currentness = requireTaskScopeCurrentness(
+        this.#database,
+        run.run_key,
+        command.taskScope,
+      );
+      if (
+        !currentness.claimsAccepted ||
+        !sameDurableTaskScopeFence(command.taskScope, currentness)
+      ) {
+        throw new TypeError("Runner command task scope is fenced before intent persistence");
       }
       const budget = this.#requiredBudget(run.run_key, command.budgetReservation.unit);
       const available = Math.max(0, budget.budget_limit - budget.spent - budget.reserved);
@@ -1196,9 +1404,13 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
             attempt_id: string;
             context_digest: string;
             origin: EffectOutcome["origin"];
+            task_id: string;
+            definition_generation: number;
+            scope_fence_generation: number;
           }
         >(
-          `SELECT owner_id, fence, attempt_id, context_digest, origin
+          `SELECT owner_id, fence, attempt_id, context_digest, origin,
+                  task_id, definition_generation, scope_fence_generation
            FROM runner_effect_claims WHERE run_key = ? AND intent_id = ?`,
         )
         .get(run.run_key, request.intent.command.operationId);
@@ -1207,7 +1419,9 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
         claim.owner_id !== request.lease.owner ||
         claim.fence !== request.lease.fence ||
         claim.attempt_id !== request.attemptId ||
-        claim.context_digest !== run.context_digest
+        claim.context_digest !== request.intent.command.taskScope.acceptedContextDigest ||
+        claim.task_id !== request.intent.command.taskScope.taskId ||
+        claim.definition_generation !== request.intent.command.taskScope.definitionGeneration
       ) {
         throw new TypeError("Effect outcome does not match the live durable attempt claim");
       }
@@ -1233,11 +1447,33 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
         owner: request.lease.owner,
         fence: request.lease.fence,
         attemptId: request.attemptId,
+        commandTaskScope: request.intent.command.taskScope,
+        claimTaskScope: {
+          runId: request.runId,
+          taskId: claim.task_id,
+          definitionGeneration: claim.definition_generation,
+          acceptedContextDigest: claim.context_digest,
+          fenceGeneration: claim.scope_fence_generation,
+        },
         contextDigest: request.intent.command.contextDigest,
         inputDigest: request.intent.command.inputDigest,
         status: observation.status,
-        freshness:
-          request.intent.command.contextDigest === run.context_digest ? "current" : "stale",
+        freshness: sameDurableTaskScopeFence(
+          {
+            runId: request.runId,
+            taskId: claim.task_id,
+            definitionGeneration: claim.definition_generation,
+            acceptedContextDigest: claim.context_digest,
+            fenceGeneration: claim.scope_fence_generation,
+          },
+          requireTaskScopeCurrentness(
+            this.#database,
+            run.run_key,
+            request.intent.command.taskScope,
+          ),
+        )
+          ? "current"
+          : "stale",
         observedAt: observation.observedAt,
         reconciliationAttempts,
         usage,
@@ -1592,7 +1828,7 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
       .all(runKey)
       .map((row) => parseRunnerValue<EffectOutcome>(row.canonical_outcome))
       .flatMap((outcome) =>
-        outcome.contextDigest !== run.context_digest
+        outcome.freshness !== "current"
           ? []
           : [
               {
@@ -1912,6 +2148,23 @@ function validateRunnerCommand(command: QueuedEffectCommand): void {
   validateRunnerIdentity(command.repositoryId, "repositoryId");
   validateRunnerIdentity(command.runId, "runId");
   validateRunnerIdentity(command.operationId, "operationId");
+  if (
+    Object.keys(command.taskScope).sort().join(",") !==
+    "acceptedContextDigest,definitionGeneration,fenceGeneration,runId,taskId"
+  )
+    throw new TypeError("Runner command task scope must contain exactly five fields");
+  if (
+    command.taskScope.runId !== command.runId ||
+    !Number.isSafeInteger(command.taskScope.definitionGeneration) ||
+    command.taskScope.definitionGeneration < 1 ||
+    !Number.isSafeInteger(command.taskScope.fenceGeneration) ||
+    command.taskScope.fenceGeneration < 1
+  )
+    throw new TypeError("Runner command task scope is invalid");
+  validateRunnerIdentity(command.taskScope.taskId, "taskScope.taskId");
+  validateRunnerDigest(command.taskScope.acceptedContextDigest, "taskScope.acceptedContextDigest");
+  if (command.contextDigest !== command.taskScope.acceptedContextDigest)
+    throw new TypeError("Runner command context must equal its accepted task scope context");
   if (!["worker", "sensor", "git", "asset", "time"].includes(command.kind)) {
     throw new TypeError("Runner command effect kind is invalid");
   }
@@ -2060,6 +2313,7 @@ export class SqliteContextBroker {
     projection: () => ContextBrokerProjection;
     toCanonicalJson: () => string;
     toDurableCanonicalJson: () => string;
+    installTaskScopeFences: (input: InstallTaskScopeFencesInput) => readonly TaskScopeCurrentness[];
   };
   readonly #database: Database.Database;
   readonly #completionFacts: CompletionFactPort | undefined;
@@ -2094,6 +2348,7 @@ export class SqliteContextBroker {
       projection: () => this.#loadAuthority().projection(),
       toCanonicalJson: () => this.#loadAuthority().toCanonicalJson(),
       toDurableCanonicalJson: () => this.#readContextState(),
+      installTaskScopeFences: (input) => this.installTaskScopeFences(input),
     });
   }
 
@@ -2111,6 +2366,18 @@ export class SqliteContextBroker {
 
   loadWorkerDispatchProgress(dispatchId: string) {
     return this.#loadBroker().loadWorkerDispatchProgress(dispatchId);
+  }
+
+  installTaskScopeFences(input: InstallTaskScopeFencesInput): readonly TaskScopeCurrentness[] {
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const installed = installDurableTaskScopeFences(this.#database, input, this.dependencies);
+      this.#database.exec("COMMIT");
+      return installed;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   grantAssetAccess(input: ContextGrantInput) {
@@ -2185,6 +2452,229 @@ export class SqliteContextBroker {
       .filter(([, fact]) => !fact.delivered)
       .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))[0];
     return pending === undefined ? false : this.deliverCompletionFact(pending[0]);
+  }
+
+  claimAmendmentProposalOutbox(
+    ownerId: string,
+    currentTime: string,
+    expiresAt: string,
+  ): WorkerAmendmentOutboxClaim | undefined {
+    validateStorageIdentifier(ownerId, "ownerId");
+    validateTimestamp(currentTime, "currentTime");
+    validateTimestamp(expiresAt, "expiresAt");
+    if (Date.parse(expiresAt) <= Date.parse(currentTime)) {
+      throw new TypeError("Amendment outbox claim expiry must be later than currentTime");
+    }
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.#database
+        .prepare<
+          [string, string],
+          {
+            submission_id: string;
+            source_digest: string;
+            claim_owner_id: string | null;
+            claim_fence: number | null;
+            claim_expires_at: string | null;
+          }
+        >(
+          `SELECT submission_id, source_digest, claim_owner_id, claim_fence, claim_expires_at
+           FROM context_amendment_outbox
+           WHERE delivered = 0
+             AND (claim_owner_id IS NULL OR claim_owner_id = ? OR claim_expires_at <= ?)
+           ORDER BY submission_id LIMIT 1`,
+        )
+        .get(ownerId, currentTime);
+      if (row === undefined) {
+        this.#database.exec("COMMIT");
+        return undefined;
+      }
+      if (
+        row.claim_owner_id === ownerId &&
+        row.claim_fence !== null &&
+        row.claim_expires_at !== null &&
+        Date.parse(row.claim_expires_at) > Date.parse(currentTime)
+      ) {
+        this.#database.exec("COMMIT");
+        return {
+          submissionId: row.submission_id,
+          sourceDigest: row.source_digest,
+          ownerId,
+          fence: row.claim_fence,
+          expiresAt: row.claim_expires_at,
+        };
+      }
+      const fence = (row.claim_fence ?? 0) + 1;
+      const result = this.#database
+        .prepare(
+          `UPDATE context_amendment_outbox
+           SET claim_owner_id = ?, claim_fence = ?, claim_expires_at = ?
+           WHERE submission_id = ? AND delivered = 0
+             AND (claim_owner_id IS NULL OR claim_owner_id = ? OR claim_expires_at <= ?)`,
+        )
+        .run(ownerId, fence, expiresAt, row.submission_id, ownerId, currentTime);
+      if (result.changes !== 1) throw new TypeError("Amendment outbox claim lost a race");
+      this.#database.exec("COMMIT");
+      return {
+        submissionId: row.submission_id,
+        sourceDigest: row.source_digest,
+        ownerId,
+        fence,
+        expiresAt,
+      };
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  readClaimedAmendmentProposal(
+    claim: WorkerAmendmentOutboxClaim,
+    currentTime: string,
+  ): WorkerAmendmentProposalSource {
+    validateTimestamp(currentTime, "currentTime");
+    const row = this.#database
+      .prepare<
+        [string, string, number],
+        {
+          source_digest: string;
+          canonical_source: string;
+          claim_expires_at: string | null;
+          delivered: number;
+        }
+      >(
+        `SELECT source_digest, canonical_source, claim_expires_at, delivered
+         FROM context_amendment_outbox
+         WHERE submission_id = ? AND claim_owner_id = ? AND claim_fence = ?`,
+      )
+      .get(claim.submissionId, claim.ownerId, claim.fence);
+    if (
+      row === undefined ||
+      row.delivered !== 0 ||
+      row.source_digest !== claim.sourceDigest ||
+      row.claim_expires_at !== claim.expiresAt ||
+      Date.parse(row.claim_expires_at) <= Date.parse(currentTime)
+    ) {
+      throw new TypeError("Amendment outbox claim is stale");
+    }
+    const source = decodeCanonicalJsonValue(row.canonical_source);
+    if (
+      !isPlainRecord(source) ||
+      !Object.hasOwn(source, "submission") ||
+      !Object.hasOwn(source, "context")
+    ) {
+      throw new Error("Amendment outbox source is invalid");
+    }
+    return Object.freeze({ submission: source.submission, context: source.context });
+  }
+
+  acknowledgeAmendmentProposalOutbox(
+    claim: WorkerAmendmentOutboxClaim,
+    currentTime: string,
+  ): boolean {
+    return this.completeAmendmentProposalOutbox(claim, currentTime, {
+      kind: "acknowledged",
+      submissionId: claim.submissionId,
+      sourceDigest: claim.sourceDigest,
+    });
+  }
+
+  completeAmendmentProposalOutbox(
+    claim: WorkerAmendmentOutboxClaim,
+    currentTime: string,
+    outcome: unknown,
+  ): boolean {
+    validateTimestamp(currentTime, "currentTime");
+    const canonicalOutcomeValue = canonicalValue(outcome);
+    if (!isPlainRecord(canonicalOutcomeValue)) {
+      throw new TypeError("Amendment bridge outcome must be an object");
+    }
+    const outcomeKind = canonicalOutcomeValue.kind;
+    if (
+      outcomeKind !== "acknowledged" &&
+      outcomeKind !== "compiled" &&
+      outcomeKind !== "diagnostics"
+    ) {
+      throw new TypeError("Amendment bridge outcome kind is invalid");
+    }
+    const canonicalOutcome = canonicalStringify(canonicalOutcomeValue);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const existingOutcome = this.#database
+        .prepare<
+          [string],
+          { source_digest: string; outcome_kind: string; canonical_outcome: string }
+        >(
+          `SELECT source_digest, outcome_kind, canonical_outcome
+           FROM amendment_proposal_bridge_outcomes WHERE submission_id = ?`,
+        )
+        .get(claim.submissionId);
+      if (existingOutcome !== undefined) {
+        if (
+          existingOutcome.source_digest !== claim.sourceDigest ||
+          existingOutcome.outcome_kind !== outcomeKind ||
+          existingOutcome.canonical_outcome !== canonicalOutcome
+        ) {
+          throw new TypeError("Amendment bridge outcome conflicts with durable completion");
+        }
+      }
+      const delivered = this.#database
+        .prepare<[string], { source_digest: string; claim_fence: number | null }>(
+          `SELECT source_digest, claim_fence FROM context_amendment_outbox
+           WHERE submission_id = ? AND delivered = 1`,
+        )
+        .get(claim.submissionId);
+      if (delivered !== undefined) {
+        if (
+          delivered.source_digest !== claim.sourceDigest ||
+          delivered.claim_fence !== claim.fence
+        ) {
+          throw new TypeError("Amendment outbox acknowledgement conflicts with delivered source");
+        }
+        this.#database.exec("COMMIT");
+        return false;
+      }
+      const result = this.#database
+        .prepare(
+          `UPDATE context_amendment_outbox
+           SET delivered = 1, claim_owner_id = NULL, claim_expires_at = NULL
+           WHERE submission_id = ? AND source_digest = ? AND delivered = 0
+             AND claim_owner_id = ? AND claim_fence = ? AND claim_expires_at = ?
+             AND claim_expires_at > ?`,
+        )
+        .run(
+          claim.submissionId,
+          claim.sourceDigest,
+          claim.ownerId,
+          claim.fence,
+          claim.expiresAt,
+          currentTime,
+        );
+      if (result.changes !== 1) throw new TypeError("Amendment outbox acknowledgement is stale");
+      this.#database
+        .prepare(
+          `INSERT INTO amendment_proposal_bridge_outcomes(
+             submission_id, source_digest, outcome_kind, canonical_outcome, recorded_at
+           ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(claim.submissionId, claim.sourceDigest, outcomeKind, canonicalOutcome, currentTime);
+      this.#database.exec("COMMIT");
+      return true;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getAmendmentProposalBridgeOutcome(submissionId: string): unknown | undefined {
+    validateStorageIdentifier(submissionId, "submissionId");
+    const row = this.#database
+      .prepare<[string], { canonical_outcome: string }>(
+        `SELECT canonical_outcome FROM amendment_proposal_bridge_outcomes
+         WHERE submission_id = ?`,
+      )
+      .get(submissionId);
+    return row === undefined ? undefined : decodeCanonicalJsonValue(row.canonical_outcome);
   }
 
   putContextAsset(binding: HistoricalAssetBinding, input: Uint8Array): void {
@@ -2394,10 +2884,12 @@ export class SqliteContextBroker {
   }
 
   #loadAuthority(): InMemoryContextAuthority {
-    return InMemoryContextAuthority.fromDurableCanonicalJson(
+    const authority = InMemoryContextAuthority.fromDurableCanonicalJson(
       this.#readContextState(),
       this.dependencies.sha256,
     );
+    overlayContextTaskScopeCurrentness(this.#database, authority);
+    return authority;
   }
 
   #persistContextAuthority(authority: InMemoryContextAuthority): void {
@@ -2409,7 +2901,28 @@ export class SqliteContextBroker {
   }
 
   #mirrorContextAuthority(authority: InMemoryContextAuthority): void {
-    const normalized = normalizeContextAuthority(authority);
+    const normalized = normalizeContextAuthority(authority, this.dependencies.sha256);
+    synchronizeContextTaskScopes(this.#database, normalized.taskScopes);
+    const amendmentOutboxState = new Map(
+      this.#database
+        .prepare<
+          [],
+          {
+            submission_id: string;
+            source_digest: string;
+            delivered: number;
+            claim_owner_id: string | null;
+            claim_fence: number | null;
+            claim_expires_at: string | null;
+          }
+        >(
+          `SELECT submission_id, source_digest, delivered, claim_owner_id,
+                  claim_fence, claim_expires_at
+           FROM context_amendment_outbox ORDER BY submission_id`,
+        )
+        .all()
+        .map((row) => [row.submission_id, row] as const),
+    );
     for (const row of normalized.contextBases) {
       this.#database
         .prepare(
@@ -2455,7 +2968,8 @@ export class SqliteContextBroker {
           row.sensitivity,
         );
     this.#database.exec(
-      `DELETE FROM context_audit_receipts;
+      `DELETE FROM context_amendment_outbox;
+       DELETE FROM context_audit_receipts;
        DELETE FROM context_events;
        DELETE FROM context_questions;
        DELETE FROM context_terminal_completions;
@@ -2568,6 +3082,31 @@ export class SqliteContextBroker {
            ) VALUES (?, ?, ?, ?)`,
         )
         .run(row.submission_id, row.dispatch_id, row.canonical_fact, row.delivered);
+    for (const row of normalized.amendmentOutbox) {
+      const prior = amendmentOutboxState.get(row.submission_id);
+      if (prior !== undefined && prior.source_digest !== row.source_digest) {
+        throw new Error("Worker amendment outbox source changed for an existing submission");
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO context_amendment_outbox(
+             submission_id, dispatch_id, context_id, amendment_id,
+             canonical_source, source_digest, delivered,
+             claim_owner_id, claim_fence, claim_expires_at
+           ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          row.submission_id,
+          row.dispatch_id,
+          row.context_id,
+          row.canonical_source,
+          row.source_digest,
+          prior?.delivered ?? 0,
+          prior?.claim_owner_id ?? null,
+          prior?.claim_fence ?? null,
+          prior?.claim_expires_at ?? null,
+        );
+    }
     for (const row of normalized.events)
       this.#database
         .prepare(
@@ -2602,6 +3141,7 @@ export class SqliteContextBroker {
     if ((this.#database.pragma("foreign_key_check") as unknown[]).length > 0)
       throw new Error("SQLite context authority foreign_key_check failed");
     verifyContextTables(this.#database, this.dependencies);
+    verifyAmendmentTables(this.#database, this.dependencies);
   }
 
   #fault(point: SqliteContextBrokerFaultPoint): void {
@@ -2664,6 +3204,708 @@ export function restoreSqliteAuthority(
     throw error;
   }
   return new SqliteAuthority(options);
+}
+
+function validateConfigurationSnapshot(
+  input: unknown,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): ConfigurationSnapshotValue {
+  const canonical = canonicalValue(input) as unknown;
+  if (!isPlainRecord(canonical)) throw new TypeError("Configuration snapshot must be an object");
+  const requiredKeys = [
+    "apiVersion",
+    "graph",
+    "schemas",
+    "roles",
+    "modelPolicies",
+    "sensors",
+    "gates",
+    "projections",
+    "componentDigests",
+    "snapshotDigest",
+  ];
+  if (
+    Object.keys(canonical).length !== requiredKeys.length ||
+    requiredKeys.some((key) => !Object.hasOwn(canonical, key))
+  ) {
+    throw new TypeError("Configuration snapshot must have the exact canonical shape");
+  }
+  if (canonical.apiVersion !== "senawa.dev/configuration-snapshot/v1alpha1") {
+    throw new TypeError("Configuration snapshot apiVersion is unsupported");
+  }
+  const graph = validateWorkflowGraph(canonical.graph, dependencies.sha256);
+  const registryKeys = [
+    "schemas",
+    "roles",
+    "modelPolicies",
+    "sensors",
+    "gates",
+    "projections",
+  ] as const;
+  for (const key of registryKeys) {
+    const entries = canonical[key];
+    if (!Array.isArray(entries))
+      throw new TypeError(`Configuration snapshot ${key} must be an array`);
+    let priorKey: string | undefined;
+    for (const entry of entries) {
+      if (!isPlainRecord(entry) || typeof entry.key !== "string" || !isSha256Digest(entry.digest)) {
+        throw new TypeError(`Configuration snapshot ${key} entry is invalid`);
+      }
+      if (priorKey !== undefined && priorKey >= entry.key) {
+        throw new TypeError(`Configuration snapshot ${key} entries must be uniquely sorted`);
+      }
+      if (canonicalDigest(canonicalValue(entry.value), dependencies.sha256) !== entry.digest) {
+        throw new TypeError(`Configuration snapshot ${key} entry digest is invalid`);
+      }
+      priorKey = entry.key;
+    }
+  }
+  if (!isPlainRecord(canonical.componentDigests)) {
+    throw new TypeError("Configuration snapshot componentDigests must be an object");
+  }
+  const componentDigests = canonical.componentDigests;
+  const componentKeys = ["graph", ...registryKeys] as const;
+  if (
+    Object.keys(canonical.componentDigests).length !== componentKeys.length ||
+    componentKeys.some((key) => !isSha256Digest(componentDigests[key]))
+  ) {
+    throw new TypeError("Configuration snapshot componentDigests are invalid");
+  }
+  for (const key of componentKeys) {
+    const value = key === "graph" ? graph : canonical[key];
+    if (canonicalDigest(canonicalValue(value), dependencies.sha256) !== componentDigests[key]) {
+      throw new TypeError(`Configuration snapshot ${key} component digest is invalid`);
+    }
+  }
+  if (!isSha256Digest(canonical.snapshotDigest)) {
+    throw new TypeError("Configuration snapshot digest is invalid");
+  }
+  const { snapshotDigest, ...content } = canonical;
+  if (canonicalDigest(canonicalValue(content), dependencies.sha256) !== snapshotDigest) {
+    throw new TypeError("Configuration snapshot digest does not match canonical content");
+  }
+  return { snapshotDigest, graph, canonical };
+}
+
+function normalizeAmendmentRows(snapshot: AuthoritySnapshot): NormalizedAmendmentRows {
+  const proposals: Record<string, unknown>[] = [];
+  const decisions: Record<string, unknown>[] = [];
+  const withdrawals: Record<string, unknown>[] = [];
+  const applications: Record<string, unknown>[] = [];
+  for (const run of snapshot.runs) {
+    const records = run.records;
+    if (!isPlainRecord(records) || !Array.isArray(records.amendmentRecords)) continue;
+    const runKey = canonicalStringify([run.repositoryId, run.runId]);
+    for (const value of records.amendmentRecords) {
+      if (!isPlainRecord(value) || !isPlainRecord(value.proposal)) {
+        throw new TypeError("Runtime amendment records are not canonical objects");
+      }
+      const lifecycle = value as unknown as AmendmentLifecycleValue;
+      const proposal = lifecycle.proposal;
+      proposals.push({
+        amendment_id: proposal.amendmentId,
+        run_key: runKey,
+        proposal_digest: proposal.proposalDigest,
+        base_graph_revision_digest: proposal.baseGraph.revisionDigest,
+        base_context_digest: proposal.baseContextDigest,
+        base_snapshot_digest: proposal.baseConfigurationSnapshotDigest,
+        result_snapshot_digest: proposal.resultConfigurationSnapshotDigest,
+        reviewed_graph_revision_digest: proposal.reviewedResultGraph.revisionDigest,
+        canonical_proposal: canonicalStringify(proposal),
+      });
+      if (lifecycle.decision !== undefined) {
+        decisions.push({
+          approval_id: lifecycle.decision.approvalId,
+          amendment_id: proposal.amendmentId,
+          proposal_digest: lifecycle.decision.proposalDigest,
+          decision_digest: lifecycle.decision.decisionDigest,
+          decision: lifecycle.decision.decision,
+          canonical_decision: canonicalStringify(lifecycle.decision),
+        });
+      }
+      if (lifecycle.withdrawal !== undefined) {
+        withdrawals.push({
+          amendment_id: proposal.amendmentId,
+          withdrawal_digest: lifecycle.withdrawal.withdrawalDigest,
+          canonical_withdrawal: canonicalStringify(lifecycle.withdrawal),
+        });
+      }
+      if (lifecycle.application !== undefined) {
+        applications.push({
+          amendment_id: proposal.amendmentId,
+          application_digest: lifecycle.application.applicationDigest,
+          before_graph_revision_digest: lifecycle.application.beforeGraphRevisionDigest,
+          after_graph_revision_digest: lifecycle.application.afterGraphRevisionDigest,
+          quiescence_fact_digest: lifecycle.application.quiescenceFactDigest,
+          canonical_application: canonicalStringify(lifecycle.application),
+        });
+      }
+    }
+  }
+  return {
+    proposals: proposals.sort(compareNormalized("amendment_id")),
+    decisions: decisions.sort(compareNormalized("approval_id")),
+    withdrawals: withdrawals.sort(compareNormalized("amendment_id")),
+    applications: applications.sort(compareNormalized("amendment_id")),
+  };
+}
+
+function persistAmendmentProjections(
+  database: Database.Database,
+  snapshot: AuthoritySnapshot,
+  dependencies: RuntimeDependencies,
+): void {
+  const expected = normalizeAmendmentRows(snapshot);
+  for (const row of expected.proposals) {
+    const proposal = JSON.parse(row.canonical_proposal as string) as AmendmentProposal;
+    const base = requiredConfigurationSnapshotRow(database, row.base_snapshot_digest as string);
+    const result = requiredConfigurationSnapshotRow(database, row.result_snapshot_digest as string);
+    if (
+      base.graph_revision_digest !== proposal.baseGraph.revisionDigest ||
+      result.graph_revision_digest !== proposal.reviewedResultGraph.revisionDigest
+    ) {
+      throw new TypeError(
+        "Amendment proposal configuration snapshots do not bind its exact graphs",
+      );
+    }
+    validateConfigurationSnapshot(JSON.parse(base.canonical_snapshot), dependencies);
+    validateConfigurationSnapshot(JSON.parse(result.canonical_snapshot), dependencies);
+  }
+  synchronizeAmendmentTable(database, "amendment_proposals", "amendment_id", expected.proposals);
+  synchronizeAmendmentTable(database, "amendment_decisions", "approval_id", expected.decisions);
+  synchronizeAmendmentTable(
+    database,
+    "amendment_withdrawals",
+    "amendment_id",
+    expected.withdrawals,
+  );
+  synchronizeAmendmentTable(
+    database,
+    "amendment_applications",
+    "amendment_id",
+    expected.applications,
+  );
+}
+
+function synchronizeAmendmentTable(
+  database: Database.Database,
+  table: string,
+  keyColumn: string,
+  expected: readonly Record<string, unknown>[],
+): void {
+  const expectedKeys = new Set(expected.map((row) => String(row[keyColumn])));
+  for (const row of database.prepare(`SELECT ${keyColumn} AS identity FROM ${table}`).all() as {
+    identity: string;
+  }[]) {
+    if (!expectedKeys.has(row.identity)) {
+      database.prepare(`DELETE FROM ${table} WHERE ${keyColumn} = ?`).run(row.identity);
+    }
+  }
+  for (const row of expected) {
+    const columns = Object.keys(row);
+    database
+      .prepare(
+        `INSERT INTO ${table}(${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})
+         ON CONFLICT(${keyColumn}) DO NOTHING`,
+      )
+      .run(...columns.map((column) => row[column]));
+    const actual = database
+      .prepare(`SELECT ${columns.join(", ")} FROM ${table} WHERE ${keyColumn} = ?`)
+      .get(row[keyColumn]);
+    if (canonicalStringify(actual) !== canonicalStringify(row)) {
+      throw new Error(`SQLite ${table} row diverges from canonical runtime amendment authority`);
+    }
+  }
+}
+
+function requiredConfigurationSnapshotRow(database: Database.Database, digest: string) {
+  const row = database
+    .prepare<[string], { graph_revision_digest: string; canonical_snapshot: string }>(
+      `SELECT graph_revision_digest, canonical_snapshot
+       FROM configuration_snapshots WHERE snapshot_digest = ?`,
+    )
+    .get(digest);
+  if (row === undefined) {
+    throw new TypeError(`Configuration snapshot ${digest} is not durably registered`);
+  }
+  return row;
+}
+
+function isApprovedAmendmentDecision(
+  value: unknown,
+): value is { readonly amendmentId: string; readonly decision: "approve" } {
+  return (
+    isPlainRecord(value) && value.decision === "approve" && typeof value.amendmentId === "string"
+  );
+}
+
+function findAmendmentLifecycle(
+  snapshot: AuthoritySnapshot,
+  repositoryId: string,
+  runIdValue: string,
+  amendmentId: string,
+): AmendmentLifecycleValue {
+  const run = snapshot.runs.find(
+    (candidate) => candidate.repositoryId === repositoryId && candidate.runId === runIdValue,
+  );
+  const records = run?.records;
+  if (!isPlainRecord(records) || !Array.isArray(records.amendmentRecords)) {
+    throw new TypeError("Run has no durable amendment authority");
+  }
+  const value = records.amendmentRecords.find(
+    (candidate) =>
+      isPlainRecord(candidate) &&
+      isPlainRecord(candidate.proposal) &&
+      candidate.proposal.amendmentId === amendmentId,
+  );
+  if (value === undefined)
+    throw new TypeError("Amendment proposal is absent from durable authority");
+  return value as unknown as AmendmentLifecycleValue;
+}
+
+function installApprovedAmendmentFences(
+  database: Database.Database,
+  snapshot: AuthoritySnapshot,
+  repositoryId: string,
+  runIdValue: string,
+  amendmentId: string,
+  installedAt: string,
+  dependencies: RuntimeDependencies,
+): readonly TaskScopeCurrentness[] {
+  const lifecycle = findAmendmentLifecycle(snapshot, repositoryId, runIdValue, amendmentId);
+  if (lifecycle.decision?.decision !== "approve") {
+    throw new TypeError("Only an approved amendment can install durable fences");
+  }
+  const runKey = canonicalStringify([repositoryId, runIdValue]);
+  const fences = lifecycle.proposal.impact.affectedTaskScopes.map((scope) => {
+    const current = requireTaskScopeCurrentness(database, runKey, {
+      runId: runIdValue,
+      taskId: scope.taskId,
+      definitionGeneration: scope.definitionGeneration,
+    });
+    return {
+      scope: {
+        runId: current.runId,
+        taskId: current.taskId,
+        definitionGeneration: current.definitionGeneration,
+      },
+      expectedFenceGeneration: current.fenceGeneration,
+      expectedAcceptedContextDigest: current.acceptedContextDigest,
+    };
+  });
+  return installDurableTaskScopeFences(
+    database,
+    { repositoryId, runId: runIdValue, installedAt, fences },
+    dependencies,
+    amendmentId,
+  );
+}
+
+function buildTrustedAmendmentQuiescence(
+  database: Database.Database,
+  canonicalAuthority: string,
+  command: ReturnType<typeof decodeCommandEnvelope>,
+  occurredAt: string,
+  dependencies: RuntimeDependencies,
+) {
+  const payload = decodeApplyApprovedAmendmentPayload(command.payload);
+  const lifecycle = findAmendmentLifecycle(
+    parseSnapshot(canonicalAuthority),
+    command.repositoryId,
+    command.runId,
+    payload.amendmentId,
+  );
+  if (
+    lifecycle.decision?.decision !== "approve" ||
+    lifecycle.decision.decisionDigest !== payload.decisionDigest
+  ) {
+    throw new TypeError("Apply does not name the exact durable approved decision");
+  }
+  const runKey = canonicalStringify([command.repositoryId, command.runId]);
+  for (const scope of lifecycle.proposal.impact.affectedTaskScopes) {
+    const current = requireTaskScopeCurrentness(database, runKey, {
+      runId: command.runId,
+      taskId: scope.taskId,
+      definitionGeneration: scope.definitionGeneration,
+    });
+    if (current.claimsAccepted) throw new TypeError("Apply requires every affected scope fence");
+    const row = database
+      .prepare<[string, string, number], { amendment_id: string | null }>(
+        `SELECT amendment_id FROM amendment_work_fences
+         WHERE run_key = ? AND task_id = ? AND definition_generation = ?`,
+      )
+      .get(runKey, scope.taskId, scope.definitionGeneration);
+    if (row?.amendment_id !== payload.amendmentId) {
+      throw new TypeError("Apply affected scope fence belongs to a different transition");
+    }
+  }
+  const affected = lifecycle.proposal.impact.affectedTaskScopes;
+  let liveClaimCount = 0;
+  let nonterminalEffectCount = 0;
+  for (const scope of affected) {
+    liveClaimCount +=
+      database
+        .prepare<[string, string, number], { count: number }>(
+          `SELECT count(*) AS count FROM runner_effect_claims
+           WHERE run_key = ? AND task_id = ? AND definition_generation = ?`,
+        )
+        .get(runKey, scope.taskId, scope.definitionGeneration)?.count ?? 0;
+    nonterminalEffectCount +=
+      database
+        .prepare<[string, string, number], { count: number }>(
+          `SELECT count(*) AS count
+           FROM runner_effect_intents i
+           WHERE i.run_key = ?
+             AND json_extract(i.canonical_intent, '$.command.taskScope.taskId') = ?
+             AND json_extract(i.canonical_intent, '$.command.taskScope.definitionGeneration') = ?
+             AND COALESCE((
+               SELECT o.status FROM runner_effect_outcomes o
+               WHERE o.intent_id = i.intent_id ORDER BY o.commit_cursor DESC LIMIT 1
+             ), 'active') IN ('active', 'unknown')`,
+        )
+        .get(runKey, scope.taskId, scope.definitionGeneration)?.count ?? 0;
+  }
+  return createAmendmentQuiescenceFact(
+    {
+      occurredAt,
+      affectedTaskScopes: affected,
+      liveClaimCount,
+      nonterminalEffectCount,
+    },
+    lifecycle.proposal,
+    dependencies.sha256,
+  );
+}
+
+function insertInitialTaskScopes(
+  database: Database.Database,
+  repositoryId: string,
+  runIdValue: string,
+  scopes: readonly TaskScopeCurrentness[],
+): void {
+  const runKey = canonicalStringify([repositoryId, runIdValue]);
+  for (const scope of scopes) {
+    if (scope.runId !== runIdValue || !scope.claimsAccepted) {
+      throw new TypeError("Initial runner task scope must match the run and accept claims");
+    }
+    database
+      .prepare(
+        `INSERT INTO amendment_work_fences(
+           run_key, repository_id, run_id, task_id, definition_generation,
+           fence_generation, current_context_digest, claims_accepted, amendment_id, installed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL)
+         ON CONFLICT(run_key, task_id, definition_generation) DO NOTHING`,
+      )
+      .run(
+        runKey,
+        repositoryId,
+        runIdValue,
+        scope.taskId,
+        scope.definitionGeneration,
+        scope.fenceGeneration,
+        scope.acceptedContextDigest,
+      );
+    const current = requireTaskScopeCurrentness(database, runKey, scope);
+    if (!current.claimsAccepted || !sameDurableTaskScopeFence(scope, current)) {
+      throw new TypeError("Runner and context task-scope initialization diverge");
+    }
+  }
+}
+
+function readTaskScopeCurrentness(
+  database: Database.Database,
+  runKey: string,
+): readonly TaskScopeCurrentness[] {
+  return Object.freeze(
+    database
+      .prepare<
+        [string],
+        {
+          run_id: string;
+          task_id: string;
+          definition_generation: number;
+          fence_generation: number;
+          current_context_digest: string;
+          claims_accepted: number;
+        }
+      >(
+        `SELECT run_id, task_id, definition_generation, fence_generation,
+                current_context_digest, claims_accepted
+         FROM amendment_work_fences WHERE run_key = ?
+         ORDER BY task_id, definition_generation`,
+      )
+      .all(runKey)
+      .map(taskScopeCurrentnessFromRow),
+  );
+}
+
+function requireTaskScopeCurrentness(
+  database: Database.Database,
+  runKey: string,
+  scope: { readonly runId: string; readonly taskId: string; readonly definitionGeneration: number },
+): TaskScopeCurrentness {
+  const row = database
+    .prepare<
+      [string, string, number],
+      {
+        run_id: string;
+        task_id: string;
+        definition_generation: number;
+        fence_generation: number;
+        current_context_digest: string;
+        claims_accepted: number;
+      }
+    >(
+      `SELECT run_id, task_id, definition_generation, fence_generation,
+              current_context_digest, claims_accepted
+       FROM amendment_work_fences
+       WHERE run_key = ? AND task_id = ? AND definition_generation = ?`,
+    )
+    .get(runKey, scope.taskId, scope.definitionGeneration);
+  if (row === undefined || row.run_id !== scope.runId) {
+    throw new TypeError("Task scope currentness is not durably configured");
+  }
+  return taskScopeCurrentnessFromRow(row);
+}
+
+function taskScopeCurrentnessFromRow(row: {
+  readonly run_id: string;
+  readonly task_id: string;
+  readonly definition_generation: number;
+  readonly fence_generation: number;
+  readonly current_context_digest: string;
+  readonly claims_accepted: number;
+}): TaskScopeCurrentness {
+  return Object.freeze({
+    runId: row.run_id,
+    taskId: row.task_id,
+    definitionGeneration: row.definition_generation,
+    acceptedContextDigest: row.current_context_digest,
+    fenceGeneration: row.fence_generation,
+    claimsAccepted: row.claims_accepted === 1,
+  });
+}
+
+function sameDurableTaskScopeFence(
+  left: {
+    readonly runId: string;
+    readonly taskId: string;
+    readonly definitionGeneration: number;
+    readonly acceptedContextDigest: string;
+    readonly fenceGeneration: number;
+  },
+  right: TaskScopeCurrentness,
+): boolean {
+  return (
+    left.runId === right.runId &&
+    left.taskId === right.taskId &&
+    left.definitionGeneration === right.definitionGeneration &&
+    left.acceptedContextDigest === right.acceptedContextDigest &&
+    left.fenceGeneration === right.fenceGeneration
+  );
+}
+
+function installDurableTaskScopeFences(
+  database: Database.Database,
+  input: InstallTaskScopeFencesInput,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+  amendmentId?: string,
+): readonly TaskScopeCurrentness[] {
+  validateTimestamp(input.installedAt, "installedAt");
+  const runKey = canonicalStringify([input.repositoryId, input.runId]);
+  const installations = [...input.fences].sort((left, right) =>
+    compareText(taskScopeKey(left.scope), taskScopeKey(right.scope)),
+  );
+  const seen = new Set<string>();
+  const current = installations.map((installation) => {
+    if (installation.scope.runId !== input.runId) {
+      throw new TypeError("Fence scope does not match the target run");
+    }
+    const key = taskScopeKey(installation.scope);
+    if (seen.has(key)) throw new TypeError("Fence installations must be unique");
+    seen.add(key);
+    const scope = requireTaskScopeCurrentness(database, runKey, installation.scope);
+    if (
+      !scope.claimsAccepted ||
+      scope.fenceGeneration !== installation.expectedFenceGeneration ||
+      scope.acceptedContextDigest !== installation.expectedAcceptedContextDigest
+    ) {
+      throw new TypeError("Task scope fence expectation is stale");
+    }
+    return scope;
+  });
+  const contextState = database
+    .prepare<[], ContextAuthorityStateRow>(
+      "SELECT canonical_json FROM context_authority_state WHERE singleton = 1",
+    )
+    .get();
+  if (contextState === undefined) throw new Error("SQLite context authority singleton is missing");
+  const contextAuthority = InMemoryContextAuthority.fromDurableCanonicalJson(
+    contextState.canonical_json,
+    dependencies.sha256,
+  );
+  overlayContextTaskScopeCurrentness(database, contextAuthority);
+  const contextInstallations = installations.filter((installation) =>
+    contextAuthority.taskScopes.has(taskScopeKey(installation.scope)),
+  );
+  const fencedDispatches = contextAuthority
+    .durableSnapshot()
+    .dispatches.filter((record) =>
+      installations.some(
+        (installation) => taskScopeKey(installation.scope) === taskScopeKey(record.taskScope),
+      ),
+    );
+  const installed = current.map((scope) => {
+    const result = database
+      .prepare(
+        `UPDATE amendment_work_fences
+         SET fence_generation = fence_generation + 1, claims_accepted = 0,
+             amendment_id = ?, installed_at = ?
+         WHERE run_key = ? AND task_id = ? AND definition_generation = ?
+           AND fence_generation = ? AND current_context_digest = ? AND claims_accepted = 1`,
+      )
+      .run(
+        amendmentId ?? null,
+        input.installedAt,
+        runKey,
+        scope.taskId,
+        scope.definitionGeneration,
+        scope.fenceGeneration,
+        scope.acceptedContextDigest,
+      );
+    if (result.changes !== 1) throw new TypeError("Task scope fence lost a concurrent race");
+    database
+      .prepare(
+        `INSERT INTO runner_cancellation_requests(intent_id, owner_id, fence, requested_at)
+         SELECT i.intent_id, i.owner_id, i.fence, ?
+         FROM runner_effect_intents i
+         WHERE i.run_key = ?
+           AND json_extract(i.canonical_intent, '$.command.taskScope.taskId') = ?
+           AND json_extract(i.canonical_intent, '$.command.taskScope.definitionGeneration') = ?
+           AND COALESCE((
+             SELECT o.status FROM runner_effect_outcomes o
+             WHERE o.intent_id = i.intent_id ORDER BY o.commit_cursor DESC LIMIT 1
+           ), 'active') IN ('active', 'unknown')
+         ON CONFLICT(intent_id) DO NOTHING`,
+      )
+      .run(input.installedAt, runKey, scope.taskId, scope.definitionGeneration);
+    return Object.freeze({
+      ...scope,
+      fenceGeneration: scope.fenceGeneration + 1,
+      claimsAccepted: false,
+    });
+  });
+  if (contextInstallations.length > 0) {
+    contextAuthority.installTaskScopeFences({ ...input, fences: contextInstallations });
+    database
+      .prepare("UPDATE context_authority_state SET canonical_json = ? WHERE singleton = 1")
+      .run(contextAuthority.toDurableCanonicalJson());
+  }
+  if (amendmentId !== undefined) {
+    for (const record of fencedDispatches) {
+      database
+        .prepare(
+          `INSERT INTO amendment_fenced_dispatches(
+             amendment_id, dispatch_id, task_id, definition_generation,
+             prior_fence_generation, installed_fence_generation
+           ) VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          amendmentId,
+          record.dispatch.dispatchId,
+          record.taskScope.taskId,
+          record.taskScope.definitionGeneration,
+          record.taskScope.fenceGeneration,
+          record.taskScope.fenceGeneration + 1,
+        );
+    }
+  }
+  return Object.freeze(installed);
+}
+
+function overlayContextTaskScopeCurrentness(
+  database: Database.Database,
+  authority: InMemoryContextAuthority,
+): void {
+  for (const [key, scope] of authority.taskScopes) {
+    let dispatch:
+      | (typeof authority.dispatches extends Map<string, infer Value> ? Value : never)
+      | undefined;
+    for (const record of authority.dispatches.values()) {
+      if (taskScopeKey(record.taskScope) === key) {
+        dispatch = record;
+        break;
+      }
+    }
+    if (dispatch === undefined) throw new Error("Context task scope lacks a durable dispatch");
+    const current = requireTaskScopeCurrentness(
+      database,
+      canonicalStringify([dispatch.dispatch.repositoryId, dispatch.dispatch.runId]),
+      scope,
+    );
+    authority.taskScopes.set(key, current);
+  }
+}
+
+function synchronizeContextTaskScopes(
+  database: Database.Database,
+  rows: readonly Record<string, unknown>[],
+): void {
+  for (const row of rows) {
+    const existing = database
+      .prepare<
+        [string, string, number],
+        {
+          run_id: string;
+          task_id: string;
+          definition_generation: number;
+          fence_generation: number;
+          current_context_digest: string;
+          claims_accepted: number;
+        }
+      >(
+        `SELECT run_id, task_id, definition_generation, fence_generation,
+                current_context_digest, claims_accepted
+         FROM amendment_work_fences
+         WHERE run_key = ? AND task_id = ? AND definition_generation = ?`,
+      )
+      .get(row.run_key as string, row.task_id as string, row.definition_generation as number);
+    if (existing === undefined) {
+      database
+        .prepare(
+          `INSERT INTO amendment_work_fences(
+             run_key, repository_id, run_id, task_id, definition_generation,
+             fence_generation, current_context_digest, claims_accepted, amendment_id, installed_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+        )
+        .run(
+          row.run_key,
+          row.repository_id,
+          row.run_id,
+          row.task_id,
+          row.definition_generation,
+          row.fence_generation,
+          row.current_context_digest,
+          row.claims_accepted,
+        );
+      continue;
+    }
+    const expected = {
+      run_id: row.run_id,
+      task_id: row.task_id,
+      definition_generation: row.definition_generation,
+      fence_generation: row.fence_generation,
+      current_context_digest: row.current_context_digest,
+      claims_accepted: row.claims_accepted,
+    };
+    if (canonicalStringify(existing) !== canonicalStringify(expected)) {
+      throw new Error("Context and runner task-scope currentness diverge");
+    }
+  }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function configureWriteConnection(database: Database.Database, busyTimeoutMs: number): void {
@@ -2786,6 +4028,7 @@ function verifyDatabase(
   InMemoryAuthority.fromCanonicalJson(state.canonical_json, dependencies);
   verifyNormalizedSnapshot(database, parseSnapshot(state.canonical_json), dependencies);
   verifyContextTables(database, dependencies);
+  verifyAmendmentTables(database, dependencies);
   verifySupervisorTables(database);
   if (!verifyAssets) return;
   for (const descriptor of readAssetDescriptors(database)) {
@@ -2811,9 +4054,358 @@ function verifyContextTables(
     state.canonical_json,
     dependencies.sha256,
   );
-  verifyNormalizedContextAuthority(database, authority);
+  verifyNormalizedContextAuthority(database, authority, dependencies.sha256);
   verifyAllContextAssetManifests(database, dependencies.sha256);
   verifyDurableContextReads(database, authority);
+}
+
+function verifyAmendmentTables(
+  database: Database.Database,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): void {
+  const authorityRow = database
+    .prepare<[], AuthorityRow>(
+      "SELECT revision, canonical_json FROM authority_state WHERE singleton = 1",
+    )
+    .get();
+  if (authorityRow === undefined) throw new Error("SQLite authority singleton is missing");
+  const expected = normalizeAmendmentRows(parseSnapshot(authorityRow.canonical_json));
+  verifyNormalizedContextRows(
+    "amendment_proposals",
+    database
+      .prepare(
+        `SELECT amendment_id, run_key, proposal_digest, base_graph_revision_digest,
+                base_context_digest, base_snapshot_digest, result_snapshot_digest,
+                reviewed_graph_revision_digest, canonical_proposal
+         FROM amendment_proposals ORDER BY amendment_id`,
+      )
+      .all(),
+    expected.proposals,
+  );
+  verifyNormalizedContextRows(
+    "amendment_decisions",
+    database
+      .prepare(
+        `SELECT approval_id, amendment_id, proposal_digest, decision_digest,
+                decision, canonical_decision
+         FROM amendment_decisions ORDER BY approval_id`,
+      )
+      .all(),
+    expected.decisions,
+  );
+  verifyNormalizedContextRows(
+    "amendment_withdrawals",
+    database
+      .prepare(
+        `SELECT amendment_id, withdrawal_digest, canonical_withdrawal
+         FROM amendment_withdrawals ORDER BY amendment_id`,
+      )
+      .all(),
+    expected.withdrawals,
+  );
+  verifyNormalizedContextRows(
+    "amendment_applications",
+    database
+      .prepare(
+        `SELECT amendment_id, application_digest, before_graph_revision_digest,
+                after_graph_revision_digest, quiescence_fact_digest, canonical_application
+         FROM amendment_applications ORDER BY amendment_id`,
+      )
+      .all(),
+    expected.applications,
+  );
+
+  for (const row of database
+    .prepare<
+      [],
+      { snapshot_digest: string; graph_revision_digest: string; canonical_snapshot: string }
+    >(
+      `SELECT snapshot_digest, graph_revision_digest, canonical_snapshot
+       FROM configuration_snapshots ORDER BY snapshot_digest`,
+    )
+    .all()) {
+    const snapshot = validateConfigurationSnapshot(
+      JSON.parse(row.canonical_snapshot),
+      dependencies,
+    );
+    if (
+      snapshot.snapshotDigest !== row.snapshot_digest ||
+      snapshot.graph.revisionDigest !== row.graph_revision_digest ||
+      canonicalStringify(snapshot.canonical) !== row.canonical_snapshot
+    ) {
+      throw new Error("SQLite configuration snapshot row diverges from canonical content");
+    }
+  }
+
+  const contextState = database
+    .prepare<[], ContextAuthorityStateRow>(
+      "SELECT canonical_json FROM context_authority_state WHERE singleton = 1",
+    )
+    .get();
+  if (contextState === undefined) throw new Error("SQLite context authority singleton is missing");
+  const contextAuthority = InMemoryContextAuthority.fromDurableCanonicalJson(
+    contextState.canonical_json,
+    dependencies.sha256,
+  );
+  const normalizedContext = normalizeContextAuthority(contextAuthority, dependencies.sha256);
+  for (const row of normalizedContext.taskScopes) {
+    const current = requireTaskScopeCurrentness(database, row.run_key as string, {
+      runId: row.run_id as string,
+      taskId: row.task_id as string,
+      definitionGeneration: row.definition_generation as number,
+    });
+    if (
+      current.fenceGeneration !== row.fence_generation ||
+      current.acceptedContextDigest !== row.current_context_digest ||
+      current.claimsAccepted !== (row.claims_accepted === 1)
+    ) {
+      throw new Error("SQLite context and runner task-scope currentness diverge");
+    }
+  }
+
+  const actualOutbox = database
+    .prepare<
+      [],
+      {
+        submission_id: string;
+        dispatch_id: string;
+        context_id: string;
+        amendment_id: string | null;
+        canonical_source: string;
+        source_digest: string;
+        delivered: number;
+        claim_owner_id: string | null;
+        claim_fence: number | null;
+        claim_expires_at: string | null;
+      }
+    >(
+      `SELECT submission_id, dispatch_id, context_id, amendment_id, canonical_source,
+              source_digest, delivered, claim_owner_id, claim_fence, claim_expires_at
+       FROM context_amendment_outbox ORDER BY submission_id`,
+    )
+    .all();
+  if (actualOutbox.length !== normalizedContext.amendmentOutbox.length) {
+    throw new Error("SQLite context amendment outbox does not exactly cover accepted sources");
+  }
+  for (const [index, expectedRow] of normalizedContext.amendmentOutbox.entries()) {
+    const actual = actualOutbox[index];
+    if (
+      actual === undefined ||
+      actual.submission_id !== expectedRow.submission_id ||
+      actual.dispatch_id !== expectedRow.dispatch_id ||
+      actual.context_id !== expectedRow.context_id ||
+      actual.canonical_source !== expectedRow.canonical_source ||
+      actual.source_digest !== expectedRow.source_digest ||
+      actual.amendment_id !== null ||
+      !isSha256Digest(actual.source_digest) ||
+      canonicalDigest(
+        canonicalValue(decodeCanonicalJsonValue(actual.canonical_source)),
+        dependencies.sha256,
+      ) !== actual.source_digest ||
+      ![0, 1].includes(actual.delivered)
+    ) {
+      throw new Error("SQLite context amendment outbox source is not semantically bound");
+    }
+    if (actual.claim_expires_at !== null)
+      validateTimestamp(actual.claim_expires_at, "claim_expires_at");
+    if (
+      (actual.claim_owner_id === null) !== (actual.claim_expires_at === null) ||
+      (actual.claim_owner_id !== null && actual.claim_fence === null) ||
+      (actual.delivered === 1 &&
+        (actual.claim_owner_id !== null || actual.claim_expires_at !== null))
+    ) {
+      throw new Error("SQLite context amendment outbox claim state is invalid");
+    }
+  }
+
+  const outboxBySubmission = new Map(actualOutbox.map((row) => [row.submission_id, row]));
+  for (const row of database
+    .prepare<
+      [],
+      {
+        submission_id: string;
+        source_digest: string;
+        outcome_kind: string;
+        canonical_outcome: string;
+        recorded_at: string;
+      }
+    >(
+      `SELECT submission_id, source_digest, outcome_kind, canonical_outcome, recorded_at
+       FROM amendment_proposal_bridge_outcomes ORDER BY submission_id`,
+    )
+    .all()) {
+    const outbox = outboxBySubmission.get(row.submission_id);
+    const outcome = decodeCanonicalJsonValue(row.canonical_outcome);
+    if (
+      outbox === undefined ||
+      outbox.delivered !== 1 ||
+      outbox.source_digest !== row.source_digest ||
+      !["acknowledged", "compiled", "diagnostics"].includes(row.outcome_kind) ||
+      !isPlainRecord(outcome) ||
+      outcome.kind !== row.outcome_kind ||
+      outcome.submissionId !== row.submission_id ||
+      outcome.sourceDigest !== row.source_digest ||
+      canonicalStringify(outcome) !== row.canonical_outcome
+    ) {
+      throw new Error("SQLite amendment bridge outcome is not bound to delivered source");
+    }
+    validateTimestamp(row.recorded_at, "recorded_at");
+  }
+
+  const proposals = new Map(
+    expected.proposals.map((row) => [
+      row.amendment_id as string,
+      JSON.parse(row.canonical_proposal as string) as AmendmentProposal,
+    ]),
+  );
+  const approved = new Set(
+    expected.decisions
+      .filter((row) => row.decision === "approve")
+      .map((row) => row.amendment_id as string),
+  );
+  const fenceRows = database
+    .prepare<
+      [],
+      {
+        run_key: string;
+        repository_id: string;
+        run_id: string;
+        task_id: string;
+        definition_generation: number;
+        fence_generation: number;
+        current_context_digest: string;
+        claims_accepted: number;
+        amendment_id: string | null;
+        installed_at: string | null;
+      }
+    >(
+      `SELECT run_key, repository_id, run_id, task_id, definition_generation,
+              fence_generation, current_context_digest, claims_accepted,
+              amendment_id, installed_at
+       FROM amendment_work_fences ORDER BY run_key, task_id, definition_generation`,
+    )
+    .all();
+  for (const row of fenceRows) {
+    if (
+      row.run_key !== canonicalStringify([row.repository_id, row.run_id]) ||
+      !Number.isSafeInteger(row.definition_generation) ||
+      row.definition_generation <= 0 ||
+      !Number.isSafeInteger(row.fence_generation) ||
+      row.fence_generation <= 0 ||
+      !isSha256Digest(row.current_context_digest) ||
+      ![0, 1].includes(row.claims_accepted) ||
+      (row.installed_at === null) !== (row.claims_accepted === 1)
+    ) {
+      throw new Error("SQLite amendment work fence row is invalid");
+    }
+    if (row.installed_at !== null && row.installed_at !== "context-authority-fence") {
+      validateTimestamp(row.installed_at, "amendment fence installed_at");
+    }
+    if (row.amendment_id !== null) {
+      const proposal = proposals.get(row.amendment_id);
+      if (
+        proposal === undefined ||
+        !approved.has(row.amendment_id) ||
+        row.claims_accepted !== 0 ||
+        !proposal.impact.affectedTaskScopes.some(
+          (scope) =>
+            scope.taskId === row.task_id &&
+            scope.definitionGeneration === row.definition_generation,
+        )
+      ) {
+        throw new Error("SQLite amendment work fence is not bound to approved exact impact");
+      }
+    }
+  }
+
+  for (const row of database
+    .prepare<[], { run_key: string; canonical_command: string }>(
+      `SELECT run_key, canonical_command FROM runner_commands
+       ORDER BY run_key, sequence, command_id`,
+    )
+    .all()) {
+    const command = parseRunnerValue<QueuedEffectCommand>(row.canonical_command);
+    const current = requireTaskScopeCurrentness(database, row.run_key, command.taskScope);
+    if (
+      command.taskScope.acceptedContextDigest !== current.acceptedContextDigest ||
+      command.taskScope.fenceGeneration > current.fenceGeneration ||
+      (current.claimsAccepted && command.taskScope.fenceGeneration !== current.fenceGeneration)
+    ) {
+      throw new Error("SQLite runner command diverges from shared task-scope currentness");
+    }
+  }
+  for (const row of database
+    .prepare<
+      [],
+      {
+        run_key: string;
+        intent_id: string;
+        context_digest: string;
+        task_id: string | null;
+        definition_generation: number | null;
+        scope_fence_generation: number | null;
+        canonical_intent: string;
+      }
+    >(
+      `SELECT c.run_key, c.intent_id, c.context_digest, c.task_id,
+              c.definition_generation, c.scope_fence_generation, i.canonical_intent
+       FROM runner_effect_claims c
+       JOIN runner_effect_intents i ON i.intent_id = c.intent_id
+       ORDER BY c.run_key, c.intent_id`,
+    )
+    .all()) {
+    const intent = parseRunnerValue<EffectIntent>(row.canonical_intent);
+    if (
+      row.task_id !== intent.command.taskScope.taskId ||
+      row.definition_generation !== intent.command.taskScope.definitionGeneration ||
+      row.context_digest !== intent.command.taskScope.acceptedContextDigest ||
+      row.scope_fence_generation === null ||
+      row.scope_fence_generation < intent.command.taskScope.fenceGeneration
+    ) {
+      throw new Error("SQLite runner claim does not bind an exact durable task scope");
+    }
+    requireTaskScopeCurrentness(database, row.run_key, {
+      runId: intent.command.runId,
+      taskId: intent.command.taskScope.taskId,
+      definitionGeneration: intent.command.taskScope.definitionGeneration,
+    });
+  }
+
+  const expectedDispatchFences: Record<string, unknown>[] = [];
+  for (const amendmentId of approved) {
+    const proposal = proposals.get(amendmentId);
+    if (proposal === undefined) continue;
+    for (const record of contextAuthority.durableSnapshot().dispatches) {
+      if (
+        proposal.impact.affectedTaskScopes.some(
+          (scope) =>
+            scope.taskId === record.taskScope.taskId &&
+            scope.definitionGeneration === record.taskScope.definitionGeneration,
+        )
+      ) {
+        expectedDispatchFences.push({
+          amendment_id: amendmentId,
+          dispatch_id: record.dispatch.dispatchId,
+          task_id: record.taskScope.taskId,
+          definition_generation: record.taskScope.definitionGeneration,
+          prior_fence_generation: record.taskScope.fenceGeneration,
+          installed_fence_generation: record.taskScope.fenceGeneration + 1,
+        });
+      }
+    }
+  }
+  expectedDispatchFences.sort(compareNormalized("amendment_id", "dispatch_id"));
+  verifyNormalizedContextRows(
+    "amendment_fenced_dispatches",
+    database
+      .prepare(
+        `SELECT amendment_id, dispatch_id, task_id, definition_generation,
+                prior_fence_generation, installed_fence_generation
+         FROM amendment_fenced_dispatches ORDER BY amendment_id, dispatch_id`,
+      )
+      .all(),
+    expectedDispatchFences,
+  );
 }
 
 function verifySupervisorTables(database: Database.Database): void {
@@ -3235,7 +4827,10 @@ function timestampEpoch(value: string, field: string): number {
   return epoch;
 }
 
-function normalizeContextAuthority(authority: InMemoryContextAuthority) {
+function normalizeContextAuthority(
+  authority: InMemoryContextAuthority,
+  sha256: RuntimeDependencies["sha256"],
+) {
   const snapshot = authority.snapshot();
   const durable = authority.durableSnapshot();
   const completionRequirements = new Map(
@@ -3245,6 +4840,29 @@ function normalizeContextAuthority(authority: InMemoryContextAuthority) {
     ]),
   );
   return {
+    taskScopes: durable.taskScopes.map((scope) => {
+      const dispatch = durable.dispatches.find(
+        (record) =>
+          record.taskScope.runId === scope.runId &&
+          record.taskScope.taskId === scope.taskId &&
+          record.taskScope.definitionGeneration === scope.definitionGeneration,
+      )?.dispatch;
+      if (dispatch === undefined) {
+        throw new Error("Context task scope has no exact durable dispatch binding");
+      }
+      return {
+        run_key: canonicalStringify([dispatch.repositoryId, dispatch.runId]),
+        repository_id: dispatch.repositoryId,
+        run_id: dispatch.runId,
+        task_id: scope.taskId,
+        definition_generation: scope.definitionGeneration,
+        fence_generation: scope.fenceGeneration,
+        current_context_digest: scope.acceptedContextDigest,
+        claims_accepted: scope.claimsAccepted ? 1 : 0,
+        amendment_id: null,
+        installed_at: scope.claimsAccepted ? null : "context-authority-fence",
+      };
+    }),
     contextBases: snapshot.contexts.map((context) => ({
       context_id: context.contextId,
       context_digest: context.contextDigest,
@@ -3364,14 +4982,37 @@ function normalizeContextAuthority(authority: InMemoryContextAuthority) {
       canonical_fact: canonicalStringify(pending.fact),
       delivered: pending.delivered ? 1 : 0,
     })),
+    amendmentOutbox: snapshot.submissions.flatMap(({ submission, result }) => {
+      if (submission.type !== "amendment-proposal" || result.status !== "accepted") return [];
+      const context = snapshot.contexts.find(
+        (candidate) => candidate.contextId === submission.contextId,
+      );
+      if (
+        context === undefined ||
+        context.contextDigest !== submission.amendment.baseContextDigest
+      ) {
+        throw new Error("Worker amendment source lacks its exact historical context");
+      }
+      const source = { submission, context };
+      return [
+        {
+          submission_id: submission.submissionId,
+          dispatch_id: submission.dispatchId,
+          context_id: submission.contextId,
+          canonical_source: canonicalStringify(source),
+          source_digest: canonicalDigest(canonicalValue(source), sha256),
+        },
+      ];
+    }),
   };
 }
 
 function verifyNormalizedContextAuthority(
   database: Database.Database,
   authority: InMemoryContextAuthority,
+  sha256: RuntimeDependencies["sha256"],
 ): void {
-  const expected = normalizeContextAuthority(authority);
+  const expected = normalizeContextAuthority(authority, sha256);
   verifyNormalizedContextRows(
     "context_bases",
     database

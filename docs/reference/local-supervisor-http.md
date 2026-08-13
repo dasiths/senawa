@@ -41,6 +41,9 @@ The shared handler exposes these exact routes:
 * `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/events`
 * `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/events/stream`
 * `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/projections/phase-lifecycle`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/amendments`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/amendments/{amendmentId}`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/amendments/{amendmentId}/source`
 
 Receipt and event page queries accept optional `after` and `limit` parameters.
 The SSE route accepts optional `after`; `Last-Event-ID` is also accepted when it
@@ -83,6 +86,22 @@ lifecycle without replacing it. Startup scans durable wakes and claimed queue
 records. One serialized cycle drains command work, delivers a completion outbox
 fact when configured, and invokes the synchronous or asynchronous fenced runner
 for runnable effects under the same lease resource.
+
+Startup and normal cycles also discover worker amendment source records and
+approved unapplied amendments. App composition injects the configuration
+compiler into a supervisor-owned bridge. The bridge claims the exact historical
+source and context, loads the registered base configuration snapshot, submits a
+deterministic proposal command, and records a sanitized durable compiler or
+terminal delivery outcome. A compiled source is acknowledged only after the
+proposal command has a terminal queue receipt.
+
+Approval installs durable affected-scope fences and cancellation requests in
+the SQLite command transaction. Recovery reconciles affected effects under the
+existing run lease while unrelated scopes continue. A supervisor quiescence
+read only decides whether an apply attempt is useful. The apply command carries
+only exact proposal, decision, and reviewed graph digests; SQLite rechecks live
+claims and nonterminal effects and constructs trusted quiescence inside the
+same `BEGIN IMMEDIATE` transaction that commits the reviewed graph.
 
 Run leases last 30 seconds. While an asynchronous worker host is pending, the
 controller renews the lease every 10 seconds or sooner when expiry is nearer.

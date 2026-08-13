@@ -45,8 +45,38 @@ export type CommandIntent =
   | { readonly type: "evaluate-gate" }
   | { readonly type: "record-authority-decision" }
   | { readonly type: "close-phase" }
+  | { readonly type: "submit-amendment-proposal" }
+  | { readonly type: "withdraw-amendment-proposal" }
+  | { readonly type: "record-amendment-decision" }
+  | { readonly type: "apply-approved-amendment" }
   | { readonly type: "create-escalation" }
   | { readonly type: "grant-allowance" };
+
+export interface SubmitAmendmentProposalPayload {
+  readonly proposal: JsonValue;
+}
+
+export interface WithdrawAmendmentProposalPayload {
+  readonly amendmentId: OpaqueIdentity;
+  readonly proposalDigest: string;
+}
+
+export type AmendmentDecisionKind = "approve" | "reject";
+
+export interface RecordAmendmentDecisionPayload extends WithdrawAmendmentProposalPayload {
+  readonly decision: AmendmentDecisionKind;
+  readonly reviewedResultGraphRevisionDigest: string;
+}
+
+export interface AmendmentTaskScopePayload {
+  readonly taskId: OpaqueIdentity;
+  readonly definitionGeneration: number;
+}
+
+export interface ApplyApprovedAmendmentPayload extends WithdrawAmendmentProposalPayload {
+  readonly decisionDigest: string;
+  readonly reviewedResultGraphRevisionDigest: string;
+}
 
 export interface CommandEnvelope {
   readonly apiVersion: ProtocolVersion;

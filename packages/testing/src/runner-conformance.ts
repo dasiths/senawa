@@ -16,7 +16,9 @@ import type {
   RunnerLeaseFact,
   RunnerProjection,
   RunOnceInput,
+  TaskScopeCurrentness,
 } from "@senawa/runtime";
+import { taskScopeFence } from "@senawa/runtime";
 
 export const runnerFixture = Object.freeze({
   repositoryId: "repository_runner-fixture",
@@ -24,6 +26,7 @@ export const runnerFixture = Object.freeze({
   contextDigest: "a".repeat(64),
   inputDigest: "b".repeat(64),
   outputDigest: "c".repeat(64),
+  taskId: "task_runner-fixture",
   currentTime: "2026-08-12T12:00:00.000Z",
   lease: Object.freeze({
     owner: "runner-owner-primary",
@@ -31,6 +34,16 @@ export const runnerFixture = Object.freeze({
     expiresAt: "2026-08-12T13:00:00.000Z",
   }),
 });
+
+export const runnerTaskScope: TaskScopeCurrentness = Object.freeze({
+  runId: runnerFixture.runId,
+  taskId: runnerFixture.taskId,
+  definitionGeneration: 1,
+  acceptedContextDigest: runnerFixture.contextDigest,
+  fenceGeneration: 1,
+  claimsAccepted: true,
+});
+export const runnerTaskFence = taskScopeFence(runnerTaskScope);
 
 export interface RunnerAuthorityConformanceHarness {
   readonly authority: RunnerAuthorityPort;
@@ -159,6 +172,7 @@ export function runnerEffectCommand(
     runId: runnerFixture.runId,
     operationId: "operation_runner-effect",
     kind: "worker",
+    taskScope: runnerTaskFence,
     contextDigest: runnerFixture.contextDigest,
     inputDigest: runnerFixture.inputDigest,
     input: { task: "verify" },
@@ -187,6 +201,7 @@ export function configuredHarness<T extends { configureRun(input: InMemoryRunner
     repositoryId: runnerFixture.repositoryId,
     runId: runnerFixture.runId,
     contextDigest: runnerFixture.contextDigest,
+    taskScopes: [runnerTaskScope],
     budgets: [
       { unit: "model-millidollars", limit: 10 },
       { unit: "retry", limit: 2 },

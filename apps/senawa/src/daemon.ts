@@ -3,6 +3,12 @@ import { mkdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
+  ConfigurationCompilationError,
+  type ConfigurationSnapshot,
+  compileWorkflowAmendment,
+  WORKFLOW_AMENDMENT_API_VERSION,
+} from "@senawa/configuration";
+import {
   type CopilotSdkPort,
   CopilotWorkerEffectHost,
   FilesystemCopilotSessionStore,
@@ -14,9 +20,11 @@ import {
   decodeAuthenticatedPrincipal,
   type SupervisorAllocationFact,
 } from "@senawa/protocol";
-import type { RuntimeDependencies } from "@senawa/runtime";
+import { createRoleAuthorizationPolicy, type RuntimeDependencies } from "@senawa/runtime";
 import { SqliteContextBroker } from "@senawa/storage-sqlite";
 import {
+  type AmendmentCompilerPort,
+  AmendmentProposalCommandBridge,
   CompletionFactCommandBridge,
   ensurePrivateRuntimeDirectory,
   InMemoryRunEventNotifier,
@@ -63,6 +71,7 @@ export interface SenawaServiceCompositionOptions {
   ) => Promise<OwnedCopilotSdkPort>;
   readonly startUnixServer?: typeof startUnixSupervisorServer;
   readonly startLoopbackServer?: typeof startLoopbackSupervisorServer;
+  readonly amendmentCompiler?: AmendmentCompilerPort;
 }
 
 export function resolveSenawaServicePaths(
@@ -130,6 +139,13 @@ export async function startSenawaService(
       completionFacts: completionBridge,
     });
     ownedContextBroker = contextBroker;
+    const amendmentBridge = new AmendmentProposalCommandBridge({
+      authority,
+      broker: () => contextBroker,
+      compiler: composition.amendmentCompiler ?? configurationAmendmentCompiler(dependencies),
+      ownerId: `amendment-bridge-${process.pid}`,
+      currentTime: () => new Date().toISOString(),
+    });
     const repositoryDirectory = environment.SENAWA_REPOSITORY_DIR;
     const sdk =
       repositoryDirectory === undefined || repositoryDirectory.length === 0
@@ -242,6 +258,7 @@ export async function startSenawaService(
             }),
       ...(asyncEffectHost === undefined ? {} : { asyncEffectHost }),
       deliverCompletionOutboxOnce: () => contextBroker.deliverCompletionOutboxOnce(),
+      deliverAmendmentProposalOutboxOnce: () => amendmentBridge.deliverOnce(),
       closeables: [
         { close: () => contextBroker.close() },
         ...(sdk === undefined
@@ -308,7 +325,20 @@ export const runtimeDependencies: RuntimeDependencies = Object.freeze({
       return createHash("sha256").update(bytes).digest("hex");
     },
   },
-  authorization: { authorize: () => true },
+  authorization: createRoleAuthorizationPolicy([
+    { intent: "instantiate-run", roles: ["release-manager"] },
+    { intent: "accept-graph-revision", roles: ["release-manager"] },
+    { intent: "submit-completion", roles: ["engine", "release-manager"] },
+    { intent: "evaluate-gate", roles: ["engine", "release-manager"] },
+    { intent: "record-authority-decision", roles: ["release-manager"] },
+    { intent: "close-phase", roles: ["engine", "release-manager"] },
+    { intent: "submit-amendment-proposal", roles: ["engine", "release-manager"] },
+    { intent: "withdraw-amendment-proposal", roles: ["release-manager"] },
+    { intent: "record-amendment-decision", roles: ["release-manager"] },
+    { intent: "apply-approved-amendment", roles: ["trusted-supervisor"] },
+    { intent: "create-escalation", roles: ["engine", "release-manager"] },
+    { intent: "grant-allowance", roles: ["release-manager"] },
+  ]),
 });
 
 const localPrincipal = decodeAuthenticatedPrincipal({
@@ -326,7 +356,10 @@ function deterministicAllocations(
     kind: "stream-event" as const,
     id: allocatedId(submission.commandId, "stream-event", ordinal),
   }));
-  if (submission.intent.type === "record-authority-decision") {
+  if (
+    submission.intent.type === "record-authority-decision" ||
+    submission.intent.type === "record-amendment-decision"
+  ) {
     allocations.push({
       kind: "approval",
       id: allocatedId(submission.commandId, "approval", 1),
@@ -335,8 +368,71 @@ function deterministicAllocations(
   return allocations;
 }
 
+function configurationAmendmentCompiler(dependencies: RuntimeDependencies): AmendmentCompilerPort {
+  return Object.freeze({
+    compile(input: Parameters<AmendmentCompilerPort["compile"]>[0]) {
+      const submission = requiredRecord(input.source.submission, "Worker amendment submission");
+      const amendment = requiredRecord(submission.amendment, "Worker amendment payload");
+      const context = requiredRecord(input.source.context, "Worker amendment context");
+      const submissionId = requiredString(submission.submissionId, "submissionId");
+      try {
+        const compilation = compileWorkflowAmendment(
+          {
+            document: {
+              apiVersion: WORKFLOW_AMENDMENT_API_VERSION,
+              kind: "WorkflowAmendment",
+              baseSnapshotDigest: requiredString(
+                context.configurationSnapshotDigest,
+                "configurationSnapshotDigest",
+              ),
+              baseContextDigest: requiredString(amendment.baseContextDigest, "baseContextDigest"),
+              operations: amendment.operations,
+            },
+            locator: `worker-amendment://${submissionId}`,
+            baseSnapshot: input.baseConfigurationSnapshot as ConfigurationSnapshot,
+            phaseCandidateHistory: input.phaseCandidateHistory as never,
+          },
+          dependencies.sha256,
+        );
+        return {
+          status: "compiled" as const,
+          proposal: compilation.proposal as never,
+          resultConfigurationSnapshot: compilation.resultSnapshot,
+        };
+      } catch (error) {
+        if (!(error instanceof ConfigurationCompilationError)) throw error;
+        return {
+          status: "diagnostics" as const,
+          diagnostics: error.diagnostics.map(({ code, locator, pointer, message }) => ({
+            code,
+            locator,
+            pointer,
+            message,
+          })),
+        };
+      }
+    },
+  });
+}
+
+function requiredRecord(value: unknown, label: string): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0) throw new TypeError(`${label} is invalid`);
+  return value;
+}
+
 function allocatedId(commandId: string, kind: string, ordinal: number): string {
-  return `${kind}-${createHash("sha256").update(`${commandId}:${kind}:${ordinal}`).digest("hex").slice(0, 32)}`;
+  const digest = createHash("sha256")
+    .update(`${commandId}:${kind}:${ordinal}`)
+    .digest("hex")
+    .slice(0, 32);
+  return kind === "approval" ? `approval_${digest}` : `${kind}-${digest}`;
 }
 
 function listener(

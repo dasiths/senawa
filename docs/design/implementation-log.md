@@ -50,7 +50,7 @@ Each phase records:
 | 6. Workflow and sensor configuration | Complete | `4667ab0` | Pushed |
 | 7. Context broker and serial workers | Complete | `4009bd8` | Pushed |
 | 8. Local supervisor, HTTP, SSE, and CLI | Complete | `e580bad` | Pushed |
-| 9. Additive amendments | Not started | Pending | Pending |
+| 9. Additive amendments | In progress through 9E | Pending | Pending |
 | 10. Optional parallel workspaces and integration | Not started | Pending | Pending |
 | 11. Local portal | Not started | Pending | Pending |
 | 12. Remote control-plane protocol | Not started | Pending | Pending |
@@ -4064,6 +4064,488 @@ pull request.
 
 Phase 8 was committed as `e580bad` (`feat: add local supervisor and cli`) and
 pushed to `origin/redesign/workflow-state-machine` on 2026-08-13.
+
+## Decision D-057: Bind additive amendments to reviewed graph authority
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 9A
+* Phase: 9
+* Decision: Represent an amendment proposal as content-addressed authority over
+  the complete validated base graph, exact context and configuration snapshot
+  digests, normalized additive operations, computed impact, candidate-history
+  input, complete reviewed result graph, and result configuration snapshot
+  digest. Approval and application bind these exact records. Application uses
+  the reviewed graph stored in the proposal and never recompiles source
+  operations.
+* Alternatives: Approve raw operations and compile during apply; store only
+  before and after graph revisions; permit task additions after a phase has
+  candidate history; reuse completion task references for amendment impact.
+* Rationale: Human review remains byte-exact only when the complete graph is
+  already part of proposal authority. A dedicated task-definition scope keeps
+  kernel impact independent of runtime context and fence data. Refusing task
+  additions after candidate history preserves immutable candidate task sets.
+* Consequence: Later runtime and storage slices must validate proposals against
+  durable candidate history, preserve the complete proposal, and install
+  runtime-specific context and dispatch fences without changing kernel impact.
+
+## Phase 9A log
+
+### Decisions
+
+* Kernel operations are limited to `add-phase` and `add-task`. Criteria can
+  enter only as definitions owned by the added task.
+* Kernel compilation reconstructs normalized input from the exact validated
+  base graph, appends normalized operations, calls the canonical graph
+  compiler, and proves every base node and edge remains byte-identical.
+* Amendment impact separates added definitions from existing affected task
+  definition scopes. Runtime context digests and fence generations remain
+  deferred to Phase 9C.
+* Configuration amendments reuse phase and work parsers, identity derivation,
+  declaration lowering, graph diagnosis, and snapshot construction from the
+  initial compiler. Accepted registries are copied unchanged into the result
+  snapshot.
+
+### Deviations
+
+* This bounded request implements only Phase 9A. Protocol, runtime, storage,
+  supervisor, transport, and CLI slices remain untouched.
+* The plan-wide commit, push, and independent final review requirements are
+  deferred until the complete Phase 9 delivery. The user explicitly prohibited
+  commit and push for this slice.
+* The configuration compiler records normalized source attribution by logical
+  locator. Preservation and durable attribution of raw worker or human source
+  records remains a Phase 9B and Phase 9D responsibility.
+
+### Validation
+
+Passed on 2026-08-13:
+
+* Focused kernel amendment suite: 12 tests
+* Configuration suite: 67 tests, including four amendment compiler tests
+* Combined focused kernel and configuration suites: 79 tests
+* Kernel and configuration package builds
+* Kernel and configuration package typechecks
+* Biome check across all seven touched TypeScript files
+* Architecture boundaries across 218 source files
+* Documentation links across 18 Markdown files
+* `git diff --check`
+
+### Review
+
+Focused implementation review verified exact graph application, proposal and
+record digest revalidation, normalized operation order, initial and amendment
+snapshot equivalence, stale-base refusal, overlap, withdrawal, quiescence, and
+candidate-history refusal. Full independent Phase 9 review remains deferred.
+
+### Commit and push
+
+No commit or push was performed for Phase 9A, as required by the bounded user
+request.
+
+### Remaining risks
+
+* Durable proposal history, approval authorization, phase-keyed lifecycle
+  records, and transaction races remain Phase 9B through Phase 9D work.
+* Task context currentness and selective fences remain Phase 9C work.
+* Recovery, transports, and human review surfaces remain Phase 9E work.
+
+## Decision D-058: Replay immutable runtime amendment authority
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 9B
+* Phase: 9
+* Decision: Add exact browser-safe proposal, withdrawal, human decision, and
+  trusted apply commands. Store immutable amendment records and content-digested
+  lifecycle events beside phase-generation-keyed lifecycle records. Derive
+  amendment status from those records and the current graph. Apply only the
+  reviewed graph embedded in the approved proposal after kernel validation of a
+  supplied canonical quiescence fact.
+* Alternatives: Store mutable amendment status; use generic JSON payloads
+  without exact codecs; install in-memory fences during approval; trust a
+  supervisor boolean for quiescence; recompile operations during apply; replace
+  all existing runtime snapshots with a mandatory new shape.
+* Rationale: Exact codecs and immutable replay preserve browser safety and audit
+  authority. A complete quiescence fact lets SQLite become the trusted producer
+  in Phase 9D without changing runtime semantics. Optional amendment arrays
+  preserve only the current implementation snapshot format until amendments
+  exist, without introducing legacy compatibility.
+* Consequence: Approval emits `amendment-fencing-required` but durable scope and
+  dispatch fence installation remains Phase 9C and Phase 9D. In-memory apply
+  proves command semantics, not storage trust. Global graph revision remains a
+  serialization guard and is not used for unrelated task freshness.
+
+## Phase 9B log
+
+### Decisions
+
+* Proposal submission revalidates the complete Phase 9A proposal through the
+  kernel, requires exact current base graph equality, and binds both the base
+  graph revision and proposal digest command guards.
+* Human decisions use admission-derived principal and time, allocate one
+  approval identity, bind the proposal and reviewed result graph digests, and
+  evaluate overlap only against current undecided proposals.
+* Apply requires the trusted-supervisor authorization role, exact base graph,
+  decision, proposal, reviewed result graph, and quiescence bindings. It appends
+  the reviewed graph through the existing kernel run-event reducer.
+* Stale proposals remain in projections. Rejection remains available for audit
+  closure, while stale approval and apply are refused.
+* Amendment lifecycle refusals are re-executed during snapshot reconstruction.
+  Existing non-amendment refusal restoration remains unchanged for the current
+  runtime snapshot format.
+
+### Deviations
+
+* Durable fence installation is not simulated in memory. Approval records an
+  immutable fencing-required event, while task and dispatch fence authority
+  remains Phase 9C and Phase 9D.
+* The runtime accepts a supplied canonical quiescence fact and revalidates it in
+  the kernel. SQLite must construct that fact from transactional authority in
+  Phase 9D.
+* No storage schema, projection rows, outbox, supervisor, API, CLI, worktree,
+  runner currentness, context fence, or live SDK changes were made.
+* No independent final Phase 9 review, commit, or push was performed, as required
+  by the bounded Phase 9B request.
+
+### Validation
+
+Passed on 2026-08-13:
+
+* Focused protocol amendment codec and runtime conformance suites: 59 tests
+* Protocol, runtime, and testing package typechecks
+* Complete workspace build and typecheck
+* Biome check across 136 files
+* Complete workspace suite: 39 files and 783 tests passed, with one file and one
+  test skipped
+* Architecture boundaries across 218 source files
+* `git diff --check`
+
+### Remaining risks
+
+* Task-generation currentness, accepted context digests, and selective fence
+  behavior remain Phase 9C.
+* SQLite transaction trust, normalized projections, amendment outbox, backup,
+  restore, and independent connection races remain Phase 9D.
+* Recovery, transports, CLI, and black-box human approval remain Phase 9E.
+
+## Decision D-059: Fence exact task scope currentness
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 9C
+* Phase: 9
+* Decision: Bind each queued effect and worker dispatch to the exact run, task
+  identity, definition generation, accepted context digest, and scope fence
+  generation. Preserve command and claim fence facts on outcomes. Advance only
+  affected scope generations, close those scopes to new claims, and classify
+  late affected output as stale while unrelated scopes remain current.
+* Alternatives: Continue run-global context invalidation; infer task scope from
+  operation or dispatch strings; reject late commits; treat a new generation as
+  sufficient without an explicit closed-claims state; simulate a cross-adapter
+  transaction in memory.
+* Rationale: Exact task scope provides amendment locality and durable audit
+  provenance. Explicit claim closure prevents a caller from presenting the new
+  fence generation as authority. Preserving late outcomes records external
+  reality without granting completion credit.
+* Consequence: SQLite migration 005 must persist the same scope and dispatch
+  fences and install them with approval in one transaction. The Phase 9C ports
+  expose that operation, but the SQLite adapter refuses it until Phase 9D.
+
+## Phase 9C log
+
+### Decisions
+
+* Runner scheduling ignores queued commands whose exact scope fence is closed
+  or superseded, so affected work cannot block unrelated commands.
+* Fence installation prevalidates the complete input set before mutation,
+  increments generations monotonically, and marks affected nonterminal intents
+  for existing cancellation and reconciliation behavior.
+* Commit preserves both command and claim task fences. A fence installed during
+  execution makes the late outcome stale and removes it from accepted runner
+  projection.
+* Context dispatch registration stores the exact task scope. Submission
+  admission compares that dispatch fence to authority-owned currentness and
+  emits no completion fact for stale output.
+* Run-global context changes no longer invalidate an otherwise exact task scope.
+
+### Deviations
+
+* Cross-authority atomicity remains a Phase 9D storage responsibility. Separate
+  in-memory runner and context authorities prove deterministic all-or-nothing
+  transitions, but no claim is made that two adapters commit atomically.
+* No SQLite migration, normalized fence projection, amendment outbox,
+  supervisor recovery, API, CLI, worktree, or live SDK behavior was added.
+* The SQLite adapters compile against the new ports and preserve baseline
+  task-scoped behavior. Selective fence installation throws an explicit Phase
+  9D requirement instead of faking atomicity.
+* No independent final Phase 9 review, commit, or push was performed, as
+  required by the bounded Phase 9C request.
+
+### Validation
+
+Passed on 2026-08-13:
+
+* Focused in-memory runner and context broker conformance: 55 tests
+* Runtime amendment and SQLite baseline conformance: 111 tests
+* Complete workspace build and typecheck
+* Complete workspace lint across 137 files
+* Complete workspace suite: 39 files and 786 tests passed, with one file and one
+  live SDK test skipped
+* Architecture boundaries across 220 source files
+* Documentation links across 18 Markdown files
+* `git diff --check`
+
+### Remaining risks
+
+* Approval, scope fences, dispatch fences, and amendment decisions are not yet
+  one SQLite transaction. Migration 005 and independent-connection race tests
+  remain Phase 9D.
+* Trusted quiescence construction, normalized projections, backup and restore
+  verification, and worker proposal outbox remain Phase 9D.
+* Recovery, transports, CLI, and black-box approval journeys remain Phase 9E.
+
+## Decision D-060: Make SQLite the amendment fence and quiescence authority
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 9D
+* Phase: 9
+* Decision: Add migration 005 with exact configuration snapshots, immutable
+  amendment projections, shared task-scope currentness, fenced dispatches,
+  claim scope facts, and a worker amendment source outbox. Execute approval and
+  application through `SqliteAuthority.submit` so runtime authority, normalized
+  projections, fences, cancellation intent, trusted quiescence, and the exact
+  reviewed graph use one `BEGIN IMMEDIATE` transaction and one connection.
+* Alternatives: Coordinate runner and context connections in memory; trust
+  supervisor-provided counts; keep quiescence in the external payload; use
+  run-global context as currentness; derive compiled amendment identity from
+  worker source JSON.
+* Rationale: Only one SQLite write transaction can prove that approval becomes
+  visible with every affected fence installed. Apply must derive zero live
+  claims and nonterminal effects from rows locked by that same transaction.
+  External counts and two-connection coordination cannot provide that proof.
+* Consequence: External apply payloads carry only exact identity and digest
+  bindings. Runtime accepts a storage-only trusted quiescence fact and persists
+  it with command admission for replay. Phase 9E can schedule and bridge these
+  operations but cannot replace their SQLite authority checks.
+
+## Phase 9D log
+
+### Decisions
+
+* Configuration snapshot registration verifies every registry entry digest,
+  component digest, graph revision, whole snapshot digest, exact shape, and
+  canonical encoding without importing the configuration package.
+* Proposal submission requires both referenced configuration snapshots to be
+  registered and to bind the proposal base and reviewed graph revisions.
+* Approval mirrors the runtime decision, advances each exact affected scope
+  generation, closes new claims, records every matching historical dispatch,
+  and inserts cancellation intent for affected nonterminal effects before the
+  command transaction commits.
+* Runner load, claim, persist, and commit plus context submission admission read
+  the same shared durable currentness rows. Late outcomes preserve their claim
+  scope and become stale after a fence advances.
+* Apply rechecks the approved decision digest, exact fence owner, affected live
+  claims, and latest nonterminal effect outcomes. It constructs the kernel
+  quiescence fact inside the transaction and commits the reviewed graph,
+  application, projections, receipt, and event atomically.
+* Worker amendment outbox rows bind the exact accepted submission and immutable
+  historical context. Lease-fenced claim, exact read, expiry takeover, and
+  idempotent acknowledgement preserve redelivery semantics.
+
+### Deviations
+
+* The external apply contract changed from a caller-supplied quiescence object
+  to digest bindings only. This closes the forgery boundary required by Phase
+  9D while preserving deterministic runtime replay through trusted admission.
+* Worker source outbox `amendment_id` remains null until the Phase 9E compiler
+  bridge creates a validated proposal. Untrusted source cannot name its own
+  compiled amendment identity.
+* Supervisor scheduling, API, CLI, worktrees, and live SDK behavior remain
+  unchanged. No independent final Phase 9 review, commit, or push was performed
+  for this bounded slice.
+
+### Validation
+
+Passed on 2026-08-13:
+
+* Protocol and runtime trusted-quiescence boundary: 59 tests
+* Focused SQLite amendment authority and worker outbox: 5 tests
+* Full affected SQLite, runtime, runner, and context suites: 171 tests
+* Independent-connection approval race, stale pre-fence refusal, approval and
+  apply rollback, and post-commit acknowledgement-loss replay
+* Reopen, normalized corruption refusal, configuration corruption refusal,
+  backup, and restore coverage
+* Complete workspace suite: 39 files and 791 tests passed, with one file and
+  one live SDK test skipped
+* Complete workspace build, typecheck, and lint
+* Architecture boundaries across 220 source files
+* Documentation links across 18 Markdown files and `git diff --check`
+* SQLite authority benchmark: 4 passing windows, 23.70 ms median window p99
+  against the 25 ms threshold
+
+### Review
+
+Independent final Phase 9 review remains assigned to Phase 9F. The focused 9D
+test matrix verifies the required transaction boundary and rejects partial
+approval or application state.
+
+### Commit and push
+
+No commit or push was performed, as required by the bounded Phase 9D request.
+
+### Remaining risks
+
+* Phase 9E must bridge worker source records through an injected configuration
+  compiler, schedule approved unapplied recovery, and expose shared API and CLI
+  surfaces without weakening SQLite transaction checks.
+* Phase 9F retains independent review, final complete validation, commit, and
+  push.
+
+## Decision D-061: Schedule amendment recovery without weakening SQLite authority
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 9E
+* Phase: 9
+* Decision: Add a supervisor-owned worker proposal bridge with an injected
+  configuration compiler port. Discover approved unapplied amendments under
+  the existing run lease and serialized operation queue, but submit apply
+  commands containing only exact digest bindings. Treat supervisor quiescence
+  reads as scheduling observations; SQLite remains the sole authority that
+  constructs quiescence and commits application in one transaction.
+* Alternatives: Import configuration into supervisor; acknowledge worker source
+  after queue acceptance; pass supervisor claim and effect counts into apply;
+  globally drain unrelated work.
+* Rationale: Compiler injection preserves package boundaries, terminal-receipt
+  acknowledgement gives exact redelivery after faults, and transaction-local
+  quiescence prevents a separate connection or stale observation from granting
+  apply authority.
+* Consequence: Compiler diagnostics are durable sanitized bridge outcomes.
+  Busy or nonquiescent apply remains retryable recovery work, and a crash-held
+  run lease must expire before higher-fence takeover.
+
+## Phase 9E log
+
+### Decisions
+
+* The bridge loads the exact claimed worker source, historical context,
+  registered base configuration snapshot, and durable phase candidate history.
+  App composition adapts `compileWorkflowAmendment` to the port.
+* Approved amendment discovery and outbox-only run discovery participate in
+  startup and normal cycles before new affected effects. Durable scope fences
+  continue to block affected claims while unrelated scopes remain runnable.
+* Shared API and HTTP clients expose immutable proposal, source, lifecycle,
+  decision, withdrawal, bridge outcome, and application records. Human
+  mutations remain authenticated protocol commands.
+* Operational CLI review commands are reads. Withdrawal, approval, and
+  rejection derive exact command bindings from the stored proposal. Explicit
+  recovery reuses the service run lease.
+
+### Deviations
+
+* Compiler diagnostic outcomes required a strict bridge-outcome table in
+  migration 005 so acknowledgement and the sanitized durable outcome commit
+  together. This extends the Phase 9D migration before release rather than
+  introducing another migration for an unreleased schema.
+* No worktree, workspace, or live SDK behavior was added. No commit or push was
+  performed for this bounded Phase 9E request.
+
+### Validation
+
+Passed on 2026-08-13:
+
+* Focused bridge, durable outbox, supervisor recovery, transport, CLI,
+  composition, SQLite amendment, and black-box matrix: 39 selected tests
+* Built service and CLI journey: exact worker compilation, deterministic
+  approval retry, approved-unapplied restart, affected stale output, unrelated
+  current progress, higher-fence lease takeover, and exact graph application
+* Complete workspace suite: 40 files and 794 tests passed, with one file and one
+  live SDK test skipped
+* Complete workspace build, typecheck, and lint across 139 files
+* Architecture boundaries across 224 source files
+* Documentation links across 18 Markdown files and `git diff --check`
+* SQLite authority benchmark: 5 passing windows, 17.92 ms median window p99 and
+  20.96 ms maximum window p99 against the 25 ms threshold
+
+### Remaining risks
+
+* Independent implementation review, final Phase 9 validation, commit, and push
+  remain assigned to Phase 9F.
+
+## Decision D-062: Keep amendment history and recovery local
+
+* Date: 2026-08-13
+* Status: Accepted and implemented for Phase 9
+* Phase: 9
+* Decision: Bind reviewed candidate history into each proposal, but compare new
+  history only for existing phases affected by that amendment. Mark an approved
+  amendment stale when its base graph or affected candidate history changes and
+  exclude stale approvals from recovery. Authorize production commands through
+  explicit intent-role rules, reserving application for the trusted supervisor.
+* Alternatives: Require proposal history to equal all current run history;
+  retry every approved unapplied record forever; or retain allow-all production
+  authorization because SQLite still validates exact application authority.
+* Rationale: Run-global history violates amendment locality, stale approvals
+  cannot converge through retry, and transport authentication does not replace
+  intent-level authorization. Local history checks preserve unrelated progress,
+  lifecycle-filtered recovery terminates, and explicit roles keep scheduling
+  authority separate from human review authority.
+* Consequence: Unrelated phases can create candidates while proposals remain
+  reviewable. New candidate history in an affected phase makes the proposal
+  stale and blocks approval or application. An approved proposal made stale by
+  another graph remains auditable but produces no more apply commands.
+
+## Phase 9F log
+
+### Independent review and repairs
+
+The first independent review rejected Phase 9 with two P1 findings and one P2
+finding. Proposal validation compared recorded history with the complete current
+run history, stale approved proposals remained eligible for repeated recovery,
+and production composition authorized every intent.
+
+The final repairs:
+
+* Compare newly observed candidate history only for an amendment's affected
+  existing phases. Unrelated history leaves the proposal current; affected
+  history marks it stale and blocks approval and application.
+* Reproject approved amendments during recovery and select only
+  `approved-awaiting-quiescence`. A test approves two disjoint proposals,
+  applies one after restart, proves the other becomes stale, and verifies
+  recovery terminates without another apply command.
+* Replace production allow-all authorization with explicit rules for every
+  protocol intent. `apply-approved-amendment` accepts only the
+  `trusted-supervisor` role.
+
+Focused repair validation passed 41 kernel, runtime, production composition,
+and daemon policy tests. Independent re-review found no P0, P1, P2, or P3
+findings and approved Phase 9.
+
+### Final validation
+
+Passed on 2026-08-13:
+
+* Frozen install across all 10 workspace projects
+* Root build, including the execution-host native helper
+* Clean workspace typecheck
+* Biome check across 139 files
+* Complete offline suite: 40 files and 797 tests passed
+* Live Copilot SDK probe: one test skipped without explicit opt-in settings
+* Architecture boundaries across 224 source files
+* Documentation links across 18 Markdown files
+* SQLite authority benchmark: 4 of 5 independent windows passed, with a 17.67
+  ms median window p99 against the unchanged 25 ms threshold
+* No active Senawa service or process-supervisor residue
+* `git diff --check`
+
+One earlier unchanged benchmark invocation passed 3 of 5 windows with a 17.58
+ms median and therefore failed. An immediate unchanged rerun passed 5 of 5 with
+a 17.55 ms median. The failed run remains recorded as host variance; no sample,
+window, or threshold was changed or discarded.
+
+Decision D-053 remains assigned to Phase 10. No Git worktree operation or live
+SDK invocation was used in Phase 9.
+
+### Commit and push
+
+Pending final Phase 9 delivery.
 
 ## Entry template
 

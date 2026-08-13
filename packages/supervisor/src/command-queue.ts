@@ -3,6 +3,7 @@ import {
   canonicalBytes,
   canonicalStringify,
   type DurableReceipt,
+  decodeAuthenticatedPrincipal,
   decodeCanonicalJsonValue,
   decodeCommandEnvelope,
   decodeSupervisorAdmissionFacts,
@@ -10,12 +11,14 @@ import {
   decodeSupervisorServiceRecord,
   decodeSupervisorWake,
   type JsonValue,
+  PROTOCOL_VERSION,
   validateOpaqueIdentity,
 } from "@senawa/protocol";
 import type { AdmissionFacts, RuntimeDependencies } from "@senawa/runtime";
 import { type LeaseGrant, SqliteAuthority, StaleLeaseFenceError } from "@senawa/storage-sqlite";
 import Database from "better-sqlite3";
 import type {
+  AmendmentReviewRecord,
   AuthenticatedCommandAdmission,
   DrainRunOnceInput,
   MutableRunEventNotifier,
@@ -50,6 +53,17 @@ export interface SqliteSupervisorAuthorityOptions {
   readonly busyTimeoutMs?: number;
   readonly faultInjector?: (point: SupervisorFaultPoint) => void;
   readonly eventNotifier?: MutableRunEventNotifier;
+}
+
+export interface ApprovedAmendmentRecovery {
+  readonly repositoryId: string;
+  readonly runId: string;
+  readonly amendmentId: string;
+  readonly proposalDigest: string;
+  readonly decisionDigest: string;
+  readonly baseGraphRevisionDigest: string;
+  readonly reviewedResultGraphRevisionDigest: string;
+  readonly observedQuiescent: boolean;
 }
 
 interface CommandRow {
@@ -300,6 +314,103 @@ export class SqliteSupervisorAuthority {
       )
       .all(runKey)
       .map((row) => parseSupervisorReceipt(row.canonical_receipt));
+  }
+
+  queryAmendments(repositoryId: string, runId: string): readonly AmendmentReviewRecord[] {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    const projection = this.commandAuthority.queryProjection(repositoryId, runId);
+    if (projection === undefined) return Object.freeze([]);
+    const projectionPayload = localRecord(projection.payload, "Amendment lifecycle projection");
+    const lifecycles = Array.isArray(projectionPayload.amendments)
+      ? projectionPayload.amendments
+      : [];
+    const lifecycleById = new Map(
+      lifecycles.map((value) => {
+        const lifecycle = localRecord(value, "Amendment lifecycle");
+        if (typeof lifecycle.amendmentId !== "string") {
+          throw new Error("Amendment lifecycle identity is invalid");
+        }
+        return [lifecycle.amendmentId, value] as const;
+      }),
+    );
+    const runKey = canonicalStringify([repositoryId, runId]);
+    const rows = this.#database
+      .prepare<
+        [string],
+        {
+          amendment_id: string;
+          canonical_proposal: string;
+          canonical_decision: string | null;
+          canonical_withdrawal: string | null;
+          canonical_application: string | null;
+          canonical_source: string | null;
+          canonical_outcome: string | null;
+        }
+      >(
+        `SELECT p.amendment_id, p.canonical_proposal,
+                d.canonical_decision, w.canonical_withdrawal, a.canonical_application,
+                (
+                  SELECT o.canonical_source
+                  FROM amendment_proposal_bridge_outcomes b
+                  JOIN context_amendment_outbox o ON o.submission_id = b.submission_id
+                  WHERE json_extract(b.canonical_outcome, '$.amendmentId') = p.amendment_id
+                  ORDER BY b.submission_id LIMIT 1
+                ) AS canonical_source,
+                (
+                  SELECT b.canonical_outcome
+                  FROM amendment_proposal_bridge_outcomes b
+                  WHERE json_extract(b.canonical_outcome, '$.amendmentId') = p.amendment_id
+                  ORDER BY b.submission_id LIMIT 1
+                ) AS canonical_outcome
+         FROM amendment_proposals p
+         LEFT JOIN amendment_decisions d ON d.amendment_id = p.amendment_id
+         LEFT JOIN amendment_withdrawals w ON w.amendment_id = p.amendment_id
+         LEFT JOIN amendment_applications a ON a.amendment_id = p.amendment_id
+         WHERE p.run_key = ? ORDER BY p.amendment_id`,
+      )
+      .all(runKey);
+    return Object.freeze(
+      rows.map((row) => {
+        const lifecycle = lifecycleById.get(row.amendment_id);
+        if (lifecycle === undefined) {
+          throw new Error("Stored amendment lacks its derived lifecycle projection");
+        }
+        return Object.freeze({
+          repositoryId,
+          runId,
+          proposal: decodeCanonicalJsonValue(row.canonical_proposal),
+          lifecycle,
+          ...(row.canonical_decision === null
+            ? {}
+            : { decision: decodeCanonicalJsonValue(row.canonical_decision) }),
+          ...(row.canonical_withdrawal === null
+            ? {}
+            : { withdrawal: decodeCanonicalJsonValue(row.canonical_withdrawal) }),
+          ...(row.canonical_application === null
+            ? {}
+            : { application: decodeCanonicalJsonValue(row.canonical_application) }),
+          ...(row.canonical_source === null
+            ? {}
+            : { workerSource: decodeCanonicalJsonValue(row.canonical_source) }),
+          ...(row.canonical_outcome === null
+            ? {}
+            : { bridgeOutcome: decodeCanonicalJsonValue(row.canonical_outcome) }),
+        });
+      }),
+    );
+  }
+
+  queryAmendment(
+    repositoryId: string,
+    runId: string,
+    amendmentId: string,
+  ): AmendmentReviewRecord | undefined {
+    validateOpaqueIdentity(amendmentId);
+    return this.queryAmendments(repositoryId, runId).find((record) => {
+      const proposal = localRecord(record.proposal, "Amendment proposal");
+      return proposal.amendmentId === amendmentId;
+    });
   }
 
   queryWake(repositoryId: string, runId: string): SupervisorWake | undefined {
@@ -580,6 +691,14 @@ export class SqliteSupervisorAuthority {
         completionOutbox: scalar(
           "SELECT COUNT(*) AS count FROM context_completion_outbox WHERE delivered = 0",
         ),
+        amendmentProposalOutbox: scalar(
+          "SELECT COUNT(*) AS count FROM context_amendment_outbox WHERE delivered = 0",
+        ),
+        approvedAmendments: scalar(
+          `SELECT COUNT(*) AS count FROM amendment_decisions d
+           LEFT JOIN amendment_applications a ON a.amendment_id = d.amendment_id
+           WHERE d.decision = 'approve' AND a.amendment_id IS NULL`,
+        ),
       }),
       leases: Object.freeze(leases),
       startedSessionIds: Object.freeze(startedSessionIds),
@@ -609,6 +728,167 @@ export class SqliteSupervisorAuthority {
         .all()
         .map((row) => Object.freeze({ repositoryId: row.repository_id, runId: row.run_id })),
     );
+  }
+
+  listPendingAmendmentProposalRuns(): readonly {
+    readonly repositoryId: string;
+    readonly runId: string;
+  }[] {
+    return Object.freeze(
+      this.#database
+        .prepare<[], { repository_id: string; run_id: string }>(
+          `SELECT DISTINCT
+             json_extract(canonical_source, '$.submission.repositoryId') AS repository_id,
+             json_extract(canonical_source, '$.submission.runId') AS run_id
+           FROM context_amendment_outbox WHERE delivered = 0
+           ORDER BY repository_id, run_id`,
+        )
+        .all()
+        .map((row) => Object.freeze({ repositoryId: row.repository_id, runId: row.run_id })),
+    );
+  }
+
+  listApprovedAmendmentRecoveries(): readonly ApprovedAmendmentRecovery[] {
+    const rows = this.#database
+      .prepare<
+        [],
+        {
+          repository_id: string;
+          run_id: string;
+          amendment_id: string;
+          proposal_digest: string;
+          decision_digest: string;
+          base_graph_revision_digest: string;
+          reviewed_graph_revision_digest: string;
+          canonical_proposal: string;
+        }
+      >(
+        `SELECT r.repository_id, r.run_id, p.amendment_id, p.proposal_digest,
+                d.decision_digest, p.base_graph_revision_digest,
+                p.reviewed_graph_revision_digest, p.canonical_proposal
+         FROM amendment_proposals p
+         JOIN runs r ON r.run_key = p.run_key
+         JOIN amendment_decisions d ON d.amendment_id = p.amendment_id
+         LEFT JOIN amendment_applications a ON a.amendment_id = p.amendment_id
+         WHERE d.decision = 'approve' AND a.amendment_id IS NULL
+         ORDER BY r.repository_id, r.run_id, p.amendment_id`,
+      )
+      .all();
+    return Object.freeze(
+      rows.flatMap((row) => {
+        const review = this.queryAmendment(row.repository_id, row.run_id, row.amendment_id);
+        if (review === undefined) {
+          throw new Error("Approved amendment lacks its review projection");
+        }
+        const lifecycle = localRecord(review.lifecycle, "Approved amendment lifecycle");
+        if (lifecycle.status !== "approved-awaiting-quiescence") return [];
+        const proposal = localRecord(
+          decodeCanonicalJsonValue(row.canonical_proposal),
+          "Stored amendment proposal",
+        );
+        const impact = localRecord(proposal.impact, "Stored amendment impact");
+        if (!Array.isArray(impact.affectedTaskScopes)) {
+          throw new Error("Stored amendment impact lacks affected task scopes");
+        }
+        const observedQuiescent = impact.affectedTaskScopes.every((value) => {
+          const scope = localRecord(value, "Stored amendment task scope");
+          if (typeof scope.taskId !== "string" || typeof scope.definitionGeneration !== "number") {
+            throw new Error("Stored amendment task scope is invalid");
+          }
+          const runKey = canonicalStringify([row.repository_id, row.run_id]);
+          const liveClaims =
+            this.#database
+              .prepare<[string, string, number], { count: number }>(
+                `SELECT COUNT(*) AS count FROM runner_effect_claims c
+               JOIN runner_effect_intents i ON i.intent_id = c.intent_id
+               WHERE i.run_key = ?
+                 AND json_extract(i.canonical_intent, '$.command.taskScope.taskId') = ?
+                 AND json_extract(i.canonical_intent, '$.command.taskScope.definitionGeneration') = ?`,
+              )
+              .get(runKey, scope.taskId, scope.definitionGeneration)?.count ?? 0;
+          const nonterminalEffects =
+            this.#database
+              .prepare<[string, string, number], { count: number }>(
+                `SELECT COUNT(*) AS count FROM runner_effect_intents i
+               WHERE i.run_key = ?
+                 AND json_extract(i.canonical_intent, '$.command.taskScope.taskId') = ?
+                 AND json_extract(i.canonical_intent, '$.command.taskScope.definitionGeneration') = ?
+                 AND NOT EXISTS (
+                   SELECT 1 FROM runner_effect_outcomes o
+                   WHERE o.intent_id = i.intent_id
+                     AND o.status IN ('completed', 'failed', 'cancelled')
+                 )`,
+              )
+              .get(runKey, scope.taskId, scope.definitionGeneration)?.count ?? 0;
+          return liveClaims === 0 && nonterminalEffects === 0;
+        });
+        return [
+          Object.freeze({
+            repositoryId: row.repository_id,
+            runId: row.run_id,
+            amendmentId: row.amendment_id,
+            proposalDigest: row.proposal_digest,
+            decisionDigest: row.decision_digest,
+            baseGraphRevisionDigest: row.base_graph_revision_digest,
+            reviewedResultGraphRevisionDigest: row.reviewed_graph_revision_digest,
+            observedQuiescent,
+          }),
+        ];
+      }),
+    );
+  }
+
+  queueApprovedAmendmentApply(recovery: ApprovedAmendmentRecovery, currentTime: string): boolean {
+    if (!recovery.observedQuiescent) return false;
+    const attempts = this.#database
+      .prepare<[], { canonical_envelope: string; state: SupervisorReceiptStatus }>(
+        "SELECT canonical_envelope, state FROM supervisor_commands ORDER BY accepted_sequence",
+      )
+      .all()
+      .filter((row) => {
+        const envelope = decodeCommandEnvelope(row.canonical_envelope);
+        if (envelope.intent.type !== "apply-approved-amendment") return false;
+        const payload = localRecord(envelope.payload, "Apply amendment payload");
+        return payload.amendmentId === recovery.amendmentId;
+      });
+    if (attempts.some(({ state }) => state !== "terminal")) return false;
+    const priorAttempts = attempts.length;
+    const payload = {
+      amendmentId: recovery.amendmentId,
+      proposalDigest: recovery.proposalDigest,
+      decisionDigest: recovery.decisionDigest,
+      reviewedResultGraphRevisionDigest: recovery.reviewedResultGraphRevisionDigest,
+    } as const;
+    const commandId = `command_amendment-apply-${recovery.proposalDigest.slice(0, 20)}-${priorAttempts + 1}`;
+    const envelope = decodeCommandEnvelope({
+      apiVersion: PROTOCOL_VERSION,
+      commandId,
+      principal: trustedSupervisorPrincipal,
+      transport: { kind: "runner", requestId: `request_${commandId}` },
+      repositoryId: recovery.repositoryId,
+      runId: recovery.runId,
+      intent: { type: "apply-approved-amendment" },
+      payload,
+      payloadDigest: this.dependencies.sha256.digest(canonicalBytes(payload)),
+      expectedGraphRevision: recovery.baseGraphRevisionDigest,
+      exactObjectDigest: recovery.decisionDigest,
+    });
+    this.accept({
+      envelope,
+      createAdmission: () => ({
+        currentTime,
+        facts: {
+          source: "approved-amendment-recovery",
+          amendmentId: recovery.amendmentId,
+          observedQuiescent: true,
+        },
+        allocations: [1, 2, 3].map((ordinal) => ({
+          kind: "stream-event" as const,
+          id: `stream-event-amendment-apply-${recovery.proposalDigest.slice(0, 16)}-${priorAttempts + 1}-${ordinal}`,
+        })),
+      }),
+    });
+    return true;
   }
 
   #claim(runKey: string, input: DrainRunOnceInput): CommandRow | undefined {
@@ -881,6 +1161,21 @@ export class SqliteSupervisorAuthority {
   #fault(point: SupervisorFaultPoint): void {
     this.#faultInjector?.(point);
   }
+}
+
+const trustedSupervisorPrincipal = decodeAuthenticatedPrincipal({
+  issuer: "senawa.local",
+  subject: "amendment-recovery",
+  tenant: "local",
+  assurance: "hardware-backed",
+  roles: ["trusted-supervisor"],
+});
+
+function localRecord(value: unknown, label: string): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  return value as Readonly<Record<string, unknown>>;
 }
 
 function logFromRow(row: LogRow): SupervisorLogEntry {

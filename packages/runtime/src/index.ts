@@ -5,3 +5,4 @@ export * from "./ports.js";
 export * from "./prompt-renderer.js";
 export * from "./runner.js";
 export * from "./simulated-worker.js";
+export * from "./task-currentness.js";

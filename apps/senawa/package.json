@@ -14,6 +14,7 @@
   "dependencies": {
     "@senawa/configuration": "workspace:*",
     "@senawa/execution-host": "workspace:*",
+    "@senawa/kernel": "workspace:*",
     "@senawa/protocol": "workspace:*",
     "@senawa/runtime": "workspace:*",
     "@senawa/storage-sqlite": "workspace:*",

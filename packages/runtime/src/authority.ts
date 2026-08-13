@@ -1,6 +1,13 @@
 import {
   type AcceptedAccountingAssessment,
+  type AmendmentApplication,
+  type AmendmentDecision,
+  type AmendmentLifecycleProjection,
+  type AmendmentProposal,
+  type AmendmentQuiescenceFact,
+  type AmendmentWithdrawal,
   type AuthorityDecision,
+  applyApprovedAmendment,
   approvalId,
   assessCompletionAccounting,
   type CompletionSubmission,
@@ -8,6 +15,8 @@ import {
   canonicalSerialize,
   canonicalValue,
   closePhase,
+  createAmendmentDecision,
+  createAmendmentWithdrawal,
   createAuthorityDecision,
   createPhaseCandidate,
   decideRunCommand,
@@ -24,6 +33,7 @@ import {
   type PhaseClosure,
   type PhaseGenerationReference,
   type PhaseLifecycleProjection,
+  projectAmendmentLifecycle,
   projectPhaseLifecycle,
   type RunEvent,
   replayRunEvents,
@@ -31,6 +41,7 @@ import {
   type SensorReading,
   type Sha256Digest,
   type TaskGenerationReference,
+  validateAmendmentProposal,
   validateGateDefinition,
   validateGateEvidence,
   validatePhaseCandidate,
@@ -45,12 +56,16 @@ import {
   canonicalBytes,
   canonicalStringify,
   type DurableReceipt,
+  decodeApplyApprovedAmendmentPayload,
   decodeCommandEnvelope,
   decodeDurableReceipt,
   decodeEventReplayPage,
   decodeEventStreamFrame,
   decodeProjectionEnvelope,
   decodeReceiptPage,
+  decodeRecordAmendmentDecisionPayload,
+  decodeSubmitAmendmentProposalPayload,
+  decodeWithdrawAmendmentProposalPayload,
   type ErrorEnvelope,
   type EventReplayPage,
   type EventStreamFrame,
@@ -109,7 +124,49 @@ interface RuntimeRunRecords {
   readonly gateEvidence?: GateEvidence;
   readonly authorityDecision?: AuthorityDecision;
   readonly closure?: PhaseClosure;
+  readonly phaseLifecycles?: readonly RuntimePhaseLifecycleRecords[];
+  readonly amendmentRecords?: readonly RuntimeAmendmentRecords[];
+  readonly amendmentEvents?: readonly RuntimeAmendmentEvent[];
 }
+
+interface RuntimePhaseLifecycleRecords {
+  readonly phase: PhaseGenerationReference;
+  readonly approvalPolicy: PhaseApprovalPolicyInput;
+  readonly escalationPolicyDigest: Sha256Digest;
+  readonly assessments: readonly AcceptedAccountingAssessment[];
+  readonly candidate?: PhaseCandidate;
+  readonly gateEvidence?: GateEvidence;
+  readonly authorityDecision?: AuthorityDecision;
+  readonly closure?: PhaseClosure;
+}
+
+interface RuntimeAmendmentRecords {
+  readonly proposal: AmendmentProposal;
+  readonly decision?: AmendmentDecision;
+  readonly withdrawal?: AmendmentWithdrawal;
+  readonly application?: AmendmentApplication;
+}
+
+type RuntimeAmendmentEventType =
+  | "amendment-proposal-submitted"
+  | "amendment-proposal-withdrawn"
+  | "amendment-decision-recorded"
+  | "amendment-fencing-required"
+  | "approved-amendment-applied";
+
+interface RuntimeAmendmentEvent {
+  readonly type: RuntimeAmendmentEventType;
+  readonly sequence: number;
+  readonly occurredAt: string;
+  readonly payload: import("@senawa/kernel").CanonicalValue;
+  readonly eventDigest: Sha256Digest;
+}
+
+type RuntimeAmendmentAggregate = RuntimeRunRecords & {
+  readonly phaseLifecycles: readonly RuntimePhaseLifecycleRecords[];
+  readonly amendmentRecords: readonly RuntimeAmendmentRecords[];
+  readonly amendmentEvents: readonly RuntimeAmendmentEvent[];
+};
 
 interface StoredCommand {
   readonly canonicalEnvelope: string;
@@ -127,6 +184,11 @@ interface StoredAdmission {
   readonly facts: JsonValue;
   readonly authorizationDecision: boolean;
   readonly allocations: readonly StoredAllocation[];
+  readonly trustedAmendmentQuiescence?: AmendmentQuiescenceFact;
+}
+
+export interface TrustedRuntimeCommandFacts {
+  readonly amendmentQuiescence?: AmendmentQuiescenceFact;
 }
 
 export interface RuntimeAuthorityRun {
@@ -219,6 +281,14 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
   }
 
   submit(input: string | unknown, admission: AdmissionFacts): DurableReceipt {
+    return this.submitWithTrustedFacts(input, admission, {});
+  }
+
+  submitWithTrustedFacts(
+    input: string | unknown,
+    admission: AdmissionFacts,
+    trustedFacts: TrustedRuntimeCommandFacts,
+  ): DurableReceipt {
     const command = decodeCommandEnvelope(input);
     const canonicalEnvelope = canonicalStringify(command);
     validateTimestamp(admission.currentTime, "currentTime");
@@ -260,7 +330,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     try {
       this.validateAuthorityIdentity(command, run);
       this.validateAdmission(command, capturedAdmission, authorizationDecision);
-      const result = this.execute(command, capturedAdmission, run);
+      const result = this.execute(command, capturedAdmission, run, trustedFacts);
       const resultRevision = this.recordRevision(run.records);
       terminal = this.transition(run, command, capturedAdmission, terminalEventId, "completed", {
         ...(priorRevision === undefined ? {} : { priorRevision }),
@@ -287,6 +357,9 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
         facts,
         authorizationDecision,
         allocations: allocations.map((allocation) => ({ ...allocation })),
+        ...(trustedFacts.amendmentQuiescence === undefined
+          ? {}
+          : { trustedAmendmentQuiescence: trustedFacts.amendmentQuiescence }),
       },
     });
     return terminal;
@@ -508,6 +581,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     command: CommandEnvelope,
     admission: AdmissionFacts,
     run: RuntimeAuthorityRun,
+    trustedFacts: TrustedRuntimeCommandFacts,
   ): JsonValue {
     switch (command.intent.type) {
       case "instantiate-run":
@@ -522,6 +596,19 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
         return this.recordAuthorityDecision(command, admission, run);
       case "close-phase":
         return this.closePhase(command, run);
+      case "submit-amendment-proposal":
+        return this.submitAmendmentProposal(command, admission, run);
+      case "withdraw-amendment-proposal":
+        return this.withdrawAmendmentProposal(command, admission, run);
+      case "record-amendment-decision":
+        return this.recordAmendmentDecision(command, admission, run);
+      case "apply-approved-amendment":
+        return this.applyApprovedAmendment(
+          command,
+          admission,
+          run,
+          trustedFacts.amendmentQuiescence,
+        );
       default:
         throw new RuntimeRefusal("unsupported-intent", "Intent is not implemented in this slice");
     }
@@ -678,10 +765,9 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       payload.submission as unknown as CompletionSubmission,
     );
     const assessmentDigest = digestAccountingAssessment(assessment, this.dependencies.sha256);
-    run.records = {
-      ...records,
+    run.records = updateCurrentPhase(records, {
       assessments: [...records.assessments, { assessmentDigest, assessment }],
-    };
+    });
     return canonicalValue({ assessmentDigest, assessment }) as unknown as JsonValue;
   }
 
@@ -739,7 +825,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       candidate.candidateDigest,
       this.dependencies.sha256,
     );
-    const updated = { ...records, candidate, gateEvidence };
+    const updated = updateCurrentPhase(records, { candidate, gateEvidence });
     this.project(updated);
     run.records = updated;
     return canonicalValue({ candidate, gateEvidence }) as unknown as JsonValue;
@@ -773,7 +859,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       },
       this.dependencies.sha256,
     );
-    const updated = { ...records, authorityDecision };
+    const updated = updateCurrentPhase(records, { authorityDecision });
     this.project(updated);
     run.records = updated;
     return canonicalValue(authorityDecision) as unknown as JsonValue;
@@ -806,10 +892,252 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       { graph, candidate: records.candidate, gateEvidence: records.gateEvidence, approval },
       this.dependencies.sha256,
     );
-    const updated = { ...records, closure };
+    const updated = updateCurrentPhase(records, { closure });
     this.project(updated);
     run.records = updated;
     return canonicalValue(closure) as unknown as JsonValue;
+  }
+
+  private submitAmendmentProposal(
+    command: CommandEnvelope,
+    admission: AdmissionFacts,
+    run: RuntimeAuthorityRun,
+  ): JsonValue {
+    const records = requiredRecords(run);
+    const payload = decodeSubmitAmendmentProposalPayload(command.payload);
+    const history = phaseCandidateHistory(records);
+    const proposal = validateAmendmentProposal(payload.proposal, history, this.dependencies.sha256);
+    this.assertGraphRevision(command, records);
+    this.assertExactObject(command, proposal.proposalDigest);
+    const graph = currentGraph(records, this.dependencies.sha256);
+    if (
+      proposal.baseGraph.revisionDigest !== command.expectedGraphRevision ||
+      canonicalSerialize(canonicalValue(proposal.baseGraph)) !==
+        canonicalSerialize(canonicalValue(graph))
+    ) {
+      throw new RuntimeRefusal(
+        "stale-base",
+        "Amendment proposal base graph must exactly equal the current graph",
+      );
+    }
+    const aggregate = ensureAmendmentAggregate(records);
+    const existing = aggregate.amendmentRecords.find(
+      (item) => item.proposal.amendmentId === proposal.amendmentId,
+    );
+    if (existing !== undefined) {
+      throw new RuntimeRefusal(
+        existing.proposal.proposalDigest === proposal.proposalDigest
+          ? "amendment-proposal-exists"
+          : "amendment-proposal-conflict",
+        "Amendment identity is already bound to a proposal",
+      );
+    }
+    const updated = appendAmendmentEvent(
+      {
+        ...aggregate,
+        amendmentRecords: [...aggregate.amendmentRecords, { proposal }],
+      },
+      "amendment-proposal-submitted",
+      admission.currentTime,
+      proposal,
+      this.dependencies.sha256,
+    );
+    this.project(updated);
+    run.records = updated;
+    return canonicalValue({
+      amendmentId: proposal.amendmentId,
+      proposalDigest: proposal.proposalDigest,
+      baseGraphRevisionDigest: proposal.baseGraph.revisionDigest,
+      reviewedResultGraphRevisionDigest: proposal.reviewedResultGraph.revisionDigest,
+    }) as unknown as JsonValue;
+  }
+
+  private withdrawAmendmentProposal(
+    command: CommandEnvelope,
+    admission: AdmissionFacts,
+    run: RuntimeAuthorityRun,
+  ): JsonValue {
+    const records = requiredRecords(run);
+    const payload = decodeWithdrawAmendmentProposalPayload(command.payload);
+    const aggregate = requiredAmendmentAggregate(records);
+    const [index, lifecycle] = requiredAmendmentRecord(aggregate, payload.amendmentId);
+    assertProposalBinding(payload.proposalDigest, lifecycle.proposal);
+    this.assertExactObject(command, lifecycle.proposal.proposalDigest);
+    if (lifecycle.withdrawal !== undefined) {
+      throw new RuntimeRefusal("amendment-withdrawal-exists", "Amendment is already withdrawn");
+    }
+    if (lifecycle.application !== undefined) {
+      throw new RuntimeRefusal("amendment-already-applied", "Applied amendments cannot withdraw");
+    }
+    const withdrawal = createAmendmentWithdrawal(
+      { principal: command.principal, occurredAt: admission.currentTime },
+      lifecycle.proposal,
+      lifecycle.decision,
+      this.dependencies.sha256,
+    );
+    const updated = appendAmendmentEvent(
+      replaceAmendmentRecord(aggregate, index, { ...lifecycle, withdrawal }),
+      "amendment-proposal-withdrawn",
+      admission.currentTime,
+      withdrawal,
+      this.dependencies.sha256,
+    );
+    this.project(updated);
+    run.records = updated;
+    return canonicalValue(withdrawal) as unknown as JsonValue;
+  }
+
+  private recordAmendmentDecision(
+    command: CommandEnvelope,
+    admission: AdmissionFacts,
+    run: RuntimeAuthorityRun,
+  ): JsonValue {
+    const records = requiredRecords(run);
+    const payload = decodeRecordAmendmentDecisionPayload(command.payload);
+    const aggregate = requiredAmendmentAggregate(records);
+    const [index, lifecycle] = requiredAmendmentRecord(aggregate, payload.amendmentId);
+    const proposal = lifecycle.proposal;
+    assertProposalBinding(payload.proposalDigest, proposal);
+    if (payload.reviewedResultGraphRevisionDigest !== proposal.reviewedResultGraph.revisionDigest) {
+      throw new RuntimeRefusal(
+        "stale-result-graph",
+        "Decision reviewed result graph digest does not match the proposal",
+      );
+    }
+    if (command.expectedGraphRevision !== proposal.baseGraph.revisionDigest) {
+      throw new RuntimeRefusal(
+        "stale-graph",
+        "Decision expectedGraphRevision must equal the proposal base graph revision",
+      );
+    }
+    this.assertExactObject(command, proposal.proposalDigest);
+    if (lifecycle.decision !== undefined) {
+      throw new RuntimeRefusal("amendment-decision-exists", "Amendment already has a decision");
+    }
+    if (lifecycle.withdrawal !== undefined) {
+      throw new RuntimeRefusal("withdrawn-proposal", "A withdrawn amendment cannot be decided");
+    }
+    const graph = currentGraph(records, this.dependencies.sha256);
+    const pendingProposals = currentPendingProposals(aggregate, graph, proposal.amendmentId);
+    const decision = createAmendmentDecision(
+      {
+        decision: payload.decision,
+        approvalId: approvalId(admission.allocateId("approval", command)),
+        principal: command.principal,
+        occurredAt: admission.currentTime,
+      },
+      proposal,
+      {
+        currentGraph: graph,
+        phaseCandidateHistory: phaseCandidateHistory(records),
+        pendingProposals,
+        ...(lifecycle.withdrawal === undefined ? {} : { withdrawal: lifecycle.withdrawal }),
+      },
+      this.dependencies.sha256,
+    );
+    let updated = appendAmendmentEvent(
+      replaceAmendmentRecord(aggregate, index, { ...lifecycle, decision }),
+      "amendment-decision-recorded",
+      admission.currentTime,
+      decision,
+      this.dependencies.sha256,
+    );
+    if (decision.decision === "approve") {
+      updated = appendAmendmentEvent(
+        updated,
+        "amendment-fencing-required",
+        admission.currentTime,
+        {
+          amendmentId: proposal.amendmentId,
+          proposalDigest: proposal.proposalDigest,
+          decisionDigest: decision.decisionDigest,
+          impactDigest: proposal.impact.impactDigest,
+          affectedTaskScopes: proposal.impact.affectedTaskScopes,
+        },
+        this.dependencies.sha256,
+      );
+    }
+    this.project(updated);
+    run.records = updated;
+    return canonicalValue(decision) as unknown as JsonValue;
+  }
+
+  private applyApprovedAmendment(
+    command: CommandEnvelope,
+    admission: AdmissionFacts,
+    run: RuntimeAuthorityRun,
+    trustedQuiescence: AmendmentQuiescenceFact | undefined,
+  ): JsonValue {
+    const records = requiredRecords(run);
+    const payload = decodeApplyApprovedAmendmentPayload(command.payload);
+    const aggregate = requiredAmendmentAggregate(records);
+    const [index, lifecycle] = requiredAmendmentRecord(aggregate, payload.amendmentId);
+    const proposal = lifecycle.proposal;
+    assertProposalBinding(payload.proposalDigest, proposal);
+    if (lifecycle.decision === undefined) {
+      throw new RuntimeRefusal("amendment-decision-required", "Application requires a decision");
+    }
+    if (payload.decisionDigest !== lifecycle.decision.decisionDigest) {
+      throw new RuntimeRefusal(
+        "stale-object",
+        "Application decision digest does not match the recorded decision",
+      );
+    }
+    if (payload.reviewedResultGraphRevisionDigest !== proposal.reviewedResultGraph.revisionDigest) {
+      throw new RuntimeRefusal(
+        "stale-result-graph",
+        "Application reviewed result graph digest does not match the proposal",
+      );
+    }
+    if (command.expectedGraphRevision !== proposal.baseGraph.revisionDigest) {
+      throw new RuntimeRefusal(
+        "stale-graph",
+        "Application expectedGraphRevision must equal the approved base graph revision",
+      );
+    }
+    this.assertGraphRevision(command, records);
+    this.assertExactObject(command, lifecycle.decision.decisionDigest);
+    if (lifecycle.application !== undefined) {
+      throw new RuntimeRefusal("amendment-already-applied", "Amendment is already applied");
+    }
+    if (trustedQuiescence === undefined) {
+      throw new RuntimeRefusal(
+        "trusted-quiescence-required",
+        "Application requires storage-authoritative quiescence facts",
+      );
+    }
+    const graph = currentGraph(records, this.dependencies.sha256);
+    const application = applyApprovedAmendment(
+      {
+        proposal,
+        decision: lifecycle.decision,
+        currentGraph: graph,
+        quiescence: trustedQuiescence,
+        occurredAt: admission.currentTime,
+        phaseCandidateHistory: phaseCandidateHistory(records),
+        ...(lifecycle.withdrawal === undefined ? {} : { withdrawal: lifecycle.withdrawal }),
+      },
+      this.dependencies.sha256,
+    );
+    const withGraph = appendGraphRevisionEvent(
+      replaceAmendmentRecord(aggregate, index, { ...lifecycle, application }),
+      application.graph,
+      admission,
+      this.dependencies,
+    );
+    const updated = appendAmendmentEvent(
+      withGraph,
+      "approved-amendment-applied",
+      admission.currentTime,
+      application,
+      this.dependencies.sha256,
+    );
+    this.project(updated);
+    run.records = updated;
+    return canonicalValue({
+      application,
+      graphRevision: application.afterGraphRevisionDigest,
+    }) as unknown as JsonValue;
   }
 
   private validateAdmission(
@@ -869,10 +1197,14 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     }
   }
 
-  private project(records: RuntimeRunRecords): PhaseLifecycleProjection {
+  private project(records: RuntimeRunRecords): PhaseLifecycleProjection & {
+    readonly phaseLifecycles?: readonly PhaseLifecycleProjection[];
+    readonly amendments?: readonly AmendmentLifecycleProjection[];
+    readonly amendmentEventDigests?: readonly Sha256Digest[];
+  } {
     const graph = currentGraph(records, this.dependencies.sha256);
     assertPhaseInGraph(records.phase, graph);
-    return projectPhaseLifecycle(
+    const primary = projectPhaseLifecycle(
       {
         graph,
         phase: records.phase,
@@ -887,6 +1219,52 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       },
       this.dependencies.sha256,
     );
+    if (
+      records.phaseLifecycles === undefined &&
+      records.amendmentRecords === undefined &&
+      records.amendmentEvents === undefined
+    ) {
+      return primary;
+    }
+    const aggregate = requiredAmendmentAggregate(records);
+    validateAmendmentEventChain(aggregate.amendmentEvents, this.dependencies.sha256);
+    const phaseLifecycles = aggregate.phaseLifecycles.map((lifecycle) =>
+      projectPhaseRecords(lifecycle, graph, this.dependencies.sha256),
+    );
+    assertCurrentPhaseProjection(records, aggregate.phaseLifecycles);
+    const history = phaseCandidateHistory(records);
+    const amendments = aggregate.amendmentRecords.map((lifecycle) =>
+      projectAmendmentLifecycle(
+        {
+          proposal: lifecycle.proposal,
+          currentGraph: graph,
+          phaseCandidateHistory: history,
+          pendingProposals: currentPendingProposals(
+            aggregate,
+            graph,
+            lifecycle.proposal.amendmentId,
+          ),
+          ...(lifecycle.decision === undefined ? {} : { decision: lifecycle.decision }),
+          ...(lifecycle.withdrawal === undefined ? {} : { withdrawal: lifecycle.withdrawal }),
+          ...(lifecycle.application === undefined ? {} : { application: lifecycle.application }),
+        },
+        this.dependencies.sha256,
+      ),
+    );
+    const content = {
+      ...primary,
+      phaseLifecycles,
+      amendments,
+      amendmentEventDigests: aggregate.amendmentEvents.map(({ eventDigest }) => eventDigest),
+    };
+    return canonicalValue({
+      ...content,
+      projectionDigest: canonicalDigest(canonicalValue(content), this.dependencies.sha256),
+    }) as unknown as PhaseLifecycleProjection & {
+      readonly phaseLifecycles: readonly PhaseLifecycleProjection[];
+      readonly amendments: readonly AmendmentLifecycleProjection[];
+      readonly amendmentEventDigests: readonly Sha256Digest[];
+    };
   }
 
   private validateHydratedRun(run: RuntimeAuthorityRun): void {
@@ -916,12 +1294,11 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       }
       return { assessmentDigest, assessment };
     });
-    let records = { ...run.records, assessments: validatedAssessments };
+    let records = updateCurrentPhase(run.records, { assessments: validatedAssessments });
     if (records.candidate !== undefined) {
-      records = {
-        ...records,
+      records = updateCurrentPhase(records, {
         candidate: validatePhaseCandidate(records.candidate, graph, this.dependencies.sha256),
-      };
+      });
     }
     this.project(records);
     run.records = records;
@@ -1060,6 +1437,282 @@ function currentGraph(
   sha256: RuntimeDependencies["sha256"],
 ): WorkflowGraph {
   return replayRunEvents(records.runEvents, sha256).graph;
+}
+
+function ensureAmendmentAggregate(records: RuntimeRunRecords): RuntimeAmendmentAggregate {
+  return {
+    ...records,
+    phaseLifecycles: records.phaseLifecycles ?? [phaseLifecycleRecords(records)],
+    amendmentRecords: records.amendmentRecords ?? [],
+    amendmentEvents: records.amendmentEvents ?? [],
+  };
+}
+
+function requiredAmendmentAggregate(records: RuntimeRunRecords): RuntimeAmendmentAggregate {
+  if (
+    records.phaseLifecycles === undefined ||
+    records.amendmentRecords === undefined ||
+    records.amendmentEvents === undefined
+  ) {
+    throw new RuntimeRefusal(
+      "amendment-proposal-required",
+      "Run has no submitted amendment proposals",
+    );
+  }
+  return records as RuntimeAmendmentAggregate;
+}
+
+function phaseLifecycleRecords(records: RuntimeRunRecords): RuntimePhaseLifecycleRecords {
+  return {
+    phase: records.phase,
+    approvalPolicy: records.approvalPolicy,
+    escalationPolicyDigest: records.escalationPolicyDigest,
+    assessments: records.assessments,
+    ...(records.candidate === undefined ? {} : { candidate: records.candidate }),
+    ...(records.gateEvidence === undefined ? {} : { gateEvidence: records.gateEvidence }),
+    ...(records.authorityDecision === undefined
+      ? {}
+      : { authorityDecision: records.authorityDecision }),
+    ...(records.closure === undefined ? {} : { closure: records.closure }),
+  };
+}
+
+function updateCurrentPhase(
+  records: RuntimeRunRecords,
+  changes: Partial<RuntimePhaseLifecycleRecords>,
+): RuntimeRunRecords {
+  const updated = { ...records, ...changes };
+  if (records.phaseLifecycles === undefined) return updated;
+  const current = phaseLifecycleRecords(updated);
+  let matched = false;
+  const phaseLifecycles = records.phaseLifecycles.map((lifecycle) => {
+    if (
+      lifecycle.phase.phaseId !== records.phase.phaseId ||
+      lifecycle.phase.definitionGeneration !== records.phase.definitionGeneration
+    ) {
+      return lifecycle;
+    }
+    matched = true;
+    return current;
+  });
+  if (!matched) {
+    throw new RuntimeRefusal(
+      "phase-history-mismatch",
+      "Current phase is absent from phase-keyed lifecycle records",
+    );
+  }
+  return { ...updated, phaseLifecycles };
+}
+
+function projectPhaseRecords(
+  records: RuntimePhaseLifecycleRecords,
+  graph: WorkflowGraph,
+  sha256: RuntimeDependencies["sha256"],
+): PhaseLifecycleProjection {
+  assertPhaseInGraph(records.phase, graph);
+  return projectPhaseLifecycle(
+    {
+      graph,
+      phase: records.phase,
+      approvalPolicy: records.approvalPolicy,
+      escalationPolicyDigest: records.escalationPolicyDigest,
+      ...(records.candidate === undefined ? {} : { candidate: records.candidate }),
+      ...(records.gateEvidence === undefined ? {} : { gateEvidence: records.gateEvidence }),
+      ...(records.authorityDecision === undefined
+        ? {}
+        : { authorityDecision: records.authorityDecision }),
+      ...(records.closure === undefined ? {} : { closure: records.closure }),
+    },
+    sha256,
+  );
+}
+
+function assertCurrentPhaseProjection(
+  records: RuntimeRunRecords,
+  phaseLifecycles: readonly RuntimePhaseLifecycleRecords[],
+): void {
+  const matching = phaseLifecycles.filter(
+    ({ phase }) =>
+      phase.phaseId === records.phase.phaseId &&
+      phase.definitionGeneration === records.phase.definitionGeneration,
+  );
+  if (
+    matching.length !== 1 ||
+    canonicalSerialize(canonicalValue(matching[0])) !==
+      canonicalSerialize(canonicalValue(phaseLifecycleRecords(records)))
+  ) {
+    throw new RuntimeRefusal(
+      "phase-history-mismatch",
+      "Current lifecycle must exactly equal its phase-keyed record",
+    );
+  }
+  const keys = phaseLifecycles.map(({ phase }) => `${phase.phaseId}@${phase.definitionGeneration}`);
+  if (new Set(keys).size !== keys.length) {
+    throw new RuntimeRefusal(
+      "phase-history-mismatch",
+      "Phase-keyed lifecycle records must have unique generation keys",
+    );
+  }
+}
+
+function validateAmendmentEventChain(
+  events: readonly RuntimeAmendmentEvent[],
+  sha256: RuntimeDependencies["sha256"],
+): void {
+  for (const [index, event] of events.entries()) {
+    validateTimestamp(event.occurredAt, "amendment event occurredAt");
+    const content = {
+      type: event.type,
+      sequence: event.sequence,
+      occurredAt: event.occurredAt,
+      payload: canonicalValue(event.payload),
+    };
+    if (
+      event.sequence !== index + 1 ||
+      ![
+        "amendment-proposal-submitted",
+        "amendment-proposal-withdrawn",
+        "amendment-decision-recorded",
+        "amendment-fencing-required",
+        "approved-amendment-applied",
+      ].includes(event.type) ||
+      event.eventDigest !== canonicalDigest(canonicalValue(content), sha256)
+    ) {
+      throw new RuntimeRefusal("invalid-amendment-event", "Amendment event chain is not canonical");
+    }
+  }
+}
+
+function phaseCandidateHistory(records: RuntimeRunRecords): readonly PhaseGenerationReference[] {
+  const lifecycles = records.phaseLifecycles ?? [phaseLifecycleRecords(records)];
+  const references = lifecycles
+    .filter((lifecycle) => lifecycle.candidate !== undefined)
+    .map(({ phase }) => phase)
+    .sort((left, right) =>
+      compareText(
+        `${left.phaseId}@${left.definitionGeneration}`,
+        `${right.phaseId}@${right.definitionGeneration}`,
+      ),
+    );
+  return Object.freeze(
+    references.filter(
+      (reference, index) =>
+        index === 0 ||
+        reference.phaseId !== references[index - 1]?.phaseId ||
+        reference.definitionGeneration !== references[index - 1]?.definitionGeneration,
+    ),
+  );
+}
+
+function requiredAmendmentRecord(
+  records: RuntimeAmendmentAggregate,
+  amendmentIdentity: string,
+): readonly [number, RuntimeAmendmentRecords] {
+  const index = records.amendmentRecords.findIndex(
+    ({ proposal }) => proposal.amendmentId === amendmentIdentity,
+  );
+  const lifecycle = records.amendmentRecords[index];
+  if (index < 0 || lifecycle === undefined) {
+    throw new RuntimeRefusal("amendment-proposal-not-found", "Amendment proposal does not exist");
+  }
+  return [index, lifecycle];
+}
+
+function assertProposalBinding(proposalDigest: string, proposal: AmendmentProposal): void {
+  if (proposalDigest !== proposal.proposalDigest) {
+    throw new RuntimeRefusal(
+      "amendment-proposal-conflict",
+      "Command proposal digest does not match the amendment identity",
+    );
+  }
+}
+
+function replaceAmendmentRecord(
+  records: RuntimeAmendmentAggregate,
+  index: number,
+  lifecycle: RuntimeAmendmentRecords,
+): RuntimeAmendmentAggregate {
+  return {
+    ...records,
+    amendmentRecords: records.amendmentRecords.map((item, itemIndex) =>
+      itemIndex === index ? lifecycle : item,
+    ),
+  };
+}
+
+function currentPendingProposals(
+  records: RuntimeAmendmentAggregate,
+  graph: WorkflowGraph,
+  excludedAmendmentId: string,
+): readonly AmendmentProposal[] {
+  return records.amendmentRecords
+    .filter(
+      ({ proposal, decision, withdrawal, application }) =>
+        proposal.amendmentId !== excludedAmendmentId &&
+        proposal.baseGraph.revisionDigest === graph.revisionDigest &&
+        decision === undefined &&
+        withdrawal === undefined &&
+        application === undefined,
+    )
+    .map(({ proposal }) => proposal);
+}
+
+function appendAmendmentEvent(
+  records: RuntimeAmendmentAggregate,
+  type: RuntimeAmendmentEventType,
+  occurredAt: string,
+  payload: unknown,
+  sha256: RuntimeDependencies["sha256"],
+): RuntimeAmendmentAggregate {
+  const content = {
+    type,
+    sequence: records.amendmentEvents.length + 1,
+    occurredAt,
+    payload: canonicalValue(payload),
+  } as const;
+  const event = canonicalValue({
+    ...content,
+    eventDigest: canonicalDigest(canonicalValue(content), sha256),
+  }) as unknown as RuntimeAmendmentEvent;
+  return { ...records, amendmentEvents: [...records.amendmentEvents, event] };
+}
+
+function appendGraphRevisionEvent(
+  records: RuntimeAmendmentAggregate,
+  graph: WorkflowGraph,
+  admission: AdmissionFacts,
+  dependencies: RuntimeDependencies,
+): RuntimeAmendmentAggregate {
+  const state = replayRunEvents(records.runEvents, dependencies.sha256);
+  const content = {
+    type: "graph-revision-accepted",
+    sequence: state.lastSequence + 1,
+    occurredAt: admission.currentTime,
+    runId: state.runId,
+    workflowId: state.workflowId,
+    beforeRevisionDigest: state.revisionDigest,
+    afterRevisionDigest: graph.revisionDigest,
+    graph,
+    facts: canonicalValue(admission.facts),
+  } as const;
+  const eventDigest = digestRunEventContent(content, dependencies.sha256);
+  const events = decideRunCommand(
+    state,
+    {
+      type: "accept-graph-revision",
+      eventId: eventId(`event_${eventDigest}`),
+      eventContentDigest: eventDigest,
+      sequence: content.sequence,
+      occurredAt: content.occurredAt,
+      runId: content.runId,
+      workflowId: content.workflowId,
+      expectedRevisionDigest: content.beforeRevisionDigest,
+      graph,
+      facts: content.facts,
+    },
+    dependencies.sha256,
+  );
+  return { ...records, runEvents: [...records.runEvents, ...events] };
 }
 
 function assertPhaseInGraph(phase: PhaseGenerationReference, graph: WorkflowGraph): void {
@@ -1419,12 +2072,12 @@ function validateSerializedRun(run: SerializedRun): void {
 }
 
 function parseStoredAdmission(value: unknown): StoredAdmission {
-  const admission = exactObject(value, "stored command admission", [
-    "currentTime",
-    "facts",
-    "authorizationDecision",
-    "allocations",
-  ]);
+  const admission = exactObject(
+    value,
+    "stored command admission",
+    ["currentTime", "facts", "authorizationDecision", "allocations"],
+    ["trustedAmendmentQuiescence"],
+  );
   const currentTime = requiredString(admission.currentTime, "currentTime");
   validateTimestamp(currentTime, "currentTime");
   if (typeof admission.authorizationDecision !== "boolean") {
@@ -1433,6 +2086,9 @@ function parseStoredAdmission(value: unknown): StoredAdmission {
   if (!Array.isArray(admission.allocations)) {
     throw new TypeError("Stored command allocations must be an array");
   }
+  const trustedAmendmentQuiescence = admission.trustedAmendmentQuiescence as
+    | AmendmentQuiescenceFact
+    | undefined;
   return {
     currentTime,
     facts: canonicalValue(admission.facts) as unknown as JsonValue,
@@ -1444,6 +2100,7 @@ function parseStoredAdmission(value: unknown): StoredAdmission {
       }
       return { kind: allocation.kind, id: validateOpaqueIdentity(allocation.id) };
     }),
+    ...(trustedAmendmentQuiescence === undefined ? {} : { trustedAmendmentQuiescence }),
   };
 }
 
@@ -1455,7 +2112,15 @@ function parseRuntimeRunRecords(
     value,
     "runtime run records",
     ["runEvents", "phase", "approvalPolicy", "escalationPolicyDigest", "assessments"],
-    ["candidate", "gateEvidence", "authorityDecision", "closure"],
+    [
+      "candidate",
+      "gateEvidence",
+      "authorityDecision",
+      "closure",
+      "phaseLifecycles",
+      "amendmentRecords",
+      "amendmentEvents",
+    ],
   );
   if (!Array.isArray(submitted.runEvents) || !Array.isArray(submitted.assessments)) {
     throw new TypeError("Runtime run events and assessments must be arrays");
@@ -1504,7 +2169,7 @@ function parseRuntimeRunRecords(
     }
     return { assessmentDigest, assessment };
   });
-  const records: RuntimeRunRecords = {
+  let records: RuntimeRunRecords = {
     runEvents,
     phase: phase as unknown as PhaseGenerationReference,
     approvalPolicy,
@@ -1539,6 +2204,166 @@ function parseRuntimeRunRecords(
     },
     dependencies.sha256,
   );
+  const amendmentFields = ["phaseLifecycles", "amendmentRecords", "amendmentEvents"] as const;
+  const presentAmendmentFields = amendmentFields.filter((field) => submitted[field] !== undefined);
+  if (presentAmendmentFields.length !== 0 && presentAmendmentFields.length !== 3) {
+    throw new TypeError("Runtime amendment record arrays must be present together");
+  }
+  if (presentAmendmentFields.length === 3) {
+    if (
+      !Array.isArray(submitted.phaseLifecycles) ||
+      !Array.isArray(submitted.amendmentRecords) ||
+      !Array.isArray(submitted.amendmentEvents)
+    ) {
+      throw new TypeError("Runtime amendment record fields must be arrays");
+    }
+    const phaseLifecycles = submitted.phaseLifecycles.map((lifecycle) =>
+      parsePhaseLifecycleRecord(lifecycle, graph, dependencies),
+    );
+    records = { ...records, phaseLifecycles };
+    assertCurrentPhaseProjection(records, phaseLifecycles);
+    const history = phaseCandidateHistory(records);
+    const amendmentRecords = submitted.amendmentRecords.map((value) => {
+      const lifecycle = exactObject(
+        value,
+        "runtime amendment records",
+        ["proposal"],
+        ["decision", "withdrawal", "application"],
+      );
+      return {
+        proposal: validateAmendmentProposal(lifecycle.proposal, history, dependencies.sha256),
+        ...(lifecycle.decision === undefined
+          ? {}
+          : { decision: lifecycle.decision as AmendmentDecision }),
+        ...(lifecycle.withdrawal === undefined
+          ? {}
+          : { withdrawal: lifecycle.withdrawal as AmendmentWithdrawal }),
+        ...(lifecycle.application === undefined
+          ? {}
+          : { application: lifecycle.application as AmendmentApplication }),
+      };
+    });
+    const amendmentEvents = submitted.amendmentEvents.map((value) => {
+      const event = exactObject(value, "runtime amendment event", [
+        "type",
+        "sequence",
+        "occurredAt",
+        "payload",
+        "eventDigest",
+      ]);
+      return {
+        type: requiredString(event.type, "amendment event type") as RuntimeAmendmentEventType,
+        sequence: event.sequence as number,
+        occurredAt: requiredString(event.occurredAt, "amendment event occurredAt"),
+        payload: canonicalValue(event.payload),
+        eventDigest: requiredDigest(event.eventDigest, "amendment eventDigest"),
+      };
+    });
+    const aggregate: RuntimeAmendmentAggregate = {
+      ...records,
+      phaseLifecycles,
+      amendmentRecords,
+      amendmentEvents,
+    };
+    validateAmendmentEventChain(amendmentEvents, dependencies.sha256);
+    for (const lifecycle of amendmentRecords) {
+      projectAmendmentLifecycle(
+        {
+          proposal: lifecycle.proposal,
+          currentGraph: graph,
+          phaseCandidateHistory: history,
+          pendingProposals: currentPendingProposals(
+            aggregate,
+            graph,
+            lifecycle.proposal.amendmentId,
+          ),
+          ...(lifecycle.decision === undefined ? {} : { decision: lifecycle.decision }),
+          ...(lifecycle.withdrawal === undefined ? {} : { withdrawal: lifecycle.withdrawal }),
+          ...(lifecycle.application === undefined ? {} : { application: lifecycle.application }),
+        },
+        dependencies.sha256,
+      );
+    }
+    records = aggregate;
+  }
+  return records;
+}
+
+function parsePhaseLifecycleRecord(
+  value: unknown,
+  graph: WorkflowGraph,
+  dependencies: RuntimeDependencies,
+): RuntimePhaseLifecycleRecords {
+  const submitted = exactObject(
+    value,
+    "runtime phase lifecycle records",
+    ["phase", "approvalPolicy", "escalationPolicyDigest", "assessments"],
+    ["candidate", "gateEvidence", "authorityDecision", "closure"],
+  );
+  const phase = exactObject(submitted.phase, "runtime phase lifecycle reference", [
+    "phaseId",
+    "definitionGeneration",
+  ]);
+  requiredString(phase.phaseId, "phaseId");
+  if (
+    !Number.isSafeInteger(phase.definitionGeneration) ||
+    (phase.definitionGeneration as number) < 1
+  ) {
+    throw new TypeError("Runtime phase lifecycle generation must be a positive safe integer");
+  }
+  const policy = exactObject(
+    submitted.approvalPolicy,
+    "runtime phase lifecycle approval policy",
+    ["policy"],
+    isApprovalRequiredPolicy(submitted.approvalPolicy) ? ["authority"] : [],
+  );
+  if (policy.policy !== "no-approval" && policy.policy !== "approval-required") {
+    throw new TypeError("Runtime phase lifecycle approval policy is invalid");
+  }
+  if (!Array.isArray(submitted.assessments)) {
+    throw new TypeError("Runtime phase lifecycle assessments must be an array");
+  }
+  const assessments = submitted.assessments.map((value) => {
+    const accepted = exactObject(value, "runtime phase lifecycle assessment", [
+      "assessmentDigest",
+      "assessment",
+    ]);
+    const assessmentDigest = requiredDigest(accepted.assessmentDigest, "assessmentDigest");
+    const assessment = accepted.assessment as AcceptedAccountingAssessment["assessment"];
+    if (digestAccountingAssessment(assessment, dependencies.sha256) !== assessmentDigest) {
+      throw new TypeError("Runtime phase lifecycle assessment digest does not match");
+    }
+    return { assessmentDigest, assessment };
+  });
+  const records: RuntimePhaseLifecycleRecords = {
+    phase: phase as unknown as PhaseGenerationReference,
+    approvalPolicy:
+      policy.policy === "no-approval"
+        ? { policy: "no-approval" }
+        : { policy: "approval-required", authority: canonicalValue(policy.authority) },
+    escalationPolicyDigest: requiredDigest(
+      submitted.escalationPolicyDigest,
+      "escalationPolicyDigest",
+    ),
+    assessments,
+    ...(submitted.candidate === undefined
+      ? {}
+      : {
+          candidate: validatePhaseCandidate(
+            submitted.candidate as PhaseCandidate,
+            graph,
+            dependencies.sha256,
+          ),
+        }),
+    ...(submitted.gateEvidence === undefined
+      ? {}
+      : { gateEvidence: submitted.gateEvidence as GateEvidence }),
+    ...(submitted.authorityDecision === undefined
+      ? {}
+      : { authorityDecision: submitted.authorityDecision as AuthorityDecision }),
+    ...(submitted.closure === undefined ? {} : { closure: submitted.closure as PhaseClosure }),
+  };
+  projectPhaseRecords(records, graph, dependencies.sha256);
   return records;
 }
 
@@ -1608,23 +2433,44 @@ function replaySerializedRun(
       (firstCursorByCommand.get(right.commandId) as number),
   );
   for (const stored of commands) {
-    if (stored.receipt.status !== "completed") {
+    const storedIntent = decodeCommandEnvelope(stored.canonicalEnvelope).intent.type;
+    if (
+      stored.receipt.status !== "completed" &&
+      stored.receipt.error !== undefined &&
+      (!isAmendmentIntent(storedIntent) ||
+        [
+          "command-expired",
+          "unauthorized",
+          "payload-digest-mismatch",
+          "repository-run-conflict",
+          "run-repository-mismatch",
+          "invalid-command",
+        ].includes(stored.receipt.error.code))
+    ) {
       service.restoreNonEffectCommand(run, stored, snapshotRuns);
       continue;
     }
     let allocationIndex = 0;
-    const receipt = service.submit(stored.canonicalEnvelope, {
-      currentTime: stored.admission.currentTime,
-      facts: stored.admission.facts,
-      allocateId(kind) {
-        const allocation = stored.admission.allocations[allocationIndex];
-        if (allocation === undefined || allocation.kind !== kind) {
-          throw new TypeError("Stored command allocation sequence does not match replay");
-        }
-        allocationIndex += 1;
-        return allocation.id;
+    const receipt = service.submitWithTrustedFacts(
+      stored.canonicalEnvelope,
+      {
+        currentTime: stored.admission.currentTime,
+        facts: stored.admission.facts,
+        allocateId(kind) {
+          const allocation = stored.admission.allocations[allocationIndex];
+          if (allocation === undefined || allocation.kind !== kind) {
+            throw new TypeError("Stored command allocation sequence does not match replay");
+          }
+          allocationIndex += 1;
+          return allocation.id;
+        },
       },
-    });
+      {
+        ...(stored.admission.trustedAmendmentQuiescence === undefined
+          ? {}
+          : { amendmentQuiescence: stored.admission.trustedAmendmentQuiescence }),
+      },
+    );
     if (allocationIndex !== stored.admission.allocations.length) {
       throw new TypeError("Stored command contains unused replay allocations");
     }
@@ -1638,6 +2484,15 @@ function replaySerializedRun(
       throw new TypeError("Stored command receipt or authorization decision does not match replay");
     }
   }
+}
+
+function isAmendmentIntent(intent: CommandIntent["type"]): boolean {
+  return [
+    "submit-amendment-proposal",
+    "withdraw-amendment-proposal",
+    "record-amendment-decision",
+    "apply-approved-amendment",
+  ].includes(intent);
 }
 
 function exactObject(

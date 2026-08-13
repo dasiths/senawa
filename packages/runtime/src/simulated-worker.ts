@@ -1,4 +1,4 @@
-import type { CompletionSubmission, TaskGenerationReference, WorkerDispatch } from "@senawa/kernel";
+import type { CompletionSubmission, WorkerDispatch } from "@senawa/kernel";
 import {
   PROTOCOL_VERSION,
   type WorkerAmendmentProposalSubmission,
@@ -15,8 +15,6 @@ import type {
 
 export interface SimulatedWorkerRunInput {
   readonly dispatch: WorkerDispatch;
-  readonly currentContextDigest: string;
-  readonly currentTask: TaskGenerationReference;
 }
 
 export type SimulatedWorkerRunResult =
@@ -99,8 +97,6 @@ export class SimulatedSerialWorkerAdapter {
           type,
           [payloadKey]: payload,
         },
-        currentContextDigest: input.currentContextDigest,
-        currentTask: input.currentTask,
       });
       submissions.push(result);
       return result;

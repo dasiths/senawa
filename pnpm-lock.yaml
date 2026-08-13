@@ -29,6 +29,9 @@ importers:
       '@senawa/execution-host':
         specifier: workspace:*
         version: link:../../packages/execution-host
+      '@senawa/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
       '@senawa/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

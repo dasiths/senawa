@@ -51,6 +51,26 @@ Command files and standard input contain attribution-free protocol submissions.
 The service derives principal, transport, request identity, current time, and
 allocation facts. Exact retries reuse the durable command identity.
 
+Review and control additive amendments through the same authenticated service:
+
+```bash
+senawa amendment list <repository-id> <run-id>
+senawa amendment get <repository-id> <run-id> <amendment-id>
+senawa amendment source <repository-id> <run-id> <amendment-id>
+senawa amendment status <repository-id> <run-id> <amendment-id>
+senawa amendment withdraw <repository-id> <run-id> <amendment-id>
+senawa amendment approve <repository-id> <run-id> <amendment-id>
+senawa amendment reject <repository-id> <run-id> <amendment-id>
+senawa amendment recover <repository-id> <run-id>
+```
+
+List, get, source, and status are immutable review reads. Withdrawal and human
+decisions submit protocol commands bound to the stored proposal digest, base
+graph revision, and reviewed result graph revision. Recovery acquires the
+existing run lease and drives affected cancellation, reconciliation, and apply.
+It never supplies quiescence facts; SQLite rechecks durable affected scopes in
+the apply transaction.
+
 Create a one-time portal bootstrap URL when the service has a loopback listener:
 
 ```bash

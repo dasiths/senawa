@@ -17,13 +17,19 @@ import { Worker } from "node:worker_threads";
 import {
   type AccountingAssessment,
   type CompletionSubmission,
+  canonicalDigest,
+  canonicalValue,
   consumerKey,
+  createAmendmentProposal,
   createPhaseCandidate,
   createSensorReading,
   criterionId,
   defineGate,
+  definitionGeneration,
   digestAccountingAssessment,
   digestSelectedTaskSet,
+  sha256Digest,
+  taskId,
 } from "@senawa/kernel";
 import { canonicalStringify, PROTOCOL_VERSION } from "@senawa/protocol";
 import {
@@ -35,6 +41,7 @@ import {
 import {
   createAdmissionFixture,
   createRuntimeGraph,
+  createWorkerExecutionFixture,
   deterministicSha256,
   runtimeCommand,
   runtimeFixture,
@@ -57,6 +64,8 @@ import {
   registerRunnerAuthorityConformance,
   runnerEffectCommand,
   runnerFixture,
+  runnerTaskFence,
+  runnerTaskScope,
   runOnceInput,
 } from "@senawa/testing/runner-conformance";
 import Database from "better-sqlite3";
@@ -76,19 +85,23 @@ import {
 
 const dependencies: RuntimeDependencies = {
   sha256: deterministicSha256,
-  authorization: createRoleAuthorizationPolicy(
-    [
+  authorization: createRoleAuthorizationPolicy([
+    ...[
       "instantiate-run",
       "accept-graph-revision",
       "submit-completion",
       "evaluate-gate",
       "record-authority-decision",
       "close-phase",
+      "submit-amendment-proposal",
+      "withdraw-amendment-proposal",
+      "record-amendment-decision",
     ].map((intent) => ({
       intent: intent as Parameters<typeof createRoleAuthorizationPolicy>[0][number]["intent"],
       roles: ["release-manager"],
     })),
-  ),
+    { intent: "apply-approved-amendment", roles: ["trusted-supervisor"] },
+  ]),
 };
 
 registerRuntimeAuthorityConformance("SQLite", dependencies, () => createConformanceHarness());
@@ -321,8 +334,6 @@ describe("SQLite context broker durability", () => {
     expect(() =>
       failing.admitSubmission({
         submission,
-        currentContextDigest: harness.context.contextDigest,
-        currentTask: harness.dispatch.task,
       }),
     ).toThrow("simulated outbox delivery loss");
     expect(failing.authority.snapshot().completionOutbox[0]).toMatchObject({ delivered: false });
@@ -371,14 +382,81 @@ describe("SQLite context broker durability", () => {
       expect(
         broker.admitSubmission({
           submission,
-          currentContextDigest: harness.context.contextDigest,
-          currentTask: harness.dispatch.task,
         }),
       ).toMatchObject({ status: "accepted" });
       expect(reentrantResult).toBe(false);
       expect(broker.authority.snapshot().completionOutbox[0]).toMatchObject({ delivered: true });
     } finally {
       broker.close();
+    }
+  });
+
+  it("claims, reads, redelivers, and acknowledges exact worker amendment sources", () => {
+    const harness = createSqliteContextBrokerHarness();
+    const original = harness.broker as SqliteContextBroker;
+    const submission = contextAmendmentSubmission(harness, "submission_amendment-outbox");
+    expect(original.admitSubmission({ submission })).toMatchObject({ status: "accepted" });
+
+    const first = original.claimAmendmentProposalOutbox(
+      "bridge_owner-a",
+      "2026-08-13T10:00:00.000Z",
+      "2026-08-13T10:01:00.000Z",
+    );
+    expect(first).toBeDefined();
+    expect(
+      original.claimAmendmentProposalOutbox(
+        "bridge_owner-a",
+        "2026-08-13T10:00:30.000Z",
+        "2026-08-13T10:02:00.000Z",
+      ),
+    ).toEqual(first);
+    expect(
+      original.claimAmendmentProposalOutbox(
+        "bridge_owner-b",
+        "2026-08-13T10:00:30.000Z",
+        "2026-08-13T10:02:00.000Z",
+      ),
+    ).toBeUndefined();
+    const source = original.readClaimedAmendmentProposal(
+      first as NonNullable<typeof first>,
+      "2026-08-13T10:00:30.000Z",
+    );
+    expect(source).toEqual({ submission, context: harness.context });
+
+    const databasePath = original.databasePath;
+    original.close();
+    const reopened = reopenContextBroker(databasePath, harness);
+    try {
+      const takeover = reopened.claimAmendmentProposalOutbox(
+        "bridge_owner-b",
+        "2026-08-13T10:01:01.000Z",
+        "2026-08-13T10:03:00.000Z",
+      );
+      expect(takeover).toMatchObject({
+        submissionId: submission.submissionId,
+        fence: (first?.fence ?? 0) + 1,
+      });
+      expect(
+        reopened.acknowledgeAmendmentProposalOutbox(
+          takeover as NonNullable<typeof takeover>,
+          "2026-08-13T10:02:00.000Z",
+        ),
+      ).toBe(true);
+      expect(
+        reopened.acknowledgeAmendmentProposalOutbox(
+          takeover as NonNullable<typeof takeover>,
+          "2026-08-13T10:02:00.000Z",
+        ),
+      ).toBe(false);
+      expect(
+        reopened.claimAmendmentProposalOutbox(
+          "bridge_owner-c",
+          "2026-08-13T10:02:00.000Z",
+          "2026-08-13T10:03:00.000Z",
+        ),
+      ).toBeUndefined();
+    } finally {
+      reopened.close();
     }
   });
 
@@ -1225,6 +1303,7 @@ describe("SQLite runner durability and fencing", () => {
       repositoryId: runnerFixture.repositoryId,
       runId: otherRunId,
       contextDigest: runnerFixture.contextDigest,
+      taskScopes: [{ ...runnerTaskScope, runId: otherRunId, claimsAccepted: true }],
       budgets: [{ unit: "model-millidollars", limit: 10 }],
       lease: runnerFixture.lease,
     });
@@ -1232,6 +1311,7 @@ describe("SQLite runner durability and fencing", () => {
       commandId: "runner-command-other-run",
       runId: otherRunId,
       operationId: "operation_runner-other-run",
+      taskScope: { ...runnerTaskFence, runId: otherRunId },
     });
     authority.enqueue(command);
     try {
@@ -1244,7 +1324,7 @@ describe("SQLite runner durability and fencing", () => {
         authority.claimEffectAttempt({
           ...runOnceInput({ runId: otherRunId, attemptId: "runner-attempt-other-outcome" }),
           intent: persisted.intent,
-          contextDigest: runnerFixture.contextDigest,
+          taskScope: command.taskScope,
         }),
       ).toMatchObject({ type: "claimed", action: "inspection" });
 
@@ -1330,7 +1410,7 @@ describe("SQLite runner durability and fencing", () => {
         authority.claimEffectAttempt({
           ...runOnceInput({ attemptId: "runner-attempt-terminal" }),
           intent,
-          contextDigest: runnerFixture.contextDigest,
+          taskScope: intent.command.taskScope,
         }),
       ).toMatchObject({ type: "claimed", action: "inspection" });
       const terminal = authority.commitEffect({
@@ -1447,7 +1527,7 @@ describe("SQLite runner durability and fencing", () => {
     }
   });
 
-  it("records stale context outcomes without projecting them", () => {
+  it("keeps task-scoped outcomes current across a run-global context change", () => {
     const sandbox = createSandbox();
     let armed = true;
     let authority = configuredSqliteRunner(
@@ -1483,15 +1563,20 @@ describe("SQLite runner durability and fencing", () => {
         ),
       ).toMatchObject({
         outcome: {
-          status: "cancelled",
-          freshness: "stale",
-          details: { reason: "stale-context-before-dispatch" },
+          status: "completed",
+          freshness: "current",
         },
       });
       expect(
         authority.queryProjection(runnerFixture.repositoryId, runnerFixture.runId).effects,
-      ).toEqual([]);
-      expect(host.dispatchCalls).toBe(0);
+      ).toEqual([
+        {
+          operationId: "operation_runner-effect",
+          outputDigest: runnerFixture.outputDigest,
+          status: "completed",
+        },
+      ]);
+      expect(host.dispatchCalls).toBe(1);
     } finally {
       authority.close();
       sandbox.dispose();
@@ -1545,6 +1630,238 @@ describe("SQLite runner durability and fencing", () => {
       commandAuthority.close();
       sandbox.dispose();
     }
+  });
+});
+
+describe("SQLite amendment authority", () => {
+  it("rolls approval and exact task plus dispatch fences back or commits them once", () => {
+    const sandbox = createSandbox();
+    let armed = true;
+    const fixture = createSqliteAmendmentFixture(sandbox, (point) => {
+      if (armed && point === "after-amendment-fences") {
+        armed = false;
+        throw new Error("injected approval fence crash");
+      }
+    });
+    const approval = amendmentDecisionCommand(fixture.proposal, "command_amendment-approve");
+    try {
+      expect(() => fixture.authority.submit(approval, fixture.admission.at())).toThrow(
+        "injected approval fence crash",
+      );
+      expect(amendmentStorageCounts(sandbox.options.databasePath)).toMatchObject({
+        decisions: 0,
+        fencedDispatches: 0,
+        openScopes: 1,
+      });
+      fixture.authority.close();
+
+      let loseApprovalAck = true;
+      const first = new SqliteAuthority({
+        ...sandbox.options,
+        faultInjector(point) {
+          if (loseApprovalAck && point === "after-command-commit-before-ack") {
+            loseApprovalAck = false;
+            throw new Error("injected approval acknowledgement loss");
+          }
+        },
+      });
+      const second = new SqliteAuthority(sandbox.options);
+      try {
+        expect(() => first.submit(approval, fixture.admission.at())).toThrow(
+          "injected approval acknowledgement loss",
+        );
+        expect(second.submit(approval, fixture.admission.at()).status).toBe("completed");
+        const loser = second.submit(
+          amendmentDecisionCommand(fixture.proposal, "command_amendment-approve-race"),
+          fixture.admission.at(),
+        );
+        expect(loser.error?.code).toBe("amendment-decision-exists");
+        expect(amendmentStorageCounts(sandbox.options.databasePath)).toMatchObject({
+          decisions: 1,
+          fencedDispatches: 1,
+          openScopes: 0,
+          closedScopes: 1,
+        });
+        const runnerView = new SqliteRunnerAuthority(sandbox.options);
+        const contextView = new SqliteContextBroker({
+          databasePath: sandbox.options.databasePath,
+          dependencies: amendmentContextDependencies(),
+        });
+        try {
+          expect(runnerView.load(fixture.runIdentity).taskScopes).toEqual(
+            contextView.authority.snapshot().taskScopes,
+          );
+        } finally {
+          contextView.close();
+          runnerView.close();
+        }
+      } finally {
+        second.close();
+        first.close();
+      }
+    } finally {
+      fixture.close();
+      sandbox.dispose();
+    }
+  });
+
+  it("rejects approval after an independently installed stale scope fence without partial rows", () => {
+    const sandbox = createSandbox();
+    const fixture = createSqliteAmendmentFixture(sandbox);
+    try {
+      fixture.runner.installTaskScopeFences({
+        repositoryId: runtimeFixture.repositoryId,
+        runId: runtimeFixture.runId,
+        installedAt: "2026-08-13T12:01:00.000Z",
+        fences: [
+          {
+            scope: {
+              runId: runtimeFixture.runId,
+              taskId: runtimeFixture.task.taskId,
+              definitionGeneration: runtimeFixture.task.definitionGeneration,
+            },
+            expectedFenceGeneration: 1,
+            expectedAcceptedContextDigest: fixture.context.contextDigest,
+          },
+        ],
+      });
+      expect(() =>
+        fixture.authority.submit(
+          amendmentDecisionCommand(fixture.proposal, "command_amendment-stale-fence"),
+          fixture.admission.at(),
+        ),
+      ).toThrow(/stale/);
+      expect(amendmentStorageCounts(sandbox.options.databasePath)).toMatchObject({
+        decisions: 0,
+        fencedDispatches: 0,
+        closedScopes: 1,
+      });
+      fixture.authority.close();
+      expect(() => new SqliteAuthority(sandbox.options)).not.toThrow();
+    } finally {
+      fixture.close();
+      sandbox.dispose();
+    }
+  });
+
+  it("derives apply quiescence from live rows and recovers atomically across apply crash", async () => {
+    const sandbox = createSandbox();
+    const fixture = createSqliteAmendmentFixture(sandbox);
+    const effect = amendmentEffectCommand(fixture.context.contextDigest);
+    fixture.runner.enqueue(effect);
+    const runInput = amendmentRunInput("attempt_amendment-live");
+    const persisted = fixture.runner.persistIntent({ ...runInput, command: effect });
+    if (persisted.type !== "persisted") throw new Error("Expected persisted amendment effect");
+    expect(
+      fixture.runner.claimEffectAttempt({
+        ...runInput,
+        intent: persisted.intent,
+        taskScope: effect.taskScope,
+      }).type,
+    ).toBe("claimed");
+    const decision = fixture.authority.submit(
+      amendmentDecisionCommand(fixture.proposal, "command_amendment-approve-live"),
+      fixture.admission.at(),
+    );
+    const decisionDigest = (decision.result as { decisionDigest: string }).decisionDigest;
+    const blockedApply = fixture.authority.submit(
+      amendmentApplyCommand(fixture.proposal, decisionDigest, "command_amendment-apply-live"),
+      fixture.admission.at(),
+    );
+    expect(blockedApply.error?.code).toBe("invalid-quiescence");
+    expect(amendmentStorageCounts(sandbox.options.databasePath).applications).toBe(0);
+
+    const outcome = fixture.runner.commitEffect({
+      ...runInput,
+      intent: persisted.intent,
+      observation: {
+        status: "cancelled",
+        observedAt: "2026-08-13T12:03:00.000Z",
+        details: { reason: "amendment-fenced" },
+      },
+    });
+    expect(outcome.freshness).toBe("stale");
+    fixture.authority.close();
+
+    let armed = true;
+    const crashing = new SqliteAuthority({
+      ...sandbox.options,
+      faultInjector(point) {
+        if (armed && point === "after-amendment-application") {
+          armed = false;
+          throw new Error("injected apply crash");
+        }
+      },
+    });
+    const apply = amendmentApplyCommand(
+      fixture.proposal,
+      decisionDigest,
+      "command_amendment-apply-final",
+    );
+    expect(() => crashing.submit(apply, fixture.admission.at())).toThrow("injected apply crash");
+    crashing.close();
+    expect(amendmentStorageCounts(sandbox.options.databasePath).applications).toBe(0);
+
+    let loseApplyAck = true;
+    const reopened = new SqliteAuthority({
+      ...sandbox.options,
+      faultInjector(point) {
+        if (loseApplyAck && point === "after-command-commit-before-ack") {
+          loseApplyAck = false;
+          throw new Error("injected apply acknowledgement loss");
+        }
+      },
+    });
+    try {
+      expect(() => reopened.submit(apply, fixture.admission.at())).toThrow(
+        "injected apply acknowledgement loss",
+      );
+      reopened.close();
+      const committed = new SqliteAuthority(sandbox.options);
+      expect(committed.submit(apply, fixture.admission.at()).status).toBe("completed");
+      expect(amendmentStorageCounts(sandbox.options.databasePath).applications).toBe(1);
+      const backupPath = join(sandbox.root, "amendment-backup");
+      await committed.backup(backupPath);
+      const restored = restoreSqliteAuthority({
+        ...sandbox.options,
+        databasePath: join(sandbox.root, "amendment-restored.db"),
+        assetDirectory: join(sandbox.root, "amendment-restored-assets"),
+        backupPath,
+      });
+      try {
+        expect(restored.queryReceipt(apply.commandId)?.status).toBe("completed");
+      } finally {
+        restored.close();
+        committed.close();
+      }
+    } finally {
+      reopened.close();
+      fixture.close();
+      sandbox.dispose();
+    }
+  });
+
+  it("refuses coordinated amendment projection and configuration snapshot corruption", async () => {
+    const sandbox = createSandbox();
+    const fixture = createSqliteAmendmentFixture(sandbox);
+    fixture.authority.close();
+    const database = new Database(sandbox.options.databasePath);
+    database.prepare("UPDATE amendment_proposals SET canonical_proposal = ?").run("{}");
+    database.close();
+    expect(() => new SqliteAuthority(sandbox.options)).toThrow(/amendment_proposals/);
+
+    const clean = createSandbox();
+    const cleanFixture = createSqliteAmendmentFixture(clean);
+    const corrupt = new Database(clean.options.databasePath);
+    corrupt.prepare("UPDATE configuration_snapshots SET canonical_snapshot = ? LIMIT 1").run("{}");
+    corrupt.close();
+    await expect(
+      cleanFixture.authority.backup(join(clean.root, "corrupt-amendment-backup")),
+    ).rejects.toThrow(/Configuration snapshot/);
+    cleanFixture.close();
+    clean.dispose();
+    fixture.close();
+    sandbox.dispose();
   });
 });
 
@@ -2317,7 +2634,7 @@ describe("SQLite authority durability", () => {
 
     const newerPath = join(sandbox.root, "newer.db");
     const newer = new Database(newerPath);
-    newer.pragma("user_version = 5");
+    newer.pragma("user_version = 6");
     newer.close();
     expect(
       () =>
@@ -2523,11 +2840,286 @@ function createConformanceHarness(): RuntimeAuthorityConformanceHarness {
   return createHarness(sandbox, authority);
 }
 
+function createSqliteAmendmentFixture(
+  sandbox: ReturnType<typeof createSandbox>,
+  faultInjector?: (point: SqliteFaultPoint) => void,
+) {
+  const authority = new SqliteAuthority({ ...sandbox.options, faultInjector });
+  const admissionFixture = createAdmissionFixture();
+  const graph = createRuntimeGraph();
+  expect(
+    authority.submit(
+      instantiateCommand("command_amendment-instantiate"),
+      admissionFixture.at("2026-08-13T12:00:00.000Z"),
+    ).status,
+  ).toBe("completed");
+
+  const worker = createWorkerExecutionFixture(graph);
+  const contextBroker = new SqliteContextBroker({
+    databasePath: sandbox.options.databasePath,
+    dependencies: amendmentContextDependencies(),
+  });
+  contextBroker.registerDispatch({
+    context: worker.context,
+    dispatch: worker.dispatch,
+    completionRequirements: worker.completionRequirements,
+    taskScope: {
+      runId: runtimeFixture.runId,
+      taskId: runtimeFixture.task.taskId,
+      definitionGeneration: runtimeFixture.task.definitionGeneration,
+      acceptedContextDigest: worker.context.contextDigest,
+      fenceGeneration: 1,
+    },
+  });
+  contextBroker.close();
+
+  const lease = {
+    owner: "runner-amendment-owner",
+    fence: 1,
+    expiresAt: "2026-08-14T00:00:00.000Z",
+  } as const;
+  const runner = new SqliteRunnerAuthority(sandbox.options);
+  runner.configureRun({
+    repositoryId: runtimeFixture.repositoryId,
+    runId: runtimeFixture.runId,
+    contextDigest: worker.context.contextDigest,
+    taskScopes: [
+      {
+        runId: runtimeFixture.runId,
+        taskId: runtimeFixture.task.taskId,
+        definitionGeneration: runtimeFixture.task.definitionGeneration,
+        acceptedContextDigest: worker.context.contextDigest,
+        fenceGeneration: 1,
+        claimsAccepted: true,
+      },
+    ],
+    budgets: [{ unit: "model-millidollars", limit: 10 }],
+    lease,
+  });
+
+  const baseSnapshot = amendmentConfigurationSnapshot(graph);
+  const provisional = createAmendmentProposal(
+    amendmentProposalInput(
+      graph,
+      worker.context.contextDigest,
+      baseSnapshot.snapshotDigest,
+      sha256Digest("f".repeat(64)),
+    ),
+    deterministicSha256,
+  );
+  const resultSnapshot = amendmentConfigurationSnapshot(provisional.reviewedResultGraph);
+  const proposal = createAmendmentProposal(
+    amendmentProposalInput(
+      graph,
+      worker.context.contextDigest,
+      baseSnapshot.snapshotDigest,
+      resultSnapshot.snapshotDigest,
+    ),
+    deterministicSha256,
+  );
+  authority.putConfigurationSnapshot(baseSnapshot);
+  authority.putConfigurationSnapshot(resultSnapshot);
+  expect(
+    authority.submit(
+      runtimeCommand({
+        commandId: "command_amendment-submit",
+        intent: "submit-amendment-proposal",
+        payload: { proposal },
+        expectedGraphRevision: graph.revisionDigest,
+        exactObjectDigest: proposal.proposalDigest,
+      }),
+      admissionFixture.at("2026-08-13T12:00:30.000Z"),
+    ).status,
+  ).toBe("completed");
+  return {
+    authority,
+    runner,
+    proposal,
+    context: worker.context,
+    admission: admissionFixture,
+    lease,
+    runIdentity: {
+      repositoryId: runtimeFixture.repositoryId,
+      runId: runtimeFixture.runId,
+    },
+    close() {
+      runner.close();
+      authority.close();
+    },
+  };
+}
+
+function amendmentProposalInput(
+  graph: ReturnType<typeof createRuntimeGraph>,
+  baseContextDigest: string,
+  baseConfigurationSnapshotDigest: string,
+  resultConfigurationSnapshotDigest: string,
+) {
+  return {
+    source: { kind: "human", request: "add package verification" },
+    baseGraph: graph,
+    baseContextDigest: sha256Digest(baseContextDigest),
+    baseConfigurationSnapshotDigest: sha256Digest(baseConfigurationSnapshotDigest),
+    resultConfigurationSnapshotDigest: sha256Digest(resultConfigurationSnapshotDigest),
+    operations: [
+      {
+        kind: "add-task" as const,
+        task: {
+          id: taskId("task_package"),
+          key: consumerKey("package"),
+          generation: definitionGeneration(1),
+          parentId: runtimeFixture.phase.phaseId,
+          dependsOn: [runtimeFixture.task.taskId],
+          source: { locator: "fixture://amendment", pointer: "/tasks/package" },
+          completionPolicy: {
+            criteria: [],
+            evidencePolicy: { mode: "none" as const, requirements: [] },
+          },
+        },
+        criteria: [],
+      },
+    ],
+    phaseCandidateHistory: [],
+  };
+}
+
+function amendmentConfigurationSnapshot(graph: ReturnType<typeof createRuntimeGraph>) {
+  const empty = Object.freeze([]);
+  const emptyDigest = canonicalDigest(canonicalValue(empty), deterministicSha256);
+  const content = {
+    apiVersion: "senawa.dev/configuration-snapshot/v1alpha1",
+    graph,
+    schemas: empty,
+    roles: empty,
+    modelPolicies: empty,
+    sensors: empty,
+    gates: empty,
+    projections: empty,
+    componentDigests: {
+      graph: canonicalDigest(canonicalValue(graph), deterministicSha256),
+      schemas: emptyDigest,
+      roles: emptyDigest,
+      modelPolicies: emptyDigest,
+      sensors: emptyDigest,
+      gates: emptyDigest,
+      projections: emptyDigest,
+    },
+  };
+  return canonicalValue({
+    ...content,
+    snapshotDigest: canonicalDigest(canonicalValue(content), deterministicSha256),
+  }) as unknown as typeof content & { readonly snapshotDigest: string };
+}
+
+function amendmentDecisionCommand(
+  proposal: ReturnType<typeof createAmendmentProposal>,
+  commandId: string,
+) {
+  return runtimeCommand({
+    commandId,
+    intent: "record-amendment-decision",
+    payload: {
+      amendmentId: proposal.amendmentId,
+      proposalDigest: proposal.proposalDigest,
+      decision: "approve",
+      reviewedResultGraphRevisionDigest: proposal.reviewedResultGraph.revisionDigest,
+    },
+    expectedGraphRevision: proposal.baseGraph.revisionDigest,
+    exactObjectDigest: proposal.proposalDigest,
+  });
+}
+
+function amendmentApplyCommand(
+  proposal: ReturnType<typeof createAmendmentProposal>,
+  decisionDigest: string,
+  commandId: string,
+) {
+  return runtimeCommand({
+    commandId,
+    intent: "apply-approved-amendment",
+    payload: {
+      amendmentId: proposal.amendmentId,
+      proposalDigest: proposal.proposalDigest,
+      decisionDigest,
+      reviewedResultGraphRevisionDigest: proposal.reviewedResultGraph.revisionDigest,
+    },
+    expectedGraphRevision: proposal.baseGraph.revisionDigest,
+    exactObjectDigest: decisionDigest,
+    roles: ["trusted-supervisor"],
+  });
+}
+
+function amendmentEffectCommand(contextDigest: string) {
+  return runnerEffectCommand({
+    sequence: 1,
+    commandId: "runner-command-amendment-effect",
+    repositoryId: runtimeFixture.repositoryId,
+    runId: runtimeFixture.runId,
+    operationId: "operation_amendment-effect",
+    taskScope: {
+      runId: runtimeFixture.runId,
+      taskId: runtimeFixture.task.taskId,
+      definitionGeneration: runtimeFixture.task.definitionGeneration,
+      acceptedContextDigest: contextDigest,
+      fenceGeneration: 1,
+    },
+    contextDigest,
+    queuedAt: "2026-08-13T12:01:00.000Z",
+  });
+}
+
+function amendmentRunInput(attemptId: string) {
+  return {
+    repositoryId: runtimeFixture.repositoryId,
+    runId: runtimeFixture.runId,
+    lease: {
+      owner: "runner-amendment-owner",
+      fence: 1,
+      expiresAt: "2026-08-14T00:00:00.000Z",
+    },
+    currentTime: "2026-08-13T12:01:30.000Z",
+    attemptId,
+  };
+}
+
+function amendmentContextDependencies() {
+  return {
+    sha256: deterministicSha256,
+    currentTime: () => "2026-08-13T12:00:00.000Z",
+    issueGrantToken: () => new Uint8Array(32),
+  };
+}
+
+function amendmentStorageCounts(databasePath: string) {
+  const database = new Database(databasePath, { readonly: true });
+  try {
+    return database
+      .prepare(
+        `SELECT
+           (SELECT count(*) FROM amendment_decisions) AS decisions,
+           (SELECT count(*) FROM amendment_applications) AS applications,
+           (SELECT count(*) FROM amendment_fenced_dispatches) AS fencedDispatches,
+           (SELECT count(*) FROM amendment_work_fences WHERE claims_accepted = 1) AS openScopes,
+           (SELECT count(*) FROM amendment_work_fences WHERE claims_accepted = 0) AS closedScopes`,
+      )
+      .get() as {
+      decisions: number;
+      applications: number;
+      fencedDispatches: number;
+      openScopes: number;
+      closedScopes: number;
+    };
+  } finally {
+    database.close();
+  }
+}
+
 function configuredSqliteRunner(authority: SqliteRunnerAuthority): SqliteRunnerAuthority {
   authority.configureRun({
     repositoryId: runnerFixture.repositoryId,
     runId: runnerFixture.runId,
     contextDigest: runnerFixture.contextDigest,
+    taskScopes: [runnerTaskScope],
     budgets: [
       { unit: "model-millidollars", limit: 10 },
       { unit: "retry", limit: 2 },
@@ -2671,6 +3263,27 @@ function contextCompletionSubmission(harness: ContextBrokerHarness, submissionId
     principalId: harness.dispatch.worker.principalId,
     type: "completion" as const,
     completion,
+  };
+}
+
+function contextAmendmentSubmission(harness: ContextBrokerHarness, submissionId: string) {
+  return {
+    apiVersion: PROTOCOL_VERSION,
+    submissionId,
+    repositoryId: harness.dispatch.repositoryId,
+    runId: harness.dispatch.runId,
+    dispatchId: harness.dispatch.dispatchId,
+    task: harness.dispatch.task,
+    contextId: harness.context.contextId,
+    contextDigest: harness.context.contextDigest,
+    principalId: harness.dispatch.worker.principalId,
+    type: "amendment-proposal" as const,
+    amendment: {
+      baseGraphRevisionDigest: harness.context.graphRevisionDigest,
+      baseContextDigest: harness.context.contextDigest,
+      summary: "Add deterministic follow-up verification",
+      operations: [{ kind: "add-task", key: "follow-up" }],
+    },
   };
 }
 

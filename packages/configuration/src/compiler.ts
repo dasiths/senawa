@@ -1,4 +1,5 @@
 import {
+  AmendmentError,
   BUDGET_UNITS,
   type BudgetUnit,
   type CanonicalValue,
@@ -8,6 +9,7 @@ import {
   canonicalValue,
   type compileWorkflowGraph,
   consumerKey,
+  createAmendmentProposal,
   criterionId,
   defineGate,
   definitionGeneration,
@@ -17,21 +19,29 @@ import {
   type GraphCompilationDiagnostic,
   isConsumerKey,
   isDefinitionGeneration,
+  isSha256Digest,
+  type NormalizedAmendmentOperation,
   type NormalizedWorkflowInput,
+  normalizedWorkflowInputFromGraph,
   phaseId,
   type Sha256,
   sha256Digest,
   taskId,
+  validateWorkflowGraph,
   workflowId,
 } from "@senawa/kernel";
 import {
   CONFIGURATION_SNAPSHOT_API_VERSION,
+  type ConfigurationAmendmentCompilation,
+  type ConfigurationAmendmentDoctorResult,
   type ConfigurationDiagnostic,
   type ConfigurationDiagnosticCode,
   type ConfigurationDoctorResult,
   type ConfigurationRegistryEntry,
   type ConfigurationSnapshot,
+  WORKFLOW_AMENDMENT_API_VERSION,
   WORKFLOW_CONFIGURATION_API_VERSION,
+  type WorkflowAmendmentCompilationInput,
 } from "./contracts.js";
 import { ConfigurationCompilationError, sortDiagnostics } from "./diagnostics.js";
 import { analyzeSchemaDefinition } from "./schema.js";
@@ -52,6 +62,16 @@ interface ParsedWorkflow {
   readonly phases: readonly ParsedPhase[];
   readonly projectedWork: readonly ParsedProjection[];
 }
+
+interface ParsedAmendment {
+  readonly baseSnapshotDigest: string;
+  readonly baseContextDigest: string;
+  readonly operations: readonly ParsedAmendmentOperation[];
+}
+
+type ParsedAmendmentOperation =
+  | { readonly kind: "add-phase"; readonly phase: ParsedPhase }
+  | { readonly kind: "add-task"; readonly phase: string; readonly work: ParsedWork };
 
 interface ParsedWorkflowDeclaration {
   readonly key: string;
@@ -202,6 +222,13 @@ const ROOT_FIELDS = [
   "projectedWork",
 ];
 const MAX_LIST_ITEMS = 256;
+const AMENDMENT_ROOT_FIELDS = [
+  "apiVersion",
+  "kind",
+  "baseSnapshotDigest",
+  "baseContextDigest",
+  "operations",
+];
 
 export function doctorWorkflowConfiguration(
   input: unknown,
@@ -235,6 +262,17 @@ export function doctorWorkflowConfiguration(
 
   const registries = validateRegistries(parsed, collector, sha256);
   const lowered = lowerConfiguration(parsed, registries.gateKeysByPhase, collector, sha256);
+  const compiled = diagnoseLoweredConfiguration(lowered, registries, collector, sha256);
+  if (compiled === undefined) return { diagnostics: sortDiagnostics(collector.diagnostics) };
+  return { diagnostics: Object.freeze([]), snapshot: compiled };
+}
+
+function diagnoseLoweredConfiguration(
+  lowered: LoweredConfiguration,
+  registries: ValidatedRegistries,
+  collector: DiagnosticCollector,
+  sha256: Sha256,
+): ConfigurationSnapshot | undefined {
   const diagnosis = diagnoseWorkflowGraph(lowered.input, sha256);
   for (const diagnostic of diagnosis.diagnostics) {
     addDiagnostic(
@@ -245,12 +283,9 @@ export function doctorWorkflowConfiguration(
     );
   }
   if (diagnosis.graph === undefined || collector.diagnostics.length > 0) {
-    return { diagnostics: sortDiagnostics(collector.diagnostics) };
+    return undefined;
   }
-  return {
-    diagnostics: Object.freeze([]),
-    snapshot: createConfigurationSnapshot(diagnosis.graph, registries, sha256),
-  };
+  return createConfigurationSnapshot(diagnosis.graph, registries, sha256);
 }
 
 export function compileWorkflowConfiguration(
@@ -261,6 +296,200 @@ export function compileWorkflowConfiguration(
   const result = doctorWorkflowConfiguration(input, locator, sha256);
   if (result.snapshot === undefined) throw new ConfigurationCompilationError(result.diagnostics);
   return result.snapshot;
+}
+
+export function doctorWorkflowAmendment(
+  input: WorkflowAmendmentCompilationInput,
+  sha256: Sha256,
+): ConfigurationAmendmentDoctorResult {
+  const validLocator = typeof input.locator === "string" && input.locator.length > 0;
+  const collector: DiagnosticCollector = {
+    locator: validLocator ? input.locator : "invalid://configuration-source",
+    diagnostics: [],
+  };
+  if (!validLocator) {
+    addDiagnostic(collector, "invalid-locator", "", "Source locator must be a non-empty string");
+  }
+
+  let document: CanonicalValue;
+  try {
+    document = canonicalValue(input.document);
+  } catch {
+    addDiagnostic(
+      collector,
+      "invalid-canonical-value",
+      "",
+      "Workflow amendment must contain only finite JSON values and plain objects",
+    );
+    return { diagnostics: sortDiagnostics(collector.diagnostics) };
+  }
+
+  const parsed = parseAmendmentDocument(document, collector);
+  if (parsed === undefined) return { diagnostics: sortDiagnostics(collector.diagnostics) };
+  let baseSnapshot: ConfigurationSnapshot;
+  try {
+    baseSnapshot = validateConfigurationSnapshot(input.baseSnapshot, sha256);
+  } catch (error) {
+    addDiagnostic(
+      collector,
+      "invalid-document",
+      "/baseSnapshotDigest",
+      error instanceof Error ? error.message : "Base configuration snapshot is invalid",
+    );
+    return { diagnostics: sortDiagnostics(collector.diagnostics) };
+  }
+  if (parsed.baseSnapshotDigest !== baseSnapshot.snapshotDigest) {
+    addDiagnostic(
+      collector,
+      "stale-base",
+      "/baseSnapshotDigest",
+      "Amendment baseSnapshotDigest does not match the accepted configuration snapshot",
+    );
+  }
+
+  let baseInput: NormalizedWorkflowInput;
+  try {
+    baseInput = normalizedWorkflowInputFromGraph(baseSnapshot.graph, sha256);
+  } catch (error) {
+    addDiagnostic(
+      collector,
+      "invalid-document",
+      "/baseSnapshotDigest",
+      error instanceof Error ? error.message : "Base configuration snapshot graph is invalid",
+    );
+    return { diagnostics: sortDiagnostics(collector.diagnostics) };
+  }
+
+  const registries = registriesFromSnapshot(baseSnapshot);
+  validateAmendmentSemantics(parsed, baseSnapshot, collector);
+  const lowered = lowerAmendment(parsed, baseInput, registries.gateKeysByPhase, collector, sha256);
+  const resultSnapshot = diagnoseLoweredConfiguration(
+    lowered.candidate,
+    registries,
+    collector,
+    sha256,
+  );
+  if (resultSnapshot === undefined) {
+    return { diagnostics: sortDiagnostics(collector.diagnostics) };
+  }
+
+  try {
+    const proposal = createAmendmentProposal(
+      {
+        source: { kind: "configuration-amendment", locator: input.locator },
+        baseGraph: baseSnapshot.graph,
+        baseContextDigest: sha256Digest(parsed.baseContextDigest),
+        baseConfigurationSnapshotDigest: baseSnapshot.snapshotDigest,
+        resultConfigurationSnapshotDigest: resultSnapshot.snapshotDigest,
+        operations: lowered.operations,
+        phaseCandidateHistory: input.phaseCandidateHistory,
+      },
+      sha256,
+    );
+    return {
+      diagnostics: Object.freeze([]),
+      compilation: canonicalValue({
+        operations: proposal.operations,
+        resultSnapshot,
+        proposal,
+      }) as unknown as ConfigurationAmendmentCompilation,
+    };
+  } catch (error) {
+    addDiagnostic(
+      collector,
+      error instanceof AmendmentError ? error.code : "invalid-document",
+      "/operations",
+      error instanceof Error ? error.message : "Amendment compilation failed",
+    );
+    return { diagnostics: sortDiagnostics(collector.diagnostics) };
+  }
+}
+
+export function compileWorkflowAmendment(
+  input: WorkflowAmendmentCompilationInput,
+  sha256: Sha256,
+): ConfigurationAmendmentCompilation {
+  const result = doctorWorkflowAmendment(input, sha256);
+  if (result.compilation === undefined) {
+    throw new ConfigurationCompilationError(result.diagnostics);
+  }
+  return result.compilation;
+}
+
+function parseAmendmentDocument(
+  value: CanonicalValue,
+  collector: DiagnosticCollector,
+): ParsedAmendment | undefined {
+  const document = exactObject(value, "", AMENDMENT_ROOT_FIELDS, [], collector);
+  if (document === undefined) return undefined;
+  if (document.apiVersion !== WORKFLOW_AMENDMENT_API_VERSION) {
+    addDiagnostic(
+      collector,
+      "invalid-api-version",
+      "/apiVersion",
+      `apiVersion must be ${WORKFLOW_AMENDMENT_API_VERSION}`,
+    );
+  }
+  if (document.kind !== "WorkflowAmendment") {
+    addDiagnostic(collector, "invalid-kind", "/kind", "kind must be WorkflowAmendment");
+  }
+  const baseSnapshotDigest = parseDigest(
+    document.baseSnapshotDigest,
+    "/baseSnapshotDigest",
+    collector,
+  );
+  const baseContextDigest = parseDigest(
+    document.baseContextDigest,
+    "/baseContextDigest",
+    collector,
+  );
+  const operations = parseArray(
+    document.operations,
+    "/operations",
+    collector,
+    (operation, pointer) => parseAmendmentOperation(operation, pointer, collector),
+  );
+  if (operations !== undefined && operations.length === 0) {
+    addDiagnostic(collector, "invalid-operation", "/operations", "Amendments require an operation");
+  }
+  return baseSnapshotDigest === undefined ||
+    baseContextDigest === undefined ||
+    operations === undefined
+    ? undefined
+    : { baseSnapshotDigest, baseContextDigest, operations };
+}
+
+function parseAmendmentOperation(
+  value: CanonicalValue,
+  pointer: string,
+  collector: DiagnosticCollector,
+): ParsedAmendmentOperation | undefined {
+  if (!isRecord(value)) {
+    addDiagnostic(collector, "invalid-document", pointer, "Amendment operations must be objects");
+    return undefined;
+  }
+  if (value.kind === "add-phase") {
+    const operation = exactObject(value, pointer, ["kind", "phase"], [], collector);
+    if (operation === undefined) return undefined;
+    const phase = parsePhase(operation.phase, `${pointer}/phase`, collector, false);
+    return phase === undefined ? undefined : { kind: value.kind, phase };
+  }
+  if (value.kind === "add-task") {
+    const operation = exactObject(value, pointer, ["kind", "phase", "work"], [], collector);
+    if (operation === undefined) return undefined;
+    const phase = parseReference(operation.phase, `${pointer}/phase`, collector);
+    const work = parseWork(operation.work, `${pointer}/work`, collector);
+    return phase === undefined || work === undefined
+      ? undefined
+      : { kind: value.kind, phase, work };
+  }
+  addDiagnostic(
+    collector,
+    "invalid-operation",
+    `${pointer}/kind`,
+    "Operation must add a phase or task",
+  );
+  return undefined;
 }
 
 function parseDocument(
@@ -563,35 +792,46 @@ function parsePhases(
   value: CanonicalValue | undefined,
   collector: DiagnosticCollector,
 ): readonly ParsedPhase[] | undefined {
-  return parseArray(value, "/phases", collector, (item, pointer) => {
-    const object = exactObject(
-      item,
-      pointer,
-      ["key", "generation", "work"],
-      ["dependsOn", "input"],
-      collector,
-    );
-    if (object === undefined) return undefined;
-    const key = parseKey(object.key, `${pointer}/key`, collector);
-    const generation = parseGeneration(object.generation, `${pointer}/generation`, collector);
-    const dependsOn = parseStringArray(object.dependsOn, `${pointer}/dependsOn`, collector);
-    const work = parseArray(object.work, `${pointer}/work`, collector, (declaration, workPointer) =>
-      parseWork(declaration, workPointer, collector),
-    );
-    return key === undefined ||
-      generation === undefined ||
-      dependsOn === undefined ||
-      work === undefined
-      ? undefined
-      : {
-          pointer,
-          key,
-          generation,
-          dependsOn,
-          input: object.input ?? canonicalValue(null),
-          work,
-        };
-  });
+  return parseArray(value, "/phases", collector, (item, pointer) =>
+    parsePhase(item, pointer, collector, true),
+  );
+}
+
+function parsePhase(
+  value: CanonicalValue | undefined,
+  pointer: string,
+  collector: DiagnosticCollector,
+  includesWork: boolean,
+): ParsedPhase | undefined {
+  const object = exactObject(
+    value,
+    pointer,
+    includesWork ? ["key", "generation", "work"] : ["key", "generation"],
+    ["dependsOn", "input"],
+    collector,
+  );
+  if (object === undefined) return undefined;
+  const key = parseKey(object.key, `${pointer}/key`, collector);
+  const generation = parseGeneration(object.generation, `${pointer}/generation`, collector);
+  const dependsOn = parseStringArray(object.dependsOn, `${pointer}/dependsOn`, collector);
+  const work = includesWork
+    ? parseArray(object.work, `${pointer}/work`, collector, (declaration, workPointer) =>
+        parseWork(declaration, workPointer, collector),
+      )
+    : Object.freeze([]);
+  return key === undefined ||
+    generation === undefined ||
+    dependsOn === undefined ||
+    work === undefined
+    ? undefined
+    : {
+        pointer,
+        key,
+        generation,
+        dependsOn,
+        input: object.input ?? canonicalValue(null),
+        work,
+      };
 }
 
 function parseProjectedWork(
@@ -1013,6 +1253,205 @@ function validateWorkSemantics(parsed: ParsedWorkflow, collector: DiagnosticColl
     }
   }
 }
+
+function validateAmendmentSemantics(
+  parsed: ParsedAmendment,
+  baseSnapshot: ConfigurationSnapshot,
+  collector: DiagnosticCollector,
+): void {
+  const roleByKey = new Map<string, Readonly<Record<string, unknown>>>(
+    baseSnapshot.roles.map((entry) => [
+      String(entry.key),
+      isRecord(entry.value) ? entry.value : {},
+    ]),
+  );
+  const schemaKeys = new Set(baseSnapshot.schemas.map(({ key }) => key));
+  for (const operation of parsed.operations) {
+    if (operation.kind !== "add-task") continue;
+    const role = roleByKey.get(operation.work.role);
+    if (role === undefined) {
+      addDiagnostic(
+        collector,
+        "unknown-reference",
+        `${operation.work.pointer}/role`,
+        `Role ${operation.work.role} is not declared in the accepted snapshot`,
+      );
+    } else if (role.kind !== "agent") {
+      addDiagnostic(
+        collector,
+        "authority-widening",
+        `${operation.work.pointer}/role`,
+        `Role ${operation.work.role} cannot execute work`,
+      );
+    }
+    if (operation.work.inputSchema !== undefined && !schemaKeys.has(operation.work.inputSchema)) {
+      addDiagnostic(
+        collector,
+        "unknown-reference",
+        `${operation.work.pointer}/inputSchema`,
+        `Input schema ${operation.work.inputSchema} is not declared in the accepted snapshot`,
+      );
+    }
+  }
+}
+
+function registriesFromSnapshot(snapshot: ConfigurationSnapshot): ValidatedRegistries {
+  const gateKeysByPhase = new Map<string, string[]>();
+  for (const entry of snapshot.gates) {
+    if (!isRecord(entry.value) || typeof entry.value.phase !== "string") continue;
+    const keys = gateKeysByPhase.get(entry.value.phase) ?? [];
+    keys.push(String(entry.key));
+    gateKeysByPhase.set(entry.value.phase, keys);
+  }
+  for (const keys of gateKeysByPhase.values()) keys.sort(compareText);
+  return {
+    schemas: snapshot.schemas,
+    roles: snapshot.roles,
+    modelPolicies: snapshot.modelPolicies,
+    sensors: snapshot.sensors,
+    gates: snapshot.gates,
+    projections: snapshot.projections,
+    gateKeysByPhase,
+  };
+}
+
+function validateConfigurationSnapshot(value: unknown, sha256: Sha256): ConfigurationSnapshot {
+  const snapshot = canonicalValue(value);
+  if (!isRecord(snapshot)) throw new TypeError("Base configuration snapshot must be an object");
+  const expectedKeys = [
+    "apiVersion",
+    "graph",
+    "schemas",
+    "roles",
+    "modelPolicies",
+    "sensors",
+    "gates",
+    "projections",
+    "componentDigests",
+    "snapshotDigest",
+  ].sort(compareText);
+  if (
+    canonicalSerialize(canonicalValue(Object.keys(snapshot).sort(compareText))) !==
+    canonicalSerialize(canonicalValue(expectedKeys))
+  ) {
+    throw new TypeError("Base configuration snapshot has an invalid shape");
+  }
+  if (snapshot.apiVersion !== CONFIGURATION_SNAPSHOT_API_VERSION) {
+    throw new TypeError(
+      `Base configuration snapshot apiVersion must be ${CONFIGURATION_SNAPSHOT_API_VERSION}`,
+    );
+  }
+  const graph = validateWorkflowGraph(snapshot.graph, sha256);
+  const registries: ValidatedRegistries = {
+    schemas: validateSnapshotRegistry(snapshot.schemas, "schemas", sha256),
+    roles: validateSnapshotRegistry(snapshot.roles, "roles", sha256),
+    modelPolicies: validateSnapshotRegistry(snapshot.modelPolicies, "modelPolicies", sha256),
+    sensors: validateSnapshotRegistry(snapshot.sensors, "sensors", sha256),
+    gates: validateSnapshotRegistry(snapshot.gates, "gates", sha256),
+    projections: validateSnapshotRegistry(snapshot.projections, "projections", sha256),
+    gateKeysByPhase: new Map(),
+  };
+  const expected = createConfigurationSnapshot(graph, registries, sha256);
+  if (canonicalSerialize(snapshot) !== canonicalSerialize(canonicalValue(expected))) {
+    throw new TypeError("Base configuration snapshot does not match its exact canonical digests");
+  }
+  return expected;
+}
+
+function validateSnapshotRegistry(
+  value: unknown,
+  label: string,
+  sha256: Sha256,
+): readonly ConfigurationRegistryEntry[] {
+  if (!Array.isArray(value)) throw new TypeError(`Base snapshot ${label} must be an array`);
+  const entries = value.map((item, index) => {
+    if (!isRecord(item)) throw new TypeError(`Base snapshot ${label}[${index}] must be an object`);
+    if (
+      canonicalSerialize(canonicalValue(Object.keys(item).sort(compareText))) !==
+      canonicalSerialize(canonicalValue(["digest", "key", "value"]))
+    ) {
+      throw new TypeError(`Base snapshot ${label}[${index}] has an invalid shape`);
+    }
+    if (typeof item.key !== "string" || item.key.length === 0 || !isSha256Digest(item.digest)) {
+      throw new TypeError(`Base snapshot ${label}[${index}] has an invalid key or digest`);
+    }
+    const canonical = canonicalValue(item.value);
+    if (canonicalDigest(canonical, sha256) !== item.digest) {
+      throw new TypeError(`Base snapshot ${label}[${index}] digest does not match its value`);
+    }
+    return { key: item.key, value: canonical, digest: item.digest };
+  });
+  const sorted = [...entries].sort((left, right) =>
+    compareText(String(left.key), String(right.key)),
+  );
+  if (canonicalSerialize(canonicalValue(entries)) !== canonicalSerialize(canonicalValue(sorted))) {
+    throw new TypeError(`Base snapshot ${label} entries are not canonically ordered`);
+  }
+  if (new Set(entries.map(({ key }) => key)).size !== entries.length) {
+    throw new TypeError(`Base snapshot ${label} entries have duplicate keys`);
+  }
+  return Object.freeze(entries);
+}
+
+function lowerAmendment(
+  parsed: ParsedAmendment,
+  baseInput: NormalizedWorkflowInput,
+  gateKeysByPhase: ReadonlyMap<string, readonly string[]>,
+  collector: DiagnosticCollector,
+  sha256: Sha256,
+): {
+  readonly operations: readonly NormalizedAmendmentOperation[];
+  readonly candidate: LoweredConfiguration;
+} {
+  const sourceById = new Map<string, { pointer: string }>();
+  const workflowKey = baseInput.workflow.key;
+  const operations = parsed.operations.map((operation) => {
+    if (operation.kind === "add-phase") {
+      const phase = lowerPhaseDeclaration(
+        workflowKey,
+        baseInput.workflow.id,
+        operation.phase,
+        collector.locator,
+        sourceById,
+        sha256,
+      );
+      return { kind: operation.kind, phase } as const;
+    }
+    const lowered = lowerWorkDeclaration(
+      workflowKey,
+      operation.phase,
+      operation.work,
+      false,
+      collector.locator,
+      gateKeysByPhase.get(operation.phase) ?? [],
+      sourceById,
+      sha256,
+    );
+    return { kind: operation.kind, task: lowered.task, criteria: lowered.criteria } as const;
+  });
+  const phases = operations.flatMap((operation) =>
+    operation.kind === "add-phase" ? [operation.phase] : [],
+  );
+  const executableWork = operations.flatMap((operation) =>
+    operation.kind === "add-task" ? [operation.task] : [],
+  );
+  const criteria = operations.flatMap((operation) =>
+    operation.kind === "add-task" ? operation.criteria : [],
+  );
+  return {
+    operations,
+    candidate: {
+      input: {
+        workflow: baseInput.workflow,
+        phases: [...baseInput.phases, ...phases],
+        executableWork: [...baseInput.executableWork, ...executableWork],
+        criteria: [...baseInput.criteria, ...criteria],
+      },
+      sourceById,
+    },
+  };
+}
+
 function lowerConfiguration(
   parsed: ParsedWorkflow,
   gateKeysByPhase: ReadonlyMap<string, readonly string[]>,
@@ -1024,20 +1463,16 @@ function lowerConfiguration(
   );
   const sourceById = new Map<string, { pointer: string }>();
   sourceById.set(workflowIdentity, { pointer: "/workflow" });
-  const phases = parsed.phases.map((phase) => {
-    const pointer = `/phases/${escapePointer(phase.key)}`;
-    const id = phaseIdentity(parsed.workflow.key, phase.key, sha256);
-    sourceById.set(id, { pointer });
-    return {
-      id,
-      key: consumerKey(phase.key),
-      generation: definitionGeneration(phase.generation),
-      parentId: workflowIdentity,
-      dependsOn: phase.dependsOn.map((key) => phaseIdentity(parsed.workflow.key, key, sha256)),
-      source: { locator: collector.locator, pointer },
-      input: phase.input,
-    };
-  });
+  const phases = parsed.phases.map((phase) =>
+    lowerPhaseDeclaration(
+      parsed.workflow.key,
+      workflowIdentity,
+      phase,
+      collector.locator,
+      sourceById,
+      sha256,
+    ),
+  );
   const allWork = [
     ...parsed.phases.flatMap((phase) =>
       phase.work.map((work) => ({ phaseKey: phase.key, work, projected: false })),
@@ -1051,61 +1486,20 @@ function lowerConfiguration(
     if (!seen.has(qualified)) uniqueWork.push(declaration);
     seen.add(qualified);
   }
-  const executableWork = uniqueWork.map(({ phaseKey, work, projected }) => {
-    const pointer = projected
-      ? `/projectedWork/${escapePointer(phaseKey)}/${escapePointer(work.key)}`
-      : `/phases/${escapePointer(phaseKey)}/work/${escapePointer(work.key)}`;
-    const id = taskIdentity(parsed.workflow.key, phaseKey, work.key, sha256);
-    sourceById.set(id, { pointer });
-    const criteria = [...work.completionPolicy.criteria].sort((left, right) =>
-      compareText(left.key, right.key),
-    );
-    return {
-      id,
-      key: consumerKey(work.key),
-      generation: definitionGeneration(work.generation),
-      parentId: phaseIdentity(parsed.workflow.key, phaseKey, sha256),
-      dependsOn: work.dependsOn.map((reference) =>
-        taskIdentityFromReference(parsed.workflow.key, reference, sha256),
-      ),
-      source: { locator: collector.locator, pointer },
-      input: canonicalValue({
-        value: work.input,
-        binding: normalizedWorkBinding(work, gateKeysByPhase.get(phaseKey) ?? []),
-      }),
-      completionPolicy: {
-        criteria: criteria.map((criterion) => ({
-          criterionId: criterionIdentity(
-            parsed.workflow.key,
-            phaseKey,
-            work.key,
-            criterion.key,
-            sha256,
-          ),
-          required: criterion.required,
-        })),
-        evidencePolicy: normalizeEvidencePolicy(work.completionPolicy.evidencePolicy),
-      },
-    };
-  });
-  const criteria = uniqueWork.flatMap(({ phaseKey, work, projected }) =>
-    work.completionPolicy.criteria.map((criterion) => {
-      const taskPointer = projected
-        ? `/projectedWork/${escapePointer(phaseKey)}/${escapePointer(work.key)}`
-        : `/phases/${escapePointer(phaseKey)}/work/${escapePointer(work.key)}`;
-      const pointer = `${taskPointer}/completionPolicy/criteria/${escapePointer(criterion.key)}`;
-      const id = criterionIdentity(parsed.workflow.key, phaseKey, work.key, criterion.key, sha256);
-      sourceById.set(id, { pointer });
-      return {
-        id,
-        key: consumerKey(criterion.key),
-        generation: definitionGeneration(criterion.generation),
-        parentId: taskIdentity(parsed.workflow.key, phaseKey, work.key, sha256),
-        source: { locator: collector.locator, pointer },
-        input: criterion.input,
-      };
-    }),
+  const loweredWork = uniqueWork.map(({ phaseKey, work, projected }) =>
+    lowerWorkDeclaration(
+      parsed.workflow.key,
+      phaseKey,
+      work,
+      projected,
+      collector.locator,
+      gateKeysByPhase.get(phaseKey) ?? [],
+      sourceById,
+      sha256,
+    ),
   );
+  const executableWork = loweredWork.map(({ task }) => task);
+  const criteria = loweredWork.flatMap((item) => item.criteria);
   return {
     input: {
       workflow: {
@@ -1121,6 +1515,86 @@ function lowerConfiguration(
     },
     sourceById,
   };
+}
+
+function lowerPhaseDeclaration(
+  workflowKey: string,
+  workflowIdentity: ReturnType<typeof workflowId>,
+  phase: ParsedPhase,
+  locator: string,
+  sourceById: Map<string, { pointer: string }>,
+  sha256: Sha256,
+) {
+  const pointer = `/phases/${escapePointer(phase.key)}`;
+  const id = phaseIdentity(workflowKey, phase.key, sha256);
+  sourceById.set(id, { pointer });
+  return {
+    id,
+    key: consumerKey(phase.key),
+    generation: definitionGeneration(phase.generation),
+    parentId: workflowIdentity,
+    dependsOn: phase.dependsOn.map((key) => phaseIdentity(workflowKey, key, sha256)),
+    source: { locator, pointer },
+    input: phase.input,
+  };
+}
+
+function lowerWorkDeclaration(
+  workflowKey: string,
+  phaseKey: string,
+  work: ParsedWork,
+  projected: boolean,
+  locator: string,
+  gates: readonly string[],
+  sourceById: Map<string, { pointer: string }>,
+  sha256: Sha256,
+) {
+  const pointer = projected
+    ? `/projectedWork/${escapePointer(phaseKey)}/${escapePointer(work.key)}`
+    : `/phases/${escapePointer(phaseKey)}/work/${escapePointer(work.key)}`;
+  const id = taskIdentity(workflowKey, phaseKey, work.key, sha256);
+  sourceById.set(id, { pointer });
+  const sortedCriteria = [...work.completionPolicy.criteria].sort((left, right) =>
+    compareText(left.key, right.key),
+  );
+  const task = {
+    id,
+    key: consumerKey(work.key),
+    generation: definitionGeneration(work.generation),
+    parentId: phaseIdentity(workflowKey, phaseKey, sha256),
+    dependsOn: work.dependsOn.map((reference) =>
+      taskIdentityFromReference(workflowKey, reference, sha256),
+    ),
+    source: { locator, pointer },
+    input: canonicalValue({ value: work.input, binding: normalizedWorkBinding(work, gates) }),
+    completionPolicy: {
+      criteria: sortedCriteria.map((criterion) => ({
+        criterionId: criterionIdentity(workflowKey, phaseKey, work.key, criterion.key, sha256),
+        required: criterion.required,
+      })),
+      evidencePolicy: normalizeEvidencePolicy(work.completionPolicy.evidencePolicy),
+    },
+  };
+  const criteria = work.completionPolicy.criteria.map((criterion) => {
+    const criterionPointer = `${pointer}/completionPolicy/criteria/${escapePointer(criterion.key)}`;
+    const criterionIdentityValue = criterionIdentity(
+      workflowKey,
+      phaseKey,
+      work.key,
+      criterion.key,
+      sha256,
+    );
+    sourceById.set(criterionIdentityValue, { pointer: criterionPointer });
+    return {
+      id: criterionIdentityValue,
+      key: consumerKey(criterion.key),
+      generation: definitionGeneration(criterion.generation),
+      parentId: id,
+      source: { locator, pointer: criterionPointer },
+      input: criterion.input,
+    };
+  });
+  return { task, criteria };
 }
 
 function normalizedWorkBinding(work: ParsedWork, gates: readonly string[]) {
@@ -1379,6 +1853,18 @@ function parseReference(
       pointer,
       "Reference must be a non-empty finite string",
     );
+    return undefined;
+  }
+  return value;
+}
+
+function parseDigest(
+  value: CanonicalValue | undefined,
+  pointer: string,
+  collector: DiagnosticCollector,
+): string | undefined {
+  if (!isSha256Digest(value)) {
+    addDiagnostic(collector, "invalid-field", pointer, "Value must be a SHA-256 digest");
     return undefined;
   }
   return value;

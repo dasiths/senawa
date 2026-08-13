@@ -37,6 +37,7 @@ export interface SupervisorServiceOptions {
   readonly effectHost?: EffectHost;
   readonly asyncEffectHost?: AsyncEffectHost;
   readonly deliverCompletionOutboxOnce?: () => boolean;
+  readonly deliverAmendmentProposalOutboxOnce?: () => boolean;
   readonly timer?: SupervisorTimer;
   readonly closeables?: readonly SupervisorCloseable[];
 }
@@ -124,6 +125,11 @@ export class SupervisorService {
       ...(options.deliverCompletionOutboxOnce === undefined
         ? {}
         : { deliverCompletionOutboxOnce: options.deliverCompletionOutboxOnce }),
+      ...(options.deliverAmendmentProposalOutboxOnce === undefined
+        ? {}
+        : {
+            deliverAmendmentProposalOutboxOnce: options.deliverAmendmentProposalOutboxOnce,
+          }),
       ...(options.timer === undefined ? {} : { timer: options.timer }),
     });
     this.#startedAt = this.#now();
@@ -321,8 +327,10 @@ export class SupervisorService {
   async #runCycle(): Promise<SupervisorCycleResult> {
     const wakes = this.authority.listPendingWakes();
     const wake = wakes[0];
+    const amendmentProposal = this.authority.listPendingAmendmentProposalRuns()[0];
     const runnable = this.authority.listRunnableRuns()[0];
-    const target = wake ?? runnable;
+    const amendmentRecovery = this.authority.listApprovedAmendmentRecoveries()[0];
+    const target = wake ?? amendmentProposal ?? amendmentRecovery ?? runnable;
     if (target === undefined) return { worked: false, pendingWakeCount: 0 };
     if (this.#state === "draining") {
       return { worked: false, pendingWakeCount: wakes.length };

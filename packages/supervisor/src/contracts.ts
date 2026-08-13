@@ -66,6 +66,8 @@ export interface SupervisorPendingCounts {
   readonly wakes: number;
   readonly runnerEffects: number;
   readonly completionOutbox: number;
+  readonly amendmentProposalOutbox: number;
+  readonly approvedAmendments: number;
 }
 
 export interface SupervisorLeaseStatus {
@@ -121,6 +123,55 @@ export interface SupervisorRepositoryRegistration {
   readonly configSnapshotId: string;
 }
 
+export interface AmendmentReviewRecord {
+  readonly repositoryId: string;
+  readonly runId: string;
+  readonly proposal: JsonValue;
+  readonly lifecycle: JsonValue;
+  readonly decision?: JsonValue;
+  readonly withdrawal?: JsonValue;
+  readonly application?: JsonValue;
+  readonly workerSource?: JsonValue;
+  readonly bridgeOutcome?: JsonValue;
+}
+
+export function decodeAmendmentReviewRecord(input: string | unknown): AmendmentReviewRecord {
+  const object = exactObject(
+    input,
+    ["repositoryId", "runId", "proposal", "lifecycle"],
+    ["decision", "withdrawal", "application", "workerSource", "bridgeOutcome"],
+  );
+  return Object.freeze({
+    repositoryId: nonControlText(object.repositoryId, "repositoryId"),
+    runId: nonControlText(object.runId, "runId"),
+    proposal: decodeCanonicalJsonValue(object.proposal),
+    lifecycle: decodeCanonicalJsonValue(object.lifecycle),
+    ...(object.decision === undefined
+      ? {}
+      : { decision: decodeCanonicalJsonValue(object.decision) }),
+    ...(object.withdrawal === undefined
+      ? {}
+      : { withdrawal: decodeCanonicalJsonValue(object.withdrawal) }),
+    ...(object.application === undefined
+      ? {}
+      : { application: decodeCanonicalJsonValue(object.application) }),
+    ...(object.workerSource === undefined
+      ? {}
+      : { workerSource: decodeCanonicalJsonValue(object.workerSource) }),
+    ...(object.bridgeOutcome === undefined
+      ? {}
+      : { bridgeOutcome: decodeCanonicalJsonValue(object.bridgeOutcome) }),
+  });
+}
+
+export function decodeAmendmentReviewRecords(
+  input: string | unknown,
+): readonly AmendmentReviewRecord[] {
+  const value = decodeCanonicalJsonValue(input);
+  if (!Array.isArray(value)) throw new TypeError("Amendment review records must be an array");
+  return Object.freeze(value.map(decodeAmendmentReviewRecord));
+}
+
 export function decodeSupervisorServiceStatus(input: string | unknown): SupervisorServiceStatus {
   const object = exactObject(input, [
     "lifecycle",
@@ -159,6 +210,8 @@ export function decodeSupervisorServiceStatus(input: string | unknown): Supervis
     "wakes",
     "runnerEffects",
     "completionOutbox",
+    "amendmentProposalOutbox",
+    "approvedAmendments",
   ]);
   const pending = Object.freeze({
     queuedCommands: safeInteger(pendingObject.queuedCommands, "queuedCommands", 0),
@@ -166,6 +219,12 @@ export function decodeSupervisorServiceStatus(input: string | unknown): Supervis
     wakes: safeInteger(pendingObject.wakes, "wakes", 0),
     runnerEffects: safeInteger(pendingObject.runnerEffects, "runnerEffects", 0),
     completionOutbox: safeInteger(pendingObject.completionOutbox, "completionOutbox", 0),
+    amendmentProposalOutbox: safeInteger(
+      pendingObject.amendmentProposalOutbox,
+      "amendmentProposalOutbox",
+      0,
+    ),
+    approvedAmendments: safeInteger(pendingObject.approvedAmendments, "approvedAmendments", 0),
   });
   if (!Array.isArray(object.leases)) throw new TypeError("leases must be an array");
   const leases = object.leases.map((value) => {

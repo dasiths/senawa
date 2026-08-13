@@ -1,11 +1,14 @@
-import type { Sha256 } from "@senawa/kernel";
+import { type Sha256, sha256Digest } from "@senawa/kernel";
 import { describe, expect, it } from "vitest";
 import {
   ConfigurationCompilationError,
+  compileWorkflowAmendment,
   compileWorkflowConfiguration,
   createExampleWorkflowConfiguration,
   detectConfigurationDrift,
+  doctorWorkflowAmendment,
   doctorWorkflowConfiguration,
+  type WorkflowAmendmentDocument,
   type WorkflowConfigurationDocument,
 } from "./index.js";
 
@@ -1228,6 +1231,178 @@ describe("workflow configuration compilation", () => {
   });
 });
 
+describe("workflow amendment compilation", () => {
+  it("produces the same snapshot as equivalent complete initial input", () => {
+    const locator = "fixture://amendment-equivalence";
+    const base = softwareFixture();
+    const baseSnapshot = compileWorkflowConfiguration(base, locator, deterministicSha256);
+    const report = task("report", ["release/publish"], "reported", { command: "report" });
+    const amendment = amendmentDocument(baseSnapshot.snapshotDigest, [
+      {
+        kind: "add-phase",
+        phase: { key: "audit", generation: 1, dependsOn: ["release"], input: { scope: "release" } },
+      },
+      { kind: "add-task", phase: "audit", work: report },
+    ]);
+    const complete = softwareFixture();
+    complete.phases.push({
+      key: "audit",
+      generation: 1,
+      dependsOn: ["release"],
+      input: { scope: "release" },
+      work: [report],
+    });
+
+    const compiled = compileWorkflowAmendment(
+      { document: amendment, locator, baseSnapshot, phaseCandidateHistory: [] },
+      deterministicSha256,
+    );
+    const expected = compileWorkflowConfiguration(complete, locator, deterministicSha256);
+
+    expect(compiled.resultSnapshot).toEqual(expected);
+    expect(compiled.proposal.reviewedResultGraph).toEqual(expected.graph);
+    expect(compiled.proposal.resultConfigurationSnapshotDigest).toBe(expected.snapshotDigest);
+  });
+
+  it("normalizes operation order into one proposal and result snapshot", () => {
+    const locator = "fixture://amendment-order";
+    const baseSnapshot = compileWorkflowConfiguration(
+      softwareFixture(),
+      locator,
+      deterministicSha256,
+    );
+    const operations: WorkflowAmendmentDocument["operations"] = [
+      {
+        kind: "add-phase",
+        phase: { key: "audit", generation: 1, dependsOn: ["release"] },
+      },
+      {
+        kind: "add-task",
+        phase: "audit",
+        work: task("report", ["release/publish"], "reported", null),
+      },
+    ];
+    const first = compileWorkflowAmendment(
+      {
+        document: amendmentDocument(baseSnapshot.snapshotDigest, operations),
+        locator,
+        baseSnapshot,
+        phaseCandidateHistory: [],
+      },
+      deterministicSha256,
+    );
+    const second = compileWorkflowAmendment(
+      {
+        document: amendmentDocument(baseSnapshot.snapshotDigest, [...operations].reverse()),
+        locator,
+        baseSnapshot,
+        phaseCandidateHistory: [],
+      },
+      deterministicSha256,
+    );
+
+    expect(second).toEqual(first);
+  });
+
+  it("reuses accepted registries without permitting registry mutation", () => {
+    const baseSnapshot = compileWorkflowConfiguration(
+      fullSoftwareFixture(),
+      "fixture://accepted-registries",
+      deterministicSha256,
+    );
+    const work = task("verify", ["release/publish"], "verified", null);
+    work.inputSchema = "work-input";
+    const document = amendmentDocument(baseSnapshot.snapshotDigest, [
+      { kind: "add-task", phase: "release", work },
+    ]);
+    const compiled = compileWorkflowAmendment(
+      {
+        document,
+        locator: "fixture://accepted-registries",
+        baseSnapshot,
+        phaseCandidateHistory: [],
+      },
+      deterministicSha256,
+    );
+    const mutated = { ...document, schemas: [] };
+    const diagnosis = doctorWorkflowAmendment(
+      {
+        document: mutated,
+        locator: "fixture://accepted-registries",
+        baseSnapshot,
+        phaseCandidateHistory: [],
+      },
+      deterministicSha256,
+    );
+    const forgedBase = JSON.parse(JSON.stringify(baseSnapshot)) as typeof baseSnapshot;
+    const forgedRole = forgedBase.roles[0] as unknown as { value: { capabilities: string[] } };
+    forgedRole.value.capabilities.push("forged-capability");
+    const forgedDiagnosis = doctorWorkflowAmendment(
+      {
+        document,
+        locator: "fixture://accepted-registries",
+        baseSnapshot: forgedBase,
+        phaseCandidateHistory: [],
+      },
+      deterministicSha256,
+    );
+
+    expect(compiled.resultSnapshot.schemas).toEqual(baseSnapshot.schemas);
+    expect(compiled.resultSnapshot.roles).toEqual(baseSnapshot.roles);
+    expect(diagnosis.diagnostics).toEqual([
+      expect.objectContaining({ code: "unknown-field", pointer: "/schemas" }),
+    ]);
+    expect(forgedDiagnosis.compilation).toBeUndefined();
+    expect(forgedDiagnosis.diagnostics).toEqual([
+      expect.objectContaining({ code: "invalid-document", pointer: "/baseSnapshotDigest" }),
+    ]);
+  });
+
+  it("refuses stale snapshots and additions to phases with candidate history", () => {
+    const locator = "fixture://amendment-history";
+    const baseSnapshot = compileWorkflowConfiguration(
+      softwareFixture(),
+      locator,
+      deterministicSha256,
+    );
+    const document = amendmentDocument(baseSnapshot.snapshotDigest, [
+      {
+        kind: "add-task",
+        phase: "release",
+        work: task("verify", ["release/publish"], "verified", null),
+      },
+    ]);
+    const initial = compileWorkflowAmendment(
+      { document, locator, baseSnapshot, phaseCandidateHistory: [] },
+      deterministicSha256,
+    );
+    const target = initial.proposal.impact.existingTargetPhases[0];
+    if (target === undefined) throw new Error("Expected existing target phase impact");
+    const history = doctorWorkflowAmendment(
+      { document, locator, baseSnapshot, phaseCandidateHistory: [target] },
+      deterministicSha256,
+    );
+    const stale = doctorWorkflowAmendment(
+      {
+        document: { ...document, baseSnapshotDigest: sha256Digest("f".repeat(64)) },
+        locator,
+        baseSnapshot,
+        phaseCandidateHistory: [],
+      },
+      deterministicSha256,
+    );
+
+    expect(history.compilation).toBeUndefined();
+    expect(history.diagnostics).toEqual([
+      expect.objectContaining({ code: "candidate-history", pointer: "/operations" }),
+    ]);
+    expect(stale.compilation).toBeUndefined();
+    expect(stale.diagnostics).toEqual([
+      expect.objectContaining({ code: "stale-base", pointer: "/baseSnapshotDigest" }),
+    ]);
+  });
+});
+
 describe("configuration drift", () => {
   it("reports changed component categories and stable keys", () => {
     const accepted = compileWorkflowConfiguration(
@@ -1324,6 +1499,19 @@ function softwareFixture(): MutableWorkflowDocument {
         work: [task("publish", ["build/test"], "published", { command: "publish" })],
       },
     ],
+  };
+}
+
+function amendmentDocument(
+  baseSnapshotDigest: WorkflowAmendmentDocument["baseSnapshotDigest"],
+  operations: WorkflowAmendmentDocument["operations"],
+): WorkflowAmendmentDocument {
+  return {
+    apiVersion: "senawa.dev/workflow-amendment/v1alpha1",
+    kind: "WorkflowAmendment",
+    baseSnapshotDigest,
+    baseContextDigest: sha256Digest("c".repeat(64)),
+    operations,
   };
 }
 

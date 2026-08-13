@@ -189,6 +189,7 @@ function createFixture(): {
     repositoryId,
     runId,
     contextDigest,
+    taskScopes: [{ ...effectTaskScope(), claimsAccepted: true }],
     budgets: [{ unit: "model-millidollars", limit: 10 }],
     lease: {
       owner: "owner_controller",
@@ -216,6 +217,7 @@ function effectCommand(): QueuedEffectCommand {
     runId,
     operationId: "operation_controller-effect",
     kind: "worker",
+    taskScope: effectTaskScope(),
     contextDigest,
     inputDigest: "b".repeat(64),
     input: { dispatchId: "dispatch_controller" },
@@ -223,4 +225,14 @@ function effectCommand(): QueuedEffectCommand {
     queuedAt: "2026-08-13T12:00:00.000Z",
     maxReconciliationAttempts: 2,
   };
+}
+
+function effectTaskScope() {
+  return {
+    runId,
+    taskId: "task_controller",
+    definitionGeneration: 1,
+    acceptedContextDigest: contextDigest,
+    fenceGeneration: 1,
+  } as const;
 }

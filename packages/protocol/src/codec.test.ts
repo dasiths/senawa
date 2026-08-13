@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { GOLDEN_COMMAND_JSON, GOLDEN_RECEIPT_JSON } from "./fixtures/v1alpha.js";
 import {
   canonicalBytes,
+  decodeApplyApprovedAmendmentPayload,
   decodeAuthenticatedPrincipal,
   decodeCapabilityHandshake,
   decodeCommandEnvelope,
@@ -12,12 +13,16 @@ import {
   decodeEventStreamFrame,
   decodeProjectionEnvelope,
   decodeReceiptPage,
+  decodeRecordAmendmentDecisionPayload,
   decodeRunIdentity,
+  decodeSubmitAmendmentProposalPayload,
   decodeSupervisorAdmissionFacts,
   decodeSupervisorReceipt,
   decodeSupervisorServiceRecord,
   decodeSupervisorWake,
   decodeTransportAttribution,
+  decodeWithdrawAmendmentProposalPayload,
+  encodeApplyApprovedAmendmentPayload,
   encodeAuthenticatedPrincipal,
   encodeCapabilityHandshake,
   encodeCommandEnvelope,
@@ -28,8 +33,11 @@ import {
   encodeEventStreamFrame,
   encodeProjectionEnvelope,
   encodeReceiptPage,
+  encodeRecordAmendmentDecisionPayload,
   encodeRunIdentity,
+  encodeSubmitAmendmentProposalPayload,
   encodeTransportAttribution,
+  encodeWithdrawAmendmentProposalPayload,
   PROTOCOL_LIMITS,
   PROTOCOL_VERSION,
   ProtocolValidationError,
@@ -159,6 +167,10 @@ describe("v1alpha command codec", () => {
     "evaluate-gate",
     "record-authority-decision",
     "close-phase",
+    "submit-amendment-proposal",
+    "withdraw-amendment-proposal",
+    "record-amendment-decision",
+    "apply-approved-amendment",
     "create-escalation",
     "grant-allowance",
   ] as const)("accepts the %s intent discriminator", (type) => {
@@ -231,6 +243,79 @@ describe("v1alpha command codec", () => {
 
     expectProtocolError("invalid-type", "$.payload", () => decodeCommandEnvelope(adversarial));
     expect(invoked).toBe(false);
+  });
+});
+
+describe("v1alpha amendment command payloads", () => {
+  const amendmentId = "amendment_fixture";
+  const proposalDigest = "b".repeat(64);
+  const reviewedResultGraphRevisionDigest = "c".repeat(64);
+  const decisionDigest = "d".repeat(64);
+
+  it("decodes exact proposal, withdrawal, decision, and apply payloads", () => {
+    const proposalPayload = { proposal: { amendmentId } };
+    expect(
+      decodeSubmitAmendmentProposalPayload(encodeSubmitAmendmentProposalPayload(proposalPayload)),
+    ).toEqual({
+      proposal: { amendmentId },
+    });
+    const withdrawalPayload = { amendmentId, proposalDigest };
+    expect(
+      decodeWithdrawAmendmentProposalPayload(
+        encodeWithdrawAmendmentProposalPayload(withdrawalPayload),
+      ),
+    ).toEqual(withdrawalPayload);
+    const decisionPayload = {
+      amendmentId,
+      proposalDigest,
+      decision: "approve",
+      reviewedResultGraphRevisionDigest,
+    } as const;
+    expect(
+      decodeRecordAmendmentDecisionPayload({
+        ...decodeRecordAmendmentDecisionPayload(
+          encodeRecordAmendmentDecisionPayload(decisionPayload),
+        ),
+      }),
+    ).toEqual(decisionPayload);
+    const applyPayload = {
+      amendmentId,
+      proposalDigest,
+      decisionDigest,
+      reviewedResultGraphRevisionDigest,
+    };
+    const encodedApply = encodeApplyApprovedAmendmentPayload(applyPayload);
+    expect(encodedApply).toBe(
+      `{"amendmentId":"amendment_fixture","decisionDigest":"${decisionDigest}","proposalDigest":"${proposalDigest}","reviewedResultGraphRevisionDigest":"${reviewedResultGraphRevisionDigest}"}`,
+    );
+    expect(decodeApplyApprovedAmendmentPayload(encodedApply)).toEqual(applyPayload);
+  });
+
+  it("rejects extras, invalid decisions, and caller-supplied quiescence", () => {
+    expectProtocolError("unknown-field", "$.mutableStatus", () =>
+      decodeWithdrawAmendmentProposalPayload({
+        amendmentId,
+        proposalDigest,
+        mutableStatus: "withdrawn",
+      }),
+    );
+    expectProtocolError("invalid-value", "$.decision", () =>
+      decodeRecordAmendmentDecisionPayload({
+        amendmentId,
+        proposalDigest,
+        decision: "abstain",
+        reviewedResultGraphRevisionDigest,
+      }),
+    );
+    expectProtocolError("unknown-field", "$.quiescence", () =>
+      decodeApplyApprovedAmendmentPayload({
+        amendmentId,
+        proposalDigest,
+        decisionDigest,
+        reviewedResultGraphRevisionDigest,
+        quiescence: {},
+      }),
+    );
   });
 });
 

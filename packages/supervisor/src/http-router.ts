@@ -17,6 +17,12 @@ export type SupervisorHttpRoute =
       readonly afterCursor?: number;
       readonly limit?: number;
     }
+  | {
+      readonly kind: "amendment-list" | "amendment-record" | "amendment-source";
+      readonly repositoryId: string;
+      readonly runId: string;
+      readonly amendmentId?: string;
+    }
   | { readonly kind: "portal-session-bootstrap" }
   | { readonly kind: "portal-bootstrap"; readonly token: string }
   | { readonly kind: "portal-session" }
@@ -185,6 +191,28 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
     if (samePath(suffix, ["projections", "phase-lifecycle"])) {
       requireQuery(query, []);
       return { kind: "phase-lifecycle", repositoryId, runId };
+    }
+    if (samePath(suffix, ["amendments"])) {
+      requireQuery(query, []);
+      return { kind: "amendment-list", repositoryId, runId };
+    }
+    if (suffix.length === 2 && suffix[0] === "amendments") {
+      requireQuery(query, []);
+      return {
+        kind: "amendment-record",
+        repositoryId,
+        runId,
+        amendmentId: validateIdentity(suffix[1]),
+      };
+    }
+    if (suffix.length === 3 && suffix[0] === "amendments" && suffix[2] === "source") {
+      requireQuery(query, []);
+      return {
+        kind: "amendment-source",
+        repositoryId,
+        runId,
+        amendmentId: validateIdentity(suffix[1]),
+      };
     }
   }
   throw notFound();
