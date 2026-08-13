@@ -2,6 +2,7 @@ export * from "./budgets.js";
 export * from "./candidates.js";
 export * from "./canonical.js";
 export * from "./completion.js";
+export * from "./context.js";
 export * from "./gates.js";
 export * from "./graph.js";
 export * from "./identity.js";

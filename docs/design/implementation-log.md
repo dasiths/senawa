@@ -47,8 +47,8 @@ Each phase records:
 | 3. Protocol and in-memory command slice | Complete | `0f5f485` | Pushed |
 | 4. SQLite authority and immutable assets | Complete | `ef8580a` | Pushed |
 | 5. Fenced runner and reconciliation | Complete | `40b0de4` | Pushed |
-| 6. Workflow and sensor configuration | In progress | Pending | Pending |
-| 7. Context broker and serial workers | Not started | Pending | Pending |
+| 6. Workflow and sensor configuration | Complete | `4667ab0` | Pushed |
+| 7. Context broker and serial workers | In progress | Pending | Pending |
 | 8. Local supervisor, HTTP, SSE, and CLI | Not started | Pending | Pending |
 | 9. Additive amendments | Not started | Pending | Pending |
 | 10. Parallel worktrees and integration | Not started | Pending | Pending |
@@ -2545,6 +2545,678 @@ Passed on 2026-08-13:
 
 * Implementation commit: `4667ab0 feat: add workflow configuration loading`
 * Push: succeeded to `origin/redesign/workflow-state-machine`
+
+## Decision D-047: Derive task context revisions from recursion-free context bases
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 7 bounded Slice A
+* Phase: 7
+* Decision: Compile one exact `senawa.dev/worker-context-base/v1alpha1` record
+  from a recursion-free task seed containing only `taskId` and
+  `definitionGeneration`, plus graph and configuration digests, selected
+  immutable contract references, a dependency barrier, historical asset
+  bindings, repository base, model policy reference, role, capabilities, and
+  finite budgets. Compute `contextDigest` over that complete versioned content,
+  derive `ContextId` from the digest, and use
+  `taskGenerationReferenceForContext` to promote the result into the exact
+  `TaskGenerationReference.contextRevisionDigest`. Derive historical
+  `AssetBindingId` values and dispatch identities from their canonical content.
+  Dispatch identity binds repository, run, task generation, context, ordinal,
+  worker principal and role, narrowed capabilities, and prompt pack digest.
+* Alternatives: Include a `TaskGenerationReference` in context input and create
+  a digest cycle; accept a caller-supplied context digest or identity; embed and
+  reorder model routes in worker context; let prompt packs or dispatch records
+  carry graph mutation or approval authority; allocate context and dispatch
+  identities from clocks or random values.
+* Rationale: The task seed makes context construction acyclic while preserving
+  the established generation reference at every completion boundary. Exact
+  canonical recompilation rejects fabricated digests and identities. Referencing
+  `orderedRoutesDigest` preserves route precedence without duplicating policy
+  content. Capability subset validation prevents assignment from widening the
+  immutable context authority.
+* Consequence: A changed authority fact creates a new context digest, task
+  generation reference, context identity, and dispatch identity. Reusing an
+  unchanged context and dispatch ordinal reproduces the same dispatch and worker
+  session identity. This slice defines no prompt renderer, lazy asset grant,
+  worker submission, protocol, runtime, storage, SDK, or adapter behavior.
+
+## Phase 7 log
+
+### Bounded Slice A: Pure context bases and worker assignment contracts
+
+Added browser-safe, I/O-free kernel contracts for canonical dependency barriers,
+worker context bases, and deterministic worker dispatch. Constructors snapshot
+unknown input before validation, require exact object shapes, sort set-like
+contracts, dependencies, asset bindings, capabilities, and budgets, reject
+duplicates and invalid bounds, and recursively freeze accepted records. Model
+routes remain ordered behind their policy and routes digests and are not
+reordered by the context compiler.
+
+Historical asset bindings preserve semantic asset identity, exact alias binding
+digest, content digest, media type, sensitivity, and byte length. Dependency
+barriers preserve each exact dependency generation, disposition, assessment
+digest, canonical authority fact, and derived authority-fact digest. Dispatches
+bind only assigned worker facts and reject capability widening or extra approval
+and graph authority fields.
+
+Focused validation passed on 2026-08-13:
+
+* Identity suite: 43 tests
+* Context and dispatch suite: 24 tests
+* Kernel package typecheck
+* Biome check for all touched TypeScript files
+
+Broad validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Root and kernel package typecheck
+* Biome check across 81 files
+* Complete workspace suite: 19 files and 507 tests
+* Architecture boundaries across 111 source files
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+No commit or push was performed for this bounded slice.
+
+## Decision D-048: Admit scoped worker reads and proposal-only submissions
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 7 bounded Slice B
+* Phase: 7
+* Decision: Keep raw context grant tokens only at the client boundary and
+  persist their SHA-256 digests with exact dispatch, task generation, context,
+  principal, historical asset binding, pointer, read mode, sensitivity,
+  issuance, expiration, operation, byte, and chunk bounds. The broker owns an
+  injected SHA-256 implementation, trusted clock, and grant-token issuer. It
+  requires exactly 32 token bytes, base64url encodes them, and rejects reused
+  token digests. Reserve one operation and the worst-case requested bytes
+  atomically before asset I/O. Install an exact canonical in-flight request
+  before reservation so concurrent replay shares one result and one charge.
+  Admit worker output as one of five exact, capability-gated submission
+  variants only after recursively refusing issued grant tokens. Preserve stale
+  submissions without completion assessment, emit at most one current
+  completion fact per dispatch, and store later current completions explicitly
+  as duplicates.
+* Alternatives: Persist bearer tokens; resolve semantic aliases at read time;
+  charge actual response bytes after I/O; let prompt text carry grants or raw
+  sensitive content; treat stale completion as current; expose approval,
+  closure, allowance, graph mutation, or raw effect commands to workers; route
+  completion submissions directly through lifecycle commands.
+* Rationale: Digest-only persistence prevents authority snapshots, events,
+  errors, and prompts from becoming bearer-token stores. Historical binding
+  reads preserve replay semantics when aliases move. Worst-case precharge
+  prevents concurrent reads from oversubscribing a grant. Proposal-only
+  submissions preserve agent observations while keeping lifecycle authority in
+  the kernel and runtime command paths. Prompt rendering excludes the derived
+  dispatch identity, so prompt-pack and dispatch digest derivation remains
+  acyclic.
+* Consequence: A denied read never charges bytes, although a pointer or digest
+  denial discovered after I/O consumes the precharged operation. In-memory
+  authority retains served bytes for exact replay and omits them from canonical
+  snapshots. Production composition must inject a grant-token issuer backed by
+  cryptographic entropy. The broker enforces exact token length and digest
+  uniqueness but does not create entropy. A later durable adapter must preserve
+  the same atomic reservation, exact canonical request replay, receipt, secret
+  refusal, and immutable historical-binding semantics. SQLite, SDK, and live
+  worker adapters remain outside this bounded slice.
+
+### Bounded Slice B: Scoped context broker and serial worker simulation
+
+Added browser-safe protocol contracts and exact codecs for context grants,
+pointer and chunk reads, durable audit receipts, and completion, question,
+asset, discovery, and amendment-proposal submissions. The codecs share the
+canonical protocol snapshot boundary and reject unknown fields, accessors,
+sparse arrays, malformed identities, pointers, timestamps, digests, and bounded
+payload violations.
+
+Added a Node-free runtime context broker with an injected historical asset port,
+in-memory authority, deterministic bounded prompt renderer, completion-fact
+port, and serial simulated worker. The authority stores canonical contexts and
+dispatches, digest-only grants, read attempts and receipts, immutable accepted
+and stale submissions, questions, events, and a projection. Reads enforce exact
+scope, sensitivity, expiration, mode, pointer, range, chunk, digest, operation,
+and byte constraints. Worker submission admission binds exact dispatch, task,
+context, and principal facts and never grants graph, approval, closure,
+allowance, or effect authority.
+
+Shared testing conformance provides deterministic token allocation, historical
+asset bytes, prompt fixtures, completion-fact capture, and serial worker
+journeys. Focused validation passed on 2026-08-13:
+
+* Worker protocol codec suite: 5 tests
+* In-memory context broker conformance suite: 8 tests
+* Protocol, runtime, and testing package typechecks
+* Biome check for all Slice B TypeScript files
+
+Broad validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Root workspace typecheck
+* Biome check across 89 files
+* Complete workspace suite: 21 files and 520 tests
+* Architecture boundaries across 127 source files
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+No SQLite schema, SDK integration, live adapter, or `FencedRunner` change was
+made in this bounded slice. No commit or push was performed, as requested.
+
+### Bounded Slice B review repairs
+
+Moved hashing, time, and token issuance behind immutable broker dependencies.
+Grant envelopes and authority records now retain trusted `issuedAt` facts, and
+worker read and submission APIs no longer accept caller-supplied time or hash
+implementations. Deterministic tests inject a controllable clock and a unique
+32-byte issuer. The runtime remains browser-safe and I/O-free; production
+cryptographic entropy remains an issuer-port obligation.
+
+Added canonical recursive refusal for every worker submission variant. Every
+43-character base64url candidate is hashed and compared with issued grant
+digests before persistence or completion-fact forwarding. Prompt-rendering and
+grant-persistence inputs receive the same refusal when a previously issued
+token could cross those boundaries. Errors, events, snapshots, and completion
+facts do not contain refused token material.
+
+Read identities now retain exact canonical requests and one in-flight promise
+or completed result. Exact concurrent replay performs one asset read and one
+charge. Changed requests receive conflict receipts attributed to a resolvable
+grant, and distinct concurrent identities reserve budgets synchronously before
+I/O. Internal asset failures settle and retain deterministic denials.
+
+Completion authority now records one terminal current completion per dispatch.
+Later current completion identities are stored as `duplicate` without another
+completion fact, stale completions remain `stale`, and exact identity replay
+remains replayed. The simulated serial adapter reports `completed` or `blocked`
+only from an accepted admission carrying a completion fact.
+
+Focused review validation passed on 2026-08-13:
+
+* Worker protocol codec suite: 5 tests
+* In-memory context broker conformance suite: 11 tests
+* Protocol, runtime, and testing package builds
+
+Broad review validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Root workspace typecheck
+* Biome check across 89 files
+* Complete workspace suite: 21 files and 523 tests
+* Architecture boundaries across 127 source files
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+No commit or push was performed for the review repairs, as requested.
+
+## Decision D-049: Serialize durable context admission through SQLite
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 7 bounded Slice C
+* Phase: 7
+* Decision: Persist a complete secret-free context authority image and
+  normalized context records in schema version 3. Execute each broker mutation
+  under `BEGIN IMMEDIATE` by hydrating the runtime authority, applying the
+  existing runtime admission policy, mirroring the resulting canonical state,
+  and committing before acknowledgement. Keep read reservations, bounded asset
+  I/O, receipts, usage counters, events, and replay bytes in one transaction.
+  Bind each secret-free canonical replay key to an admission-time SHA-256
+  digest and retain exact token-digest receipt-attempt metadata separately from
+  the public receipt. Derive expected receipt charges and remaining budgets
+  during verification from ordered replay semantics and verified asset bytes,
+  rather than treating persisted charge fields as accounting authority. Retain
+  a digest-bound read-failure stage only for live `digest-mismatch` outcomes so
+  verification can distinguish historical transient I/O or integrity failures
+  from deterministic outcomes reconstructed from repaired assets.
+  Store historical assets as verified 64 KiB chunks, read only overlapping
+  chunks for range requests, and limit pointer-capable JSON assets to 1 MiB.
+  Deliver completion facts after submission commit and acknowledge the outbox
+  in a second transaction.
+* Alternatives: Reimplement grant and submission policy in SQL; persist raw
+  grant tokens; retain whole-asset reads in the runtime port; reserve usage in
+  one transaction and settle results in another; deliver completion facts
+  before durable submission commit; store context state in command or runner
+  snapshots.
+* Rationale: Transactional hydration preserves one semantic contract and keeps
+  policy in runtime while SQLite owns compare, reserve, commit, replay, and
+  recovery atomicity. `BEGIN IMMEDIATE` serializes independent processes before
+  request identity and budget comparison. Chunk manifests make range I/O
+  proportional to the request, and the JSON ceiling bounds the only operation
+  that requires a complete parse. The transactional outbox preserves accepted
+  completion authority across delivery loss without requiring an exactly-once
+  external call. Independent replay-key digests detect accidental or partial
+  semantic divergence without retaining a bearer token. They are unkeyed
+  integrity checks, not protection against an attacker who can rewrite every
+  canonical record, normalized row, and digest coherently.
+* Consequence: Exact reads replay identical bytes and receipts without another
+  charge after reopen or lost acknowledgement. A crash before read commit rolls
+  back the reservation and result together; a crash after commit replays the
+  durable result. Completion delivery is at least once and requires the
+  completion-fact consumer to be idempotent by submission identity. Context
+  tables and chunks participate in database integrity, backup, and restore,
+  while command and runner snapshots remain unchanged. Every served, denied,
+  and conflicting read remains attributable to the exact presented token digest
+  and secret-free replay identity. Startup, backup, and restore recompute
+  operation and byte accounting from those facts. A `digest-mismatch` receipt is
+  valid only with independently recorded `asset-read` or `asset-integrity`
+  provenance bound to its receipt cursor, replay-key digest, request digest, and
+  token digest. No SDK or live worker adapter is introduced.
+
+### Bounded Slice C: Durable SQLite context broker
+
+Added checksummed migration `003-context-broker.sql` and advanced the supported
+schema version to 3. The migration adds exact context, dispatch, historical
+asset binding, chunk manifest, grant digest, read attempt, receipt, event,
+projection, submission, question, terminal completion, and completion outbox
+tables with run-scoped indexes and foreign keys. Existing command authority,
+runner authority, lease, revision, and filesystem CAS records are unchanged.
+
+Refactored the runtime asset port to bounded range reads and bounded JSON reads.
+The in-memory and SQLite adapters now run the same factory-driven conformance
+suite. Durable authority images include dispatch completion requirements,
+digest-only grants, completed read results, submissions, terminal claims,
+outbox state, questions, events, and counters. Public snapshots continue to
+omit served bytes and grant authority.
+
+The SQLite composition verifies complete content before dedicated context asset
+insertion, stores fixed 64 KiB chunks with per-chunk digests, verifies chunks on
+startup and backup or restore integrity checks, and queries only overlapping
+chunks for ranges. Pointer reads refuse assets above the 1 MiB parse ceiling.
+Fault injection covers reservation, precommit, postcommit acknowledgement, and
+outbox acknowledgement boundaries.
+
+Focused validation passed on 2026-08-13:
+
+* In-memory context broker conformance suite: 12 tests
+* SQLite context broker conformance and durability suite: 22 tests
+* Runtime, testing, and storage SQLite package typechecks
+* Independent worker connections returned one exact result with one charge
+* Reopen, raw-token scan, conflict, exhaustion, outbox, corruption, backup,
+  restore, and command and runner isolation probes
+
+Broad validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Root workspace typecheck
+* Biome check across 89 files
+* Complete workspace suite: 21 files and 546 tests
+* Architecture boundaries across 127 source files
+* Documentation links across 17 Markdown files
+* SQLite authority refusal benchmark: p99 9.28 ms against a 25 ms limit
+* `git diff --check`
+
+No commit or push was performed for this bounded slice, as requested.
+
+### Bounded Slice C review repairs
+
+Replaced cast-based context authority hydration with exact canonical decoding.
+Hydration now recompiles contexts and dispatches with the injected SHA-256
+implementation, validates completion requirements and persisted protocol
+records, rejects bearer fields and issued-token candidates, and checks unique
+identities, usage bounds, replay receipts, submissions, completion claims,
+questions, outbox facts, event sequence, and cursor consistency. Protocol now
+provides an exact decoder for secret-free persisted grant envelopes.
+
+Added one deterministic normalized context projection shared by SQLite writes
+and verification. Startup, backup, and restore compare exact row counts and all
+canonical and scalar fields for context bases, dispatches, asset bindings,
+grants, read attempts, receipts, events, projection, submissions, questions,
+terminal completions, and completion outbox records. Schema version 3 now seeds
+the exact empty context projection.
+
+Expanded context asset verification from individual chunk checks to complete
+manifest validation. Each manifest must match its binding, use 64 KiB chunks,
+declare the exact chunk count, contain contiguous indexes and offsets with exact
+final-chunk sizing, reproduce every chunk digest, and reproduce the aggregate
+content digest and byte length. Range reads repeat manifest and selected-chunk
+geometry checks, and complete reads verify the full content digest.
+
+Serialized same-instance asynchronous SQLite reads through a releasing promise
+queue. Exact concurrent calls now share the first durable result after its
+transaction commits, with one charge and one asset read. Completion outbox
+delivery now tracks instance-local in-flight submission identities and refuses
+reentrant delivery while retaining the durable at-least-once contract.
+
+Regression coverage now includes canonical grant bearer, budget, and scope
+corruption; normalized grant-row divergence; coordinated chunk content and
+chunk-digest corruption; chunk offset and manifest count corruption;
+same-instance exact concurrent reads; and completion outbox reentry.
+
+Focused review validation passed on 2026-08-13:
+
+* Runtime hydration and complete SQLite context suites: 30 tests
+* Complete SQLite storage suite: 79 tests
+* Protocol, runtime, and SQLite package builds
+* SQLite package typecheck
+
+Broad review validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Root workspace typecheck
+* Biome check across 89 files
+* Complete workspace suite: 21 files and 554 tests
+* Architecture boundaries across 127 source files
+* Documentation links across 17 Markdown files
+* SQLite authority refusal benchmark: p99 8.51 ms against a 25 ms limit
+* `git diff --check`
+
+No SDK work, commit, push, or subagent review was performed, as requested.
+
+#### Final Slice C durable invariant repairs
+
+Extended D-049 verification across the runtime authority image, normalized
+SQLite rows, and verified historical asset chunks. Runtime now exports an exact
+browser-safe `PersistedAssetReadReplayKey` decoder. It accepts only the canonical
+secret-free pointer or chunk request shape, requires canonical string equality,
+and rejects bearer fields. The runtime broker and SQLite verifier also use one
+exported pure JSON Pointer evaluator, so durable pointer replay cannot diverge
+from live admission semantics.
+
+After authority hydration, normalized-row comparison, and complete manifest and
+chunk verification, SQLite recomputes every served response. Chunk reads select
+the exact historical range. Pointer reads reconstruct the bounded complete JSON
+asset, apply the runtime pointer byte ceiling and request limit, and compare the
+canonical response byte for byte with both canonical and normalized durable
+results. Startup, backup, and restore therefore reject coordinated result
+corruption that preserves row equality.
+
+SQLite also replays completed read receipts in `receipt_cursor` order. Exact
+stored-result receipts charge their resolved grant by the codec-authorized
+operation and byte amounts. Conflict receipts remain distinct audit records,
+charge zero, and must preserve an attributable grant's budget at that cursor.
+Unknown-token receipts remain unattributed with zero remaining budget. Every
+receipt remaining budget must equal its grant maxima minus cumulative usage,
+and the final cumulative operations and bytes must equal the durable grant
+counters.
+
+Focused validation passed on 2026-08-13:
+
+* Strict replay-key and coordinated corruption selection: 5 tests
+* Complete in-memory context and SQLite storage suites: 97 tests
+
+Broad validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Root workspace typecheck
+* Biome check across 89 files
+* Complete workspace suite: 21 files and 559 tests
+* Architecture boundaries across 127 source files
+* SQLite authority refusal benchmark: p99 9.41 ms against a 25 ms limit
+
+No subagent, commit, or push was used for these final repairs, as requested.
+
+#### Final Slice C replay identity and accounting repairs
+
+Added an admission-time `replayKeyDigest` over the canonical UTF-8 secret-free
+replay key. Durable reads now retain that digest and their exact token digest,
+and hydration checks both against the canonical replay key. Migration 003 and
+the normalized read-attempt projection persist the same independent identity.
+
+Added a durable receipt-attempt ledger for every served, denied, and conflicting
+read. Each entry binds its cursor and public receipt to the exact canonical
+replay key, replay-key digest, token digest, bearer-bearing request audit digest,
+and reservation fact. The public authority snapshot and protocol receipt remain
+unchanged and no grant token is persisted.
+
+SQLite verification now replays attempts in receipt order, resolves only the
+exact token-digest grant, evaluates live admission stages, reconstructs served
+bytes or missing JSON Pointer targets from verified historical content, and
+derives operation charges, byte charges, response sizes, remaining budgets, and
+final grant counters independently from receipt charge fields. Runtime and
+verification share the pure worst-case byte-charge helper.
+
+Focused regression validation passed on 2026-08-13:
+
+* Coordinated served byte overcharge rejection on startup and backup
+* Coordinated post-reservation invalid-pointer undercharge rejection
+* Canonical and normalized replay-key mutation with a stale digest rejection
+* Equivalent-grant conflict reattribution rejection by exact token digest
+* Complete in-memory context and SQLite storage suites: 101 tests
+
+Broad validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Root workspace typecheck
+* Biome check across 89 files
+* Complete workspace suite: 21 files and 563 tests
+* Architecture boundaries across 127 source files
+* Documentation links across 17 Markdown files
+* SQLite authority refusal benchmark: p99 21.88 ms against a 25 ms limit
+* `git diff --check`
+
+No subagent, commit, or push was used for these repairs, as requested.
+
+#### RI-4 independent digest-mismatch provenance
+
+Durable receipt attempts now retain optional `failureStage` and
+`failureFactDigest` facts that are absent from public receipts. The only valid
+stages are `asset-read` and `asset-integrity`. Live admission records them at
+the failure boundary, and exact hydration requires both fields if and only if
+the receipt denial is `digest-mismatch`. The fact digest binds the stage to the
+receipt cursor, replay-key digest, request digest, and exact token digest.
+
+SQLite migration 003 stores the same facts in nullable normalized receipt
+columns with pair and enum constraints. Verification derives request
+permission and the current verified-asset outcome before considering the
+historical denial. A valid chunk range therefore reconstructs served bytes,
+and an allowed pointer is evaluated with the shared runtime JSON Pointer
+evaluator. A missing target derives post-reservation `invalid-pointer`. A
+historical `digest-mismatch` overrides that reconstructed outcome only when its
+validated live failure provenance is present.
+
+Focused validation passed on 2026-08-13:
+
+* Coordinated canonical and normalized `invalid-pointer` to `digest-mismatch`
+  relabeling was rejected by startup, backup, and restore verification
+* A genuine transient asset-integrity failure reopened with one charged
+  operation after the asset became readable
+* Coordinated failure-stage mutation with a stale fact digest was rejected by
+  startup and backup verification
+* Complete context broker and SQLite storage suites: 103 tests
+
+Broad validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Root workspace typecheck
+* Biome check across 89 files
+* Complete workspace suite: 21 files and 565 tests
+* Architecture boundaries across 127 source files
+* Documentation links across 17 Markdown files
+* SQLite authority refusal benchmark: p99 16.57 ms against a 25 ms limit
+* `git diff --check`
+
+No subagent, commit, or push was used for RI-4, as requested.
+
+The provenance digest detects accidental, partial, and reviewer-probe
+coordination. Consistent with D-049's existing integrity model, it does not
+authenticate records against an attacker who can coherently rewrite all
+canonical data, normalized facts, and unkeyed digests.
+
+## Decision D-050: Bind live Copilot sessions to validated worker routes
+
+* Date: 2026-08-13
+* Status: Accepted for Phase 7 bounded Slice D
+* Phase: 7
+* Decision: Compile and exactly revalidate one deterministic
+  `senawa.dev/worker-model-route-selection/v1alpha1` value in the kernel. Bind
+  it to the exact dispatch, context, model policy, ordered route index,
+  provider, model, `maxTurns`, `maxSubmissions`, and `maxMillidollars`. Retain a
+  separate trusted positive `maxAiCredits` ceiling for the Copilot SDK and
+  compute a selection digest over all fields. Do not convert currency units to
+  AI credits. Use the dispatch identity as the Copilot session identity. Attempt
+  `resumeSession` with pending work disabled, create the exact session only when
+  metadata confirms that identity is absent, and leave the external Copilot
+  session store as an operational dependency. Keep SDK declarations behind an
+  execution-host port. Run sessions in SDK `empty` mode with verified isolated
+  working and base directories, explicit tool filtering, disabled ambient
+  discovery and persistence features, generic permission refusal, and an
+  independent pre-tool allowlist. Expose only six capability-filtered custom
+  tools whose handlers derive authority fields and deterministic identities,
+  inject grant tokens from closure-local maps, and call the context broker.
+* Alternatives: Convert `maxMillidollars` into SDK AI credits; let the model
+  choose an automatic provider or model; create a second checkpoint database;
+  use a random SDK session identity; expose SDK types through runtime or kernel;
+  inherit repository tools, instructions, skills, MCP servers, or permissions;
+  accept model-supplied dispatch identities or bearer tokens; infer completion
+  from assistant text.
+* Rationale: Independent units avoid a fabricated exchange rate. Exact route
+  selection recompilation makes policy choice and SDK credit authority
+  reviewable without adding effects to the kernel. Dispatch-scoped SDK sessions
+  preserve unchanged-context resume and changed-context fencing. A narrow port
+  makes the authority adapter testable offline, while closed schemas, derived
+  identities, broker admission, permission refusal, and tool allowlisting keep
+  model output proposal-only.
+* Consequence: Copilot SDK 1.0.9 supports `maxAiCredits` but has no `maxTurns`
+  session option. Senawa retains exact turn, submission, and millidollar policy
+  facts; the adapter enforces the submission ceiling and does not claim SDK turn
+  enforcement. SDK session files are not duplicated in SQLite. Phase 8 must
+  define backup, retention, restore, and operational checks for the external
+  SDK session store. A shared started client is accepted only with explicit
+  trusted acknowledgement that its owner configured SDK empty mode, and its
+  external owner remains responsible for stopping it.
+
+### Bounded Slice D: Live Copilot SDK worker adapter
+
+Pinned `@github/copilot-sdk` exactly at 1.0.9 in execution-host. The installed
+SDK resolves `@github/copilot` and the platform CLI at 1.0.78, koffi at 3.1.4,
+and one transitive zod at 4.4.3. No direct zod dependency was added because raw
+JSON schemas are supported. The Linux x64 CLI package and koffi platform
+prebuild are present. pnpm reports the koffi install script as suppressed, but
+direct loading of the installed transitive package successfully resolves its
+optional prebuilt native module.
+
+Added the pure worker model route selection contract and exact tamper-resistant
+recompilation. Its selection digest binds context and dispatch identity, the
+complete model policy reference, ordered route index, provider and model, the
+three Senawa policy ceilings, and the independent SDK AI-credit ceiling.
+
+Added an internal SDK-neutral execution-host port, a production SDK 1.0.9
+wrapper, and a serial Copilot worker adapter. The production wrapper verifies
+real working and base directories outside the repository before constructing a
+client in empty mode. Session options disable tool search, infinite sessions,
+large-output files, streaming, MCP, extensions, canvases, config discovery,
+custom instructions, instruction discovery, file hooks, host Git operations,
+the cross-session store, skills, memory, remote sessions, and additional
+directories. Available tools contain only the selected custom names, while
+built-in and MCP tools are excluded. Every permission request is rejected, and
+the pre-tool hook independently denies unknown tools.
+
+The adapter validates context, dispatch, route selection, prompt bytes and
+digest, isolated paths, and grant-map bindings before contacting the SDK. It
+attempts dispatch-ID resume with `continuePendingWork: false`, creates the exact
+dispatch-ID session only when absent, runs one active dispatch, bounds send time,
+aborts timeout or cancellation, always disconnects, and never stops a shared
+client. Completion, blocked, stale, duplicate, missing, aborted, and crashed
+results derive from broker admission and sanitized lifecycle facts. Assistant
+text cannot complete work.
+
+Added six closed, protocol-bounded JSON-schema tools for granted historical
+asset reads and question, asset, discovery, amendment, and completion proposals.
+Model arguments omit repository, run, dispatch, context, principal, task,
+request, and submission identities and all tokens. Handlers derive request and
+submission identities from dispatch and SDK tool-call facts through injected
+SHA-256, inject trusted bindings and current authority callbacks, and return
+bounded JSON with base64 asset data or generic refusal codes. Grant tokens
+remain only in closure-local maps and broker requests.
+
+Added an explicit live probe gated by `SENAWA_COPILOT_LIVE=1`, model, positive
+AI-credit ceiling, timeout, and `SENAWA_COPILOT_ACKNOWLEDGE_COST_AND_DATA=1`.
+It uses isolated temporary directories, no asset grants or sensitive content,
+one completion-only dispatch, one turn policy fact, and one submission. Failures
+are sanitized. The live probe was not opted into or run against the service in
+this slice; its default skip behavior passed.
+
+Focused validation passed on 2026-08-13:
+
+* Kernel context and route selection suite: 44 tests
+* Offline Copilot adapter suite: 17 tests
+* Production wrapper no-start smoke suite: 2 tests
+* Default live probe: 1 skipped test
+* Kernel and execution-host package typechecks
+* Biome check for all Slice D TypeScript, JSON, and boundary files
+* Built execution-host import without starting Copilot
+* Exact transitive koffi native prebuild import
+* Frozen lockfile install
+* Execution-host package build and native supervisor build
+* Execution-host tarball contained runtime JavaScript, declarations, maps,
+  executable native supervisor, and exact dependency metadata; compiled tests
+  and the live probe were excluded
+
+Broad validation passed on 2026-08-13:
+
+* Root build, including the execution-host native helper
+* Root workspace typecheck
+* Biome check across 95 files
+* Complete workspace suite: 23 files and 604 tests, with 1 live test skipped
+* Architecture boundaries across 139 source files
+* Documentation links across 17 Markdown files
+* `git diff --check`
+
+No live service call, subagent, commit, or push was performed, as requested.
+Final Phase 7 independent review followed the bounded implementation.
+
+### Slice D review repairs
+
+Independent review rejected the SDK adapter until its confinement remained
+true across cancellation and delayed tool execution. The final repairs:
+
+* Require the exact `github-copilot` provider before any SDK call; a validated
+  route for another provider is refused rather than silently executed by
+  Copilot.
+* Bind both the pre-tool hook and every handler invocation to the exact dispatch
+  session and registered tool name.
+* Close a run-scoped tool fence synchronously at timeout or abort, before
+  awaiting SDK cancellation. Calls received while abort is pending or after the
+  run returns are refused without broker mutation.
+* Track every started handler and retain the serial guard until all handlers
+  settle. A permanently pending broker operation therefore fails closed and can
+  retain the adapter; Phase 8 must provide cancellation-aware broker operations
+  or process-level recovery rather than release authority early.
+* Give cancellation precedence over a completion racing with the same run.
+* Reject SDK state directories equal to, beneath, or containing the repository.
+* Require `maxAiCredits` to round to at least one safe nano-credit.
+
+Adversarial tests cover a captured completion after return, completion while
+SDK abort is gated, a delayed read holding the serial guard, wrong session and
+tool identities, unsupported providers, ancestor directories, and sub-nano
+credit ceilings.
+
+### Final Phase 7 review and validation
+
+The final independent review reported no critical, high, medium, or low
+findings and approved Phase 7. It also confirmed the approved Slices A-C
+remained intact: immutable context authority, proposal-only protocol and broker
+admission, historical scoped reads, exact durable replay and accounting, stale
+completion preservation, and serialized SQLite authority.
+
+Passed on 2026-08-13:
+
+* Frozen workspace install across 9 projects
+* Root build, including the execution-host native helper
+* Clean workspace typecheck
+* Biome check across 95 files
+* Complete offline workspace suite: 23 files and 611 tests
+* Live Copilot service probe: 1 test skipped because explicit model, budget,
+  timeout, data/cost acknowledgement, and `SENAWA_COPILOT_LIVE=1` were not set
+* Focused final kernel and SDK confinement suites: 70 tests
+* Architecture boundaries across 139 source files
+* Documentation links across 17 Markdown files
+* SQLite command-authority benchmark: p99 15.86 ms across 100 samples, below the
+  25 ms threshold
+* Execution-host package contains runtime SDK adapter output and executable
+  native supervisor while excluding tests and the live probe
+* `git diff --check`
+
+### Remaining risks
+
+* Phase 8 must own SDK session-store backup, retention, restore, and health
+  checks; those files are an explicit external operational dependency.
+* Production completion-fact consumers must remain idempotent by exact
+  submission identity for at-least-once outbox delivery.
+* The live adapter probe still requires an explicit separately authorized run;
+  no paid service call was made in Phase 7.
+
+### Commit and push
+
+Pending final Phase 7 delivery.
 
 ## Entry template
 

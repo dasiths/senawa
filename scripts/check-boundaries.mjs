@@ -38,9 +38,17 @@ const executionHostManifest = JSON.parse(
   await readFile("packages/execution-host/package.json", "utf8"),
 );
 const executionHostDependencies = Object.keys(executionHostManifest.dependencies ?? {});
-if (executionHostDependencies.length > 0) {
+const allowedExecutionHostDependencies = new Set([
+  "@github/copilot-sdk",
+  "@senawa/kernel",
+  "@senawa/protocol",
+  "@senawa/runtime",
+]);
+if (
+  executionHostDependencies.some((dependency) => !allowedExecutionHostDependencies.has(dependency))
+) {
   violations.push(
-    "packages/execution-host/package.json: execution-host must not have production dependencies",
+    "packages/execution-host/package.json: execution-host has an unsupported production dependency",
   );
 }
 
@@ -113,8 +121,11 @@ function checkSource(file, content) {
   if (isConfiguration && /@senawa\/(?!kernel(?:["'/]|$))[a-z0-9-]+/u.test(content)) {
     findings.push(`${file}: configuration may import only the kernel package`);
   }
-  if (isExecutionHost && /@senawa\/[a-z0-9-]+/u.test(content)) {
-    findings.push(`${file}: execution-host cannot import Senawa packages`);
+  if (
+    isExecutionHost &&
+    /@senawa\/(?!kernel(?:["'/]|$)|protocol(?:["'/]|$)|runtime(?:["'/]|$))[a-z0-9-]+/u.test(content)
+  ) {
+    findings.push(`${file}: execution-host may import only kernel, protocol, and runtime packages`);
   }
   if (
     isKernel &&
@@ -261,7 +272,7 @@ function verifyRules() {
     [
       "packages/execution-host/src/bad.ts",
       'import "@senawa/storage-sqlite";',
-      "cannot import Senawa packages",
+      "may import only kernel, protocol, and runtime packages",
     ],
     [
       "packages/execution-host/src/bad.ts",

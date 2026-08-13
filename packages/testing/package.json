@@ -15,6 +15,10 @@
     "./runner-conformance": {
       "types": "./dist/runner-authority-conformance.d.ts",
       "default": "./dist/runner-authority-conformance.js"
+    },
+    "./context-broker-conformance": {
+      "types": "./dist/context-broker-conformance.d.ts",
+      "default": "./dist/context-broker-conformance.js"
     }
   },
   "scripts": {

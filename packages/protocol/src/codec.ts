@@ -353,6 +353,10 @@ export function canonicalBytes(input: unknown): Uint8Array {
   return new TextEncoder().encode(canonicalStringify(input));
 }
 
+export function decodeCanonicalJsonValue(input: string | unknown): JsonValue {
+  return decodeWireValue(input);
+}
+
 function authenticatedPrincipal(value: unknown, path: string): AuthenticatedPrincipal {
   const object = exactObject(value, path, ["issuer", "subject", "tenant", "assurance", "roles"]);
   boundedString(object.issuer, `${path}.issuer`, 1, 512);

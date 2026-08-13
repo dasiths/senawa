@@ -10,6 +10,8 @@ export type PhaseId = Opaque<string, "PhaseId">;
 export type TaskId = Opaque<string, "TaskId">;
 export type CriterionId = Opaque<string, "CriterionId">;
 export type AssetId = Opaque<string, "AssetId">;
+export type AssetBindingId = Opaque<string, "AssetBindingId">;
+export type ContextId = Opaque<string, "ContextId">;
 export type DispatchId = Opaque<string, "DispatchId">;
 export type ApprovalId = Opaque<string, "ApprovalId">;
 export type AmendmentId = Opaque<string, "AmendmentId">;
@@ -25,6 +27,8 @@ type IdentityKind =
   | "task"
   | "criterion"
   | "asset"
+  | "asset-binding"
+  | "context"
   | "dispatch"
   | "approval"
   | "amendment"
@@ -38,6 +42,8 @@ interface IdentityByKind {
   readonly task: TaskId;
   readonly criterion: CriterionId;
   readonly asset: AssetId;
+  readonly "asset-binding": AssetBindingId;
+  readonly context: ContextId;
   readonly dispatch: DispatchId;
   readonly approval: ApprovalId;
   readonly amendment: AmendmentId;
@@ -85,6 +91,13 @@ export const criterionId = (value: string): CriterionId => identity("criterion",
 
 export const isAssetId = (value: unknown): value is AssetId => isIdentity("asset", value);
 export const assetId = (value: string): AssetId => identity("asset", value);
+
+export const isAssetBindingId = (value: unknown): value is AssetBindingId =>
+  isIdentity("asset-binding", value);
+export const assetBindingId = (value: string): AssetBindingId => identity("asset-binding", value);
+
+export const isContextId = (value: unknown): value is ContextId => isIdentity("context", value);
+export const contextId = (value: string): ContextId => identity("context", value);
 
 export const isDispatchId = (value: unknown): value is DispatchId => isIdentity("dispatch", value);
 export const dispatchId = (value: string): DispatchId => identity("dispatch", value);

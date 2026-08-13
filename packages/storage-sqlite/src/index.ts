@@ -19,7 +19,12 @@ import {
 } from "node:fs";
 import { basename, dirname, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { canonicalDigest, canonicalValue, isSha256Digest } from "@senawa/kernel";
+import {
+  canonicalDigest,
+  canonicalValue,
+  type HistoricalAssetBinding,
+  isSha256Digest,
+} from "@senawa/kernel";
 import {
   canonicalStringify,
   type DurableReceipt,
@@ -29,20 +34,34 @@ import {
 } from "@senawa/protocol";
 import {
   type AdmissionFacts,
+  type AssetReadInput,
+  type AssetReadResult,
+  assetReadWorstCaseBytes,
   type ClaimEffectAttemptRequest,
   type ClaimEffectAttemptResult,
   type CommandServicePort,
   type CommitEffectRequest,
+  type CompletionFactPort,
+  type ContextAuthoritySnapshot,
+  ContextBroker,
+  type ContextBrokerDependencies,
+  type ContextBrokerProjection,
+  ContextBrokerTransactionAbortError,
+  type ContextGrantInput,
+  DEFAULT_POINTER_ASSET_MAX_BYTES,
+  decodePersistedAssetReadReplayKey,
   type EffectIntent,
   type EffectOutcome,
   type FencedRunnerCancellationInput,
   type FencedRunnerContextUpdateInput,
   type FinalizedEffectUsage,
   InMemoryAuthority,
+  InMemoryContextAuthority,
   type InMemoryRunnerRunInput,
   type PersistIntentRequest,
   type PersistIntentResult,
   type QueuedEffectCommand,
+  type RegisterWorkerDispatchInput,
   type RunnerAuthorityPort,
   type RunnerAuthoritySnapshot,
   type RunnerBudgetState,
@@ -56,12 +75,15 @@ import {
   RuntimeCommandService,
   type RuntimeDependencies,
   type RuntimeQueryPort,
+  readCanonicalJsonPointer,
   type SerializableAuthorityPort,
+  type SubmissionAdmissionInput,
+  type SubmissionAdmissionResult,
   selectEffectAttemptAction,
 } from "@senawa/runtime";
 import Database from "better-sqlite3";
 
-const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 const WAL_AUTOCHECKPOINT_PAGES = 16_384;
 const MIGRATIONS_DIRECTORY = fileURLToPath(new URL("../migrations", import.meta.url));
@@ -119,6 +141,23 @@ export type SqliteRunnerFaultPoint =
   | "after-intent-commit-before-ack"
   | "before-outcome-commit"
   | "after-outcome-commit-before-ack";
+
+export type SqliteContextBrokerFaultPoint =
+  | "after-read-reservation"
+  | "before-read-commit"
+  | "after-read-commit-before-ack"
+  | "before-context-commit"
+  | "after-context-commit-before-ack"
+  | "before-outbox-ack"
+  | "after-outbox-ack-before-return";
+
+export interface SqliteContextBrokerOptions {
+  readonly databasePath: string;
+  readonly dependencies: ContextBrokerDependencies;
+  readonly completionFacts?: CompletionFactPort;
+  readonly busyTimeoutMs?: number;
+  readonly faultInjector?: (point: SqliteContextBrokerFaultPoint) => void;
+}
 
 export interface SqliteRunnerAuthorityOptions {
   readonly databasePath: string;
@@ -1774,6 +1813,596 @@ function isSqliteConstraint(error: unknown): boolean {
   );
 }
 
+const CONTEXT_ASSET_CHUNK_BYTES = 65_536;
+const MAX_VERIFIED_CONTEXT_ASSET_BYTES = 268_435_456;
+
+interface ContextAuthorityStateRow {
+  readonly canonical_json: string;
+}
+
+interface ContextChunkRow {
+  readonly chunk_index: number;
+  readonly byte_offset: number;
+  readonly byte_length: number;
+  readonly chunk_digest: string;
+  readonly content: Uint8Array;
+}
+
+export class SqliteContextAssetAuthority {
+  readCalls = 0;
+  readonly broker: SqliteContextBroker;
+
+  constructor(broker: SqliteContextBroker) {
+    this.broker = broker;
+  }
+
+  put(binding: HistoricalAssetBinding, bytes: Uint8Array): void {
+    this.broker.putContextAsset(binding, bytes);
+  }
+
+  readAssetRange(
+    binding: HistoricalAssetBinding,
+    offset: number,
+    length: number,
+  ): Uint8Array | undefined {
+    this.readCalls += 1;
+    return this.broker.readContextAssetRange(binding, offset, length);
+  }
+
+  readJsonAsset(binding: HistoricalAssetBinding, maxAssetBytes: number): Uint8Array | undefined {
+    this.readCalls += 1;
+    if (binding.byteLength > maxAssetBytes) return undefined;
+    return this.broker.readContextAssetRange(binding, 0, binding.byteLength);
+  }
+}
+
+export class SqliteContextBroker {
+  readonly databasePath: string;
+  readonly dependencies: ContextBrokerDependencies;
+  readonly assets: SqliteContextAssetAuthority;
+  readonly authority: {
+    snapshot: () => ContextAuthoritySnapshot;
+    projection: () => ContextBrokerProjection;
+    toCanonicalJson: () => string;
+    toDurableCanonicalJson: () => string;
+  };
+  readonly #database: Database.Database;
+  readonly #completionFacts: CompletionFactPort | undefined;
+  readonly #faultInjector: ((point: SqliteContextBrokerFaultPoint) => void) | undefined;
+  readonly #deliveringSubmissionIds = new Set<string>();
+  #readQueue: Promise<void> = Promise.resolve();
+
+  constructor(options: SqliteContextBrokerOptions) {
+    this.databasePath = resolve(options.databasePath);
+    this.dependencies = Object.freeze({
+      sha256: options.dependencies.sha256,
+      currentTime: options.dependencies.currentTime,
+      issueGrantToken: options.dependencies.issueGrantToken,
+    });
+    this.#completionFacts = options.completionFacts;
+    this.#faultInjector = options.faultInjector;
+    ensureSafeDirectoryPath(dirname(this.databasePath));
+    this.#database = new Database(this.databasePath, {
+      timeout: options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS,
+    });
+    try {
+      configureWriteConnection(this.#database, options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS);
+      applyMigrations(this.#database, this.dependencies);
+      this.#verifyContextStorage();
+    } catch (error) {
+      this.#database.close();
+      throw error;
+    }
+    this.assets = new SqliteContextAssetAuthority(this);
+    this.authority = Object.freeze({
+      snapshot: () => this.#loadAuthority().snapshot(),
+      projection: () => this.#loadAuthority().projection(),
+      toCanonicalJson: () => this.#loadAuthority().toCanonicalJson(),
+      toDurableCanonicalJson: () => this.#readContextState(),
+    });
+  }
+
+  close(): void {
+    if (this.#database.open) this.#database.close();
+  }
+
+  registerDispatch(input: RegisterWorkerDispatchInput) {
+    return this.#transact((broker) => broker.registerDispatch(input));
+  }
+
+  grantAssetAccess(input: ContextGrantInput) {
+    return this.#transact((broker) => broker.grantAssetAccess(input));
+  }
+
+  async readAsset(input: AssetReadInput): Promise<AssetReadResult> {
+    return this.#serializeRead(() => this.#readAssetTransaction(input));
+  }
+
+  async #readAssetTransaction(input: AssetReadInput): Promise<AssetReadResult> {
+    this.#database.exec("BEGIN IMMEDIATE");
+    let committed = false;
+    try {
+      const authority = this.#loadAuthority();
+      const broker = new ContextBroker(this.assets, this.dependencies, authority);
+      const result = await broker.readAsset(input);
+      this.#persistContextAuthority(authority);
+      this.#fault("before-read-commit");
+      this.#database.exec("COMMIT");
+      committed = true;
+      this.#fault("after-read-commit-before-ack");
+      return result;
+    } catch (error) {
+      if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  admitSubmission(input: SubmissionAdmissionInput): SubmissionAdmissionResult {
+    const result = this.#transact((broker) => broker.admitSubmission(input));
+    this.deliverCompletionFact(result.submissionId);
+    return result;
+  }
+
+  deliverCompletionFact(submissionId: string): boolean {
+    if (this.#completionFacts === undefined || this.#deliveringSubmissionIds.has(submissionId))
+      return false;
+    this.#deliveringSubmissionIds.add(submissionId);
+    try {
+      const pending = this.#loadAuthority().completionOutbox.get(submissionId);
+      if (pending === undefined || pending.delivered) return false;
+      this.#completionFacts.admitCompletionFact(pending.fact);
+      this.#database.exec("BEGIN IMMEDIATE");
+      let committed = false;
+      try {
+        const current = this.#loadAuthority();
+        const currentPending = current.completionOutbox.get(submissionId);
+        if (currentPending === undefined || currentPending.delivered) {
+          this.#database.exec("COMMIT");
+          committed = true;
+          return false;
+        }
+        currentPending.delivered = true;
+        this.#persistContextAuthority(current);
+        this.#fault("before-outbox-ack");
+        this.#database.exec("COMMIT");
+        committed = true;
+        this.#fault("after-outbox-ack-before-return");
+        return true;
+      } catch (error) {
+        if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
+        throw error;
+      }
+    } finally {
+      this.#deliveringSubmissionIds.delete(submissionId);
+    }
+  }
+
+  putContextAsset(binding: HistoricalAssetBinding, input: Uint8Array): void {
+    const bytes = Uint8Array.from(input);
+    if (
+      bytes.byteLength !== binding.byteLength ||
+      this.dependencies.sha256.digest(bytes) !== binding.contentDigest
+    )
+      throw new TypeError("Context asset bytes do not match their historical binding");
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.#database
+        .prepare<[string], { content_digest: string; byte_length: number }>(
+          `SELECT content_digest, byte_length FROM context_asset_bindings
+           WHERE asset_binding_id = ?`,
+        )
+        .get(binding.assetBindingId);
+      if (
+        row === undefined ||
+        row.content_digest !== binding.contentDigest ||
+        row.byte_length !== binding.byteLength
+      )
+        throw new TypeError("Context asset binding is not registered with exact canonical facts");
+      const chunkCount = Math.ceil(bytes.byteLength / CONTEXT_ASSET_CHUNK_BYTES);
+      const existing = this.#database
+        .prepare<[string], { content_digest: string; byte_length: number; chunk_count: number }>(
+          `SELECT content_digest, byte_length, chunk_count FROM context_asset_manifests
+           WHERE asset_binding_id = ?`,
+        )
+        .get(binding.assetBindingId);
+      if (existing !== undefined) {
+        if (
+          existing.content_digest !== binding.contentDigest ||
+          existing.byte_length !== binding.byteLength ||
+          existing.chunk_count !== chunkCount
+        )
+          throw new TypeError("Context asset identity is already bound to different content");
+        verifyContextAssetManifest(
+          this.#database,
+          binding.assetBindingId,
+          this.dependencies.sha256,
+        );
+        this.#database.exec("COMMIT");
+        return;
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO context_asset_manifests(
+             asset_binding_id, content_digest, byte_length, chunk_size, chunk_count
+           ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          binding.assetBindingId,
+          binding.contentDigest,
+          binding.byteLength,
+          CONTEXT_ASSET_CHUNK_BYTES,
+          chunkCount,
+        );
+      const insertChunk = this.#database.prepare(
+        `INSERT INTO context_asset_chunks(
+           asset_binding_id, chunk_index, byte_offset, byte_length, chunk_digest, content
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+      for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+        const byteOffset = chunkIndex * CONTEXT_ASSET_CHUNK_BYTES;
+        const chunk = bytes.slice(byteOffset, byteOffset + CONTEXT_ASSET_CHUNK_BYTES);
+        insertChunk.run(
+          binding.assetBindingId,
+          chunkIndex,
+          byteOffset,
+          chunk.byteLength,
+          this.dependencies.sha256.digest(chunk),
+          chunk,
+        );
+      }
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  readContextAssetRange(
+    binding: HistoricalAssetBinding,
+    offset: number,
+    length: number,
+  ): Uint8Array | undefined {
+    this.#fault("after-read-reservation");
+    if (
+      !Number.isSafeInteger(offset) ||
+      !Number.isSafeInteger(length) ||
+      offset < 0 ||
+      length < 0 ||
+      offset > binding.byteLength ||
+      length > binding.byteLength - offset
+    )
+      return undefined;
+    const manifest = this.#database
+      .prepare<
+        [string],
+        { content_digest: string; byte_length: number; chunk_size: number; chunk_count: number }
+      >(
+        `SELECT content_digest, byte_length, chunk_size, chunk_count
+         FROM context_asset_manifests WHERE asset_binding_id = ?`,
+      )
+      .get(binding.assetBindingId);
+    if (
+      manifest === undefined ||
+      manifest.content_digest !== binding.contentDigest ||
+      manifest.byte_length !== binding.byteLength ||
+      manifest.chunk_size !== CONTEXT_ASSET_CHUNK_BYTES ||
+      manifest.chunk_count !== expectedContextChunkCount(binding.byteLength)
+    )
+      return undefined;
+    if (length === 0) {
+      const empty = new Uint8Array();
+      return offset === 0 &&
+        binding.byteLength === 0 &&
+        this.dependencies.sha256.digest(empty) !== binding.contentDigest
+        ? undefined
+        : empty;
+    }
+    const firstChunk = Math.floor(offset / CONTEXT_ASSET_CHUNK_BYTES);
+    const lastChunk = Math.floor((offset + length - 1) / CONTEXT_ASSET_CHUNK_BYTES);
+    const rows = this.#database
+      .prepare<[string, number, number], ContextChunkRow>(
+        `SELECT chunk_index, byte_offset, byte_length, chunk_digest, content
+         FROM context_asset_chunks
+         WHERE asset_binding_id = ? AND chunk_index BETWEEN ? AND ?
+         ORDER BY chunk_index`,
+      )
+      .all(binding.assetBindingId, firstChunk, lastChunk);
+    if (rows.length !== lastChunk - firstChunk + 1) return undefined;
+    const result = new Uint8Array(length);
+    for (const [index, row] of rows.entries()) {
+      const content = Uint8Array.from(row.content);
+      const expectedIndex = firstChunk + index;
+      const expectedLength = expectedContextChunkLength(
+        binding.byteLength,
+        manifest.chunk_count,
+        expectedIndex,
+      );
+      if (
+        row.chunk_index !== expectedIndex ||
+        row.byte_length !== content.byteLength ||
+        row.byte_length !== expectedLength ||
+        row.byte_offset !== row.chunk_index * CONTEXT_ASSET_CHUNK_BYTES ||
+        this.dependencies.sha256.digest(content) !== row.chunk_digest
+      )
+        return undefined;
+      const copyStart = Math.max(offset, row.byte_offset);
+      const copyEnd = Math.min(offset + length, row.byte_offset + row.byte_length);
+      result.set(
+        content.slice(copyStart - row.byte_offset, copyEnd - row.byte_offset),
+        copyStart - offset,
+      );
+    }
+    if (
+      offset === 0 &&
+      length === binding.byteLength &&
+      this.dependencies.sha256.digest(result) !== binding.contentDigest
+    )
+      return undefined;
+    return result;
+  }
+
+  #serializeRead<Result>(operation: () => Promise<Result>): Promise<Result> {
+    const prior = this.#readQueue;
+    let release: () => void = () => undefined;
+    this.#readQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return prior.then(operation).finally(release);
+  }
+
+  #transact<Result>(operation: (broker: ContextBroker) => Result): Result {
+    this.#database.exec("BEGIN IMMEDIATE");
+    let committed = false;
+    try {
+      const authority = this.#loadAuthority();
+      const broker = new ContextBroker(this.assets, this.dependencies, authority);
+      const result = operation(broker);
+      this.#persistContextAuthority(authority);
+      this.#fault("before-context-commit");
+      this.#database.exec("COMMIT");
+      committed = true;
+      this.#fault("after-context-commit-before-ack");
+      return result;
+    } catch (error) {
+      if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  #readContextState(): string {
+    const row = this.#database
+      .prepare<[], ContextAuthorityStateRow>(
+        "SELECT canonical_json FROM context_authority_state WHERE singleton = 1",
+      )
+      .get();
+    if (row === undefined) throw new Error("SQLite context authority singleton is missing");
+    return row.canonical_json;
+  }
+
+  #loadAuthority(): InMemoryContextAuthority {
+    return InMemoryContextAuthority.fromDurableCanonicalJson(
+      this.#readContextState(),
+      this.dependencies.sha256,
+    );
+  }
+
+  #persistContextAuthority(authority: InMemoryContextAuthority): void {
+    const serialized = authority.toDurableCanonicalJson();
+    this.#database
+      .prepare("UPDATE context_authority_state SET canonical_json = ? WHERE singleton = 1")
+      .run(serialized);
+    this.#mirrorContextAuthority(authority);
+  }
+
+  #mirrorContextAuthority(authority: InMemoryContextAuthority): void {
+    const normalized = normalizeContextAuthority(authority);
+    for (const row of normalized.contextBases) {
+      this.#database
+        .prepare(
+          `INSERT INTO context_bases(context_id, context_digest, canonical_context)
+           VALUES (?, ?, ?) ON CONFLICT(context_id) DO NOTHING`,
+        )
+        .run(row.context_id, row.context_digest, row.canonical_context);
+    }
+    for (const row of normalized.dispatches) {
+      this.#database
+        .prepare(
+          `INSERT INTO context_dispatches(
+             dispatch_id, repository_id, run_id, context_id, prompt_pack_digest,
+             canonical_dispatch, canonical_completion_requirements
+           ) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(dispatch_id) DO NOTHING`,
+        )
+        .run(
+          row.dispatch_id,
+          row.repository_id,
+          row.run_id,
+          row.context_id,
+          row.prompt_pack_digest,
+          row.canonical_dispatch,
+          row.canonical_completion_requirements,
+        );
+    }
+    for (const row of normalized.bindings)
+      this.#database
+        .prepare(
+          `INSERT INTO context_asset_bindings(
+             asset_binding_id, context_id, semantic_asset_id, alias_binding_digest,
+             content_digest, byte_length, media_type, sensitivity
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(asset_binding_id) DO NOTHING`,
+        )
+        .run(
+          row.asset_binding_id,
+          row.context_id,
+          row.semantic_asset_id,
+          row.alias_binding_digest,
+          row.content_digest,
+          row.byte_length,
+          row.media_type,
+          row.sensitivity,
+        );
+    this.#database.exec(
+      `DELETE FROM context_audit_receipts;
+       DELETE FROM context_events;
+       DELETE FROM context_questions;
+       DELETE FROM context_terminal_completions;
+       DELETE FROM context_completion_outbox;
+       DELETE FROM context_read_attempts;
+       DELETE FROM context_grants;
+       DELETE FROM context_submissions;`,
+    );
+    for (const row of normalized.grants)
+      this.#database
+        .prepare(
+          `INSERT INTO context_grants(
+             token_digest, dispatch_id, repository_id, run_id, asset_binding_id,
+             canonical_envelope, operations_used, bytes_used
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          row.token_digest,
+          row.dispatch_id,
+          row.repository_id,
+          row.run_id,
+          row.asset_binding_id,
+          row.canonical_envelope,
+          row.operations_used,
+          row.bytes_used,
+        );
+    for (const row of normalized.readAttempts) {
+      this.#database
+        .prepare(
+          `INSERT INTO context_read_attempts(
+             request_id, token_digest, dispatch_id, repository_id, run_id,
+             canonical_replay_key, replay_key_digest, request_digest, status,
+             result_bytes, canonical_receipt
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          row.request_id,
+          row.token_digest,
+          row.dispatch_id,
+          row.repository_id,
+          row.run_id,
+          row.canonical_replay_key,
+          row.replay_key_digest,
+          row.request_digest,
+          row.status,
+          row.result_bytes === null ? null : Uint8Array.from(row.result_bytes),
+          row.canonical_receipt,
+        );
+    }
+    for (const row of normalized.receipts) {
+      this.#database
+        .prepare(
+          `INSERT INTO context_audit_receipts(
+             receipt_cursor, request_id, repository_id, run_id, dispatch_id,
+             canonical_replay_key, replay_key_digest, token_digest, request_digest,
+             reserved, failure_stage, failure_fact_digest, canonical_receipt
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          row.receipt_cursor,
+          row.request_id,
+          row.repository_id,
+          row.run_id,
+          row.dispatch_id,
+          row.canonical_replay_key,
+          row.replay_key_digest,
+          row.token_digest,
+          row.request_digest,
+          row.reserved,
+          row.failure_stage,
+          row.failure_fact_digest,
+          row.canonical_receipt,
+        );
+    }
+    for (const row of normalized.submissions)
+      this.#database
+        .prepare(
+          `INSERT INTO context_submissions(
+             submission_id, repository_id, run_id, dispatch_id, submission_type,
+             canonical_submission, canonical_result
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          row.submission_id,
+          row.repository_id,
+          row.run_id,
+          row.dispatch_id,
+          row.submission_type,
+          row.canonical_submission,
+          row.canonical_result,
+        );
+    for (const row of normalized.questions)
+      this.#database
+        .prepare(
+          `INSERT INTO context_questions(submission_id, repository_id, run_id, canonical_question)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run(row.submission_id, row.repository_id, row.run_id, row.canonical_question);
+    for (const row of normalized.terminalCompletions)
+      this.#database
+        .prepare(
+          "INSERT INTO context_terminal_completions(dispatch_id, submission_id) VALUES (?, ?)",
+        )
+        .run(row.dispatch_id, row.submission_id);
+    for (const row of normalized.completionOutbox)
+      this.#database
+        .prepare(
+          `INSERT INTO context_completion_outbox(
+             submission_id, dispatch_id, canonical_fact, delivered
+           ) VALUES (?, ?, ?, ?)`,
+        )
+        .run(row.submission_id, row.dispatch_id, row.canonical_fact, row.delivered);
+    for (const row of normalized.events)
+      this.#database
+        .prepare(
+          `INSERT INTO context_events(
+             cursor, repository_id, run_id, dispatch_id, event_type, canonical_event
+           ) VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          row.cursor,
+          row.repository_id,
+          row.run_id,
+          row.dispatch_id,
+          row.event_type,
+          row.canonical_event,
+        );
+    const projection = normalized.projection[0];
+    if (projection === undefined) throw new Error("Context projection normalization failed");
+    this.#database
+      .prepare(
+        `INSERT INTO context_projection(singleton, cursor, canonical_projection)
+         VALUES (1, ?, ?)
+         ON CONFLICT(singleton) DO UPDATE SET
+           cursor = excluded.cursor, canonical_projection = excluded.canonical_projection`,
+      )
+      .run(projection.cursor, projection.canonical_projection);
+  }
+
+  #verifyContextStorage(): void {
+    const quickCheck = this.#database.pragma("quick_check(1)") as { quick_check: string }[];
+    if (quickCheck.length !== 1 || quickCheck[0]?.quick_check !== "ok")
+      throw new Error("SQLite context authority quick_check failed");
+    if ((this.#database.pragma("foreign_key_check") as unknown[]).length > 0)
+      throw new Error("SQLite context authority foreign_key_check failed");
+    verifyContextTables(this.#database, this.dependencies);
+  }
+
+  #fault(point: SqliteContextBrokerFaultPoint): void {
+    try {
+      this.#faultInjector?.(point);
+    } catch (error) {
+      if (point === "after-read-reservation")
+        throw new ContextBrokerTransactionAbortError(
+          error instanceof Error ? error.message : "Injected context read transaction abort",
+        );
+      throw error;
+    }
+  }
+}
+
 export function restoreSqliteAuthority(
   options: SqliteAuthorityOptions & { readonly backupPath: string },
 ): SqliteAuthority {
@@ -1853,7 +2482,10 @@ function openReadConnection(path: string): Database.Database {
   return database;
 }
 
-function applyMigrations(database: Database.Database, dependencies: RuntimeDependencies): void {
+function applyMigrations(
+  database: Database.Database,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): void {
   const version = database.pragma("user_version", { simple: true }) as number;
   if (version > CURRENT_SCHEMA_VERSION) throw new UnsupportedSchemaVersionError(version);
   const migrations = loadMigrations(dependencies);
@@ -1875,7 +2507,7 @@ function applyMigrations(database: Database.Database, dependencies: RuntimeDepen
   verifyMigrationMetadata(database, migrations);
 }
 
-function loadMigrations(dependencies: RuntimeDependencies): readonly Migration[] {
+function loadMigrations(dependencies: Pick<RuntimeDependencies, "sha256">): readonly Migration[] {
   return readdirSync(MIGRATIONS_DIRECTORY)
     .filter((name) => /^\d{3}-[a-z0-9-]+\.sql$/u.test(name))
     .sort()
@@ -1939,6 +2571,7 @@ function verifyDatabase(
   if (state === undefined) throw new Error("SQLite authority singleton is missing");
   InMemoryAuthority.fromCanonicalJson(state.canonical_json, dependencies);
   verifyNormalizedSnapshot(database, parseSnapshot(state.canonical_json), dependencies);
+  verifyContextTables(database, dependencies);
   if (!verifyAssets) return;
   for (const descriptor of readAssetDescriptors(database)) {
     verifyAssetBytes(
@@ -1947,6 +2580,694 @@ function verifyDatabase(
       dependencies,
     );
   }
+}
+
+function verifyContextTables(
+  database: Database.Database,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): void {
+  const state = database
+    .prepare<[], ContextAuthorityStateRow>(
+      "SELECT canonical_json FROM context_authority_state WHERE singleton = 1",
+    )
+    .get();
+  if (state === undefined) throw new Error("SQLite context authority singleton is missing");
+  const authority = InMemoryContextAuthority.fromDurableCanonicalJson(
+    state.canonical_json,
+    dependencies.sha256,
+  );
+  verifyNormalizedContextAuthority(database, authority);
+  verifyAllContextAssetManifests(database, dependencies.sha256);
+  verifyDurableContextReads(database, authority);
+}
+
+function normalizeContextAuthority(authority: InMemoryContextAuthority) {
+  const snapshot = authority.snapshot();
+  const durable = authority.durableSnapshot();
+  const completionRequirements = new Map(
+    durable.dispatches.map((record) => [
+      record.dispatch.dispatchId,
+      canonicalStringify(record.completionRequirements),
+    ]),
+  );
+  return {
+    contextBases: snapshot.contexts.map((context) => ({
+      context_id: context.contextId,
+      context_digest: context.contextDigest,
+      canonical_context: canonicalStringify(context),
+    })),
+    dispatches: snapshot.dispatches.map((dispatch) => ({
+      dispatch_id: dispatch.dispatchId,
+      repository_id: dispatch.repositoryId,
+      run_id: dispatch.runId,
+      context_id: dispatch.contextId,
+      prompt_pack_digest: dispatch.promptPackDigest,
+      canonical_dispatch: canonicalStringify(dispatch),
+      canonical_completion_requirements:
+        completionRequirements.get(dispatch.dispatchId) ??
+        (() => {
+          throw new Error("Context dispatch normalization is missing completion requirements");
+        })(),
+    })),
+    bindings: snapshot.contexts
+      .flatMap((context) =>
+        context.assets.map((binding) => ({
+          asset_binding_id: binding.assetBindingId,
+          context_id: context.contextId,
+          semantic_asset_id: binding.semanticAssetId,
+          alias_binding_digest: binding.aliasBindingDigest,
+          content_digest: binding.contentDigest,
+          byte_length: binding.byteLength,
+          media_type: binding.mediaType,
+          sensitivity: binding.sensitivity,
+        })),
+      )
+      .sort((left, right) => compareNormalizedText(left.asset_binding_id, right.asset_binding_id)),
+    grants: snapshot.grants.map((grant) => ({
+      token_digest: grant.tokenDigest,
+      dispatch_id: grant.envelope.dispatchId,
+      repository_id: grant.envelope.repositoryId,
+      run_id: grant.envelope.runId,
+      asset_binding_id: grant.envelope.assetBindingId,
+      canonical_envelope: canonicalStringify(grant.envelope),
+      operations_used: grant.operationsUsed,
+      bytes_used: grant.bytesUsed,
+    })),
+    readAttempts: durable.reads
+      .map((read) => {
+        return {
+          request_id: read.requestId,
+          token_digest: read.tokenDigest,
+          dispatch_id:
+            read.result.receipt.dispatchId === "dispatch_unknown"
+              ? null
+              : read.result.receipt.dispatchId,
+          repository_id: read.result.receipt.repositoryId,
+          run_id: read.result.receipt.runId,
+          canonical_replay_key: read.canonicalReplayKey,
+          replay_key_digest: read.replayKeyDigest,
+          request_digest: read.requestDigest,
+          status: read.result.status,
+          result_bytes: read.result.bytes ?? null,
+          canonical_receipt: canonicalStringify(read.result.receipt),
+          owner_id: null,
+          fence: null,
+        };
+      })
+      .sort((left, right) => compareNormalizedText(left.request_id, right.request_id)),
+    receipts: durable.receiptAttempts.map((attempt) => ({
+      receipt_cursor: attempt.receiptCursor,
+      request_id: attempt.receipt.requestId,
+      repository_id: attempt.receipt.repositoryId,
+      run_id: attempt.receipt.runId,
+      dispatch_id: attempt.receipt.dispatchId,
+      canonical_replay_key: attempt.canonicalReplayKey,
+      replay_key_digest: attempt.replayKeyDigest,
+      token_digest: attempt.tokenDigest,
+      request_digest: attempt.requestDigest,
+      reserved: attempt.reserved ? 1 : 0,
+      failure_stage: attempt.failureStage ?? null,
+      failure_fact_digest: attempt.failureFactDigest ?? null,
+      canonical_receipt: canonicalStringify(attempt.receipt),
+    })),
+    events: snapshot.events.map((event) => ({
+      cursor: event.cursor,
+      repository_id: event.repositoryId,
+      run_id: event.runId,
+      dispatch_id: event.dispatchId,
+      event_type: event.eventType,
+      canonical_event: canonicalStringify(event),
+    })),
+    projection: [
+      {
+        singleton: 1,
+        cursor: snapshot.projection.cursor,
+        canonical_projection: canonicalStringify(snapshot.projection),
+      },
+    ],
+    submissions: snapshot.submissions.map((stored) => ({
+      submission_id: stored.submission.submissionId,
+      repository_id: stored.submission.repositoryId,
+      run_id: stored.submission.runId,
+      dispatch_id: stored.submission.dispatchId,
+      submission_type: stored.submission.type,
+      canonical_submission: canonicalStringify(stored.submission),
+      canonical_result: canonicalStringify(stored.result),
+    })),
+    questions: snapshot.questions.map((question) => ({
+      submission_id: question.submissionId,
+      repository_id: question.repositoryId,
+      run_id: question.runId,
+      canonical_question: canonicalStringify(question),
+    })),
+    terminalCompletions: snapshot.terminalCompletions.map((terminal) => ({
+      dispatch_id: terminal.dispatchId,
+      submission_id: terminal.submissionId,
+    })),
+    completionOutbox: snapshot.completionOutbox.map((pending) => ({
+      submission_id: pending.submissionId,
+      dispatch_id: pending.fact.dispatchId,
+      canonical_fact: canonicalStringify(pending.fact),
+      delivered: pending.delivered ? 1 : 0,
+    })),
+  };
+}
+
+function verifyNormalizedContextAuthority(
+  database: Database.Database,
+  authority: InMemoryContextAuthority,
+): void {
+  const expected = normalizeContextAuthority(authority);
+  verifyNormalizedContextRows(
+    "context_bases",
+    database
+      .prepare(
+        `SELECT context_id, context_digest, canonical_context
+         FROM context_bases ORDER BY context_id`,
+      )
+      .all(),
+    expected.contextBases,
+  );
+  verifyNormalizedContextRows(
+    "context_dispatches",
+    database
+      .prepare(
+        `SELECT dispatch_id, repository_id, run_id, context_id, prompt_pack_digest,
+                canonical_dispatch, canonical_completion_requirements
+         FROM context_dispatches ORDER BY dispatch_id`,
+      )
+      .all(),
+    expected.dispatches,
+  );
+  verifyNormalizedContextRows(
+    "context_asset_bindings",
+    database
+      .prepare(
+        `SELECT asset_binding_id, context_id, semantic_asset_id, alias_binding_digest,
+                content_digest, byte_length, media_type, sensitivity
+         FROM context_asset_bindings ORDER BY asset_binding_id`,
+      )
+      .all(),
+    expected.bindings,
+  );
+  verifyNormalizedContextRows(
+    "context_grants",
+    database
+      .prepare(
+        `SELECT token_digest, dispatch_id, repository_id, run_id, asset_binding_id,
+                canonical_envelope, operations_used, bytes_used
+         FROM context_grants ORDER BY token_digest`,
+      )
+      .all(),
+    expected.grants,
+  );
+  const readRows = database
+    .prepare<
+      [],
+      {
+        request_id: string;
+        token_digest: string;
+        dispatch_id: string | null;
+        repository_id: string;
+        run_id: string;
+        canonical_replay_key: string;
+        replay_key_digest: string;
+        request_digest: string;
+        status: string;
+        result_bytes: Uint8Array | null;
+        canonical_receipt: string | null;
+        owner_id: string | null;
+        fence: number | null;
+      }
+    >(
+      `SELECT request_id, token_digest, dispatch_id, repository_id, run_id,
+              canonical_replay_key, replay_key_digest, request_digest, status, result_bytes,
+              canonical_receipt, owner_id, fence
+       FROM context_read_attempts ORDER BY request_id`,
+    )
+    .all()
+    .map((row) => ({
+      ...row,
+      result_bytes: row.result_bytes === null ? null : [...row.result_bytes],
+    }));
+  verifyNormalizedContextRows("context_read_attempts", readRows, expected.readAttempts);
+  verifyNormalizedContextRows(
+    "context_audit_receipts",
+    database
+      .prepare(
+        `SELECT receipt_cursor, request_id, repository_id, run_id, dispatch_id,
+          canonical_replay_key, replay_key_digest, token_digest, request_digest,
+          reserved, failure_stage, failure_fact_digest, canonical_receipt
+         FROM context_audit_receipts ORDER BY receipt_cursor`,
+      )
+      .all(),
+    expected.receipts,
+  );
+  verifyNormalizedContextRows(
+    "context_events",
+    database
+      .prepare(
+        `SELECT cursor, repository_id, run_id, dispatch_id, event_type, canonical_event
+         FROM context_events ORDER BY cursor`,
+      )
+      .all(),
+    expected.events,
+  );
+  verifyNormalizedContextRows(
+    "context_projection",
+    database
+      .prepare(
+        "SELECT singleton, cursor, canonical_projection FROM context_projection ORDER BY singleton",
+      )
+      .all(),
+    expected.projection,
+  );
+  verifyNormalizedContextRows(
+    "context_submissions",
+    database
+      .prepare(
+        `SELECT submission_id, repository_id, run_id, dispatch_id, submission_type,
+                canonical_submission, canonical_result
+         FROM context_submissions ORDER BY submission_id`,
+      )
+      .all(),
+    expected.submissions,
+  );
+  verifyNormalizedContextRows(
+    "context_questions",
+    database
+      .prepare(
+        `SELECT submission_id, repository_id, run_id, canonical_question
+         FROM context_questions ORDER BY submission_id`,
+      )
+      .all(),
+    expected.questions,
+  );
+  verifyNormalizedContextRows(
+    "context_terminal_completions",
+    database
+      .prepare(
+        `SELECT dispatch_id, submission_id
+         FROM context_terminal_completions ORDER BY dispatch_id`,
+      )
+      .all(),
+    expected.terminalCompletions,
+  );
+  verifyNormalizedContextRows(
+    "context_completion_outbox",
+    database
+      .prepare(
+        `SELECT submission_id, dispatch_id, canonical_fact, delivered
+         FROM context_completion_outbox ORDER BY submission_id`,
+      )
+      .all(),
+    expected.completionOutbox,
+  );
+}
+
+function verifyNormalizedContextRows(
+  table: string,
+  actual: readonly unknown[],
+  expected: readonly unknown[],
+): void {
+  if (actual.length !== expected.length)
+    throw new Error(`SQLite ${table} row count diverges from canonical context authority`);
+  for (let index = 0; index < expected.length; index += 1) {
+    if (canonicalStringify(actual[index]) !== canonicalStringify(expected[index]))
+      throw new Error(`SQLite ${table} row ${index} diverges from canonical context authority`);
+  }
+}
+
+function verifyDurableContextReads(
+  database: Database.Database,
+  authority: InMemoryContextAuthority,
+): void {
+  const snapshot = authority.snapshot();
+  const durable = authority.durableSnapshot();
+  const contexts = new Map<string, ContextAuthoritySnapshot["contexts"][number]>(
+    snapshot.contexts.map((context) => [context.contextId, context]),
+  );
+  const grants = new Map(durable.grants.map((grant) => [grant.tokenDigest, grant]));
+  const reads = new Map(durable.reads.map((read) => [read.requestId, read]));
+
+  for (const read of durable.reads) {
+    if (read.result.status !== "served") continue;
+    const replay = decodePersistedAssetReadReplayKey(read.canonicalReplayKey);
+    const grant = grants.get(replay.tokenDigest);
+    if (grant === undefined)
+      throw new Error("SQLite served context read does not resolve its exact persisted grant");
+    const context = contexts.get(grant.envelope.contextId);
+    const binding = context?.assets.find(
+      ({ assetBindingId }) => assetBindingId === replay.assetBindingId,
+    );
+    if (binding === undefined)
+      throw new Error("SQLite served context read does not resolve its historical asset binding");
+    const content =
+      replay.type === "pointer" && binding.byteLength <= DEFAULT_POINTER_ASSET_MAX_BYTES
+        ? readVerifiedContextAssetRange(database, binding, 0, binding.byteLength)
+        : undefined;
+    const expected =
+      replay.type === "chunk"
+        ? readVerifiedContextAssetRange(database, binding, replay.offset, replay.length)
+        : content === undefined
+          ? undefined
+          : readCanonicalJsonPointer(content, replay.pointer, replay.maxBytes);
+    if (expected === undefined || !sameContextBytes(expected, read.result.bytes))
+      throw new Error("SQLite durable context read bytes do not match verified historical asset");
+  }
+
+  const usage = new Map(
+    durable.grants.map((grant) => [grant.tokenDigest, { operations: 0, bytes: 0 }]),
+  );
+  for (const attempt of durable.receiptAttempts) {
+    const receipt = attempt.receipt;
+    const read = reads.get(receipt.requestId);
+    if (read === undefined)
+      throw new Error("SQLite context receipt does not resolve its durable read");
+    const replay = decodePersistedAssetReadReplayKey(attempt.canonicalReplayKey);
+    const isStoredResult = canonicalStringify(receipt) === canonicalStringify(read.result.receipt);
+    const grant = grants.get(attempt.tokenDigest);
+    if (grant === undefined) {
+      if (
+        attempt.reserved ||
+        receipt.status !== "denied" ||
+        receipt.denialCode !== (isStoredResult ? "invalid-token" : "request-conflict") ||
+        receipt.chargedOperations !== 0 ||
+        receipt.chargedBytes !== 0 ||
+        receipt.responseBytes !== 0 ||
+        receipt.remainingOperations !== 0 ||
+        receipt.remainingBytes !== 0
+      )
+        throw new Error("SQLite unknown-token context receipt has invalid derived accounting");
+      continue;
+    }
+    const charged = usage.get(grant.tokenDigest);
+    if (charged === undefined) throw new Error("SQLite context grant usage state is missing");
+    const context = contexts.get(grant.envelope.contextId);
+    const binding = context?.assets.find(
+      ({ assetBindingId }) => assetBindingId === grant.envelope.assetBindingId,
+    );
+    if (binding === undefined)
+      throw new Error("SQLite context receipt does not resolve its historical asset binding");
+    const expected = deriveExpectedContextReadAccounting(
+      database,
+      replay,
+      attempt,
+      grant,
+      binding,
+      charged,
+      isStoredResult,
+    );
+    if (
+      attempt.tokenDigest !== replay.tokenDigest ||
+      attempt.reserved !== expected.reserved ||
+      receipt.status !== expected.status ||
+      receipt.denialCode !== expected.denialCode ||
+      receipt.chargedOperations !== expected.operations ||
+      receipt.chargedBytes !== expected.bytes ||
+      receipt.responseBytes !== expected.responseBytes
+    )
+      throw new Error("SQLite context receipt fields do not match verifier-derived accounting");
+    charged.operations += expected.operations;
+    charged.bytes += expected.bytes;
+    if (
+      charged.operations > grant.envelope.maxOperations ||
+      charged.bytes > grant.envelope.maxBytes ||
+      receipt.remainingOperations !== grant.envelope.maxOperations - charged.operations ||
+      receipt.remainingBytes !== grant.envelope.maxBytes - charged.bytes
+    )
+      throw new Error("SQLite context receipt remaining budget does not match ordered usage");
+  }
+  for (const grant of durable.grants) {
+    const charged = usage.get(grant.tokenDigest);
+    if (
+      charged === undefined ||
+      grant.operationsUsed !== charged.operations ||
+      grant.bytesUsed !== charged.bytes
+    )
+      throw new Error("SQLite context grant counters do not match the completed read ledger");
+  }
+}
+
+interface DerivedContextReadAccounting {
+  readonly status: "served" | "denied";
+  readonly denialCode?: ContextAuthoritySnapshot["receipts"][number]["denialCode"];
+  readonly reserved: boolean;
+  readonly operations: number;
+  readonly bytes: number;
+  readonly responseBytes: number;
+}
+
+function deriveExpectedContextReadAccounting(
+  database: Database.Database,
+  replay: ReturnType<typeof decodePersistedAssetReadReplayKey>,
+  attempt: ReturnType<InMemoryContextAuthority["durableSnapshot"]>["receiptAttempts"][number],
+  grant: ReturnType<InMemoryContextAuthority["durableSnapshot"]>["grants"][number],
+  binding: HistoricalAssetBinding,
+  charged: { operations: number; bytes: number },
+  isStoredResult: boolean,
+): DerivedContextReadAccounting {
+  const receipt = attempt.receipt;
+  const denied = (
+    denialCode: NonNullable<DerivedContextReadAccounting["denialCode"]>,
+    reserved = false,
+  ): DerivedContextReadAccounting => ({
+    status: "denied",
+    denialCode,
+    reserved,
+    operations: reserved ? 1 : 0,
+    bytes: 0,
+    responseBytes: 0,
+  });
+  if (!isStoredResult) return denied("request-conflict");
+  if (replay.assetBindingId !== grant.envelope.assetBindingId) return denied("scope-denied");
+  if (Date.parse(receipt.occurredAt) >= Date.parse(grant.envelope.expiresAt))
+    return denied("expired");
+  if (
+    contextSensitivityRank(binding.sensitivity) >
+    contextSensitivityRank(grant.envelope.sensitivityCeiling)
+  )
+    return denied("sensitivity-denied");
+  if (!persistedContextRequestAllowed(replay, grant.envelope, binding))
+    return denied(replay.type === "chunk" ? "invalid-range" : "invalid-pointer");
+  const worstCaseBytes = assetReadWorstCaseBytes(replay);
+  if (
+    charged.operations + 1 > grant.envelope.maxOperations ||
+    charged.bytes + worstCaseBytes > grant.envelope.maxBytes
+  )
+    return denied("budget-exhausted");
+  const content =
+    replay.type === "pointer" && binding.byteLength <= DEFAULT_POINTER_ASSET_MAX_BYTES
+      ? readVerifiedContextAssetRange(database, binding, 0, binding.byteLength)
+      : undefined;
+  const response =
+    replay.type === "chunk"
+      ? readVerifiedContextAssetRange(database, binding, replay.offset, replay.length)
+      : content === undefined
+        ? undefined
+        : readCanonicalJsonPointer(content, replay.pointer, replay.maxBytes);
+  if (
+    receipt.status === "denied" &&
+    receipt.denialCode === "digest-mismatch" &&
+    attempt.failureStage !== undefined &&
+    attempt.failureFactDigest !== undefined
+  )
+    return denied("digest-mismatch", true);
+  if (response === undefined) return denied("invalid-pointer", true);
+  return {
+    status: "served",
+    reserved: true,
+    operations: 1,
+    bytes: worstCaseBytes,
+    responseBytes: response.byteLength,
+  };
+}
+
+function persistedContextRequestAllowed(
+  request: ReturnType<typeof decodePersistedAssetReadReplayKey>,
+  envelope: ReturnType<InMemoryContextAuthority["durableSnapshot"]>["grants"][number]["envelope"],
+  binding: HistoricalAssetBinding,
+): boolean {
+  if (request.type === "chunk") {
+    if (envelope.readMode === "pointer") return false;
+    return (
+      request.length <= envelope.maxChunkBytes &&
+      request.offset <= binding.byteLength &&
+      request.length <= binding.byteLength - request.offset
+    );
+  }
+  if (envelope.readMode === "chunk") return false;
+  const pointerSegments = parsePersistedJsonPointer(request.pointer);
+  const allowedSegments = parsePersistedJsonPointer(envelope.allowedPointer);
+  return allowedSegments.every((segment, index) => pointerSegments[index] === segment);
+}
+
+function parsePersistedJsonPointer(pointer: string): readonly string[] {
+  if (pointer === "") return [];
+  return pointer
+    .slice(1)
+    .split("/")
+    .map((segment) => segment.replace(/~1/gu, "/").replace(/~0/gu, "~"));
+}
+
+function contextSensitivityRank(value: HistoricalAssetBinding["sensitivity"]): number {
+  return ["public", "internal", "confidential", "restricted"].indexOf(value);
+}
+
+function readVerifiedContextAssetRange(
+  database: Database.Database,
+  binding: HistoricalAssetBinding,
+  offset: number,
+  length: number,
+): Uint8Array | undefined {
+  if (
+    !Number.isSafeInteger(offset) ||
+    !Number.isSafeInteger(length) ||
+    offset < 0 ||
+    length < 0 ||
+    offset > binding.byteLength ||
+    length > binding.byteLength - offset
+  )
+    return undefined;
+  if (length === 0) return new Uint8Array();
+  const firstChunk = Math.floor(offset / CONTEXT_ASSET_CHUNK_BYTES);
+  const lastChunk = Math.floor((offset + length - 1) / CONTEXT_ASSET_CHUNK_BYTES);
+  const rows = database
+    .prepare<[string, number, number], Pick<ContextChunkRow, "byte_offset" | "content">>(
+      `SELECT byte_offset, content FROM context_asset_chunks
+       WHERE asset_binding_id = ? AND chunk_index BETWEEN ? AND ?
+       ORDER BY chunk_index`,
+    )
+    .all(binding.assetBindingId, firstChunk, lastChunk);
+  if (rows.length !== lastChunk - firstChunk + 1) return undefined;
+  const result = new Uint8Array(length);
+  for (const row of rows) {
+    const copyStart = Math.max(offset, row.byte_offset);
+    const copyEnd = Math.min(offset + length, row.byte_offset + row.content.byteLength);
+    result.set(
+      row.content.slice(copyStart - row.byte_offset, copyEnd - row.byte_offset),
+      copyStart - offset,
+    );
+  }
+  return result;
+}
+
+function sameContextBytes(expected: Uint8Array, actual: readonly number[] | undefined): boolean {
+  return (
+    actual !== undefined &&
+    expected.byteLength === actual.length &&
+    expected.every((byte, index) => byte === actual[index])
+  );
+}
+
+function compareNormalizedText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+interface ContextManifestVerificationRow {
+  readonly asset_binding_id: string;
+  readonly binding_content_digest: string;
+  readonly binding_byte_length: number;
+  readonly content_digest: string;
+  readonly byte_length: number;
+  readonly chunk_size: number;
+  readonly chunk_count: number;
+}
+
+function expectedContextChunkCount(byteLength: number): number {
+  return Math.ceil(byteLength / CONTEXT_ASSET_CHUNK_BYTES);
+}
+
+function expectedContextChunkLength(
+  byteLength: number,
+  chunkCount: number,
+  chunkIndex: number,
+): number {
+  return chunkIndex + 1 < chunkCount
+    ? CONTEXT_ASSET_CHUNK_BYTES
+    : byteLength - chunkIndex * CONTEXT_ASSET_CHUNK_BYTES;
+}
+
+function verifyAllContextAssetManifests(
+  database: Database.Database,
+  sha256: RuntimeDependencies["sha256"],
+): void {
+  const manifests = database
+    .prepare<[], { asset_binding_id: string }>(
+      "SELECT asset_binding_id FROM context_asset_manifests ORDER BY asset_binding_id",
+    )
+    .all();
+  for (const manifest of manifests)
+    verifyContextAssetManifest(database, manifest.asset_binding_id, sha256);
+}
+
+function verifyContextAssetManifest(
+  database: Database.Database,
+  assetBindingId: string,
+  sha256: RuntimeDependencies["sha256"],
+): void {
+  const manifest = database
+    .prepare<[string], ContextManifestVerificationRow>(
+      `SELECT
+         manifest.asset_binding_id,
+         binding.content_digest AS binding_content_digest,
+         binding.byte_length AS binding_byte_length,
+         manifest.content_digest,
+         manifest.byte_length,
+         manifest.chunk_size,
+         manifest.chunk_count
+       FROM context_asset_manifests AS manifest
+       JOIN context_asset_bindings AS binding
+         ON binding.asset_binding_id = manifest.asset_binding_id
+       WHERE manifest.asset_binding_id = ?`,
+    )
+    .get(assetBindingId);
+  if (manifest === undefined) throw new Error("SQLite context asset manifest is missing");
+  if (
+    !Number.isSafeInteger(manifest.byte_length) ||
+    manifest.byte_length < 0 ||
+    manifest.byte_length > MAX_VERIFIED_CONTEXT_ASSET_BYTES ||
+    manifest.binding_content_digest !== manifest.content_digest ||
+    manifest.binding_byte_length !== manifest.byte_length ||
+    manifest.chunk_size !== CONTEXT_ASSET_CHUNK_BYTES ||
+    manifest.chunk_count !== expectedContextChunkCount(manifest.byte_length)
+  )
+    throw new Error("SQLite context asset manifest does not match its exact binding facts");
+  const rows = database
+    .prepare<[string], ContextChunkRow>(
+      `SELECT chunk_index, byte_offset, byte_length, chunk_digest, content
+       FROM context_asset_chunks
+       WHERE asset_binding_id = ?
+       ORDER BY chunk_index`,
+    )
+    .all(assetBindingId);
+  if (rows.length !== manifest.chunk_count)
+    throw new Error("SQLite context asset chunk count does not match its manifest");
+  const contentBytes = new Uint8Array(manifest.byte_length);
+  let aggregateLength = 0;
+  for (const [index, row] of rows.entries()) {
+    const content = Uint8Array.from(row.content);
+    const expectedLength = expectedContextChunkLength(
+      manifest.byte_length,
+      manifest.chunk_count,
+      index,
+    );
+    if (
+      row.chunk_index !== index ||
+      row.byte_offset !== index * CONTEXT_ASSET_CHUNK_BYTES ||
+      row.byte_length !== expectedLength ||
+      content.byteLength !== expectedLength ||
+      sha256.digest(content) !== row.chunk_digest
+    )
+      throw new Error("SQLite context asset chunk integrity check failed");
+    contentBytes.set(content, row.byte_offset);
+    aggregateLength += content.byteLength;
+  }
+  if (
+    aggregateLength !== manifest.byte_length ||
+    sha256.digest(contentBytes) !== manifest.content_digest
+  )
+    throw new Error("SQLite context asset full content digest check failed");
 }
 
 function readAssetDescriptors(database: Database.Database): readonly AssetDescriptor[] {

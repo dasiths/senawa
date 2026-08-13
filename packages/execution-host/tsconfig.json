@@ -4,5 +4,16 @@
     "outDir": "dist",
     "rootDir": "src"
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../kernel"
+    },
+    {
+      "path": "../protocol"
+    },
+    {
+      "path": "../runtime"
+    }
+  ]
 }

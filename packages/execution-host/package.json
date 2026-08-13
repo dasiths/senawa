@@ -9,7 +9,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.test.*"
   ],
   "publishConfig": {
     "executableFiles": [
@@ -20,5 +21,11 @@
     "build": "tsc -b && pnpm build:native",
     "build:native": "node ../../scripts/build-process-supervisor.mjs",
     "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@github/copilot-sdk": "1.0.9",
+    "@senawa/kernel": "workspace:*",
+    "@senawa/protocol": "workspace:*",
+    "@senawa/runtime": "workspace:*"
   }
 }
