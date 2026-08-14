@@ -1,4 +1,4 @@
-import type { Sha256 } from "@senawa/kernel";
+import type { IntegrationBarrier, Sha256 } from "@senawa/kernel";
 import type {
   AuthenticatedPrincipal,
   CommandEnvelope,
@@ -67,6 +67,7 @@ export interface RuntimeQueryPort {
     limit?: number,
   ): EventReplayPage;
   queryProjection(repositoryId: string, runId: string): ProjectionEnvelope | undefined;
+  queryIntegrationBarrier(repositoryId: string, runId: string): IntegrationBarrier | undefined;
 }
 
 export interface SerializableAuthorityPort {

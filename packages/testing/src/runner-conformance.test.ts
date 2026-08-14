@@ -5,6 +5,7 @@ import {
   InMemoryRunnerAuthority,
   type RunnerFaultPoint,
   type RunnerLeaseFact,
+  scheduleRunnerTransitions,
   taskScopeFence,
 } from "@senawa/runtime";
 import { describe, expect, it } from "vitest";
@@ -33,7 +34,344 @@ registerRunnerAuthorityConformance("in-memory", () => {
     queryEvents: authority.queryEvents.bind(authority),
     queryProjection: authority.queryProjection.bind(authority),
     queryBudgets: authority.queryBudgets.bind(authority),
+    queryCapacities: authority.queryCapacities.bind(authority),
   };
+});
+
+describe("bounded sibling runner conformance", () => {
+  it("reserves writer capacity and spend atomically under contention", () => {
+    const authority = configuredCapacityAuthority(1, 20);
+    const first = runnerEffectCommand({
+      commandId: "runner-command-capacity-a",
+      operationId: "operation-capacity-a",
+      capacityReservation: { resource: "writer", amount: 1 },
+    });
+    const second = runnerEffectCommand({
+      commandId: "runner-command-capacity-b",
+      operationId: "operation-capacity-b",
+      sequence: 2,
+      capacityReservation: { resource: "writer", amount: 1 },
+    });
+    authority.enqueue(first);
+    authority.enqueue(second);
+
+    expect(authority.persistIntent({ ...runOnceInput(), command: first }).type).toBe("persisted");
+    expect(authority.persistIntent({ ...runOnceInput(), command: second })).toEqual({
+      type: "capacity-unavailable",
+      reservation: { resource: "writer", amount: 1 },
+      available: 0,
+    });
+    expect(authority.queryCapacities(runnerFixture.repositoryId, runnerFixture.runId)).toEqual([
+      { resource: "writer", limit: 1, occupied: 1 },
+    ]);
+    expect(
+      authority.queryBudgets(runnerFixture.repositoryId, runnerFixture.runId)[0],
+    ).toMatchObject({ reserved: 5, spent: 0 });
+  });
+
+  it("does not retain capacity when spend escalation prevents a sibling start", () => {
+    const authority = configuredCapacityAuthority(2, 10);
+    for (const suffix of ["a", "b"] as const) {
+      authority.enqueue(
+        runnerEffectCommand({
+          commandId: `runner-command-spend-${suffix}`,
+          operationId: `operation-spend-${suffix}`,
+          sequence: suffix === "a" ? 1 : 2,
+          budgetReservation: { unit: "model-millidollars", amount: 6 },
+          capacityReservation: { resource: "writer", amount: 1 },
+        }),
+      );
+    }
+    const host = new FakeEffectHost({
+      dispatch(intent, currentHost) {
+        const active = { status: "active" as const, observedAt: runnerFixture.currentTime };
+        currentHost.observations.set(intent.command.operationId, active);
+        return active;
+      },
+    });
+
+    const batch = new FencedRunner(authority, host).runBatch(runOnceInput(), {
+      maxTransitions: 2,
+    });
+
+    expect(batch.results.map(({ type }) => type)).toEqual(["escalated", "committed"]);
+    expect(authority.queryCapacities(runnerFixture.repositoryId, runnerFixture.runId)[0]).toEqual({
+      resource: "writer",
+      limit: 2,
+      occupied: 1,
+    });
+    expect(
+      authority.queryBudgets(runnerFixture.repositoryId, runnerFixture.runId)[0],
+    ).toMatchObject({ reserved: 6, spent: 0 });
+  });
+
+  it("releases capacity once for terminal outcomes and retains it for unknown outcomes", () => {
+    const authority = configuredCapacityAuthority(2, 20);
+    authority.enqueue(
+      runnerEffectCommand({
+        commandId: "runner-command-complete",
+        operationId: "operation-complete",
+        capacityReservation: { resource: "writer", amount: 1 },
+      }),
+    );
+    authority.enqueue(
+      runnerEffectCommand({
+        commandId: "runner-command-unknown",
+        operationId: "operation-unknown",
+        sequence: 2,
+        maxReconciliationAttempts: 1,
+        capacityReservation: { resource: "writer", amount: 1 },
+      }),
+    );
+    const host = new FakeEffectHost({
+      dispatch(intent) {
+        return intent.command.operationId === "operation-unknown"
+          ? { status: "unknown", observedAt: runnerFixture.currentTime }
+          : { status: "completed", observedAt: runnerFixture.currentTime };
+      },
+      inspect() {
+        return { status: "unknown", observedAt: runnerFixture.currentTime };
+      },
+    });
+    const runner = new FencedRunner(authority, host);
+
+    expect(runner.runBatch(runOnceInput(), { maxTransitions: 2 }).results).toHaveLength(2);
+    expect(
+      authority.queryCapacities(runnerFixture.repositoryId, runnerFixture.runId)[0]?.occupied,
+    ).toBe(1);
+    expect(
+      runner.runBatch(runOnceInput({ attemptId: "runner-attempt-settle" }), {
+        maxTransitions: 2,
+      }),
+    ).toMatchObject({
+      results: [
+        {
+          type: "committed",
+          outcome: { operationId: "operation-unknown", status: "failed" },
+        },
+      ],
+    });
+    expect(
+      authority.queryCapacities(runnerFixture.repositoryId, runnerFixture.runId)[0]?.occupied,
+    ).toBe(0);
+    expect(
+      runner.runBatch(runOnceInput({ attemptId: "runner-attempt-after-terminal" }), {
+        maxTransitions: 2,
+      }).results,
+    ).toEqual([]);
+    expect(
+      authority.queryCapacities(runnerFixture.repositoryId, runnerFixture.runId)[0]?.occupied,
+    ).toBe(0);
+  });
+
+  it("orders cancellation, reconciliation, and starts independently of insertion order", () => {
+    const authority = configuredCapacityAuthority(3, 30);
+    for (const suffix of ["b", "a"] as const) {
+      authority.enqueue(
+        runnerEffectCommand({
+          commandId: `runner-command-active-${suffix}`,
+          operationId: `operation-active-${suffix}`,
+          sequence: suffix === "a" ? 1 : 2,
+          capacityReservation: { resource: "writer", amount: 1 },
+        }),
+      );
+    }
+    new FencedRunner(
+      authority,
+      new FakeEffectHost({
+        dispatch() {
+          return { status: "active", observedAt: runnerFixture.currentTime };
+        },
+      }),
+    ).runBatch(runOnceInput(), { maxTransitions: 2 });
+    authority.requestCancellation({
+      repositoryId: runnerFixture.repositoryId,
+      runId: runnerFixture.runId,
+      operationId: "operation-active-b",
+      lease: runnerFixture.lease,
+      currentTime: runnerFixture.currentTime,
+      requestedAt: runnerFixture.currentTime,
+    });
+    authority.enqueue(
+      runnerEffectCommand({
+        commandId: "runner-command-ready",
+        operationId: "operation-ready",
+        sequence: 3,
+        capacityReservation: { resource: "writer", amount: 1 },
+      }),
+    );
+
+    expect(
+      scheduleRunnerTransitions(authority.load(runOnceInput()), {
+        currentTime: runnerFixture.currentTime,
+        maxTransitions: 3,
+      }).map((plan) =>
+        plan.type === "start"
+          ? `start:${plan.command.operationId}`
+          : `reconcile:${plan.effect.intent.command.operationId}`,
+      ),
+    ).toEqual([
+      "reconcile:operation-active-b",
+      "reconcile:operation-active-a",
+      "start:operation-ready",
+    ]);
+  });
+
+  it("plans the same operation prefix for every queued command permutation", () => {
+    const schedules = permutations(["c", "a", "b"] as const).map((order) => {
+      const authority = configuredCapacityAuthority(2, 30);
+      order.forEach((suffix, index) => {
+        authority.enqueue(
+          runnerEffectCommand({
+            commandId: `runner-command-stable-${suffix}`,
+            operationId: `operation-stable-${suffix}`,
+            sequence: index + 1,
+            capacityReservation: { resource: "writer", amount: 1 },
+          }),
+        );
+      });
+      return scheduleRunnerTransitions(authority.load(runOnceInput()), {
+        currentTime: runnerFixture.currentTime,
+        maxTransitions: 2,
+      }).map((plan) => (plan.type === "start" ? plan.command.operationId : "unexpected"));
+    });
+
+    expect(new Set(schedules.map((schedule) => JSON.stringify(schedule))).size).toBe(1);
+    expect(schedules[0]).toEqual(["operation-stable-a", "operation-stable-b"]);
+  });
+
+  it("all-settles mixed sibling observations and commits each observable result", async () => {
+    const authority = configuredCapacityAuthority(3, 30);
+    for (const suffix of ["unknown", "failed", "completed"] as const) {
+      authority.enqueue(
+        runnerEffectCommand({
+          commandId: `runner-command-mixed-${suffix}`,
+          operationId: `operation-mixed-${suffix}`,
+          capacityReservation: { resource: "writer", amount: 1 },
+        }),
+      );
+    }
+    const result = await new AsyncFencedRunner(authority, {
+      async dispatch(intent) {
+        if (intent.command.operationId === "operation-mixed-unknown") {
+          throw new Error("lost sibling response");
+        }
+        return {
+          status: intent.command.operationId === "operation-mixed-failed" ? "failed" : "completed",
+          observedAt: runnerFixture.currentTime,
+        };
+      },
+      async inspect(intent) {
+        return {
+          status: intent.command.operationId === "operation-mixed-unknown" ? "unknown" : "missing",
+          observedAt: runnerFixture.currentTime,
+        };
+      },
+      async cancel() {
+        return { status: "cancelled", observedAt: runnerFixture.currentTime };
+      },
+    }).runBatch(asyncBatchInput("runner-attempt-mixed"), { maxTransitions: 3 });
+
+    expect(
+      result.results.map((item) =>
+        item.type === "committed"
+          ? [item.outcome.operationId, item.outcome.status]
+          : [item.type, ""],
+      ),
+    ).toEqual([
+      ["operation-mixed-completed", "completed"],
+      ["operation-mixed-failed", "failed"],
+      ["operation-mixed-unknown", "unknown"],
+    ]);
+    expect(
+      authority
+        .load(runOnceInput())
+        .effects.map(({ outcome }) => outcome?.status)
+        .sort(),
+    ).toEqual(["completed", "failed", "unknown"]);
+    expect(
+      authority.queryCapacities(runnerFixture.repositoryId, runnerFixture.runId)[0]?.occupied,
+    ).toBe(1);
+  });
+
+  it("replays a batch attempt without another host observation", async () => {
+    const authority = configuredCapacityAuthority(1, 10);
+    authority.enqueue(
+      runnerEffectCommand({ capacityReservation: { resource: "writer", amount: 1 } }),
+    );
+    const host = new FakeAsyncEffectHost({
+      dispatch() {
+        return { status: "active", observedAt: runnerFixture.currentTime };
+      },
+    });
+    const runner = new AsyncFencedRunner(authority, host);
+    const input = asyncBatchInput("runner-attempt-batch-replay");
+
+    await expect(runner.runBatch(input, { maxTransitions: 2 })).resolves.toMatchObject({
+      results: [{ type: "committed", outcome: { status: "active" } }],
+    });
+    await expect(runner.runBatch(input, { maxTransitions: 2 })).resolves.toMatchObject({
+      results: [{ type: "committed", outcome: { status: "active" } }],
+    });
+    expect(host.host.dispatchCalls).toBe(1);
+    expect(host.host.inspectCalls).toBe(0);
+  });
+
+  it("supplies one abort signal to every active sibling", async () => {
+    const authority = configuredCapacityAuthority(2, 20);
+    for (const suffix of ["a", "b"] as const) {
+      authority.enqueue(
+        runnerEffectCommand({
+          commandId: `runner-command-abort-${suffix}`,
+          operationId: `operation-abort-${suffix}`,
+          capacityReservation: { resource: "writer", amount: 1 },
+        }),
+      );
+    }
+    const controller = new AbortController();
+    let started = 0;
+    let aborted = 0;
+    let allStarted: (() => void) | undefined;
+    const startedGate = new Promise<void>((resolve) => {
+      allStarted = resolve;
+    });
+    const pending = new AsyncFencedRunner(authority, {
+      async dispatch(_intent, { signal }) {
+        started += 1;
+        if (started === 2) allStarted?.();
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              aborted += 1;
+              reject(new Error("host aborted"));
+            },
+            { once: true },
+          );
+        });
+        throw new Error("unreachable");
+      },
+      async inspect() {
+        throw new Error("aborted siblings must not inspect");
+      },
+      async cancel() {
+        throw new Error("unexpected cancellation");
+      },
+    }).runBatch(asyncBatchInput("runner-attempt-batch-abort", controller), {
+      maxTransitions: 2,
+    });
+    await startedGate;
+    controller.abort();
+
+    await expect(pending).rejects.toBeInstanceOf(AsyncRunnerCancelledError);
+    expect(aborted).toBe(2);
+    expect(
+      authority.load(runOnceInput()).effects.every(({ outcome }) => outcome === undefined),
+    ).toBe(true);
+    expect(
+      authority.queryCapacities(runnerFixture.repositoryId, runnerFixture.runId)[0]?.occupied,
+    ).toBe(2);
+  });
 });
 
 describe("fenced runner crash and reconciliation matrix", () => {
@@ -851,4 +1189,42 @@ function crashAfterIntentAuthority(): InMemoryRunnerAuthority {
   );
   authority.enqueue(runnerEffectCommand());
   return authority;
+}
+
+function configuredCapacityAuthority(
+  capacityLimit: number,
+  budgetLimit: number,
+): InMemoryRunnerAuthority {
+  const authority = new InMemoryRunnerAuthority();
+  authority.configureRun({
+    repositoryId: runnerFixture.repositoryId,
+    runId: runnerFixture.runId,
+    contextDigest: runnerFixture.contextDigest,
+    taskScopes: [runnerTaskScope],
+    budgets: [{ unit: "model-millidollars", limit: budgetLimit }],
+    capacities: [{ resource: "writer", limit: capacityLimit, occupied: 0 }],
+    lease: runnerFixture.lease,
+  });
+  return authority;
+}
+
+function asyncBatchInput(attemptId: string, controller = new AbortController()) {
+  return {
+    repositoryId: runnerFixture.repositoryId,
+    runId: runnerFixture.runId,
+    attemptId,
+    signal: controller.signal,
+    currentTime: () => runnerFixture.currentTime,
+    currentLease: () => runnerFixture.lease,
+  };
+}
+
+function permutations<T>(values: readonly T[]): readonly (readonly T[])[] {
+  if (values.length < 2) return [values];
+  return values.flatMap((value, index) =>
+    permutations([...values.slice(0, index), ...values.slice(index + 1)]).map((remaining) => [
+      value,
+      ...remaining,
+    ]),
+  );
 }

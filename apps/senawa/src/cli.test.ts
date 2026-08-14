@@ -128,7 +128,7 @@ describe("runCli", () => {
     const content = memory.files.get("senawa.json");
     expect(content).toBeDefined();
     const document = JSON.parse(content as string);
-    expect(document.apiVersion).toBe("senawa.dev/workflow/v1alpha1");
+    expect(document.apiVersion).toBe("senawa.dev/workflow/v1alpha2");
     expect(() =>
       compileWorkflowConfiguration(document, "senawa.json", memory.sha256),
     ).not.toThrow();
@@ -189,7 +189,7 @@ describe("built executable", () => {
     });
     expect(initialized.stdout.trim()).toBe("senawa.json: created");
     const content = await readFile(join(root, "senawa.json"), "utf8");
-    expect(JSON.parse(content).apiVersion).toBe("senawa.dev/workflow/v1alpha1");
+    expect(JSON.parse(content).apiVersion).toBe("senawa.dev/workflow/v1alpha2");
 
     const valid = await execute(process.execPath, [executable.pathname, "doctor"], { cwd: root });
     expect(valid.stdout.trim()).toBe("senawa.json: valid");
@@ -211,7 +211,7 @@ describe("built executable", () => {
     expect(concurrent.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
     expect(concurrent.filter(({ status }) => status === "rejected")).toHaveLength(1);
     const concurrentContent = await readFile(join(root, "concurrent.json"), "utf8");
-    expect(JSON.parse(concurrentContent).apiVersion).toBe("senawa.dev/workflow/v1alpha1");
+    expect(JSON.parse(concurrentContent).apiVersion).toBe("senawa.dev/workflow/v1alpha2");
 
     await writeFile(join(root, "invalid.json"), '{"kind":"Job","authority":true}', "utf8");
     await expect(

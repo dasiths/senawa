@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = "senawa.dev/protocol/v1alpha1" as const;
+export const PROTOCOL_VERSION = "senawa.dev/protocol/v1alpha2" as const;
 
 export type ProtocolVersion = typeof PROTOCOL_VERSION;
 
@@ -49,6 +49,7 @@ export type CommandIntent =
   | { readonly type: "withdraw-amendment-proposal" }
   | { readonly type: "record-amendment-decision" }
   | { readonly type: "apply-approved-amendment" }
+  | { readonly type: "record-integration-barrier" }
   | { readonly type: "create-escalation" }
   | { readonly type: "grant-allowance" };
 
@@ -76,6 +77,12 @@ export interface AmendmentTaskScopePayload {
 export interface ApplyApprovedAmendmentPayload extends WithdrawAmendmentProposalPayload {
   readonly decisionDigest: string;
   readonly reviewedResultGraphRevisionDigest: string;
+}
+
+export interface RecordIntegrationBarrierPayload {
+  readonly integrationId: OpaqueIdentity;
+  readonly configurationSnapshotDigest: string;
+  readonly barrier: JsonValue;
 }
 
 export interface CommandEnvelope {

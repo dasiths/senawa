@@ -500,6 +500,23 @@ Execute dependency-ready tasks under a configured workspace mode with one
 serialized integration slot. The default repository mode is serial. Explicit
 worktree mode enables isolated parallel writers.
 
+Phase 10A through 10E are complete. Configuration, pure planning, bounded
+runner scheduling, durable capacity, workspace and integration authority,
+trusted barriers, deferred completion, execution-host Git effects, and scoped
+workspace file tools are implemented. Production composition now selects
+repository or worktree behavior per immutable run, dispatches exact workspace
+effects, rechecks completion eligibility, and converges publication after
+restart. The first Phase 10F independent review rejected the implementation.
+The review repairs add authority-derived production stage emission, immediate
+fail-fast cancellation, current integration-slot fencing before publication,
+exact successful-barrier completion selection, and descriptor-confined
+single-file workspace mutations. A second Phase 10F re-review also rejected the
+implementation. Its repairs require exact current task-generation dispatch and
+integration cohorts, durable admission of later runner scopes without resetting
+accounting, authority reassertion in the final publication window, bounded
+two-attempt semantic rework, and parent-directory swap confinement. Final
+independent re-review, validation, and delivery remain in Phase 10F.
+
 ### Acceptance
 
 * Effective concurrency respects workflow, supervisor, host, and resource limits.
@@ -511,8 +528,16 @@ worktree mode enables isolated parallel writers.
   isolated worktrees, and an immutable base for every writer.
 * Siblings cannot observe partial work.
 * Integration is fenced, durable, restartable, and followed by configured gates.
+* Publication inspection and compare-and-swap require the exact live current
+  integration-slot owner and fence.
+* Production derives restartable stable stage commands from graph, status,
+  dispatch, completion, workspace, integration, and barrier authority.
+* Workspace patch authority accepts one file per operation and performs
+  descriptor-confined compare-and-rename under a root lock.
 * Fan-in digest is independent of completion order.
 * Failed siblings do not cancel unrelated work unless workflow selects fail-fast.
+* Fail-fast aborts still-pending admitted siblings and durably records every
+  observed failure or cancellation.
 
 ### Validation
 
@@ -521,9 +546,13 @@ worktree mode enables isolated parallel writers.
 * Disjoint edits, same-file conflicts, semantic conflicts, cancellation, and
   task-local failure in explicit worktree mode
 * Post-integration failure and rework
-* Restart while integration owns the slot
+* Restart while integration owns or has expired the slot, including higher-fence
+  takeover and a crash between trusted runtime barrier and workspace barrier
 * Every sibling completion permutation
 * Resource and spend cap scheduling
+* Failed-first and successful-later semantic rework, plus ambiguous successful
+  barrier refusal
+* Parent and target symlink swaps and concurrent expected-text patch races
 * Worktree tests create a fresh temporary Git repository outside the Senawa
   checkout, including when Senawa is mounted into a devcontainer
 

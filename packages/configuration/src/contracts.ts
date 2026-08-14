@@ -11,13 +11,32 @@ import type {
   WorkflowGraph,
 } from "@senawa/kernel";
 
-export const WORKFLOW_CONFIGURATION_API_VERSION = "senawa.dev/workflow/v1alpha1";
-export const CONFIGURATION_SNAPSHOT_API_VERSION = "senawa.dev/configuration-snapshot/v1alpha1";
+export const WORKFLOW_CONFIGURATION_API_VERSION = "senawa.dev/workflow/v1alpha2";
+export const CONFIGURATION_SNAPSHOT_API_VERSION = "senawa.dev/configuration-snapshot/v1alpha2";
 export const WORKFLOW_AMENDMENT_API_VERSION = "senawa.dev/workflow-amendment/v1alpha1";
+
+export type WorkspaceMode = "repository" | "worktree";
+export type FailurePolicy = "continue" | "fail-fast";
+
+export interface ExecutionDeclaration {
+  readonly workspaceMode?: WorkspaceMode;
+  readonly maxWriterConcurrency?: number;
+  readonly failurePolicy?: FailurePolicy;
+  readonly integrationRef?: string;
+}
+
+export type ExecutionPolicy = Readonly<
+  {
+    readonly workspaceMode: WorkspaceMode;
+    readonly maxWriterConcurrency: number;
+    readonly failurePolicy: FailurePolicy;
+  } & { readonly integrationRef?: string }
+>;
 
 export interface WorkflowConfigurationDocument {
   readonly apiVersion: typeof WORKFLOW_CONFIGURATION_API_VERSION;
   readonly kind: "Workflow";
+  readonly execution?: ExecutionDeclaration;
   readonly workflow: WorkflowDeclaration;
   readonly schemas: readonly SchemaDeclaration[];
   readonly roles: readonly RoleDeclaration[];
@@ -213,6 +232,7 @@ export interface ConfigurationRegistryEntry {
 }
 
 export type ConfigurationComponentCategory =
+  | "execution"
   | "graph"
   | "schemas"
   | "roles"
@@ -227,6 +247,7 @@ export type ConfigurationComponentDigests = Readonly<
 
 export interface ConfigurationSnapshot {
   readonly apiVersion: typeof CONFIGURATION_SNAPSHOT_API_VERSION;
+  readonly execution: ExecutionPolicy;
   readonly graph: WorkflowGraph;
   readonly schemas: readonly ConfigurationRegistryEntry[];
   readonly roles: readonly ConfigurationRegistryEntry[];

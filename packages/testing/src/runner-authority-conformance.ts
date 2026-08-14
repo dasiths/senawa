@@ -1,4 +1,9 @@
-import { AsyncFencedRunner, FencedRunner, type RunnerAuthorityPort } from "@senawa/runtime";
+import {
+  AsyncFencedRunner,
+  FencedRunner,
+  type RunnerAuthorityPort,
+  taskScopeFence,
+} from "@senawa/runtime";
 import { describe, expect, it } from "vitest";
 import {
   configuredHarness,
@@ -7,6 +12,7 @@ import {
   type RunnerAuthorityConformanceFactory,
   runnerEffectCommand,
   runnerFixture,
+  runnerTaskScope,
   runOnceInput,
 } from "./runner-conformance.js";
 
@@ -147,6 +153,228 @@ export function registerRunnerAuthorityConformance(
       ).toMatchObject({ reserved: 0, spent: 5, unreported: 5 });
     });
 
+    it("admits a later task generation without resetting spend, capacity, or fenced scopes", () => {
+      const harness = configuredHarness(createHarness());
+      const first = runnerEffectCommand({ capacityReservation: { resource: "writer", amount: 1 } });
+      harness.enqueue(first);
+      expect(harness.authority.persistIntent({ ...runOnceInput(), command: first }).type).toBe(
+        "persisted",
+      );
+      harness.authority.installTaskScopeFences({
+        repositoryId: runnerFixture.repositoryId,
+        runId: runnerFixture.runId,
+        fences: [
+          {
+            scope: runnerTaskScope,
+            expectedFenceGeneration: 1,
+            expectedAcceptedContextDigest: runnerFixture.contextDigest,
+          },
+        ],
+        installedAt: runnerFixture.currentTime,
+      });
+      const generationTwo = {
+        ...runnerTaskScope,
+        definitionGeneration: 2,
+        acceptedContextDigest: "d".repeat(64),
+      };
+      const admission = {
+        repositoryId: runnerFixture.repositoryId,
+        runId: runnerFixture.runId,
+        lease: runnerFixture.lease,
+        currentTime: runnerFixture.currentTime,
+        taskScopes: [generationTwo],
+        budgets: [
+          { unit: "model-millidollars", limit: 15 },
+          { unit: "workspace-operations", limit: 2 },
+        ],
+      };
+
+      harness.authority.ensureTaskScopesAndBudgets(admission);
+      harness.authority.ensureTaskScopesAndBudgets(admission);
+
+      expect(harness.authority.load(runOnceInput()).taskScopes).toEqual([
+        { ...runnerTaskScope, fenceGeneration: 2, claimsAccepted: false },
+        generationTwo,
+      ]);
+      expect(harness.queryBudgets(runnerFixture.repositoryId, runnerFixture.runId)).toEqual([
+        {
+          unit: "model-millidollars",
+          limit: 15,
+          reserved: 5,
+          spent: 0,
+          unreported: 0,
+        },
+        { unit: "retry", limit: 2, reserved: 0, spent: 0, unreported: 0 },
+        { unit: "workspace-operations", limit: 2, reserved: 0, spent: 0, unreported: 0 },
+      ]);
+      expect(harness.queryCapacities(runnerFixture.repositoryId, runnerFixture.runId)).toEqual([
+        { resource: "writer", limit: 1, occupied: 1 },
+      ]);
+      expect(() =>
+        harness.authority.ensureTaskScopesAndBudgets({
+          ...admission,
+          taskScopes: [runnerTaskScope],
+          budgets: [],
+        }),
+      ).toThrow();
+    });
+
+    it("dispatches only the newly admitted generation and spends nothing on stale work", () => {
+      const harness = configuredHarness(createHarness());
+      harness.authority.installTaskScopeFences({
+        repositoryId: runnerFixture.repositoryId,
+        runId: runnerFixture.runId,
+        fences: [
+          {
+            scope: runnerTaskScope,
+            expectedFenceGeneration: 1,
+            expectedAcceptedContextDigest: runnerFixture.contextDigest,
+          },
+        ],
+        installedAt: runnerFixture.currentTime,
+      });
+      const generationTwo = {
+        ...runnerTaskScope,
+        definitionGeneration: 2,
+        acceptedContextDigest: "d".repeat(64),
+      };
+      harness.authority.ensureTaskScopesAndBudgets({
+        repositoryId: runnerFixture.repositoryId,
+        runId: runnerFixture.runId,
+        lease: runnerFixture.lease,
+        currentTime: runnerFixture.currentTime,
+        taskScopes: [generationTwo],
+        budgets: [{ unit: "model-millidollars", limit: 10 }],
+      });
+      harness.enqueue(
+        runnerEffectCommand({
+          commandId: "runner-command-stale-generation",
+          operationId: "operation_stale-generation",
+        }),
+      );
+      harness.enqueue(
+        runnerEffectCommand({
+          commandId: "runner-command-current-generation",
+          operationId: "operation_current-generation",
+          sequence: 2,
+          taskScope: taskScopeFence(generationTwo),
+          contextDigest: generationTwo.acceptedContextDigest,
+        }),
+      );
+      const host = new FakeEffectHost();
+
+      expect(new FencedRunner(harness.authority, host).runOnce(runOnceInput())).toMatchObject({
+        type: "committed",
+        outcome: { operationId: "operation_current-generation", status: "completed" },
+      });
+      expect(host.dispatchCalls).toBe(1);
+      expect(harness.authority.load(runOnceInput()).effects).toHaveLength(1);
+      expect(
+        harness.queryBudgets(runnerFixture.repositoryId, runnerFixture.runId)[0],
+      ).toMatchObject({ reserved: 0, spent: 3 });
+    });
+
+    it("atomically reserves durable writer capacity and releases it once on settlement", () => {
+      const harness = createHarness();
+      harness.configureRun({
+        repositoryId: runnerFixture.repositoryId,
+        runId: runnerFixture.runId,
+        contextDigest: runnerFixture.contextDigest,
+        taskScopes: [runnerTaskScope],
+        budgets: [{ unit: "model-millidollars", limit: 20 }],
+        capacities: [{ resource: "writer", limit: 2, occupied: 0 }],
+        lease: runnerFixture.lease,
+      });
+      const first = runnerEffectCommand({
+        commandId: "runner-command-capacity-first",
+        operationId: "operation-capacity-first",
+        capacityReservation: { resource: "writer", amount: 1 },
+      });
+      const second = runnerEffectCommand({
+        commandId: "runner-command-capacity-second",
+        operationId: "operation-capacity-second",
+        sequence: 2,
+        maxReconciliationAttempts: 1,
+        capacityReservation: { resource: "writer", amount: 1 },
+      });
+      const blocked = runnerEffectCommand({
+        commandId: "runner-command-capacity-blocked",
+        operationId: "operation-capacity-blocked",
+        sequence: 3,
+        capacityReservation: { resource: "writer", amount: 1 },
+      });
+      for (const command of [first, second, blocked]) harness.enqueue(command);
+
+      expect(harness.authority.persistIntent({ ...runOnceInput(), command: first }).type).toBe(
+        "persisted",
+      );
+      expect(harness.authority.persistIntent({ ...runOnceInput(), command: second }).type).toBe(
+        "persisted",
+      );
+      expect(harness.authority.persistIntent({ ...runOnceInput(), command: blocked })).toEqual({
+        type: "capacity-unavailable",
+        reservation: { resource: "writer", amount: 1 },
+        available: 0,
+      });
+      expect(harness.queryCapacities(runnerFixture.repositoryId, runnerFixture.runId)).toEqual([
+        { resource: "writer", limit: 2, occupied: 2 },
+      ]);
+      expect(
+        harness.queryBudgets(runnerFixture.repositoryId, runnerFixture.runId)[0],
+      ).toMatchObject({ reserved: 10, spent: 0 });
+
+      const runner = new FencedRunner(
+        harness.authority,
+        new FakeEffectHost({
+          dispatch(intent) {
+            return intent.command.operationId === second.operationId
+              ? { status: "unknown", observedAt: runnerFixture.currentTime }
+              : { status: "completed", observedAt: runnerFixture.currentTime };
+          },
+          inspect() {
+            return { status: "unknown", observedAt: runnerFixture.currentTime };
+          },
+        }),
+      );
+      expect(runner.runBatch(runOnceInput(), { maxTransitions: 2 }).results).toHaveLength(2);
+      expect(harness.queryCapacities(runnerFixture.repositoryId, runnerFixture.runId)[0]).toEqual({
+        resource: "writer",
+        limit: 2,
+        occupied: 1,
+      });
+      expect(
+        runner.runBatch(runOnceInput({ attemptId: "runner-attempt-capacity-settle" }), {
+          maxTransitions: 2,
+        }),
+      ).toMatchObject({
+        results: [
+          {
+            outcome: { operationId: second.operationId, status: "failed" },
+            type: "committed",
+          },
+          {
+            outcome: { operationId: blocked.operationId, status: "completed" },
+            type: "committed",
+          },
+        ],
+      });
+      expect(harness.queryCapacities(runnerFixture.repositoryId, runnerFixture.runId)[0]).toEqual({
+        resource: "writer",
+        limit: 2,
+        occupied: 0,
+      });
+      expect(
+        runner.runBatch(runOnceInput({ attemptId: "runner-attempt-capacity-replay" }), {
+          maxTransitions: 2,
+        }).results,
+      ).toEqual([]);
+      expect(harness.queryCapacities(runnerFixture.repositoryId, runnerFixture.runId)[0]).toEqual({
+        resource: "writer",
+        limit: 2,
+        occupied: 0,
+      });
+    });
+
     it("keeps exact task-scoped outcomes current across a run-global context change", () => {
       const harness = configuredHarness(createHarness());
       harness.enqueue(runnerEffectCommand());
@@ -274,6 +502,9 @@ export function registerRunnerAuthorityConformance(
       const delayedAuthority: RunnerAuthorityPort = {
         load: harness.authority.load.bind(harness.authority),
         assertLease: harness.authority.assertLease.bind(harness.authority),
+        ensureTaskScopesAndBudgets: harness.authority.ensureTaskScopesAndBudgets.bind(
+          harness.authority,
+        ),
         installTaskScopeFences: harness.authority.installTaskScopeFences.bind(harness.authority),
         claimEffectAttempt: harness.authority.claimEffectAttempt.bind(harness.authority),
         persistIntent(request) {

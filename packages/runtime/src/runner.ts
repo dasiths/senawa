@@ -20,6 +20,11 @@ export interface EffectBudgetReservation {
   readonly amount: number;
 }
 
+export interface EffectCapacityReservation {
+  readonly resource: "writer";
+  readonly amount: number;
+}
+
 export interface EffectUsageReport {
   readonly unit: string;
   readonly amount: number;
@@ -44,6 +49,7 @@ export interface QueuedEffectCommand {
   readonly inputDigest: string;
   readonly input: JsonValue;
   readonly budgetReservation: EffectBudgetReservation;
+  readonly capacityReservation?: EffectCapacityReservation;
   readonly queuedAt: string;
   readonly deadline?: string;
   readonly maxReconciliationAttempts: number;
@@ -118,6 +124,13 @@ export interface RunnerAuthoritySnapshot {
   readonly queuedCommands: readonly QueuedEffectCommand[];
   readonly effects: readonly RunnerEffectRecord[];
   readonly escalations: readonly RunnerEscalation[];
+  readonly capacities: readonly RunnerCapacityState[];
+}
+
+export interface RunnerCapacityState {
+  readonly resource: "writer";
+  readonly limit: number;
+  readonly occupied: number;
 }
 
 export interface RunOnceInput {
@@ -139,6 +152,11 @@ export interface FencedRunnerContextUpdateInput extends FencedRunnerMutationInpu
   readonly contextDigest: string;
 }
 
+export interface EnsureTaskScopesAndBudgetsInput extends FencedRunnerMutationInput {
+  readonly taskScopes: readonly TaskScopeCurrentness[];
+  readonly budgets: readonly { readonly unit: string; readonly limit: number }[];
+}
+
 export interface FencedRunnerCancellationInput extends FencedRunnerMutationInput {
   readonly operationId: string;
   readonly requestedAt: string;
@@ -149,9 +167,16 @@ export type RunnerPlan =
   | { readonly type: "reconcile"; readonly effect: RunnerEffectRecord }
   | { readonly type: "none" };
 
+type RunnerTransitionPlan = Exclude<RunnerPlan, { readonly type: "none" }>;
+
 export type PersistIntentResult =
   | { readonly type: "persisted"; readonly intent: EffectIntent }
-  | { readonly type: "escalated"; readonly escalation: RunnerEscalation };
+  | { readonly type: "escalated"; readonly escalation: RunnerEscalation }
+  | {
+      readonly type: "capacity-unavailable";
+      readonly reservation: EffectCapacityReservation;
+      readonly available: number;
+    };
 
 export interface PersistIntentRequest extends RunOnceInput {
   readonly command: QueuedEffectCommand;
@@ -182,6 +207,7 @@ export type ClaimEffectAttemptResult =
 export interface RunnerAuthorityPort {
   load(input: Pick<RunOnceInput, "repositoryId" | "runId">): RunnerAuthoritySnapshot;
   assertLease(input: RunOnceInput): void;
+  ensureTaskScopesAndBudgets(input: EnsureTaskScopesAndBudgetsInput): void;
   installTaskScopeFences(input: InstallTaskScopeFencesInput): readonly TaskScopeCurrentness[];
   claimEffectAttempt(request: ClaimEffectAttemptRequest): ClaimEffectAttemptResult;
   persistIntent(request: PersistIntentRequest): PersistIntentResult;
@@ -217,22 +243,53 @@ export interface AsyncRunOnceInput {
 export type RunOnceResult =
   | { readonly type: "idle" }
   | { readonly type: "escalated"; readonly escalation: RunnerEscalation }
+  | {
+      readonly type: "capacity-unavailable";
+      readonly reservation: EffectCapacityReservation;
+      readonly available: number;
+    }
   | { readonly type: "committed"; readonly outcome: EffectOutcome };
 
-export function scheduleRunnerTransition(snapshot: RunnerAuthoritySnapshot): RunnerPlan {
+export interface RunnerBatchOptions {
+  readonly maxTransitions: number;
+  readonly failurePolicy?: "continue" | "fail-fast";
+}
+
+export interface RunBatchResult {
+  readonly type: "batch";
+  readonly results: readonly Exclude<RunOnceResult, { readonly type: "idle" }>[];
+}
+
+export interface ScheduleRunnerTransitionsOptions extends RunnerBatchOptions {
+  readonly currentTime: string;
+}
+
+export function scheduleRunnerTransitions(
+  snapshot: RunnerAuthoritySnapshot,
+  options: ScheduleRunnerTransitionsOptions,
+): readonly RunnerTransitionPlan[] {
+  validateBatchOptions(options);
   const reconcilable = snapshot.effects
     .filter(({ outcome }) => {
       if (outcome === undefined) return true;
       return outcome.status === "active" || outcome.status === "unknown";
     })
-    .sort((left, right) =>
-      compareText(left.intent.command.operationId, right.intent.command.operationId),
-    )[0];
-  if (reconcilable !== undefined) return { type: "reconcile", effect: reconcilable };
+    .sort(
+      (left, right) =>
+        cancellationPriority(left, options.currentTime) -
+          cancellationPriority(right, options.currentTime) ||
+        compareText(left.intent.command.operationId, right.intent.command.operationId),
+    );
 
   const startedCommandIds = new Set(snapshot.effects.map(({ intent }) => intent.command.commandId));
   const escalatedCommandIds = new Set(snapshot.escalations.map(({ commandId }) => commandId));
-  const command = snapshot.queuedCommands
+  const availableCapacities = new Map(
+    snapshot.capacities.map((capacity) => [
+      capacity.resource,
+      Math.max(0, capacity.limit - capacity.occupied),
+    ]),
+  );
+  const commands = snapshot.queuedCommands
     .filter(
       (candidate) =>
         !startedCommandIds.has(candidate.commandId) &&
@@ -244,10 +301,48 @@ export function scheduleRunnerTransition(snapshot: RunnerAuthoritySnapshot): Run
     )
     .sort(
       (left, right) =>
-        left.sequence - right.sequence || compareText(left.commandId, right.commandId),
-    )[0];
-  return command === undefined ? { type: "none" } : { type: "start", command };
+        compareText(left.operationId, right.operationId) ||
+        left.sequence - right.sequence ||
+        compareText(left.commandId, right.commandId),
+    );
+  const plans: RunnerTransitionPlan[] = reconcilable
+    .slice(0, options.maxTransitions)
+    .map((effect) => ({ type: "reconcile", effect }));
+  for (const command of commands) {
+    if (plans.length >= options.maxTransitions) break;
+    const reservation = command.capacityReservation;
+    if (reservation !== undefined) {
+      const available = availableCapacities.get(reservation.resource) ?? 0;
+      if (reservation.amount > available) continue;
+      availableCapacities.set(reservation.resource, available - reservation.amount);
+    }
+    plans.push({ type: "start", command });
+  }
+  return Object.freeze(plans);
 }
+
+export function scheduleRunnerTransition(snapshot: RunnerAuthoritySnapshot): RunnerPlan {
+  return (
+    scheduleRunnerTransitions(snapshot, {
+      currentTime: "0000-01-01T00:00:00.000Z",
+      maxTransitions: 1,
+    })[0] ?? { type: "none" }
+  );
+}
+
+interface PreparedEffectAttempt {
+  readonly intent: EffectIntent;
+  readonly action: EffectAttemptOrigin;
+  readonly effect: RunnerEffectRecord;
+}
+
+type PreparedPlanResult =
+  | { readonly type: "attempt"; readonly attempt: PreparedEffectAttempt }
+  | {
+      readonly type: "result";
+      readonly result: Exclude<RunOnceResult, { readonly type: "idle" }>;
+    }
+  | { readonly type: "skip" };
 
 export class FencedRunner {
   readonly authority: RunnerAuthorityPort;
@@ -259,60 +354,84 @@ export class FencedRunner {
   }
 
   runOnce(input: RunOnceInput): RunOnceResult {
-    validateRunOnceInput(input);
-    const snapshot = this.authority.load(input);
-    const plan = scheduleRunnerTransition(snapshot);
-    if (plan.type === "none") return { type: "idle" };
+    const batch = this.runBatch(input, { maxTransitions: 1 });
+    return batch.results[0] ?? { type: "idle" };
+  }
 
+  runBatch(input: RunOnceInput, options: RunnerBatchOptions): RunBatchResult {
+    validateRunOnceInput(input);
+    validateBatchOptions(options);
+    const snapshot = this.authority.load(input);
+    const plans = scheduleRunnerTransitions(snapshot, {
+      currentTime: input.currentTime,
+      maxTransitions: options.maxTransitions,
+    });
+    const prepared: PreparedEffectAttempt[] = [];
+    const results: Exclude<RunOnceResult, { readonly type: "idle" }>[] = [];
+    for (const plan of plans) {
+      const preparedPlan = this.preparePlan(plan, snapshot, input);
+      if (preparedPlan.type === "attempt") prepared.push(preparedPlan.attempt);
+      if (preparedPlan.type === "result") results.push(preparedPlan.result);
+    }
+
+    const errors: unknown[] = [];
+    for (const attempt of prepared) {
+      try {
+        const observation = this.observeClaimedAction(
+          attempt.action,
+          attempt.effect,
+          input,
+          attempt.effect.intent.command.contextDigest,
+        );
+        results.push({
+          type: "committed",
+          outcome: this.authority.commitEffect({
+            ...input,
+            intent: attempt.intent,
+            observation,
+          }),
+        });
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "One or more fenced effects failed");
+    return Object.freeze({ type: "batch", results: Object.freeze(results) });
+  }
+
+  private preparePlan(
+    plan: Exclude<RunnerPlan, { readonly type: "none" }>,
+    snapshot: RunnerAuthoritySnapshot,
+    input: RunOnceInput,
+  ): PreparedPlanResult {
+    let intent: EffectIntent;
     if (plan.type === "start") {
       const persisted = this.authority.persistIntent({ ...input, command: plan.command });
       if (persisted.type === "escalated") {
-        return { type: "escalated", escalation: persisted.escalation };
+        return { type: "result", result: persisted };
       }
-      const claim = this.authority.claimEffectAttempt({
-        ...input,
-        intent: persisted.intent,
-        taskScope: persisted.intent.command.taskScope,
-      });
-      if (claim.type === "busy") return { type: "idle" };
-      if (claim.type === "fenced") return { type: "idle" };
-      if (claim.type === "replay") return { type: "committed", outcome: claim.outcome };
-      const observation = this.observeClaimedAction(
-        claim.action,
-        claim.effect,
-        input,
-        claim.effect.intent.command.contextDigest,
-      );
-      return {
-        type: "committed",
-        outcome: this.authority.commitEffect({ ...input, intent: persisted.intent, observation }),
-      };
+      if (persisted.type === "capacity-unavailable") {
+        return { type: "result", result: persisted };
+      }
+      intent = persisted.intent;
+    } else {
+      intent = plan.effect.intent;
     }
-
     const claim = this.authority.claimEffectAttempt({
       ...input,
-      intent: plan.effect.intent,
+      intent,
       taskScope:
-        snapshot.taskScopes.find((scope) =>
-          sameTaskScope(scope, plan.effect.intent.command.taskScope),
-        ) ?? plan.effect.intent.command.taskScope,
+        snapshot.taskScopes.find((scope) => sameTaskScope(scope, intent.command.taskScope)) ??
+        intent.command.taskScope,
     });
-    if (claim.type === "busy") return { type: "idle" };
-    if (claim.type === "fenced") return { type: "idle" };
-    if (claim.type === "replay") return { type: "committed", outcome: claim.outcome };
-    const observation = this.observeClaimedAction(
-      claim.action,
-      claim.effect,
-      input,
-      claim.effect.intent.command.contextDigest,
-    );
+    if (claim.type === "busy" || claim.type === "fenced") return { type: "skip" };
+    if (claim.type === "replay") {
+      return { type: "result", result: { type: "committed", outcome: claim.outcome } };
+    }
     return {
-      type: "committed",
-      outcome: this.authority.commitEffect({
-        ...input,
-        intent: plan.effect.intent,
-        observation,
-      }),
+      type: "attempt",
+      attempt: { intent, action: claim.action, effect: claim.effect },
     };
   }
 
@@ -426,26 +545,106 @@ export class AsyncFencedRunner {
   }
 
   async runOnce(input: AsyncRunOnceInput): Promise<RunOnceResult> {
+    const batch = await this.runBatch(input, { maxTransitions: 1 });
+    return batch.results[0] ?? { type: "idle" };
+  }
+
+  async runBatch(input: AsyncRunOnceInput, options: RunnerBatchOptions): Promise<RunBatchResult> {
     validateAsyncRunOnceIdentity(input);
+    validateBatchOptions(options);
     const initial = this.freshInput(input);
     const snapshot = this.authority.load(initial);
-    const plan = scheduleRunnerTransition(snapshot);
-    if (plan.type === "none") return { type: "idle" };
+    const plans = scheduleRunnerTransitions(snapshot, {
+      currentTime: initial.currentTime,
+      maxTransitions: options.maxTransitions,
+    });
+    const prepared: PreparedEffectAttempt[] = [];
+    const results: Exclude<RunOnceResult, { readonly type: "idle" }>[] = [];
+    for (const plan of plans) {
+      const preparedPlan = this.preparePlan(plan, snapshot, input);
+      if (preparedPlan.type === "attempt") prepared.push(preparedPlan.attempt);
+      if (preparedPlan.type === "result") results.push(preparedPlan.result);
+    }
 
+    const cohort = new AbortController();
+    const abortCohort = (): void => cohort.abort(input.signal.reason);
+    if (input.signal.aborted) abortCohort();
+    else input.signal.addEventListener("abort", abortCohort, { once: true });
+    const cohortInput = { ...input, signal: cohort.signal };
+    const observations = await Promise.allSettled(
+      prepared.map(async (attempt): Promise<EffectObservation> => {
+        try {
+          const observation = await this.observeClaimedAction(
+            attempt.action,
+            attempt.effect,
+            cohortInput,
+            attempt.effect.intent.command.contextDigest,
+          );
+          if (
+            options.failurePolicy === "fail-fast" &&
+            (observation.status === "failed" || observation.status === "cancelled")
+          ) {
+            cohort.abort(new AsyncRunnerCancelledError());
+          }
+          return observation;
+        } catch (error) {
+          if (cohort.signal.aborted && !input.signal.aborted) {
+            return {
+              status: "cancelled",
+              observedAt: input.currentTime(),
+              details: { reason: "fail-fast-sibling-failed" },
+            };
+          }
+          throw error;
+        }
+      }),
+    );
+    input.signal.removeEventListener("abort", abortCohort);
+    const errors: unknown[] = [];
+    for (const [index, settled] of observations.entries()) {
+      if (settled.status === "rejected") {
+        errors.push(settled.reason);
+        continue;
+      }
+      const attempt = prepared[index];
+      if (attempt === undefined) throw new TypeError("Settled effect has no prepared attempt");
+      try {
+        results.push({
+          type: "committed",
+          outcome: this.authority.commitEffect({
+            ...this.freshInput(input),
+            intent: attempt.intent,
+            observation: settled.value,
+          }),
+        });
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (input.signal.aborted) throw new AsyncRunnerCancelledError();
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "One or more fenced effects failed");
+    return Object.freeze({ type: "batch", results: Object.freeze(results) });
+  }
+
+  private preparePlan(
+    plan: Exclude<RunnerPlan, { readonly type: "none" }>,
+    snapshot: RunnerAuthoritySnapshot,
+    input: AsyncRunOnceInput,
+  ): PreparedPlanResult {
     let intent: EffectIntent;
     if (plan.type === "start") {
       const persisted = this.authority.persistIntent({
         ...this.freshInput(input),
         command: plan.command,
       });
-      if (persisted.type === "escalated") {
-        return { type: "escalated", escalation: persisted.escalation };
+      if (persisted.type === "escalated" || persisted.type === "capacity-unavailable") {
+        return { type: "result", result: persisted };
       }
       intent = persisted.intent;
     } else {
       intent = plan.effect.intent;
     }
-
     const claim = this.authority.claimEffectAttempt({
       ...this.freshInput(input),
       intent,
@@ -453,23 +652,13 @@ export class AsyncFencedRunner {
         snapshot.taskScopes.find((scope) => sameTaskScope(scope, intent.command.taskScope)) ??
         intent.command.taskScope,
     });
-    if (claim.type === "busy") return { type: "idle" };
-    if (claim.type === "fenced") return { type: "idle" };
-    if (claim.type === "replay") return { type: "committed", outcome: claim.outcome };
-
-    const observation = await this.observeClaimedAction(
-      claim.action,
-      claim.effect,
-      input,
-      claim.effect.intent.command.contextDigest,
-    );
+    if (claim.type === "busy" || claim.type === "fenced") return { type: "skip" };
+    if (claim.type === "replay") {
+      return { type: "result", result: { type: "committed", outcome: claim.outcome } };
+    }
     return {
-      type: "committed",
-      outcome: this.authority.commitEffect({
-        ...this.freshInput(input),
-        intent,
-        observation,
-      }),
+      type: "attempt",
+      attempt: { intent, action: claim.action, effect: claim.effect },
     };
   }
 
@@ -675,6 +864,26 @@ function validateAsyncRunOnceIdentity(input: AsyncRunOnceInput): void {
   if (input.repositoryId.length === 0 || input.runId.length === 0 || input.attemptId.length === 0) {
     throw new TypeError("RunOnce identities must be non-empty");
   }
+}
+
+function validateBatchOptions(options: RunnerBatchOptions): void {
+  if (!Number.isSafeInteger(options.maxTransitions) || options.maxTransitions < 1) {
+    throw new TypeError("Runner batch limit must be a positive safe integer");
+  }
+  if (
+    options.failurePolicy !== undefined &&
+    options.failurePolicy !== "continue" &&
+    options.failurePolicy !== "fail-fast"
+  ) {
+    throw new TypeError("Runner batch failure policy must be continue or fail-fast");
+  }
+}
+
+function cancellationPriority(effect: RunnerEffectRecord, currentTime: string): number {
+  return effect.cancellationRequestedAt !== undefined ||
+    isAtOrAfter(currentTime, effect.intent.command.deadline)
+    ? 0
+    : 1;
 }
 
 function isAtOrAfter(currentTime: string, deadline: string | undefined): boolean {

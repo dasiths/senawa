@@ -14,7 +14,8 @@
   ],
   "publishConfig": {
     "executableFiles": [
-      "dist/senawa-process-supervisor"
+      "dist/senawa-process-supervisor",
+      "dist/senawa-workspace-files"
     ]
   },
   "scripts": {

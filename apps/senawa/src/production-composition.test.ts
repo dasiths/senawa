@@ -21,7 +21,11 @@ import {
   type EffectIntent,
   type RuntimeDependencies,
 } from "@senawa/runtime";
-import { SqliteContextBroker, SqliteRunnerAuthority } from "@senawa/storage-sqlite";
+import {
+  SqliteContextBroker,
+  SqliteRunnerAuthority,
+  SqliteWorkspaceIntegrationAuthority,
+} from "@senawa/storage-sqlite";
 import {
   CompletionFactCommandBridge,
   SqliteSupervisorAuthority,
@@ -36,6 +40,7 @@ import {
   runtimePrincipal,
 } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
+import { ProductionScheduler, selectCurrentDispatches } from "./production-scheduler.js";
 
 const roots = new Set<string>();
 const dependencies: RuntimeDependencies = {
@@ -52,6 +57,61 @@ afterEach(() => {
 });
 
 describe("production worker composition", () => {
+  it("selects one exact durable current dispatch and fails closed on ambiguity", () => {
+    const baseGraph = createRuntimeGraph();
+    const taskNode = baseGraph.nodes.find(({ kind }) => kind === "task");
+    if (taskNode?.kind !== "task") throw new Error("Expected a task node");
+    const graph = {
+      ...baseGraph,
+      nodes: baseGraph.nodes.map((node) =>
+        node.kind === "task"
+          ? { ...node, definition: { ...node.definition, generation: 2 } }
+          : node,
+      ),
+    };
+    const scope = {
+      runId: runtimeFixture.runId,
+      taskId: taskNode.definition.id,
+      definitionGeneration: 2,
+      acceptedContextDigest: "b".repeat(64),
+      fenceGeneration: 2,
+      claimsAccepted: true,
+    };
+    const historical = {
+      context: { contextDigest: "a".repeat(64) },
+      dispatch: {
+        dispatchId: "dispatch_historical",
+        task: { taskId: taskNode.definition.id, definitionGeneration: 1 },
+      },
+      taskScope: { ...scope, definitionGeneration: 1, acceptedContextDigest: "a".repeat(64) },
+      effect: {},
+    };
+    const current = {
+      context: { contextDigest: scope.acceptedContextDigest },
+      dispatch: {
+        dispatchId: "dispatch_current",
+        task: { taskId: taskNode.definition.id, definitionGeneration: 2 },
+      },
+      taskScope: scope,
+      effect: {},
+    };
+    const runtime = { graph, phase: runtimeFixture.phase, acceptedTasks: [] };
+
+    expect(
+      selectCurrentDispatches(runtime as never, [scope], [historical, current] as never),
+    ).toEqual([current]);
+    expect(
+      selectCurrentDispatches(runtime as never, [scope], [
+        historical,
+        current,
+        {
+          ...current,
+          dispatch: { ...current.dispatch, dispatchId: "dispatch_current-duplicate" },
+        },
+      ] as never),
+    ).toBeUndefined();
+  });
+
   it("recovers an approved amendment after restart and applies the exact reviewed graph", async () => {
     const root = mkdtempSync(join(tmpdir(), "senawa-amendment-recovery-"));
     roots.add(root);
@@ -153,6 +213,8 @@ describe("production worker composition", () => {
           intent: "instantiate-run",
           payload: {
             workflowId: baseSnapshot.graph.workflowId,
+            configurationSnapshotDigest: baseSnapshot.snapshotDigest,
+            execution: baseSnapshot.execution,
             graph: baseSnapshot.graph,
             phase: {
               phaseId: phase.definition.id,
@@ -371,11 +433,26 @@ describe("production worker composition", () => {
     });
     const graph = createRuntimeGraph();
     const worker = createWorkerExecutionFixture(graph);
+    const effectInput = decodeCanonicalJsonValue({
+      dispatchId: worker.dispatch.dispatchId,
+      routeSelection: worker.routeSelection,
+      timeoutMs: 1_000,
+      grantPolicy: {
+        expiresAfterMs: 2_000,
+        maxOperations: 4,
+        maxBytes: 4_096,
+        maxChunkBytes: 1_024,
+      },
+    });
     broker.registerDispatch({
       context: worker.context,
       dispatch: worker.dispatch,
       completionRequirements: worker.completionRequirements,
       taskScope: workerTaskScope(worker),
+      effect: {
+        input: effectInput,
+        budgetReservation: { unit: "model-millidollars", amount: 2_000 },
+      },
     });
     authority.accept({
       envelope: runtimeCommand({
@@ -383,6 +460,8 @@ describe("production worker composition", () => {
         intent: "instantiate-run",
         payload: {
           workflowId: runtimeFixture.workflowId,
+          configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+          execution: runtimeFixture.execution,
           graph,
           phase: runtimeFixture.phase,
           approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
@@ -398,46 +477,20 @@ describe("production worker composition", () => {
         })),
       }),
     });
-    const effectInput = decodeCanonicalJsonValue({
-      dispatchId: worker.dispatch.dispatchId,
-      routeSelection: worker.routeSelection,
-      timeoutMs: 1_000,
-      grantPolicy: {
-        expiresAfterMs: 2_000,
-        maxOperations: 4,
-        maxBytes: 4_096,
-        maxChunkBytes: 1_024,
-      },
+    const schedulerRunner = new SqliteRunnerAuthority({ databasePath, dependencies });
+    const workspaceAuthority = new SqliteWorkspaceIntegrationAuthority({
+      databasePath,
+      dependencies,
     });
-    const seeder = new SqliteRunnerAuthority({ databasePath, dependencies });
-    seeder.configureRun({
-      repositoryId: runtimeFixture.repositoryId,
-      runId: runtimeFixture.runId,
-      contextDigest: worker.context.contextDigest,
-      taskScopes: [{ ...workerTaskScope(worker), claimsAccepted: true }],
-      budgets: [{ unit: "model-millidollars", limit: 2_000 }],
-      lease: {
-        owner: "owner_production",
-        fence: 1,
-        expiresAt: "2026-08-12T12:00:30.000Z",
-      },
+    const scheduler = new ProductionScheduler({
+      authority,
+      runnerAuthority: schedulerRunner,
+      workspaceAuthority,
+      contextBroker: broker,
+      supervisorWriterLimit: 4,
+      hostWriterLimit: 4,
+      sha256: deterministicSha256,
     });
-    seeder.enqueue({
-      sequence: 1,
-      commandId: "command_production-worker",
-      repositoryId: runtimeFixture.repositoryId,
-      runId: runtimeFixture.runId,
-      operationId: "operation_production-worker",
-      kind: "worker",
-      taskScope: workerTaskScope(worker),
-      contextDigest: worker.context.contextDigest,
-      inputDigest: deterministicSha256.digest(canonicalBytes(effectInput)),
-      input: effectInput,
-      budgetReservation: { unit: "model-millidollars", amount: 2_000 },
-      queuedAt: runtimeFixture.currentTime,
-      maxReconciliationAttempts: 2,
-    });
-    seeder.close();
 
     const sdk = new CompletingSdkPort();
     const service = new SupervisorService({
@@ -450,11 +503,17 @@ describe("production worker composition", () => {
         workingDirectory: "/tmp/senawa-production-work",
       }),
       deliverCompletionOutboxOnce: () => broker.deliverCompletionOutboxOnce(),
+      scheduleBeforeEffects: ({ repositoryId, runId, lease, currentTime }) =>
+        scheduler.schedule({ repositoryId, runId, lease, currentTime }),
       sessionStoreHealth: new FilesystemCopilotSessionStore({
         baseDirectory: sdkDirectory,
         metadata: sdk,
       }),
-      closeables: [{ close: () => broker.close() }],
+      closeables: [
+        { close: () => broker.close() },
+        { close: () => workspaceAuthority.close() },
+        { close: () => schedulerRunner.close() },
+      ],
     });
 
     expect(authority.operationalSnapshot().startedSessionIds).toEqual([]);

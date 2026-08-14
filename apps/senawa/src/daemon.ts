@@ -9,19 +9,33 @@ import {
   WORKFLOW_AMENDMENT_API_VERSION,
 } from "@senawa/configuration";
 import {
+  BoundedGitCommandPort,
   type CopilotSdkPort,
   CopilotWorkerEffectHost,
-  FilesystemCopilotSessionStore,
+  DurableWorkspaceEffectHost,
+  GitIntegrationAdapter,
+  GitWorkspaceAdapter,
   ProductionCopilotSdkPort,
   type ProductionCopilotSdkPortOptions,
+  RootScopedWorkspaceFiles,
+  verifyGitRepository,
 } from "@senawa/execution-host";
+import type { IntegrationBarrier } from "@senawa/kernel";
 import {
   type CommandSubmission,
+  canonicalBytes,
   decodeAuthenticatedPrincipal,
+  decodeCommandEnvelope,
+  PROTOCOL_VERSION,
   type SupervisorAllocationFact,
 } from "@senawa/protocol";
+import type { RunExecutionBinding } from "@senawa/runtime";
 import { createRoleAuthorizationPolicy, type RuntimeDependencies } from "@senawa/runtime";
-import { SqliteContextBroker } from "@senawa/storage-sqlite";
+import {
+  SqliteContextBroker,
+  SqliteRunnerAuthority,
+  SqliteWorkspaceIntegrationAuthority,
+} from "@senawa/storage-sqlite";
 import {
   type AmendmentCompilerPort,
   AmendmentProposalCommandBridge,
@@ -40,6 +54,11 @@ import {
   startLoopbackSupervisorServer,
   startUnixSupervisorServer,
 } from "@senawa/supervisor";
+import { ProductionScheduler } from "./production-scheduler.js";
+import {
+  DurableCompletionEligibility,
+  DynamicWorkspaceEffectHost,
+} from "./workspace-composition.js";
 
 export interface SenawaServicePaths {
   readonly runtimeDirectory: string;
@@ -72,6 +91,12 @@ export interface SenawaServiceCompositionOptions {
   readonly startUnixServer?: typeof startUnixSupervisorServer;
   readonly startLoopbackServer?: typeof startLoopbackSupervisorServer;
   readonly amendmentCompiler?: AmendmentCompilerPort;
+  readonly evaluateIntegration?: ConstructorParameters<
+    typeof DurableWorkspaceEffectHost
+  >[0]["evaluateIntegration"];
+  readonly createGitHost?: (
+    options: ConstructorParameters<typeof DurableWorkspaceEffectHost>[0],
+  ) => Promise<DurableWorkspaceEffectHost>;
 }
 
 export function resolveSenawaServicePaths(
@@ -113,7 +138,9 @@ export async function startSenawaService(
   let service: SupervisorService | undefined;
   let ownedAuthority: SqliteSupervisorAuthority | undefined;
   let ownedContextBroker: SqliteContextBroker | undefined;
-  let ownedSdk: OwnedCopilotSdkPort | undefined;
+  let ownedWorkspaceAuthority: SqliteWorkspaceIntegrationAuthority | undefined;
+  let ownedRunnerAuthority: SqliteRunnerAuthority | undefined;
+  let ownedSdkPool: WorkspaceSdkPool | undefined;
   try {
     const notifier = new InMemoryRunEventNotifier(() => service?.wake());
     const authority = new SqliteSupervisorAuthority({
@@ -123,10 +150,28 @@ export async function startSenawaService(
       eventNotifier: notifier,
     });
     ownedAuthority = authority;
+    const workspaceAuthority = new SqliteWorkspaceIntegrationAuthority({
+      databasePath: paths.databasePath,
+      dependencies,
+    });
+    ownedWorkspaceAuthority = workspaceAuthority;
+    const runnerAuthority = new SqliteRunnerAuthority({
+      databasePath: paths.databasePath,
+      dependencies,
+    });
+    ownedRunnerAuthority = runnerAuthority;
     let contextBroker: SqliteContextBroker;
+    const completionEligibility = new DurableCompletionEligibility({
+      workspaceAuthority,
+      runnerAuthority,
+      sha256: dependencies.sha256,
+      currentIntegrationBarrier: (repositoryId, runId) =>
+        authority.commandAuthority.queryIntegrationBarrier(repositoryId, runId),
+    });
     const completionBridge = new CompletionFactCommandBridge({
       authority,
       broker: () => contextBroker,
+      completionEligibility,
       currentTime: () => new Date().toISOString(),
     });
     contextBroker = new SqliteContextBroker({
@@ -147,23 +192,94 @@ export async function startSenawaService(
       currentTime: () => new Date().toISOString(),
     });
     const repositoryDirectory = environment.SENAWA_REPOSITORY_DIR;
-    const sdk =
+    const supervisorWriterLimit = positiveEnvironmentInteger(
+      environment.SENAWA_SUPERVISOR_WRITER_LIMIT,
+      "SENAWA_SUPERVISOR_WRITER_LIMIT",
+      1,
+    );
+    const hostWriterCapacity = positiveEnvironmentInteger(
+      environment.SENAWA_HOST_WRITER_LIMIT,
+      "SENAWA_HOST_WRITER_LIMIT",
+      1,
+    );
+    const productionScheduler = new ProductionScheduler({
+      authority,
+      runnerAuthority,
+      workspaceAuthority,
+      contextBroker,
+      supervisorWriterLimit,
+      hostWriterLimit: hostWriterCapacity,
+      sha256: dependencies.sha256,
+    });
+    const sdkPool =
       repositoryDirectory === undefined || repositoryDirectory.length === 0
         ? undefined
-        : await (composition.createCopilotSdk ?? ProductionCopilotSdkPort.create)({
+        : new WorkspaceSdkPool({
             repositoryDirectory,
-            workingDirectory: paths.copilotWorkingDirectory,
-            baseDirectory: paths.sdkDirectory,
+            sdkDirectory: paths.sdkDirectory,
+            createSdk: composition.createCopilotSdk ?? ProductionCopilotSdkPort.create,
+            sha256: dependencies.sha256,
           });
-    ownedSdk = sdk;
+    if (sdkPool !== undefined) await sdkPool.sdkFor(required(repositoryDirectory));
+    ownedSdkPool = sdkPool;
     const asyncEffectHost =
-      sdk === undefined
+      sdkPool === undefined
         ? undefined
-        : new CopilotWorkerEffectHost({
-            broker: contextBroker,
-            sdk,
-            workingDirectory: paths.copilotWorkingDirectory,
-            sessionBaseDirectory: paths.sdkDirectory,
+        : new DynamicWorkspaceEffectHost({
+            authority,
+            workspaceAuthority,
+            repositoryRoot: required(repositoryDirectory),
+            hostWriterCapacity,
+            createWorkerHost: async (workingRoot) => {
+              const [sdk, workspaceFiles] = await Promise.all([
+                sdkPool.sdkFor(workingRoot),
+                RootScopedWorkspaceFiles.create(workingRoot),
+              ]);
+              return new CopilotWorkerEffectHost({
+                broker: contextBroker,
+                sdk,
+                workingDirectory: workingRoot,
+                ...(sdk.baseDirectory === undefined
+                  ? {}
+                  : { sessionBaseDirectory: sdk.baseDirectory }),
+                workspaceFiles,
+              });
+            },
+            createGitHost: async (binding) => {
+              const targetRef = required(binding.execution.integrationRef);
+              const command = new BoundedGitCommandPort({
+                gitExecutable: environment.SENAWA_GIT_EXECUTABLE ?? "/usr/bin/git",
+                isolatedHome: paths.sdkDirectory,
+              });
+              const verified = await verifyGitRepository(command, {
+                repositoryRoot: required(repositoryDirectory),
+                ownedRoot: paths.copilotWorkingDirectory,
+                targetRef,
+              });
+              const options: ConstructorParameters<typeof DurableWorkspaceEffectHost>[0] = {
+                authority: workspaceAuthority,
+                workspace: new GitWorkspaceAdapter(command, verified),
+                integration: new GitIntegrationAdapter(command, verified),
+                identity: deterministicGitIdentity,
+                sha256: dependencies.sha256,
+                evaluateIntegration: composition.evaluateIntegration ?? unavailableIntegrationGate,
+                recordTrustedBarrier: (repositoryId, runId, integrationId, barrier) =>
+                  recordTrustedIntegrationBarrier(
+                    authority,
+                    binding,
+                    repositoryId,
+                    runId,
+                    integrationId,
+                    barrier,
+                  ),
+                currentTrustedBarrier: (repositoryId, runId) =>
+                  authority.commandAuthority.queryIntegrationBarrier(repositoryId, runId),
+                currentTime: () => new Date().toISOString(),
+              };
+              return composition.createGitHost === undefined
+                ? new DurableWorkspaceEffectHost(options)
+                : composition.createGitHost(options);
+            },
           });
     const api = new SupervisorApi(authority);
     const sessions = new PortalSessionSecurity({
@@ -243,7 +359,7 @@ export async function startSenawaService(
       ownerId: `service-${process.pid}`,
       listeners,
       sessionStoreHealth:
-        sdk === undefined
+        sdkPool === undefined
           ? {
               health: async (expectedSessionIds) => ({
                 status: "degraded" as const,
@@ -252,20 +368,26 @@ export async function startSenawaService(
                 message: "SENAWA_REPOSITORY_DIR is not configured; worker dispatch is disabled",
               }),
             }
-          : new FilesystemCopilotSessionStore({
-              baseDirectory: paths.sdkDirectory,
-              metadata: sdk,
-            }),
+          : sdkPool,
       ...(asyncEffectHost === undefined ? {} : { asyncEffectHost }),
+      runnerBatchSize: Math.min(supervisorWriterLimit, hostWriterCapacity),
+      failurePolicyForRun: (repositoryId, runId) =>
+        workspaceAuthority.loadRunExecution(repositoryId, runId)?.execution.failurePolicy ??
+        authority.commandAuthority.queryRunExecution(repositoryId, runId)?.execution.failurePolicy,
+      scheduleBeforeEffects: ({ repositoryId, runId, lease, currentTime }) =>
+        productionScheduler.schedule({ repositoryId, runId, lease, currentTime }),
+      listSchedulableRuns: () => productionScheduler.listRuns(),
       deliverCompletionOutboxOnce: () => contextBroker.deliverCompletionOutboxOnce(),
       deliverAmendmentProposalOutboxOnce: () => amendmentBridge.deliverOnce(),
       closeables: [
         { close: () => contextBroker.close() },
-        ...(sdk === undefined
+        { close: () => workspaceAuthority.close() },
+        { close: () => runnerAuthority.close() },
+        ...(sdkPool === undefined
           ? []
           : [
               {
-                close: () => stopOwnedCopilotSdk(sdk),
+                close: () => sdkPool.close(),
               },
             ]),
       ],
@@ -278,15 +400,25 @@ export async function startSenawaService(
   } catch (error) {
     if (service !== undefined) throw error;
     const cleanupErrors: unknown[] = [];
-    if (ownedSdk !== undefined) {
+    if (ownedSdkPool !== undefined) {
       try {
-        await stopOwnedCopilotSdk(ownedSdk);
+        await ownedSdkPool.close();
       } catch (cleanupError) {
         cleanupErrors.push(cleanupError);
       }
     }
     try {
       ownedContextBroker?.close();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    try {
+      ownedWorkspaceAuthority?.close();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    try {
+      ownedRunnerAuthority?.close();
     } catch (cleanupError) {
       cleanupErrors.push(cleanupError);
     }
@@ -336,6 +468,7 @@ export const runtimeDependencies: RuntimeDependencies = Object.freeze({
     { intent: "withdraw-amendment-proposal", roles: ["release-manager"] },
     { intent: "record-amendment-decision", roles: ["release-manager"] },
     { intent: "apply-approved-amendment", roles: ["trusted-supervisor"] },
+    { intent: "record-integration-barrier", roles: ["trusted-supervisor"] },
     { intent: "create-escalation", roles: ["engine", "release-manager"] },
     { intent: "grant-allowance", roles: ["release-manager"] },
   ]),
@@ -464,6 +597,154 @@ function optionalPort(input: string | undefined): number | undefined {
 async function stopOwnedCopilotSdk(sdk: OwnedCopilotSdkPort): Promise<void> {
   const errors = await sdk.stopOwnedClient();
   if (errors.length > 0) throw new AggregateError(errors, "Copilot SDK shutdown failed");
+}
+
+interface WorkspaceSdkPoolOptions {
+  readonly repositoryDirectory: string;
+  readonly sdkDirectory: string;
+  readonly createSdk: NonNullable<SenawaServiceCompositionOptions["createCopilotSdk"]>;
+  readonly sha256: RuntimeDependencies["sha256"];
+}
+
+class WorkspaceSdkPool {
+  readonly #options: WorkspaceSdkPoolOptions;
+  readonly #sdks = new Map<string, Promise<OwnedCopilotSdkPort>>();
+
+  constructor(options: WorkspaceSdkPoolOptions) {
+    this.#options = options;
+  }
+
+  sdkFor(workingDirectory: string): Promise<OwnedCopilotSdkPort> {
+    const existing = this.#sdks.get(workingDirectory);
+    if (existing !== undefined) return existing;
+    const baseDirectory = join(
+      this.#options.sdkDirectory,
+      `workspace-${this.#options.sha256.digest(new TextEncoder().encode(workingDirectory))}`,
+    );
+    ensurePrivateRuntimeDirectory(baseDirectory);
+    const created = this.#options.createSdk({
+      repositoryDirectory: this.#options.repositoryDirectory,
+      workingDirectory,
+      baseDirectory,
+      allowRepositoryWorkingDirectory: true,
+    });
+    this.#sdks.set(workingDirectory, created);
+    return created;
+  }
+
+  async health(expectedSessionIds: readonly string[]) {
+    const sdks = await Promise.all(this.#sdks.values());
+    const missingSessionIds: string[] = [];
+    for (const sessionId of expectedSessionIds) {
+      let present = false;
+      for (const sdk of sdks) {
+        if (await sdk.sessionMetadataExists(sessionId)) {
+          present = true;
+          break;
+        }
+      }
+      if (!present) missingSessionIds.push(sessionId);
+    }
+    return Object.freeze({
+      status: missingSessionIds.length === 0 ? ("healthy" as const) : ("degraded" as const),
+      expectedSessionCount: expectedSessionIds.length,
+      missingSessionIds: Object.freeze(missingSessionIds),
+      ...(missingSessionIds.length === 0
+        ? {}
+        : { message: "One or more durable worker sessions are missing from isolated SDK roots" }),
+    });
+  }
+
+  async close(): Promise<void> {
+    const errors: unknown[] = [];
+    for (const sdk of await Promise.all(this.#sdks.values())) {
+      try {
+        await stopOwnedCopilotSdk(sdk);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "Copilot SDK pool shutdown failed");
+  }
+}
+
+const deterministicGitIdentity = Object.freeze({
+  authorName: "Senawa Worker",
+  authorEmail: "worker@senawa.invalid",
+  authorDate: "2000-01-01T00:00:00Z",
+  committerName: "Senawa Integration",
+  committerEmail: "integration@senawa.invalid",
+  committerDate: "2000-01-01T00:00:00Z",
+});
+
+async function unavailableIntegrationGate() {
+  return Object.freeze({
+    decision: "failed" as const,
+    evidence: { reason: "post-integration validation callback is not configured" },
+  });
+}
+
+const trustedSupervisorPrincipal = decodeAuthenticatedPrincipal({
+  issuer: "senawa.local",
+  subject: "workspace-integration-supervisor",
+  tenant: "local",
+  assurance: "hardware-backed",
+  roles: ["trusted-supervisor"],
+});
+
+export function recordTrustedIntegrationBarrier(
+  authority: SqliteSupervisorAuthority,
+  binding: RunExecutionBinding,
+  repositoryId: string,
+  runId: string,
+  integrationId: string,
+  barrier: IntegrationBarrier,
+): void {
+  const payload = {
+    integrationId,
+    configurationSnapshotDigest: binding.configurationSnapshotDigest,
+    barrier,
+  } as const;
+  const commandId = `command_integration-barrier-${barrier.barrierDigest.slice(0, 32)}`;
+  const envelope = decodeCommandEnvelope({
+    apiVersion: PROTOCOL_VERSION,
+    commandId,
+    principal: trustedSupervisorPrincipal,
+    transport: { kind: "runner", requestId: `request_${commandId}` },
+    repositoryId,
+    runId,
+    intent: { type: "record-integration-barrier" },
+    payload,
+    payloadDigest: authority.dependencies.sha256.digest(canonicalBytes(payload)),
+    expectedGraphRevision: barrier.graphRevisionDigest,
+    exactObjectDigest: barrier.barrierDigest,
+  });
+  let ordinal = 0;
+  const receipt = authority.commandAuthority.submit(envelope, {
+    currentTime: new Date().toISOString(),
+    facts: { source: "workspace-integration-supervisor", integrationId },
+    allocateId: () => {
+      ordinal += 1;
+      return `stream-event-${barrier.barrierDigest.slice(0, 24)}-${ordinal}`;
+    },
+  });
+  if (receipt.status !== "completed") {
+    throw new Error("Trusted integration barrier command was not accepted");
+  }
+}
+
+function positiveEnvironmentInteger(
+  value: string | undefined,
+  name: string,
+  fallback: number,
+): number {
+  if (value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new TypeError(`${name} must be a positive safe integer`);
+  }
+  return parsed;
 }
 
 function required<T>(value: T | undefined): T {

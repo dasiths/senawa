@@ -1,5 +1,6 @@
 import {
   assessCompletionAccounting,
+  bindGitRevision,
   type CompletionRequirements,
   type CompletionSubmission,
   type HistoricalAssetBinding,
@@ -80,8 +81,10 @@ export interface CompletionFact {
 
 export interface CompletionFactPort {
   /** Must be idempotent for an exact submissionId and reject conflicting content. */
-  admitCompletionFact(fact: CompletionFact): void;
+  admitCompletionFact(fact: CompletionFact): CompletionFactAdmission;
 }
+
+export type CompletionFactAdmission = "accepted" | "deferred";
 
 export interface ContextBrokerDependencies {
   readonly sha256: Sha256;
@@ -123,6 +126,14 @@ export interface RegisterWorkerDispatchInput {
   readonly dispatch: unknown;
   readonly completionRequirements: unknown;
   readonly taskScope: TaskScopeFence;
+  readonly effect?: RegisteredWorkerEffectSeed;
+}
+
+export interface RegisteredWorkerEffectSeed {
+  readonly input: JsonValue;
+  readonly budgetReservation: Readonly<{ unit: string; amount: number }>;
+  readonly baseRevision?: import("@senawa/kernel").GitRevisionDescriptor;
+  readonly integrationGatePolicyDigest?: string;
 }
 
 export interface SubmissionAdmissionInput {
@@ -141,6 +152,7 @@ export interface ContextBrokerClient {
   readonly dependencies: ContextBrokerDependencies;
   registerDispatch(input: RegisterWorkerDispatchInput): WorkerDispatch;
   loadWorkerDispatch(dispatchId: string): StoredDispatch | undefined;
+  listWorkerDispatches?(repositoryId: string, runId: string): readonly StoredDispatch[];
   loadWorkerDispatchProgress(dispatchId: string): WorkerDispatchProgress | undefined;
   grantAssetAccess(input: ContextGrantInput): ContextGrantEnvelope;
   readAsset(input: AssetReadInput): Promise<AssetReadResult>;
@@ -176,6 +188,7 @@ export interface StoredDispatch {
   readonly dispatch: WorkerDispatch;
   readonly completionRequirements: CompletionRequirements;
   readonly taskScope: TaskScopeFence;
+  readonly effect?: RegisteredWorkerEffectSeed;
 }
 
 export interface WorkerDispatchProgress {
@@ -547,11 +560,13 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
       authority.taskScopes.set(key, scope);
     }
     for (const [index, value] of dispatchRecords.entries()) {
+      const candidate = durableObject(value, `dispatches[${index}]`);
       const record = exactDurableObject(value, `dispatches[${index}]`, [
         "context",
         "dispatch",
         "completionRequirements",
         "taskScope",
+        ...(Object.hasOwn(candidate, "effect") ? ["effect"] : []),
       ]);
       const context = validateWorkerContextBase(record.context, sha256);
       const dispatch = validateWorkerDispatch(record.dispatch, context, sha256);
@@ -570,7 +585,14 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
       const currentness = authority.taskScopes.get(taskScopeKey(taskScope));
       if (currentness === undefined || !isHistoricalTaskScopeFence(taskScope, currentness))
         durableFailure(`dispatches[${index}] task fence is not present in scope currentness`);
-      const stored = deepFreeze({ context, dispatch, completionRequirements, taskScope });
+      const effect = decodeRegisteredWorkerEffectSeed(record.effect, sha256);
+      const stored = deepFreeze({
+        context,
+        dispatch,
+        completionRequirements,
+        taskScope,
+        ...(effect === undefined ? {} : { effect }),
+      });
       authority.contexts.set(context.contextId, context);
       authority.dispatches.set(dispatch.dispatchId, stored);
     }
@@ -1003,6 +1025,7 @@ export class ContextBroker implements ContextBrokerClient {
     const dispatch = validateWorkerDispatch(input.dispatch, context, this.dependencies.sha256);
     const completionRequirements = validateCompletionRequirements(input.completionRequirements);
     const taskScope = validateDispatchTaskScope(input.taskScope, dispatch, context);
+    const effect = decodeRegisteredWorkerEffectSeed(input.effect, this.dependencies.sha256);
     if (!sameTask(dispatch.task, completionRequirements.task)) {
       throw new ContextBrokerError(
         "binding-mismatch",
@@ -1037,7 +1060,8 @@ export class ContextBroker implements ContextBrokerClient {
         canonicalStringify(existing.dispatch) !== canonicalStringify(dispatch) ||
         canonicalStringify(existing.completionRequirements) !==
           canonicalStringify(completionRequirements) ||
-        canonicalStringify(existing.taskScope) !== canonicalStringify(taskScope)
+        canonicalStringify(existing.taskScope) !== canonicalStringify(taskScope) ||
+        canonicalStringify(existing.effect ?? null) !== canonicalStringify(effect ?? null)
       ) {
         throw new ContextBrokerError(
           "binding-mismatch",
@@ -1059,7 +1083,13 @@ export class ContextBroker implements ContextBrokerClient {
     this.authority.contexts.set(context.contextId, context);
     this.authority.dispatches.set(
       dispatch.dispatchId,
-      Object.freeze({ context, dispatch, completionRequirements, taskScope }),
+      Object.freeze({
+        context,
+        dispatch,
+        completionRequirements,
+        taskScope,
+        ...(effect === undefined ? {} : { effect }),
+      }),
     );
     return dispatch;
   }
@@ -1073,6 +1103,17 @@ export class ContextBroker implements ContextBrokerClient {
       completionRequirements: stored.completionRequirements,
       taskScope: stored.taskScope,
     });
+  }
+
+  listWorkerDispatches(repositoryId: string, runId: string): readonly StoredDispatch[] {
+    return Object.freeze(
+      [...this.authority.dispatches.values()]
+        .filter(
+          ({ dispatch }) => dispatch.repositoryId === repositoryId && dispatch.runId === runId,
+        )
+        .sort((left, right) => compareText(left.dispatch.dispatchId, right.dispatch.dispatchId))
+        .map((stored) => deepFreeze({ ...stored })),
+    );
   }
 
   loadWorkerDispatchProgress(dispatchId: string): WorkerDispatchProgress | undefined {
@@ -1433,7 +1474,7 @@ export class ContextBroker implements ContextBrokerClient {
     if (this.completionFacts === undefined) return false;
     pending.delivering = true;
     try {
-      this.completionFacts.admitCompletionFact(pending.fact);
+      if (this.completionFacts.admitCompletionFact(pending.fact) === "deferred") return false;
       pending.delivered = true;
       return true;
     } finally {
@@ -1958,6 +1999,57 @@ function exactDurableObject(
   if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index]))
     return durableFailure(`${label} must contain exactly ${expected.join(", ")}`);
   return value as Readonly<Record<string, unknown>>;
+}
+
+function durableObject(value: unknown, label: string): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return durableFailure(`${label} must be an object`);
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function decodeRegisteredWorkerEffectSeed(
+  value: unknown,
+  sha256: Sha256,
+): RegisteredWorkerEffectSeed | undefined {
+  if (value === undefined) return undefined;
+  const candidate = durableObject(value, "registered worker effect");
+  const record = exactDurableObject(value, "registered worker effect", [
+    "input",
+    "budgetReservation",
+    ...(Object.hasOwn(candidate, "baseRevision") ? ["baseRevision"] : []),
+    ...(Object.hasOwn(candidate, "integrationGatePolicyDigest")
+      ? ["integrationGatePolicyDigest"]
+      : []),
+  ]);
+  const budget = exactDurableObject(record.budgetReservation, "worker effect budget", [
+    "unit",
+    "amount",
+  ]);
+  const unit = durableString(budget.unit, "worker effect budget unit");
+  if (unit.length === 0 || unit.length > 128) {
+    return durableFailure("worker effect budget unit must be bounded");
+  }
+  const amount = nonNegativeSafeInteger(budget.amount, "worker effect budget amount");
+  if (amount < 1) return durableFailure("worker effect budget amount must be positive");
+  const input = decodeCanonicalJsonValue(record.input) as JsonValue;
+  const baseRevision =
+    record.baseRevision === undefined
+      ? undefined
+      : bindGitRevision(record.baseRevision, sha256).revision;
+  const integrationGatePolicyDigest =
+    record.integrationGatePolicyDigest === undefined
+      ? undefined
+      : sha256DigestValue(
+          record.integrationGatePolicyDigest,
+          "worker effect integration gate policy digest",
+        );
+  return deepFreeze({
+    input,
+    budgetReservation: { unit, amount },
+    ...(baseRevision === undefined ? {} : { baseRevision }),
+    ...(integrationGatePolicyDigest === undefined ? {} : { integrationGatePolicyDigest }),
+  });
 }
 
 function durableArray(value: unknown, label: string): readonly unknown[] {

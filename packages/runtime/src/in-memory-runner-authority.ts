@@ -6,6 +6,7 @@ import type {
   EffectAttemptOrigin,
   EffectIntent,
   EffectOutcome,
+  EnsureTaskScopesAndBudgetsInput,
   FencedRunnerCancellationInput,
   FencedRunnerContextUpdateInput,
   FinalizedEffectUsage,
@@ -14,6 +15,7 @@ import type {
   QueuedEffectCommand,
   RunnerAuthorityPort,
   RunnerAuthoritySnapshot,
+  RunnerCapacityState,
   RunnerEffectRecord,
   RunnerEscalation,
   RunnerLeaseFact,
@@ -90,6 +92,7 @@ export interface InMemoryRunnerRunInput {
   readonly runId: string;
   readonly contextDigest: string;
   readonly budgets: readonly { readonly unit: string; readonly limit: number }[];
+  readonly capacities?: readonly RunnerCapacityState[];
   readonly lease: RunnerLeaseFact;
 }
 
@@ -99,6 +102,12 @@ interface MutableBudgetState {
   reserved: number;
   spent: number;
   unreported: number;
+}
+
+interface MutableCapacityState {
+  resource: "writer";
+  limit: number;
+  occupied: number;
 }
 
 interface InMemoryEffectClaim {
@@ -121,6 +130,7 @@ interface InMemoryRunnerRun {
   claims: Map<string, InMemoryEffectClaim>;
   escalations: RunnerEscalation[];
   budgets: Map<string, MutableBudgetState>;
+  capacities: Map<string, MutableCapacityState>;
   cursor: number;
   receipts: RunnerEffectReceipt[];
   events: RunnerEffectEvent[];
@@ -162,6 +172,16 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
         unreported: 0,
       });
     }
+    const capacities = new Map<string, MutableCapacityState>();
+    for (const capacity of input.capacities ?? [
+      { resource: "writer" as const, limit: 1, occupied: 0 },
+    ]) {
+      validateCapacityState(capacity);
+      if (capacities.has(capacity.resource)) {
+        throw new TypeError("Runner capacity resources must be unique");
+      }
+      capacities.set(capacity.resource, { ...capacity });
+    }
     this.runs.set(key, {
       repositoryId: input.repositoryId,
       runId: input.runId,
@@ -174,6 +194,7 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
       claims: new Map(),
       escalations: [],
       budgets,
+      capacities,
       cursor: 0,
       receipts: [],
       events: [],
@@ -237,12 +258,57 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
       queuedCommands: Object.freeze([...run.queuedCommands]),
       effects: Object.freeze([...run.effects.values()]),
       escalations: Object.freeze([...run.escalations]),
+      capacities: Object.freeze(
+        [...run.capacities.values()]
+          .sort((left, right) => compareText(left.resource, right.resource))
+          .map((capacity) => Object.freeze({ ...capacity })),
+      ),
     });
   }
 
   assertLease(input: PersistIntentRequest): void {
     const run = this.requiredRun(input.repositoryId, input.runId);
     this.assertFence(run, input.lease, input.currentTime);
+  }
+
+  ensureTaskScopesAndBudgets(input: EnsureTaskScopesAndBudgetsInput): void {
+    const run = this.requiredRun(input.repositoryId, input.runId);
+    this.assertFence(run, input.lease, input.currentTime);
+    const scopes = new Map<string, TaskScopeCurrentness>();
+    for (const scope of input.taskScopes) {
+      validateTaskScopeCurrentness(scope, input.runId);
+      if (!scope.claimsAccepted)
+        throw new TypeError("Admitted runner task scopes must accept claims");
+      const key = taskScopeKey(scope);
+      if (scopes.has(key)) throw new TypeError("Admitted runner task scopes must be unique");
+      scopes.set(key, scope);
+      const existing = run.taskScopes.get(key);
+      if (existing !== undefined && canonicalStringify(existing) !== canonicalStringify(scope)) {
+        throw new TypeError("Runner task scope admission conflicts with durable currentness");
+      }
+    }
+    const budgets = new Map<string, number>();
+    for (const budget of input.budgets) {
+      validateUnit(budget.unit);
+      validateAmount(budget.limit, "budget limit");
+      if (budgets.has(budget.unit)) throw new TypeError("Admitted runner budgets must be unique");
+      budgets.set(budget.unit, budget.limit);
+      const existing = run.budgets.get(budget.unit);
+      if (existing !== undefined && budget.limit < existing.limit) {
+        throw new TypeError("Runner budget admission cannot reduce a durable limit");
+      }
+    }
+    for (const [key, scope] of scopes) {
+      if (!run.taskScopes.has(key)) run.taskScopes.set(key, deepFreeze({ ...scope }));
+    }
+    for (const [unit, limit] of budgets) {
+      const existing = run.budgets.get(unit);
+      if (existing === undefined) {
+        run.budgets.set(unit, { unit, limit, reserved: 0, spent: 0, unreported: 0 });
+      } else {
+        existing.limit = limit;
+      }
+    }
   }
 
   installTaskScopeFences(input: InstallTaskScopeFencesInput): readonly TaskScopeCurrentness[] {
@@ -398,6 +464,25 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
       return { type: "escalated", escalation };
     }
 
+    const capacityReservation = queued.capacityReservation;
+    const capacity =
+      capacityReservation === undefined
+        ? undefined
+        : run.capacities.get(capacityReservation.resource);
+    if (capacityReservation !== undefined && capacity === undefined) {
+      throw new TypeError("Runner command names an unknown capacity resource");
+    }
+    if (capacityReservation !== undefined && capacity !== undefined) {
+      const capacityAvailable = Math.max(0, capacity.limit - capacity.occupied);
+      if (capacityReservation.amount > capacityAvailable) {
+        return {
+          type: "capacity-unavailable",
+          reservation: capacityReservation,
+          available: capacityAvailable,
+        };
+      }
+    }
+
     const intent: EffectIntent = Object.freeze({
       command: queued,
       owner: request.lease.owner,
@@ -407,6 +492,9 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
       persistedAt: request.currentTime,
     });
     budget.reserved += queued.budgetReservation.amount;
+    if (capacityReservation !== undefined && capacity !== undefined) {
+      capacity.occupied += capacityReservation.amount;
+    }
     run.effects.set(queued.operationId, Object.freeze({ intent }));
     this.appendTransition(run, queued, "intent", request.currentTime, request.attemptId, {
       owner: intent.owner,
@@ -491,6 +579,13 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
       budget.reserved -= reservation.amount;
       budget.spent += usage.reported ?? usage.unreported;
       budget.unreported += usage.unreported;
+      const capacityReservation = record.intent.command.capacityReservation;
+      if (capacityReservation !== undefined) {
+        const capacity = run.capacities.get(capacityReservation.resource);
+        if (capacity === undefined)
+          throw new TypeError("Durable effect reservation has no capacity");
+        capacity.occupied -= capacityReservation.amount;
+      }
     }
     run.effects.set(
       outcome.operationId,
@@ -592,6 +687,14 @@ export class InMemoryRunnerAuthority implements RunnerAuthorityPort {
       [...this.requiredRun(repositoryId, runId).budgets.values()]
         .sort((left, right) => compareText(left.unit, right.unit))
         .map((budget) => Object.freeze({ ...budget })),
+    );
+  }
+
+  queryCapacities(repositoryId: string, runId: string): readonly RunnerCapacityState[] {
+    return Object.freeze(
+      [...this.requiredRun(repositoryId, runId).capacities.values()]
+        .sort((left, right) => compareText(left.resource, right.resource))
+        .map((capacity) => Object.freeze({ ...capacity })),
     );
   }
 
@@ -745,6 +848,12 @@ function validateCommand(command: QueuedEffectCommand): void {
   canonicalStringify(command.input);
   validateUnit(command.budgetReservation.unit);
   validateAmount(command.budgetReservation.amount, "budget reservation");
+  if (command.capacityReservation !== undefined) {
+    if (command.capacityReservation.resource !== "writer") {
+      throw new TypeError("Effect capacity resource must be writer");
+    }
+    validatePositiveAmount(command.capacityReservation.amount, "capacity reservation");
+  }
   validateTimestamp(command.queuedAt, "queuedAt");
   if (command.deadline !== undefined) validateTimestamp(command.deadline, "deadline");
   if (
@@ -809,6 +918,22 @@ function validateUnit(unit: string): void {
 function validateAmount(amount: number, subject: string): void {
   if (!Number.isSafeInteger(amount) || amount < 0) {
     throw new TypeError(`${subject} must be a non-negative safe integer`);
+  }
+}
+
+function validatePositiveAmount(amount: number, subject: string): void {
+  if (!Number.isSafeInteger(amount) || amount < 1) {
+    throw new TypeError(`${subject} must be a positive safe integer`);
+  }
+}
+
+function validateCapacityState(capacity: RunnerCapacityState): void {
+  if (capacity.resource !== "writer")
+    throw new TypeError("Runner capacity resource must be writer");
+  validatePositiveAmount(capacity.limit, "capacity limit");
+  validateAmount(capacity.occupied, "occupied capacity");
+  if (capacity.occupied > capacity.limit) {
+    throw new TypeError("Occupied runner capacity must not exceed its limit");
   }
 }
 

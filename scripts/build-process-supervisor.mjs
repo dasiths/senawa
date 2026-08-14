@@ -13,45 +13,43 @@ if (typeof runtimeReport?.header.glibcVersionRuntime !== "string") {
 }
 
 const root = new URL("../", import.meta.url);
-const source = fileURLToPath(
-  new URL("packages/execution-host/native/senawa-process-supervisor.c", root),
-);
-const output = fileURLToPath(
-  new URL("packages/execution-host/dist/senawa-process-supervisor", root),
-);
 mkdirSync(fileURLToPath(new URL("packages/execution-host/dist/", root)), { recursive: true });
 
-const compiler = spawnSync(
-  "cc",
-  [
-    "-std=c17",
-    "-O2",
-    "-Wall",
-    "-Wextra",
-    "-Werror",
-    "-pedantic",
-    "-fPIE",
-    "-pie",
-    "-fstack-protector-strong",
-    "-D_FORTIFY_SOURCE=2",
-    "-Wl,-z,relro",
-    "-Wl,-z,now",
-    source,
-    "-o",
-    output,
-  ],
-  { encoding: "utf8" },
-);
-
-if (compiler.error?.code === "ENOENT") {
-  throw new Error(
-    "Building @senawa/execution-host requires a C17 compiler available as `cc`; no runtime compilation is performed.",
+for (const name of ["senawa-process-supervisor", "senawa-workspace-files"]) {
+  const source = fileURLToPath(new URL(`packages/execution-host/native/${name}.c`, root));
+  const output = fileURLToPath(new URL(`packages/execution-host/dist/${name}`, root));
+  const compiler = spawnSync(
+    "cc",
+    [
+      "-std=c17",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-pedantic",
+      "-fPIE",
+      "-pie",
+      "-fstack-protector-strong",
+      "-D_FORTIFY_SOURCE=2",
+      "-Wl,-z,relro",
+      "-Wl,-z,now",
+      source,
+      "-o",
+      output,
+    ],
+    { encoding: "utf8" },
   );
+
+  if (compiler.error?.code === "ENOENT") {
+    throw new Error(
+      "Building @senawa/execution-host requires a C17 compiler available as `cc`; no runtime compilation is performed.",
+    );
+  }
+  if (compiler.error !== undefined) throw compiler.error;
+  if (compiler.status !== 0) {
+    process.stderr.write(compiler.stdout);
+    process.stderr.write(compiler.stderr);
+    throw new Error(`Failed to build ${name} with cc (exit ${compiler.status})`);
+  }
+  chmodSync(output, 0o755);
 }
-if (compiler.error !== undefined) throw compiler.error;
-if (compiler.status !== 0) {
-  process.stderr.write(compiler.stdout);
-  process.stderr.write(compiler.stderr);
-  throw new Error(`Failed to build senawa-process-supervisor with cc (exit ${compiler.status})`);
-}
-chmodSync(output, 0o755);

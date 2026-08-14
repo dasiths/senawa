@@ -117,6 +117,8 @@ describe("built supervisor service and thin CLI", () => {
       intent: "instantiate-run",
       payload: {
         workflowId: baseSnapshot.graph.workflowId,
+        configurationSnapshotDigest: baseSnapshot.snapshotDigest,
+        execution: baseSnapshot.execution,
         graph: baseSnapshot.graph,
         phase: {
           phaseId: phase.definition.id,
@@ -701,6 +703,8 @@ describe("built supervisor service and thin CLI", () => {
       intent: "instantiate-run",
       payload: {
         workflowId: runtimeFixture.workflowId,
+        configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+        execution: runtimeFixture.execution,
         graph: createRuntimeGraph(),
         phase: runtimeFixture.phase,
         approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },

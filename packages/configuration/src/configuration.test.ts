@@ -31,7 +31,7 @@ describe("workflow configuration compilation", () => {
       deterministicSha256,
     );
 
-    expect(example.apiVersion).toBe("senawa.dev/workflow/v1alpha1");
+    expect(example.apiVersion).toBe("senawa.dev/workflow/v1alpha2");
     expect(example.sensors).toEqual([]);
     expect(example.gates).toEqual([]);
     expect(snapshot.sensors).toEqual([]);
@@ -59,6 +59,11 @@ describe("workflow configuration compilation", () => {
     expect(snapshot.modelPolicies.map(({ key }) => key)).toEqual(["standard"]);
     expect(snapshot.sensors).toEqual([]);
     expect(snapshot.gates).toEqual([]);
+    expect(snapshot.execution).toEqual({
+      workspaceMode: "repository",
+      maxWriterConcurrency: 1,
+      failurePolicy: "continue",
+    });
     expect(snapshot.projections).toEqual([]);
     expect(snapshot.snapshotDigest).toMatch(/^[0-9a-f]{64}$/);
     expect(Object.isFrozen(snapshot)).toBe(true);
@@ -84,6 +89,59 @@ describe("workflow configuration compilation", () => {
     expect(secondSnapshot).toEqual(firstSnapshot);
     expect(secondSnapshot.componentDigests).toEqual(firstSnapshot.componentDigests);
     expect(secondSnapshot.snapshotDigest).toBe(firstSnapshot.snapshotDigest);
+  });
+
+  it("normalizes execution defaults and explicit worktree opt-in", () => {
+    const repository = compileWorkflowConfiguration(
+      softwareFixture(),
+      "fixture://repository-execution",
+      deterministicSha256,
+    );
+    const worktreeDocument = softwareFixture();
+    worktreeDocument.execution = {
+      workspaceMode: "worktree",
+      maxWriterConcurrency: 4,
+      failurePolicy: "fail-fast",
+      integrationRef: "refs/heads/senawa/integration",
+    };
+    const worktree = compileWorkflowConfiguration(
+      worktreeDocument,
+      "fixture://worktree-execution",
+      deterministicSha256,
+    );
+
+    expect(repository.execution).toEqual({
+      workspaceMode: "repository",
+      maxWriterConcurrency: 1,
+      failurePolicy: "continue",
+    });
+    expect(worktree.execution).toEqual(worktreeDocument.execution);
+    expect(worktree.componentDigests.execution).not.toBe(repository.componentDigests.execution);
+  });
+
+  it.each([
+    [{ workspaceMode: "parallel" }, "/execution/workspaceMode"],
+    [{ workspaceMode: "repository", maxWriterConcurrency: 2 }, "/execution/maxWriterConcurrency"],
+    [
+      { workspaceMode: "repository", integrationRef: "refs/heads/integration" },
+      "/execution/integrationRef",
+    ],
+    [{ workspaceMode: "worktree" }, "/execution/integrationRef"],
+    [{ workspaceMode: "worktree", integrationRef: "main" }, "/execution/integrationRef"],
+    [{ maxWriterConcurrency: 0 }, "/execution/maxWriterConcurrency"],
+    [{ maxWriterConcurrency: 1.5 }, "/execution/maxWriterConcurrency"],
+    [{ failurePolicy: "stop" }, "/execution/failurePolicy"],
+  ])("rejects invalid execution policy %#", (execution, pointer) => {
+    const document = softwareFixture();
+    document.execution = execution as NonNullable<WorkflowConfigurationDocument["execution"]>;
+    const diagnosis = doctorWorkflowConfiguration(
+      document,
+      "fixture://invalid-execution",
+      deterministicSha256,
+    );
+
+    expect(diagnosis.snapshot).toBeUndefined();
+    expect(diagnosis.diagnostics).toContainEqual(expect.objectContaining({ pointer }));
   });
 
   it("derives branded identities from raw qualified consumer paths", () => {
@@ -1349,6 +1407,7 @@ describe("workflow amendment compilation", () => {
 
     expect(compiled.resultSnapshot.schemas).toEqual(baseSnapshot.schemas);
     expect(compiled.resultSnapshot.roles).toEqual(baseSnapshot.roles);
+    expect(compiled.resultSnapshot.execution).toEqual(baseSnapshot.execution);
     expect(diagnosis.diagnostics).toEqual([
       expect.objectContaining({ code: "unknown-field", pointer: "/schemas" }),
     ]);
@@ -1404,6 +1463,32 @@ describe("workflow amendment compilation", () => {
 });
 
 describe("configuration drift", () => {
+  it("reports execution policy drift at the normalized policy address", () => {
+    const accepted = compileWorkflowConfiguration(
+      softwareFixture(),
+      "fixture://execution-drift",
+      deterministicSha256,
+    );
+    const changed = softwareFixture();
+    changed.execution = {
+      workspaceMode: "worktree",
+      maxWriterConcurrency: 2,
+      failurePolicy: "continue",
+      integrationRef: "refs/heads/senawa/integration",
+    };
+    const current = compileWorkflowConfiguration(
+      changed,
+      "fixture://execution-drift",
+      deterministicSha256,
+    );
+
+    expect(detectConfigurationDrift(accepted, current)).toMatchObject({
+      hasDrift: true,
+      changedCategories: ["execution"],
+      changedKeys: ["/execution"],
+    });
+  });
+
   it("reports changed component categories and stable keys", () => {
     const accepted = compileWorkflowConfiguration(
       softwareFixture(),
@@ -1472,7 +1557,7 @@ describe("configuration drift", () => {
 
 function softwareFixture(): MutableWorkflowDocument {
   return {
-    apiVersion: "senawa.dev/workflow/v1alpha1",
+    apiVersion: "senawa.dev/workflow/v1alpha2",
     kind: "Workflow",
     workflow: { key: "delivery", generation: 1, input: { product: "senawa" } },
     ...authorityRegistries(),
@@ -1531,7 +1616,7 @@ function reorderedSoftwareFixture(): MutableWorkflowDocument {
 
 function incidentFixture(): MutableWorkflowDocument {
   return {
-    apiVersion: "senawa.dev/workflow/v1alpha1",
+    apiVersion: "senawa.dev/workflow/v1alpha2",
     kind: "Workflow",
     workflow: { key: "incident", generation: 1, input: { service: "payments" } },
     ...authorityRegistries(),

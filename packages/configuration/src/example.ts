@@ -3,8 +3,13 @@ import type { WorkflowConfigurationDocument } from "./contracts.js";
 
 export function createExampleWorkflowConfiguration(): WorkflowConfigurationDocument {
   return canonicalValue({
-    apiVersion: "senawa.dev/workflow/v1alpha1",
+    apiVersion: "senawa.dev/workflow/v1alpha2",
     kind: "Workflow",
+    execution: {
+      workspaceMode: "repository",
+      maxWriterConcurrency: 1,
+      failurePolicy: "continue",
+    },
     workflow: {
       key: "example",
       generation: 1,

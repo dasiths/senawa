@@ -27,6 +27,7 @@ import {
   evaluateGate,
   eventId,
   type GateEvidence,
+  type IntegrationBarrier,
   isSha256Digest,
   type PhaseApprovalPolicyInput,
   type PhaseCandidate,
@@ -44,6 +45,7 @@ import {
   validateAmendmentProposal,
   validateGateDefinition,
   validateGateEvidence,
+  validateIntegrationBarrier,
   validatePhaseCandidate,
   validateWorkflowGraph,
   type WorkflowGraph,
@@ -64,6 +66,7 @@ import {
   decodeProjectionEnvelope,
   decodeReceiptPage,
   decodeRecordAmendmentDecisionPayload,
+  decodeRecordIntegrationBarrierPayload,
   decodeSubmitAmendmentProposalPayload,
   decodeWithdrawAmendmentProposalPayload,
   type ErrorEnvelope,
@@ -88,8 +91,9 @@ import {
   type RuntimeQueryPort,
   type SerializableAuthorityPort,
 } from "./ports.js";
+import type { ParallelExecutionPolicy, RunExecutionBinding } from "./workspace-authority.js";
 
-const SNAPSHOT_VERSION = "senawa.dev/runtime-memory/v1alpha1" as const;
+const SNAPSHOT_VERSION = "senawa.dev/runtime-memory/v1alpha2" as const;
 
 export interface RoleAuthorizationRule {
   readonly intent: CommandIntent["type"];
@@ -116,6 +120,8 @@ export function createRoleAuthorizationPolicy(
 
 interface RuntimeRunRecords {
   readonly runEvents: readonly RunEvent[];
+  readonly configurationSnapshotDigest: Sha256Digest;
+  readonly execution: ParallelExecutionPolicy;
   readonly phase: PhaseGenerationReference;
   readonly approvalPolicy: PhaseApprovalPolicyInput;
   readonly escalationPolicyDigest: Sha256Digest;
@@ -124,9 +130,20 @@ interface RuntimeRunRecords {
   readonly gateEvidence?: GateEvidence;
   readonly authorityDecision?: AuthorityDecision;
   readonly closure?: PhaseClosure;
+  readonly integrationBarrier?: IntegrationBarrier;
   readonly phaseLifecycles?: readonly RuntimePhaseLifecycleRecords[];
   readonly amendmentRecords?: readonly RuntimeAmendmentRecords[];
   readonly amendmentEvents?: readonly RuntimeAmendmentEvent[];
+}
+
+export interface RuntimeSchedulingSnapshot {
+  readonly graph: WorkflowGraph;
+  readonly phase: PhaseGenerationReference;
+  readonly acceptedTasks: readonly {
+    readonly task: TaskGenerationReference;
+    readonly accountingAssessmentDigest: Sha256Digest;
+    readonly integrationBarrierDigest?: Sha256Digest;
+  }[];
 }
 
 interface RuntimePhaseLifecycleRecords {
@@ -448,6 +465,50 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     });
   }
 
+  queryRunExecution(repositoryId: string, runIdentity: string): RunExecutionBinding | undefined {
+    const records = this.authority.runs.get(runKey(repositoryId, runIdentity))?.records;
+    return records === undefined
+      ? undefined
+      : Object.freeze({
+          repositoryId,
+          runId: runIdentity,
+          configurationSnapshotDigest: records.configurationSnapshotDigest,
+          execution: records.execution,
+        });
+  }
+
+  queryIntegrationBarrier(
+    repositoryId: string,
+    runIdentity: string,
+  ): IntegrationBarrier | undefined {
+    return this.authority.runs.get(runKey(repositoryId, runIdentity))?.records?.integrationBarrier;
+  }
+
+  queryRunScheduling(
+    repositoryId: string,
+    runIdentity: string,
+  ): RuntimeSchedulingSnapshot | undefined {
+    const records = this.authority.runs.get(runKey(repositoryId, runIdentity))?.records;
+    if (records === undefined) return undefined;
+    return Object.freeze({
+      graph: currentGraph(records, this.dependencies.sha256),
+      phase: records.phase,
+      acceptedTasks: Object.freeze(
+        records.assessments
+          .map(({ assessment, assessmentDigest }) =>
+            Object.freeze({
+              task: assessment.submission.task,
+              accountingAssessmentDigest: assessmentDigest,
+              ...(records.integrationBarrier === undefined
+                ? {}
+                : { integrationBarrierDigest: records.integrationBarrier.barrierDigest }),
+            }),
+          )
+          .sort((left, right) => compareText(left.task.taskId, right.task.taskId)),
+      ),
+    });
+  }
+
   restoreNonEffectCommand(
     sourceRun: SerializedRun,
     stored: SerializedRun["commands"][number],
@@ -609,6 +670,8 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
           run,
           trustedFacts.amendmentQuiescence,
         );
+      case "record-integration-barrier":
+        return this.recordIntegrationBarrier(command, run);
       default:
         throw new RuntimeRefusal("unsupported-intent", "Intent is not implemented in this slice");
     }
@@ -624,12 +687,19 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     }
     const payload = exactObject(command.payload, "instantiate-run payload", [
       "workflowId",
+      "configurationSnapshotDigest",
+      "execution",
       "graph",
       "phase",
       "approvalPolicy",
       "escalationPolicyDigest",
     ]);
     const graph = validateWorkflowGraph(payload.graph, this.dependencies.sha256);
+    const configurationSnapshotDigest = requiredDigest(
+      payload.configurationSnapshotDigest,
+      "configurationSnapshotDigest",
+    );
+    const execution = validateRuntimeExecutionPolicy(payload.execution);
     const content = {
       type: "run-instantiated",
       sequence: 1,
@@ -658,6 +728,8 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     );
     const records: RuntimeRunRecords = {
       runEvents: events,
+      configurationSnapshotDigest,
+      execution,
       phase: payload.phase as unknown as PhaseGenerationReference,
       approvalPolicy: payload.approvalPolicy as unknown as PhaseApprovalPolicyInput,
       escalationPolicyDigest: requiredDigest(
@@ -668,7 +740,66 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     };
     this.project(records);
     run.records = records;
-    return canonicalValue({ graphRevision: graph.revisionDigest }) as unknown as JsonValue;
+    return canonicalValue({
+      graphRevision: graph.revisionDigest,
+      configurationSnapshotDigest,
+      execution,
+    }) as unknown as JsonValue;
+  }
+
+  private recordIntegrationBarrier(command: CommandEnvelope, run: RuntimeAuthorityRun): JsonValue {
+    const records = requiredRecords(run);
+    this.assertGraphRevision(command, records);
+    if (!command.principal.roles.includes("trusted-supervisor")) {
+      throw new RuntimeRefusal(
+        "trusted-supervisor-required",
+        "Integration barriers require the trusted-supervisor role",
+      );
+    }
+    if (records.execution.workspaceMode !== "worktree") {
+      throw new RuntimeRefusal(
+        "integration-forbidden",
+        "Repository execution forbids integration barriers",
+      );
+    }
+    const payload = decodeRecordIntegrationBarrierPayload(command.payload);
+    if (payload.configurationSnapshotDigest !== records.configurationSnapshotDigest) {
+      throw new RuntimeRefusal(
+        "stale-configuration",
+        "Integration barrier configuration snapshot does not match the run",
+      );
+    }
+    const barrier = validateIntegrationBarrier(payload.barrier, this.dependencies.sha256);
+    const graph = currentGraph(records, this.dependencies.sha256);
+    if (
+      barrier.phaseId !== records.phase.phaseId ||
+      barrier.definitionGeneration !== records.phase.definitionGeneration ||
+      barrier.graphRevisionDigest !== graph.revisionDigest ||
+      barrier.targetRef !== records.execution.integrationRef
+    ) {
+      throw new RuntimeRefusal(
+        "stale-integration-barrier",
+        "Integration barrier does not match current run authority",
+      );
+    }
+    this.assertExactObject(command, barrier.barrierDigest);
+    if (records.integrationBarrier !== undefined) {
+      if (canonicalStringify(records.integrationBarrier) !== canonicalStringify(barrier)) {
+        throw new RuntimeRefusal(
+          "integration-barrier-exists",
+          "A different integration barrier is already authoritative",
+        );
+      }
+      return canonicalValue({
+        integrationId: payload.integrationId,
+        barrierDigest: barrier.barrierDigest,
+      }) as unknown as JsonValue;
+    }
+    run.records = { ...records, integrationBarrier: barrier };
+    return canonicalValue({
+      integrationId: payload.integrationId,
+      barrierDigest: barrier.barrierDigest,
+    }) as unknown as JsonValue;
   }
 
   private acceptGraphRevision(
@@ -783,6 +914,22 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       ["phase", "dependencyBarrierDigest", "gateDefinition", "readings"],
       ["integrationBarrierDigest"],
     );
+    if (records.execution.workspaceMode === "repository") {
+      if (payload.integrationBarrierDigest !== undefined) {
+        throw new RuntimeRefusal(
+          "integration-forbidden",
+          "Repository execution forbids integration barrier candidates",
+        );
+      }
+    } else if (
+      records.integrationBarrier === undefined ||
+      payload.integrationBarrierDigest !== records.integrationBarrier.barrierDigest
+    ) {
+      throw new RuntimeRefusal(
+        "integration-barrier-required",
+        "Worktree gate evaluation requires the exact current integration barrier",
+      );
+    }
     const graph = currentGraph(records, this.dependencies.sha256);
     const definition = validateGateDefinition(payload.gateDefinition, this.dependencies.sha256);
     if (!Array.isArray(payload.readings)) {
@@ -800,13 +947,10 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
           payload.dependencyBarrierDigest,
           "dependencyBarrierDigest",
         ),
-        ...(payload.integrationBarrierDigest === undefined
+        ...(records.integrationBarrier === undefined
           ? {}
           : {
-              integrationBarrierDigest: requiredDigest(
-                payload.integrationBarrierDigest,
-                "integrationBarrierDigest",
-              ),
+              integrationBarrierDigest: records.integrationBarrier.barrierDigest,
             }),
         gatePolicyDigest: definition.policyDigest,
       },
@@ -877,6 +1021,16 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     }
     if (records.closure !== undefined) {
       throw new RuntimeRefusal("closure-exists", "Phase is already closed");
+    }
+    if (
+      records.execution.workspaceMode === "worktree" &&
+      (records.integrationBarrier === undefined ||
+        records.candidate.integrationBarrierDigest !== records.integrationBarrier.barrierDigest)
+    ) {
+      throw new RuntimeRefusal(
+        "integration-barrier-required",
+        "Worktree closure requires the exact current integration barrier",
+      );
     }
     this.assertExactObject(command, records.candidate.candidateDigest);
     const graph = currentGraph(records, this.dependencies.sha256);
@@ -2111,12 +2265,21 @@ function parseRuntimeRunRecords(
   const submitted = exactObject(
     value,
     "runtime run records",
-    ["runEvents", "phase", "approvalPolicy", "escalationPolicyDigest", "assessments"],
+    [
+      "runEvents",
+      "configurationSnapshotDigest",
+      "execution",
+      "phase",
+      "approvalPolicy",
+      "escalationPolicyDigest",
+      "assessments",
+    ],
     [
       "candidate",
       "gateEvidence",
       "authorityDecision",
       "closure",
+      "integrationBarrier",
       "phaseLifecycles",
       "amendmentRecords",
       "amendmentEvents",
@@ -2171,6 +2334,11 @@ function parseRuntimeRunRecords(
   });
   let records: RuntimeRunRecords = {
     runEvents,
+    configurationSnapshotDigest: requiredDigest(
+      submitted.configurationSnapshotDigest,
+      "configurationSnapshotDigest",
+    ),
+    execution: validateRuntimeExecutionPolicy(submitted.execution),
     phase: phase as unknown as PhaseGenerationReference,
     approvalPolicy,
     escalationPolicyDigest: requiredDigest(
@@ -2188,6 +2356,14 @@ function parseRuntimeRunRecords(
       ? {}
       : { authorityDecision: submitted.authorityDecision as AuthorityDecision }),
     ...(submitted.closure === undefined ? {} : { closure: submitted.closure as PhaseClosure }),
+    ...(submitted.integrationBarrier === undefined
+      ? {}
+      : {
+          integrationBarrier: validateIntegrationBarrier(
+            submitted.integrationBarrier,
+            dependencies.sha256,
+          ),
+        }),
   };
   projectPhaseLifecycle(
     {
@@ -2374,6 +2550,51 @@ function isApprovalRequiredPolicy(value: unknown): boolean {
     !Array.isArray(value) &&
     (value as Record<string, unknown>).policy === "approval-required"
   );
+}
+
+function validateRuntimeExecutionPolicy(value: unknown): ParallelExecutionPolicy {
+  const submitted = exactObject(
+    value,
+    "runtime execution policy",
+    ["workspaceMode", "maxWriterConcurrency", "failurePolicy"],
+    ["integrationRef"],
+  );
+  if (submitted.workspaceMode !== "repository" && submitted.workspaceMode !== "worktree") {
+    throw new TypeError("Runtime workspaceMode must be repository or worktree");
+  }
+  if (submitted.failurePolicy !== "continue" && submitted.failurePolicy !== "fail-fast") {
+    throw new TypeError("Runtime failurePolicy must be continue or fail-fast");
+  }
+  if (
+    !Number.isSafeInteger(submitted.maxWriterConcurrency) ||
+    (submitted.maxWriterConcurrency as number) < 1
+  ) {
+    throw new TypeError("Runtime maxWriterConcurrency must be a positive safe integer");
+  }
+  if (submitted.workspaceMode === "repository") {
+    if (submitted.maxWriterConcurrency !== 1 || submitted.integrationRef !== undefined) {
+      throw new TypeError(
+        "Runtime repository execution requires one writer and no integration ref",
+      );
+    }
+    return Object.freeze({
+      workspaceMode: "repository",
+      maxWriterConcurrency: 1,
+      failurePolicy: submitted.failurePolicy,
+    });
+  }
+  if (
+    typeof submitted.integrationRef !== "string" ||
+    !submitted.integrationRef.startsWith("refs/heads/")
+  ) {
+    throw new TypeError("Runtime worktree execution requires a full local integration ref");
+  }
+  return Object.freeze({
+    workspaceMode: "worktree",
+    maxWriterConcurrency: submitted.maxWriterConcurrency as number,
+    failurePolicy: submitted.failurePolicy,
+    integrationRef: submitted.integrationRef,
+  });
 }
 
 function validateSnapshotUniqueness(runs: readonly SerializedRun[]): void {

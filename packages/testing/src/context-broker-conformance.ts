@@ -169,6 +169,7 @@ export function createContextBrokerHarness(): ContextBrokerHarness {
   const broker = new ContextBroker(assetPort, dependencies, authority, {
     admitCompletionFact(fact) {
       completionFacts.push(fact);
+      return "accepted";
     },
   });
   return initializeContextBrokerHarness({
@@ -830,6 +831,7 @@ export function registerContextBrokerConformance(
           reentrantResult = broker.deliverCompletionFact(fact.submissionId);
           if (!delivered.has(fact.submissionId)) delivered.set(fact.submissionId, fact);
           if (shouldThrow) throw new Error("simulated completion delivery loss");
+          return "accepted";
         },
       });
       const completion = completionSubmission(harness, "submission_outbox", "completed");
@@ -855,6 +857,32 @@ export function registerContextBrokerConformance(
       expect(delivered.size).toBe(1);
       expect(reentrantResult).toBe(false);
       expect(harness.authority.snapshot().completionOutbox[0]).toMatchObject({ delivered: true });
+    });
+
+    it("keeps deferred completion outbox rows pending until accepted redelivery", () => {
+      const harness = createHarness();
+      if (harness.recomposeBroker === undefined) return;
+      let admission: "accepted" | "deferred" = "deferred";
+      const broker = harness.recomposeBroker({
+        admitCompletionFact() {
+          return admission;
+        },
+      });
+      const completion = completionSubmission(harness, "submission_deferred", "completed");
+
+      expect(broker.admitSubmission({ submission: completion })).toMatchObject({
+        status: "accepted",
+      });
+      expect(harness.authority.snapshot().completionOutbox).toEqual([
+        expect.objectContaining({ submissionId: "submission_deferred", delivered: false }),
+      ]);
+      expect(broker.deliverCompletionFact("submission_deferred")).toBe(false);
+
+      admission = "accepted";
+      expect(broker.deliverCompletionFact("submission_deferred")).toBe(true);
+      expect(harness.authority.snapshot().completionOutbox).toEqual([
+        expect.objectContaining({ submissionId: "submission_deferred", delivered: true }),
+      ]);
     });
 
     it("runs the full serial journey and preserves session identity across crash resume", async () => {

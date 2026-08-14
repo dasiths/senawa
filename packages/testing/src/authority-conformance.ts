@@ -111,6 +111,8 @@ function instantiateCommand(commandId: string) {
     intent: "instantiate-run",
     payload: {
       workflowId: runtimeFixture.workflowId,
+      configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+      execution: runtimeFixture.execution,
       graph: createRuntimeGraph(),
       phase: runtimeFixture.phase,
       approvalPolicy: { policy: "approval-required" as const, authority: runtimePrincipal },

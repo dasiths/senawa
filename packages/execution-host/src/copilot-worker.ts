@@ -29,6 +29,11 @@ import type {
   CopilotSdkToolInvocation,
   CopilotSdkToolResult,
 } from "./copilot-sdk-port.js";
+import {
+  WORKSPACE_FILE_LIMITS,
+  type WorkspaceFilePatchChange,
+  type WorkspaceFilePort,
+} from "./workspace-files.js";
 
 export const COPILOT_WORKER_TOOL_NAMES = Object.freeze([
   "senawa_read_asset",
@@ -38,11 +43,17 @@ export const COPILOT_WORKER_TOOL_NAMES = Object.freeze([
   "propose_amendment",
   "submit_completion",
 ] as const);
+export const COPILOT_WORKSPACE_TOOL_NAMES = Object.freeze([
+  "senawa_list_workspace",
+  "senawa_read_workspace_file",
+  "senawa_write_workspace_file",
+  "senawa_apply_workspace_patch",
+] as const);
 
 const MAX_TIMER_MILLISECONDS = 2_147_483_647;
 const PROMPT_MAX_BYTES = 65_536;
 const GENERIC_PERMISSION_FEEDBACK = "This session does not grant that operation.";
-const TOOL_NAMES = new Set<string>(COPILOT_WORKER_TOOL_NAMES);
+const TOOL_NAMES = new Set<string>([...COPILOT_WORKER_TOOL_NAMES, ...COPILOT_WORKSPACE_TOOL_NAMES]);
 
 export interface CopilotWorkerRunInput {
   readonly context: unknown;
@@ -51,6 +62,7 @@ export interface CopilotWorkerRunInput {
   readonly broker: ContextBrokerClient;
   readonly grantTokens: ReadonlyMap<string, string>;
   readonly workingDirectory: string;
+  readonly workspaceFiles?: WorkspaceFilePort;
   readonly sessionBaseDirectory?: string;
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
@@ -181,6 +193,12 @@ export class CopilotSerialWorkerAdapter {
       throw new TypeError("Copilot worker working directory does not match its SDK port");
     }
     if (
+      input.workspaceFiles !== undefined &&
+      input.workspaceFiles.root !== input.workingDirectory
+    ) {
+      throw new TypeError("Copilot workspace files must bind the exact dispatch working directory");
+    }
+    if (
       input.sessionBaseDirectory !== undefined &&
       input.sessionBaseDirectory !== this.sdk.baseDirectory
     ) {
@@ -283,6 +301,9 @@ function createTools(
 ): readonly CopilotSdkTool[] {
   const capabilities = new Set(dispatch.capabilities);
   const tools: CopilotSdkTool[] = [];
+  if (input.workspaceFiles !== undefined) {
+    tools.push(...workspaceFileTools(input.workspaceFiles, scope));
+  }
   if (capabilities.has(WORKER_CAPABILITIES.assetRead) && input.grantTokens.size > 0) {
     tools.push(readAssetTool(input, context, dispatch, sha256, scope));
   }
@@ -367,6 +388,101 @@ function createTools(
     );
   }
   return Object.freeze(tools);
+}
+
+function workspaceFileTools(files: WorkspaceFilePort, scope: RunScope): readonly CopilotSdkTool[] {
+  return Object.freeze([
+    tool(
+      "senawa_list_workspace",
+      "List one directory inside the dispatch workspace.",
+      WORKSPACE_LIST_SCHEMA,
+      scope,
+      async (args) => {
+        try {
+          const value = exactObject(args, ["path"], ["maxEntries"]);
+          const entries = await files.list(
+            boundedString(value.path, PROTOCOL_LIMITS.maxStringLength),
+            value.maxEntries === undefined
+              ? undefined
+              : positiveInteger(value.maxEntries, WORKSPACE_FILE_LIMITS.maxListEntries),
+          );
+          return success({ entries });
+        } catch {
+          return failure("workspace-list-refused");
+        }
+      },
+    ),
+    tool(
+      "senawa_read_workspace_file",
+      "Read one UTF-8 file inside the dispatch workspace.",
+      WORKSPACE_READ_SCHEMA,
+      scope,
+      async (args) => {
+        try {
+          const value = exactObject(args, ["path"], ["maxBytes"]);
+          const content = await files.read(
+            boundedString(value.path, PROTOCOL_LIMITS.maxStringLength),
+            value.maxBytes === undefined
+              ? undefined
+              : positiveInteger(value.maxBytes, WORKSPACE_FILE_LIMITS.maxFileBytes),
+          );
+          return success({ content });
+        } catch {
+          return failure("workspace-read-refused");
+        }
+      },
+    ),
+    tool(
+      "senawa_write_workspace_file",
+      "Atomically write one UTF-8 file inside the dispatch workspace.",
+      WORKSPACE_WRITE_SCHEMA,
+      scope,
+      async (args) => {
+        try {
+          const value = exactObject(args, ["path", "content"]);
+          await files.write(
+            boundedString(value.path, PROTOCOL_LIMITS.maxStringLength),
+            boundedString(value.content, WORKSPACE_FILE_LIMITS.maxFileBytes, true),
+          );
+          return success({ status: "written" });
+        } catch {
+          return failure("workspace-write-refused");
+        }
+      },
+    ),
+    tool(
+      "senawa_apply_workspace_patch",
+      "Compare and replace bounded UTF-8 files inside the dispatch workspace.",
+      WORKSPACE_PATCH_SCHEMA,
+      scope,
+      async (args) => {
+        try {
+          const value = exactObject(args, ["changes"]);
+          if (!Array.isArray(value.changes)) return failure("workspace-patch-refused");
+          const changes: WorkspaceFilePatchChange[] = value.changes.map((change) => {
+            const item = exactObject(change, ["path", "expectedText", "replacementText"]);
+            return {
+              path: boundedString(item.path, PROTOCOL_LIMITS.maxStringLength),
+              expectedText: boundedString(
+                item.expectedText,
+                WORKSPACE_FILE_LIMITS.maxFileBytes,
+                true,
+              ),
+              replacementText: boundedString(
+                item.replacementText,
+                WORKSPACE_FILE_LIMITS.maxFileBytes,
+                true,
+              ),
+            };
+          });
+          await files.applyPatch(changes);
+          return success({ status: "patched", changeCount: changes.length });
+        } catch {
+          return failure("workspace-patch-refused");
+        }
+      },
+    ),
+  ]);
 }
 
 function readAssetTool(
@@ -750,6 +866,49 @@ const READ_SCHEMA = Object.freeze({
     ),
   ]),
 });
+const WORKSPACE_PATH_SCHEMA = stringSchema(PROTOCOL_LIMITS.maxStringLength);
+const WORKSPACE_CONTENT_SCHEMA = stringSchema(WORKSPACE_FILE_LIMITS.maxFileBytes, 0);
+const WORKSPACE_LIST_SCHEMA = closedObject(
+  {
+    path: WORKSPACE_PATH_SCHEMA,
+    maxEntries: {
+      type: "integer",
+      minimum: 1,
+      maximum: WORKSPACE_FILE_LIMITS.maxListEntries,
+    },
+  },
+  ["path"],
+);
+const WORKSPACE_READ_SCHEMA = closedObject(
+  {
+    path: WORKSPACE_PATH_SCHEMA,
+    maxBytes: { type: "integer", minimum: 1, maximum: WORKSPACE_FILE_LIMITS.maxFileBytes },
+  },
+  ["path"],
+);
+const WORKSPACE_WRITE_SCHEMA = closedObject(
+  { path: WORKSPACE_PATH_SCHEMA, content: WORKSPACE_CONTENT_SCHEMA },
+  ["path", "content"],
+);
+const WORKSPACE_PATCH_CHANGE_SCHEMA = closedObject(
+  {
+    path: WORKSPACE_PATH_SCHEMA,
+    expectedText: WORKSPACE_CONTENT_SCHEMA,
+    replacementText: WORKSPACE_CONTENT_SCHEMA,
+  },
+  ["path", "expectedText", "replacementText"],
+);
+const WORKSPACE_PATCH_SCHEMA = closedObject(
+  {
+    changes: {
+      type: "array",
+      minItems: 1,
+      maxItems: WORKSPACE_FILE_LIMITS.maxPatchChanges,
+      items: WORKSPACE_PATCH_CHANGE_SCHEMA,
+    },
+  },
+  ["changes"],
+);
 const QUESTION_SCHEMA = closedObject(
   {
     prompt: stringSchema(WORKER_PROTOCOL_LIMITS.maxQuestionLength),

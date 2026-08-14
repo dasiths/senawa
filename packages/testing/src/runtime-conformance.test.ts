@@ -1,8 +1,11 @@
 import {
   type AccountingAssessment,
+  bindGitObjectId,
+  bindGitRevision,
   consumerKey,
   createAmendmentProposal,
   createAmendmentQuiescenceFact,
+  createIntegrationBarrier,
   createPhaseCandidate,
   createSensorReading,
   defineGate,
@@ -55,6 +58,10 @@ function createDependencies(): RuntimeDependencies {
     authorization: createRoleAuthorizationPolicy([
       ...ALLOWED_INTENTS.map((intent) => ({ intent, roles: ["release-manager"] })),
       { intent: "apply-approved-amendment", roles: ["trusted-supervisor"] },
+      {
+        intent: "record-integration-barrier",
+        roles: ["release-manager", "trusted-supervisor"],
+      },
     ]),
   };
 }
@@ -130,6 +137,8 @@ function instantiate(service: RuntimeCommandService, commandId = "command_instan
     intent: "instantiate-run",
     payload: {
       workflowId: runtimeFixture.workflowId,
+      configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+      execution: runtimeFixture.execution,
       graph,
       phase: runtimeFixture.phase,
       approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
@@ -206,6 +215,162 @@ function acceptedCandidate(
 }
 
 describe("transport-independent runtime command conformance", () => {
+  it("binds trusted integration barriers to worktree policy and exact gate authority", () => {
+    const repositoryService = createService();
+    const repository = instantiate(repositoryService, "command_repository-instantiate");
+    const repositoryBarrier = integrationBarrier(repository.graph);
+    expect(
+      repositoryService.submit(
+        {
+          ...runtimeCommand({
+            commandId: "command_repository-barrier",
+            intent: "record-integration-barrier",
+            payload: {
+              integrationId: "integration_repository",
+              configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+              barrier: repositoryBarrier,
+            },
+            expectedGraphRevision: repository.graph.revisionDigest,
+            exactObjectDigest: repositoryBarrier.barrierDigest,
+          }),
+          principal: trustedSupervisorPrincipal,
+        },
+        repository.admission.at(),
+      ),
+    ).toMatchObject({ status: "refused", error: { code: "integration-forbidden" } });
+
+    const service = createService();
+    const graph = createRuntimeGraph();
+    const admission = createAdmissionFixture();
+    expect(
+      service.submit(
+        runtimeCommand({
+          commandId: "command_worktree-instantiate",
+          intent: "instantiate-run",
+          payload: {
+            ...instantiatePayload(),
+            graph,
+            execution: {
+              workspaceMode: "worktree",
+              maxWriterConcurrency: 2,
+              failurePolicy: "continue",
+              integrationRef: "refs/heads/senawa/integration",
+            },
+          },
+        }),
+        admission.at(),
+      ),
+    ).toMatchObject({ status: "completed" });
+    const completion = service.submit(
+      runtimeCommand({
+        commandId: "command_worktree-completion",
+        intent: "submit-completion",
+        payload: completionPayload(),
+        expectedDefinitionRevision: runtimeFixture.task.contextRevisionDigest,
+        expectedGraphRevision: graph.revisionDigest,
+      }),
+      admission.at(),
+    );
+    expect(completion.status).toBe("completed");
+    const assessment = (completion.result as unknown as { assessment: AccountingAssessment })
+      .assessment;
+    const barrier = integrationBarrier(graph);
+    const barrierPayload = {
+      integrationId: "integration_worktree",
+      configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+      barrier,
+    };
+    expect(
+      service.submit(
+        runtimeCommand({
+          commandId: "command_worktree-barrier-untrusted",
+          intent: "record-integration-barrier",
+          payload: barrierPayload,
+          expectedGraphRevision: graph.revisionDigest,
+          exactObjectDigest: barrier.barrierDigest,
+        }),
+        admission.at(),
+      ),
+    ).toMatchObject({ status: "refused", error: { code: "trusted-supervisor-required" } });
+    expect(
+      service.submit(
+        {
+          ...runtimeCommand({
+            commandId: "command_worktree-barrier",
+            intent: "record-integration-barrier",
+            payload: barrierPayload,
+            expectedGraphRevision: graph.revisionDigest,
+            exactObjectDigest: barrier.barrierDigest,
+          }),
+          principal: trustedSupervisorPrincipal,
+        },
+        admission.at(),
+      ),
+    ).toMatchObject({
+      status: "completed",
+      result: { barrierDigest: barrier.barrierDigest },
+    });
+    const gateDefinition = defineGate(
+      { key: consumerKey("release"), blocking: [], advisory: [] },
+      deterministicSha256,
+    );
+    const candidate = createPhaseCandidate(
+      {
+        phase: runtimeFixture.phase,
+        graphRevisionDigest: graph.revisionDigest,
+        selectedTaskSetDigest: digestSelectedTaskSet([runtimeFixture.task], deterministicSha256),
+        tasks: [runtimeFixture.task],
+        acceptedAccountingAssessments: [
+          {
+            assessmentDigest: digestAccountingAssessment(assessment, deterministicSha256),
+            assessment,
+          },
+        ],
+        dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
+        integrationBarrierDigest: barrier.barrierDigest,
+        gatePolicyDigest: gateDefinition.policyDigest,
+      },
+      graph,
+      deterministicSha256,
+    );
+    expect(
+      service.submit(
+        runtimeCommand({
+          commandId: "command_worktree-gate-wrong-barrier",
+          intent: "evaluate-gate",
+          payload: {
+            phase: runtimeFixture.phase,
+            dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
+            integrationBarrierDigest: "f".repeat(64),
+            gateDefinition,
+            readings: [],
+          },
+          expectedGraphRevision: graph.revisionDigest,
+          exactObjectDigest: candidate.candidateDigest,
+        }),
+        admission.at(),
+      ),
+    ).toMatchObject({ status: "refused", error: { code: "integration-barrier-required" } });
+    expect(
+      service.submit(
+        runtimeCommand({
+          commandId: "command_worktree-gate",
+          intent: "evaluate-gate",
+          payload: {
+            phase: runtimeFixture.phase,
+            dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
+            integrationBarrierDigest: barrier.barrierDigest,
+            gateDefinition,
+            readings: [],
+          },
+          expectedGraphRevision: graph.revisionDigest,
+          exactObjectDigest: candidate.candidateDigest,
+        }),
+        admission.at(),
+      ),
+    ).toMatchObject({ status: "completed", result: { candidate } });
+  });
+
   it("reaches closure only through commands and reconstructs from canonical authority state", () => {
     const service = createService();
     const { graph, admission } = instantiate(service);
@@ -1226,9 +1391,54 @@ function decideAmendment(
 function instantiatePayload() {
   return {
     workflowId: runtimeFixture.workflowId,
+    configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+    execution: runtimeFixture.execution,
     graph: createRuntimeGraph(),
     phase: runtimeFixture.phase,
     approvalPolicy: { policy: "approval-required" as const, authority: runtimePrincipal },
     escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
   };
+}
+
+const trustedSupervisorPrincipal = Object.freeze({
+  ...runtimePrincipal,
+  subject: "trusted_supervisor",
+  roles: Object.freeze(["trusted-supervisor"]),
+});
+
+function integrationBarrier(graph: ReturnType<typeof createRuntimeGraph>) {
+  const beforeRevision = {
+    commit: { objectFormat: "sha1" as const, oid: "1".repeat(40) },
+    tree: { objectFormat: "sha1" as const, oid: "2".repeat(40) },
+  };
+  const afterRevision = {
+    commit: { objectFormat: "sha1" as const, oid: "3".repeat(40) },
+    tree: { objectFormat: "sha1" as const, oid: "4".repeat(40) },
+  };
+  return createIntegrationBarrier(
+    {
+      phaseId: runtimeFixture.phase.phaseId,
+      definitionGeneration: runtimeFixture.phase.definitionGeneration,
+      graphRevisionDigest: graph.revisionDigest,
+      targetRef: "refs/heads/senawa/integration",
+      beforeRevision,
+      afterRevision,
+      members: [
+        {
+          taskId: runtimeFixture.task.taskId,
+          definitionGeneration: runtimeFixture.task.definitionGeneration,
+          contextDigest: runtimeFixture.task.contextRevisionDigest,
+          baseRevisionDigest: bindGitRevision(beforeRevision, deterministicSha256).descriptorDigest,
+          resultTreeDigest: bindGitObjectId(afterRevision.tree, deterministicSha256)
+            .descriptorDigest,
+          completionFactDigest: sha256Digest("5".repeat(64)),
+        },
+      ],
+      gatePolicyDigest: sha256Digest("6".repeat(64)),
+      gateReadingDigest: sha256Digest("7".repeat(64)),
+      gateEvaluationDigest: sha256Digest("8".repeat(64)),
+      outcome: "integrated",
+    },
+    deterministicSha256,
+  );
 }

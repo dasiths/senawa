@@ -63,6 +63,12 @@ export const runtimeFixture = Object.freeze({
   criterionId: criterionId("criterion_verified"),
   dependencyBarrierDigest: sha256Digest("b".repeat(64)),
   escalationPolicyDigest: sha256Digest("c".repeat(64)),
+  configurationSnapshotDigest: sha256Digest("d".repeat(64)),
+  execution: Object.freeze({
+    workspaceMode: "repository" as const,
+    maxWriterConcurrency: 1,
+    failurePolicy: "continue" as const,
+  }),
   currentTime: "2026-08-12T12:00:00.000Z",
 });
 

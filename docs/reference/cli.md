@@ -77,7 +77,7 @@ Create a one-time portal bootstrap URL when the service has a loopback listener:
 senawa portal
 ```
 
-Create a sensor-free `senawa.dev/workflow/v1alpha1` JSON example without
+Create a sensor-free `senawa.dev/workflow/v1alpha2` JSON example without
 overwriting an existing destination:
 
 ```bash

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GOLDEN_COMMAND_JSON, GOLDEN_RECEIPT_JSON } from "./fixtures/v1alpha.js";
+import { GOLDEN_COMMAND_JSON, GOLDEN_RECEIPT_JSON } from "./fixtures/v1alpha2.js";
 import {
   canonicalBytes,
   decodeApplyApprovedAmendmentPayload,
@@ -14,6 +14,7 @@ import {
   decodeProjectionEnvelope,
   decodeReceiptPage,
   decodeRecordAmendmentDecisionPayload,
+  decodeRecordIntegrationBarrierPayload,
   decodeRunIdentity,
   decodeSubmitAmendmentProposalPayload,
   decodeSupervisorAdmissionFacts,
@@ -34,6 +35,7 @@ import {
   encodeProjectionEnvelope,
   encodeReceiptPage,
   encodeRecordAmendmentDecisionPayload,
+  encodeRecordIntegrationBarrierPayload,
   encodeRunIdentity,
   encodeSubmitAmendmentProposalPayload,
   encodeTransportAttribution,
@@ -120,7 +122,7 @@ const errorEnvelope = {
   details: { actualRevision: "revision_08" },
 } as const;
 
-describe("v1alpha command codec", () => {
+describe("v1alpha2 command codec", () => {
   it("matches the canonical command golden fixture and round trips", () => {
     const encoded = encodeCommandEnvelope(command);
 
@@ -171,10 +173,25 @@ describe("v1alpha command codec", () => {
     "withdraw-amendment-proposal",
     "record-amendment-decision",
     "apply-approved-amendment",
+    "record-integration-barrier",
     "create-escalation",
     "grant-allowance",
   ] as const)("accepts the %s intent discriminator", (type) => {
     expect(decodeCommandEnvelope({ ...command, intent: { type } }).intent).toEqual({ type });
+  });
+
+  it("round trips the exact trusted integration barrier payload", () => {
+    const payload = {
+      integrationId: "integration_alpha",
+      configurationSnapshotDigest: DIGEST,
+      barrier: { barrierDigest: "b".repeat(64), outcome: "integrated" },
+    };
+    expect(
+      decodeRecordIntegrationBarrierPayload(encodeRecordIntegrationBarrierPayload(payload)),
+    ).toEqual(payload);
+    expectProtocolError("unknown-field", "$.candidateDigest", () =>
+      decodeRecordIntegrationBarrierPayload({ ...payload, candidateDigest: DIGEST }),
+    );
   });
 
   it("rejects malformed identifiers, digests, timestamps, and alternate attribution", () => {
@@ -246,7 +263,7 @@ describe("v1alpha command codec", () => {
   });
 });
 
-describe("v1alpha amendment command payloads", () => {
+describe("v1alpha2 amendment command payloads", () => {
   const amendmentId = "amendment_fixture";
   const proposalDigest = "b".repeat(64);
   const reviewedResultGraphRevisionDigest = "c".repeat(64);
@@ -319,7 +336,7 @@ describe("v1alpha amendment command payloads", () => {
   });
 });
 
-describe("v1alpha identity and attribution values", () => {
+describe("v1alpha2 identity and attribution values", () => {
   it("round trips standalone principal, transport, and run identity DTOs", () => {
     expect(decodeAuthenticatedPrincipal(encodeAuthenticatedPrincipal(command.principal))).toEqual(
       command.principal,
@@ -350,7 +367,7 @@ describe("v1alpha identity and attribution values", () => {
   });
 });
 
-describe("v1alpha receipts", () => {
+describe("v1alpha2 receipts", () => {
   it("matches the canonical receipt golden fixture and round trips", () => {
     const encoded = encodeDurableReceipt(receipt);
 
@@ -382,7 +399,7 @@ describe("v1alpha receipts", () => {
   });
 });
 
-describe("v1alpha bounded query pages", () => {
+describe("v1alpha2 bounded query pages", () => {
   const receiptPage = {
     apiVersion: PROTOCOL_VERSION,
     repositoryId: command.repositoryId,
@@ -505,7 +522,7 @@ describe("v1alpha bounded query pages", () => {
   });
 });
 
-describe("v1alpha supervisor persistence codecs", () => {
+describe("v1alpha2 supervisor persistence codecs", () => {
   it("decodes exact admission allocations and rejects unknown allocation fields", () => {
     const admission = {
       currentTime: "2026-08-12T12:00:00Z",
@@ -572,7 +589,7 @@ describe("v1alpha supervisor persistence codecs", () => {
   });
 });
 
-describe("v1alpha event, projection, capability, and error envelopes", () => {
+describe("v1alpha2 event, projection, capability, and error envelopes", () => {
   it("round trips canonical event and projection envelopes", () => {
     expect(decodeEventStreamFrame(encodeEventStreamFrame(event))).toEqual(event);
     expect(decodeProjectionEnvelope(encodeProjectionEnvelope(projection))).toEqual(projection);

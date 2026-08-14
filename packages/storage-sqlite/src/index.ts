@@ -24,12 +24,17 @@ import {
   type AmendmentDecision,
   type AmendmentProposal,
   type AmendmentWithdrawal,
+  bindGitObjectId,
+  bindGitRevision,
   canonicalDigest,
   canonicalValue,
   createAmendmentQuiescenceFact,
   type HistoricalAssetBinding,
+  type IntegrationBarrier,
+  type IntegrationMember,
   isSha256Digest,
   type PhaseGenerationReference,
+  validateIntegrationBarrier,
   validateWorkflowGraph,
 } from "@senawa/kernel";
 import {
@@ -63,6 +68,8 @@ import {
   type ClaimEffectAttemptResult,
   type CommandServicePort,
   type CommitEffectRequest,
+  type CompletionEligibilityInput,
+  type CompletionEligibilityRecord,
   type CompletionFactPort,
   type ContextAuthoritySnapshot,
   ContextBroker,
@@ -74,6 +81,7 @@ import {
   decodePersistedAssetReadReplayKey,
   type EffectIntent,
   type EffectOutcome,
+  type EnsureTaskScopesAndBudgetsInput,
   type FencedRunnerCancellationInput,
   type FencedRunnerContextUpdateInput,
   type FinalizedEffectUsage,
@@ -81,14 +89,23 @@ import {
   InMemoryContextAuthority,
   type InMemoryRunnerRunInput,
   type InstallTaskScopeFencesInput,
+  type IntegrationAttemptInput,
+  type IntegrationAttemptRecord,
+  type IntegrationAttemptState,
+  type IntegrationGateRecord,
+  type IntegrationSlotClaimInput,
+  type IntegrationSlotClaimResult,
   PageQueryError,
+  type ParallelExecutionPolicy,
   type PersistIntentRequest,
   type PersistIntentResult,
   type QueuedEffectCommand,
   type RegisterWorkerDispatchInput,
+  type RunExecutionBinding,
   type RunnerAuthorityPort,
   type RunnerAuthoritySnapshot,
   type RunnerBudgetState,
+  type RunnerCapacityState,
   type RunnerEffectEvent,
   type RunnerEffectReceipt,
   type RunnerEscalation,
@@ -106,10 +123,16 @@ import {
   selectEffectAttemptAction,
   type TaskScopeCurrentness,
   taskScopeKey,
+  type WorkspaceIntegrationAuthorityPort,
+  type WorkspaceIntentInput,
+  type WorkspaceLifecycleState,
+  type WorkspaceRecord,
+  type WorkspaceResultInput,
+  type WorkspaceResultRecord,
 } from "@senawa/runtime";
 import Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 const WAL_AUTOCHECKPOINT_PAGES = 16_384;
 const MIGRATIONS_DIRECTORY = fileURLToPath(new URL("../migrations", import.meta.url));
@@ -203,6 +226,27 @@ export interface SqliteRunnerAuthorityOptions {
   readonly dependencies: RuntimeDependencies;
   readonly busyTimeoutMs?: number;
   readonly faultInjector?: (point: SqliteRunnerFaultPoint) => void;
+}
+
+export type SqliteWorkspaceAuthorityFaultPoint =
+  | "before-workspace-intent-commit"
+  | "after-workspace-intent-commit-before-ack"
+  | "before-workspace-result-commit"
+  | "after-workspace-result-commit-before-ack"
+  | "before-integration-intent-commit"
+  | "after-integration-intent-commit-before-ack"
+  | "before-integration-claim-commit"
+  | "after-integration-claim-commit-before-ack"
+  | "before-integration-barrier-commit"
+  | "after-integration-barrier-commit-before-ack"
+  | "before-completion-eligibility-commit"
+  | "after-completion-eligibility-commit-before-ack";
+
+export interface SqliteWorkspaceIntegrationAuthorityOptions {
+  readonly databasePath: string;
+  readonly dependencies: RuntimeDependencies;
+  readonly busyTimeoutMs?: number;
+  readonly faultInjector?: (point: SqliteWorkspaceAuthorityFaultPoint) => void;
 }
 
 export interface WorkerAmendmentOutboxClaim {
@@ -596,6 +640,18 @@ export class SqliteAuthority
     return this.#readService().queryProjection(repositoryId, runId);
   }
 
+  queryRunExecution(repositoryId: string, runId: string): RunExecutionBinding | undefined {
+    return this.#readService().queryRunExecution(repositoryId, runId);
+  }
+
+  queryIntegrationBarrier(repositoryId: string, runId: string): IntegrationBarrier | undefined {
+    return this.#readService().queryIntegrationBarrier(repositoryId, runId);
+  }
+
+  queryRunScheduling(repositoryId: string, runId: string) {
+    return this.#readService().queryRunScheduling(repositoryId, runId);
+  }
+
   toCanonicalJson(): string {
     const serialized = this.#readAuthorityRow().canonical_json;
     InMemoryAuthority.fromCanonicalJson(serialized, this.dependencies);
@@ -956,6 +1012,16 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
     if (this.#database.open) this.#database.close();
   }
 
+  isConfigured(repositoryId: string, runId: string): boolean {
+    return (
+      this.#database
+        .prepare<[string], { present: number }>(
+          "SELECT 1 AS present FROM runner_runs WHERE run_key = ?",
+        )
+        .get(runnerRunKey(repositoryId, runId)) !== undefined
+    );
+  }
+
   configureRun(input: InMemoryRunnerRunInput): void {
     validateRunnerIdentity(input.repositoryId, "repositoryId");
     validateRunnerIdentity(input.runId, "runId");
@@ -967,6 +1033,16 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
       validateRunnerAmount(budget.limit, "budget limit");
       if (budgets.has(budget.unit)) throw new TypeError("Runner budget units must be unique");
       budgets.set(budget.unit, budget.limit);
+    }
+    const capacities = new Map<string, RunnerCapacityState>();
+    for (const capacity of input.capacities ?? [
+      { resource: "writer" as const, limit: 1, occupied: 0 },
+    ]) {
+      validateRunnerCapacityState(capacity);
+      if (capacities.has(capacity.resource)) {
+        throw new TypeError("Runner capacity resources must be unique");
+      }
+      capacities.set(capacity.resource, capacity);
     }
     const runKey = runnerRunKey(input.repositoryId, input.runId);
     this.#database.exec("BEGIN IMMEDIATE");
@@ -984,6 +1060,14 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
          ) VALUES (?, ?, ?, 0, 0, 0)`,
       );
       for (const [unit, limit] of budgets) insertBudget.run(runKey, unit, limit);
+      const insertCapacity = this.#database.prepare(
+        `INSERT INTO runner_capacities(
+           run_key, resource_key, capacity_limit, occupied
+         ) VALUES (?, ?, ?, ?)`,
+      );
+      for (const capacity of capacities.values()) {
+        insertCapacity.run(runKey, capacity.resource, capacity.limit, capacity.occupied);
+      }
       insertInitialTaskScopes(this.#database, input.repositoryId, input.runId, input.taskScopes);
       this.#database
         .prepare("INSERT INTO runner_projections(run_key, canonical_projection) VALUES (?, ?)")
@@ -1027,6 +1111,50 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
       if (isSqliteConstraint(error)) {
         throw new TypeError("Runner command or operation identity is already queued or started");
       }
+      throw error;
+    }
+  }
+
+  enqueueIdempotent(command: QueuedEffectCommand): boolean {
+    validateRunnerCommand(command);
+    const stored = snapshotRunnerValue(command);
+    const canonical = canonicalStringify(stored);
+    const runKey = runnerRunKey(command.repositoryId, command.runId);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#requireRunnerRun(command.repositoryId, command.runId);
+      const existing = this.#database
+        .prepare<
+          [string, string, string],
+          { command_id: string; operation_id: string; canonical_command: string }
+        >(
+          `SELECT command_id, operation_id, canonical_command FROM runner_commands
+           WHERE run_key = ? AND (command_id = ? OR operation_id = ?)`,
+        )
+        .get(runKey, stored.commandId, stored.operationId);
+      if (existing !== undefined) {
+        if (
+          existing.command_id !== stored.commandId ||
+          existing.operation_id !== stored.operationId ||
+          existing.canonical_command !== canonical
+        ) {
+          throw new TypeError("Runner stage identity is already bound to different content");
+        }
+        this.#database.exec("COMMIT");
+        return false;
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO runner_commands(
+             command_id, run_key, operation_id, sequence, canonical_command
+           ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(stored.commandId, runKey, stored.operationId, stored.sequence, canonical);
+      this.#appendTransition(stored, "queued", stored.queuedAt, undefined, { kind: stored.kind });
+      this.#database.exec("COMMIT");
+      return true;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
       throw error;
     }
   }
@@ -1084,6 +1212,7 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
       queuedCommands: commands,
       effects,
       escalations,
+      capacities: this.queryCapacities(input.repositoryId, input.runId),
     });
   }
 
@@ -1092,6 +1221,55 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
     try {
       const run = this.#requireRunnerRun(input.repositoryId, input.runId);
       this.#assertRunnerFence(run.run_key, input.lease, input.currentTime);
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  ensureTaskScopesAndBudgets(input: EnsureTaskScopesAndBudgetsInput): void {
+    const scopes = new Map<string, TaskScopeCurrentness>();
+    for (const scope of input.taskScopes) {
+      if (scope.runId !== input.runId || !scope.claimsAccepted) {
+        throw new TypeError("Admitted runner task scope must match the run and accept claims");
+      }
+      const key = taskScopeKey(scope);
+      if (scopes.has(key)) throw new TypeError("Admitted runner task scopes must be unique");
+      scopes.set(key, scope);
+    }
+    const budgets = new Map<string, number>();
+    for (const budget of input.budgets) {
+      validateRunnerUnit(budget.unit);
+      validateRunnerAmount(budget.limit, "budget limit");
+      if (budgets.has(budget.unit)) throw new TypeError("Admitted runner budgets must be unique");
+      budgets.set(budget.unit, budget.limit);
+    }
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const run = this.#requireRunnerRun(input.repositoryId, input.runId);
+      this.#assertRunnerFence(run.run_key, input.lease, input.currentTime);
+      for (const scope of scopes.values()) {
+        insertInitialTaskScopes(this.#database, input.repositoryId, input.runId, [scope]);
+      }
+      for (const [unit, limit] of budgets) {
+        const existing = this.#database
+          .prepare<[string, string], { budget_limit: number }>(
+            "SELECT budget_limit FROM runner_budgets WHERE run_key = ? AND unit = ?",
+          )
+          .get(run.run_key, unit);
+        if (existing !== undefined && limit < existing.budget_limit) {
+          throw new TypeError("Runner budget admission cannot reduce a durable limit");
+        }
+        this.#database
+          .prepare(
+            `INSERT INTO runner_budgets(
+               run_key, unit, budget_limit, reserved, spent, unreported
+             ) VALUES (?, ?, ?, 0, 0, 0)
+             ON CONFLICT(run_key, unit) DO UPDATE SET budget_limit = excluded.budget_limit`,
+          )
+          .run(run.run_key, unit, limit);
+      }
       this.#database.exec("COMMIT");
     } catch (error) {
       if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
@@ -1253,9 +1431,6 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
           escalation: parseRunnerValue(existingEscalation.canonical_escalation),
         };
       }
-      if (command.contextDigest !== run.context_digest) {
-        throw new TypeError("Runner command context is stale before effect intent persistence");
-      }
       const currentness = requireTaskScopeCurrentness(
         this.#database,
         run.run_key,
@@ -1302,6 +1477,20 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
         this.#fault("after-intent-commit-before-ack");
         return { type: "escalated", escalation };
       }
+      const capacityReservation = command.capacityReservation;
+      if (capacityReservation !== undefined) {
+        const capacity = this.#requiredCapacity(run.run_key, capacityReservation.resource);
+        const availableCapacity = Math.max(0, capacity.capacity_limit - capacity.occupied);
+        if (capacityReservation.amount > availableCapacity) {
+          this.#database.exec("COMMIT");
+          committed = true;
+          return {
+            type: "capacity-unavailable",
+            reservation: capacityReservation,
+            available: availableCapacity,
+          };
+        }
+      }
       const intent = deepFreezeRunnerValue<EffectIntent>({
         command,
         owner: request.lease.owner,
@@ -1331,6 +1520,36 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
            WHERE run_key = ? AND unit = ?`,
         )
         .run(command.budgetReservation.amount, run.run_key, command.budgetReservation.unit);
+      if (capacityReservation !== undefined) {
+        this.#database
+          .prepare(
+            `INSERT INTO runner_capacity_reservations(
+               intent_id, run_key, resource_key, amount, released, reserved_at, released_at
+             ) VALUES (?, ?, ?, ?, 0, ?, NULL)`,
+          )
+          .run(
+            command.operationId,
+            run.run_key,
+            capacityReservation.resource,
+            capacityReservation.amount,
+            request.currentTime,
+          );
+        const capacityUpdate = this.#database
+          .prepare(
+            `UPDATE runner_capacities SET occupied = occupied + ?
+             WHERE run_key = ? AND resource_key = ?
+               AND occupied + ? <= capacity_limit`,
+          )
+          .run(
+            capacityReservation.amount,
+            run.run_key,
+            capacityReservation.resource,
+            capacityReservation.amount,
+          );
+        if (capacityUpdate.changes !== 1) {
+          throw new Error("Durable writer capacity changed during intent persistence");
+        }
+      }
       this.#appendTransition(command, "intent", request.currentTime, request.attemptId, {
         owner: intent.owner,
         fence: intent.fence,
@@ -1518,6 +1737,28 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
             run.run_key,
             reservation.unit,
           );
+        const capacityReservation = request.intent.command.capacityReservation;
+        if (capacityReservation !== undefined) {
+          const release = this.#database
+            .prepare(
+              `UPDATE runner_capacity_reservations
+               SET released = 1, released_at = ?
+               WHERE intent_id = ? AND released = 0`,
+            )
+            .run(outcome.observedAt, outcome.operationId);
+          if (release.changes === 1) {
+            const capacity = this.#requiredCapacity(run.run_key, capacityReservation.resource);
+            if (capacity.occupied < capacityReservation.amount) {
+              throw new Error("Durable effect reservation exceeds occupied capacity");
+            }
+            this.#database
+              .prepare(
+                `UPDATE runner_capacities SET occupied = occupied - ?
+                 WHERE run_key = ? AND resource_key = ?`,
+              )
+              .run(capacityReservation.amount, run.run_key, capacityReservation.resource);
+          }
+        }
       }
       this.#appendTransition(
         request.intent.command,
@@ -1721,6 +1962,25 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
     );
   }
 
+  queryCapacities(repositoryId: string, runId: string): readonly RunnerCapacityState[] {
+    const run = this.#requireRunnerRun(repositoryId, runId);
+    return Object.freeze(
+      this.#database
+        .prepare<[string], { resource_key: "writer"; capacity_limit: number; occupied: number }>(
+          `SELECT resource_key, capacity_limit, occupied
+           FROM runner_capacities WHERE run_key = ? ORDER BY resource_key`,
+        )
+        .all(run.run_key)
+        .map((row) =>
+          Object.freeze({
+            resource: row.resource_key,
+            limit: row.capacity_limit,
+            occupied: row.occupied,
+          }),
+        ),
+    );
+  }
+
   #appendTransition(
     command: QueuedEffectCommand,
     status: RunnerEffectReceipt["status"] | "budget-escalated",
@@ -1881,21 +2141,33 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
   }
 
   #configureLease(runKey: string, lease: RunnerLeaseFact): void {
-    if (lease.fence !== 1)
-      throw new TypeError("A newly configured runner lease must start at fence 1");
     const run = this.#database
       .prepare<[string], { repository_id: string; run_id: string }>(
         "SELECT repository_id, run_id FROM runner_runs WHERE run_key = ?",
       )
       .get(runKey);
     if (run === undefined) throw new TypeError("Runner run is not configured");
+    const resourceKey = runnerLeaseResourceKey(run.repository_id, run.run_id, this.dependencies);
+    const existing = this.#database
+      .prepare<[string], LeaseRow>(
+        "SELECT resource_key, owner_id, fence, expires_at FROM leases WHERE resource_key = ?",
+      )
+      .get(resourceKey);
+    if (existing !== undefined) {
+      if (
+        existing.owner_id !== lease.owner ||
+        existing.fence !== lease.fence ||
+        existing.expires_at !== lease.expiresAt
+      ) {
+        throw new StaleLeaseFenceError(resourceKey, lease.fence);
+      }
+      return;
+    }
+    if (lease.fence !== 1)
+      throw new TypeError("A newly configured runner lease must start at fence 1");
     this.#database
       .prepare("INSERT INTO leases(resource_key, owner_id, fence, expires_at) VALUES (?, ?, 1, ?)")
-      .run(
-        runnerLeaseResourceKey(run.repository_id, run.run_id, this.dependencies),
-        lease.owner,
-        lease.expiresAt,
-      );
+      .run(resourceKey, lease.owner, lease.expiresAt);
   }
 
   #requireRunnerRun(
@@ -1951,7 +2223,902 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
     return row;
   }
 
+  #requiredCapacity(
+    runKey: string,
+    resource: "writer",
+  ): {
+    readonly resource_key: "writer";
+    readonly capacity_limit: number;
+    readonly occupied: number;
+  } {
+    const row = this.#database
+      .prepare<
+        [string, string],
+        { resource_key: "writer"; capacity_limit: number; occupied: number }
+      >(
+        `SELECT resource_key, capacity_limit, occupied FROM runner_capacities
+         WHERE run_key = ? AND resource_key = ?`,
+      )
+      .get(runKey, resource);
+    if (row === undefined) throw new TypeError("Runner command names an unknown capacity resource");
+    return row;
+  }
+
   #fault(point: SqliteRunnerFaultPoint): void {
+    this.#faultInjector?.(point);
+  }
+}
+
+export class SqliteWorkspaceIntegrationAuthority implements WorkspaceIntegrationAuthorityPort {
+  readonly databasePath: string;
+  readonly dependencies: RuntimeDependencies;
+  readonly #database: Database.Database;
+  readonly #faultInjector: ((point: SqliteWorkspaceAuthorityFaultPoint) => void) | undefined;
+
+  constructor(options: SqliteWorkspaceIntegrationAuthorityOptions) {
+    this.databasePath = resolve(options.databasePath);
+    this.dependencies = options.dependencies;
+    this.#faultInjector = options.faultInjector;
+    ensureSafeDirectoryPath(dirname(this.databasePath));
+    this.#database = new Database(this.databasePath, {
+      timeout: options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS,
+    });
+    try {
+      configureWriteConnection(this.#database, options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS);
+      applyMigrations(this.#database, this.dependencies);
+    } catch (error) {
+      this.#database.close();
+      throw error;
+    }
+  }
+
+  close(): void {
+    if (this.#database.open) this.#database.close();
+  }
+
+  bindRunExecution(input: RunExecutionBinding): RunExecutionBinding {
+    const binding = validateRunExecutionBinding(input);
+    const run = this.#requireRun(binding.repositoryId, binding.runId);
+    const canonical = canonicalStringify(binding);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.#database
+        .prepare<[string], { canonical_binding: string }>(
+          "SELECT canonical_binding FROM runner_execution_bindings WHERE run_key = ?",
+        )
+        .get(run.run_key);
+      if (existing === undefined) {
+        this.#database
+          .prepare(
+            `INSERT INTO runner_execution_bindings(
+               run_key, repository_id, run_id, configuration_snapshot_digest,
+               workspace_mode, max_writer_concurrency, failure_policy,
+               integration_ref, canonical_binding
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            run.run_key,
+            binding.repositoryId,
+            binding.runId,
+            binding.configurationSnapshotDigest,
+            binding.execution.workspaceMode,
+            binding.execution.maxWriterConcurrency,
+            binding.execution.failurePolicy,
+            binding.execution.integrationRef ?? null,
+            canonical,
+          );
+      } else if (existing.canonical_binding !== canonical) {
+        throw new TypeError("Run execution identity is already bound to different content");
+      }
+      this.#database.exec("COMMIT");
+      return binding;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  loadRunExecution(repositoryId: string, runId: string): RunExecutionBinding | undefined {
+    const run = this.#requireRun(repositoryId, runId);
+    const row = this.#database
+      .prepare<[string], { canonical_binding: string }>(
+        "SELECT canonical_binding FROM runner_execution_bindings WHERE run_key = ?",
+      )
+      .get(run.run_key);
+    return row === undefined
+      ? undefined
+      : validateRunExecutionBinding(parseRunnerValue(row.canonical_binding));
+  }
+
+  listWorkspaces(repositoryId: string, runId: string): readonly WorkspaceRecord[] {
+    const run = this.#requireRun(repositoryId, runId);
+    return Object.freeze(
+      this.#database
+        .prepare<[string], { canonical_workspace: string }>(
+          `SELECT canonical_workspace FROM runner_workspaces
+           WHERE run_key = ? ORDER BY workspace_id`,
+        )
+        .all(run.run_key)
+        .map(({ canonical_workspace }) => parseRunnerValue<WorkspaceRecord>(canonical_workspace)),
+    );
+  }
+
+  listWorkspaceResults(repositoryId: string, runId: string): readonly WorkspaceResultRecord[] {
+    const run = this.#requireRun(repositoryId, runId);
+    return Object.freeze(
+      this.#database
+        .prepare<[string], { canonical_result: string }>(
+          `SELECT r.canonical_result FROM runner_workspace_results r
+           JOIN runner_workspaces w ON w.workspace_id = r.workspace_id
+           WHERE w.run_key = ? ORDER BY r.result_id`,
+        )
+        .all(run.run_key)
+        .map(({ canonical_result }) => parseRunnerValue<WorkspaceResultRecord>(canonical_result)),
+    );
+  }
+
+  listIntegrationAttempts(
+    repositoryId: string,
+    runId: string,
+  ): readonly IntegrationAttemptRecord[] {
+    const run = this.#requireRun(repositoryId, runId);
+    return Object.freeze(
+      this.#database
+        .prepare<[string], { canonical_attempt: string }>(
+          `SELECT canonical_attempt FROM runner_integration_attempts
+           WHERE run_key = ? ORDER BY integration_id`,
+        )
+        .all(run.run_key)
+        .map(({ canonical_attempt }) =>
+          parseRunnerValue<IntegrationAttemptRecord>(canonical_attempt),
+        ),
+    );
+  }
+
+  integrationSlotStatus(repositoryId: string):
+    | {
+        readonly ownerId: string;
+        readonly fence: number;
+        readonly expiresAt: string;
+      }
+    | undefined {
+    validateRunnerIdentity(repositoryId, "repositoryId");
+    const resourceKey = integrationSlotResourceKey(repositoryId, this.dependencies);
+    const row = this.#database
+      .prepare<[string], LeaseRow>(
+        "SELECT resource_key, owner_id, fence, expires_at FROM leases WHERE resource_key = ?",
+      )
+      .get(resourceKey);
+    return row === undefined
+      ? undefined
+      : Object.freeze({
+          ownerId: row.owner_id,
+          fence: row.fence,
+          expiresAt: row.expires_at,
+        });
+  }
+
+  persistWorkspaceIntent(input: WorkspaceIntentInput): WorkspaceRecord {
+    validateRunnerIdentity(input.workspaceId, "workspaceId");
+    validateRunnerIdentity(input.dispatchId, "dispatchId");
+    validateRunnerIdentity(input.taskId, "taskId");
+    validateRunnerIdentity(input.prepareEffectId, "prepareEffectId");
+    validateRunnerIdentity(input.inspectEffectId, "inspectEffectId");
+    validateDefinitionGeneration(input.definitionGeneration);
+    const binding = this.#requiredBinding(input.repositoryId, input.runId);
+    if (binding.execution.workspaceMode !== "worktree") {
+      throw new TypeError("Repository execution forbids durable workspace intents");
+    }
+    const baseRevision = bindGitRevision(input.baseRevision, this.dependencies.sha256);
+    const record = deepFreezeRunnerValue<WorkspaceRecord>({
+      repositoryId: input.repositoryId,
+      runId: input.runId,
+      workspaceId: input.workspaceId,
+      dispatchId: input.dispatchId,
+      taskId: input.taskId,
+      definitionGeneration: input.definitionGeneration,
+      mode: binding.execution.workspaceMode,
+      state: "intent",
+      baseRevision,
+      prepareEffectId: input.prepareEffectId,
+      inspectEffectId: input.inspectEffectId,
+    });
+    const run = this.#requireRun(input.repositoryId, input.runId);
+    const canonical = canonicalStringify(record);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.#database
+        .prepare<[string], { canonical_workspace: string }>(
+          "SELECT canonical_workspace FROM runner_workspaces WHERE workspace_id = ?",
+        )
+        .get(input.workspaceId);
+      let result = record;
+      if (existing === undefined) {
+        this.#database
+          .prepare(
+            `INSERT INTO runner_workspaces(
+               workspace_id, run_key, repository_id, dispatch_id, task_id,
+               definition_generation, mode, state, base_revision_digest,
+               prepare_effect_id, inspect_effect_id, canonical_workspace
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, 'intent', ?, ?, ?, ?)`,
+          )
+          .run(
+            record.workspaceId,
+            run.run_key,
+            record.repositoryId,
+            record.dispatchId,
+            record.taskId,
+            record.definitionGeneration,
+            record.mode,
+            record.baseRevision.descriptorDigest,
+            record.prepareEffectId,
+            record.inspectEffectId,
+            canonical,
+          );
+      } else {
+        const current = parseRunnerValue<WorkspaceRecord>(existing.canonical_workspace);
+        if (canonicalStringify({ ...current, state: "intent" }) !== canonical) {
+          throw new TypeError("Workspace identity is already bound to different content");
+        }
+        result = current;
+      }
+      this.#fault("before-workspace-intent-commit");
+      this.#database.exec("COMMIT");
+      this.#fault("after-workspace-intent-commit-before-ack");
+      return result;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordWorkspaceState(
+    repositoryId: string,
+    runId: string,
+    workspaceId: string,
+    state: WorkspaceLifecycleState,
+  ): WorkspaceRecord {
+    const current = this.#requiredWorkspace(repositoryId, runId, workspaceId);
+    if (!isAllowedWorkspaceTransition(current.state, state)) {
+      throw new TypeError(`Workspace state cannot transition from ${current.state} to ${state}`);
+    }
+    if (current.state === state) return current;
+    const updated = deepFreezeRunnerValue({ ...current, state });
+    this.#database
+      .prepare(
+        `UPDATE runner_workspaces SET state = ?, canonical_workspace = ?
+         WHERE workspace_id = ?`,
+      )
+      .run(state, canonicalStringify(updated), workspaceId);
+    return updated;
+  }
+
+  persistWorkspaceResult(input: WorkspaceResultInput): WorkspaceResultRecord {
+    validateRunnerIdentity(input.resultId, "resultId");
+    validateRunnerIdentity(input.captureEffectId, "captureEffectId");
+    validateRunnerIdentity(input.inspectEffectId, "inspectEffectId");
+    validateRunnerDigest(input.completionFactDigest, "completionFactDigest");
+    validateTimestamp(input.recordedAt, "recordedAt");
+    const workspace = this.#requiredWorkspace(input.repositoryId, input.runId, input.workspaceId);
+    if (!isAllowedWorkspaceTransition(workspace.state, "captured")) {
+      throw new TypeError("Workspace result requires a prepared or capture-intent workspace");
+    }
+    const resultRevision = bindGitRevision(input.resultRevision, this.dependencies.sha256);
+    const record = deepFreezeRunnerValue<WorkspaceResultRecord>({ ...input, resultRevision });
+    const canonical = canonicalStringify(record);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.#database
+        .prepare<[string], { canonical_result: string }>(
+          "SELECT canonical_result FROM runner_workspace_results WHERE result_id = ?",
+        )
+        .get(input.resultId);
+      if (existing === undefined) {
+        this.#database
+          .prepare(
+            `INSERT INTO runner_workspace_results(
+               result_id, workspace_id, result_tree_digest, result_revision_digest,
+               completion_fact_digest, capture_effect_id, inspect_effect_id,
+               recorded_at, canonical_result
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            record.resultId,
+            record.workspaceId,
+            bindGitObjectId(record.resultRevision.revision.tree, this.dependencies.sha256)
+              .descriptorDigest,
+            record.resultRevision.descriptorDigest,
+            record.completionFactDigest,
+            record.captureEffectId,
+            record.inspectEffectId,
+            record.recordedAt,
+            canonical,
+          );
+        const updatedWorkspace = deepFreezeRunnerValue({
+          ...workspace,
+          state: "captured" as const,
+        });
+        this.#database
+          .prepare(
+            `UPDATE runner_workspaces SET state = 'captured', canonical_workspace = ?
+             WHERE workspace_id = ?`,
+          )
+          .run(canonicalStringify(updatedWorkspace), workspace.workspaceId);
+      } else if (existing.canonical_result !== canonical) {
+        throw new TypeError("Workspace result identity is already bound to different content");
+      }
+      this.#fault("before-workspace-result-commit");
+      this.#database.exec("COMMIT");
+      this.#fault("after-workspace-result-commit-before-ack");
+      return record;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  persistIntegrationIntent(input: IntegrationAttemptInput): IntegrationAttemptRecord {
+    validateIntegrationAttemptInput(input, this.dependencies);
+    const binding = this.#requiredBinding(input.repositoryId, input.runId);
+    if (binding.execution.workspaceMode !== "worktree") {
+      throw new TypeError("Repository execution forbids integration attempts");
+    }
+    if (input.targetRef !== binding.execution.integrationRef) {
+      throw new TypeError("Integration attempt target does not match immutable execution policy");
+    }
+    const run = this.#requireRun(input.repositoryId, input.runId);
+    const record = deepFreezeRunnerValue<IntegrationAttemptRecord>({ ...input, state: "intent" });
+    const canonical = canonicalStringify(record);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.#database
+        .prepare<[string], { canonical_attempt: string }>(
+          "SELECT canonical_attempt FROM runner_integration_attempts WHERE integration_id = ?",
+        )
+        .get(input.integrationId);
+      let result = record;
+      if (existing === undefined) {
+        this.#database
+          .prepare(
+            `INSERT INTO runner_integration_attempts(
+               integration_id, run_key, repository_id, phase_id, definition_generation,
+               target_ref, fan_in_digest, state, owner_id, fence, slot_resource_key,
+               prepare_effect_id, inspect_effect_id, barrier_digest, canonical_barrier,
+               canonical_attempt
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, 'intent', NULL, NULL, NULL, ?, ?, NULL, NULL, ?)`,
+          )
+          .run(
+            record.integrationId,
+            run.run_key,
+            record.repositoryId,
+            record.phaseId,
+            record.definitionGeneration,
+            record.targetRef,
+            record.fanInDigest,
+            record.prepareEffectId,
+            record.inspectEffectId,
+            canonical,
+          );
+        const insertMember = this.#database.prepare(
+          `INSERT INTO runner_integration_members(
+             integration_id, ordinal, workspace_id, result_id, member_digest, canonical_member
+           ) VALUES (?, ?, ?, ?, ?, ?)`,
+        );
+        for (const [ordinal, member] of record.members.entries()) {
+          const workspace = this.#requiredWorkspace(
+            record.repositoryId,
+            record.runId,
+            member.workspaceId,
+          );
+          const result = this.#requiredResult(record.repositoryId, record.runId, member.resultId);
+          if (
+            member.member.baseRevisionDigest !== workspace.baseRevision.descriptorDigest ||
+            member.member.resultTreeDigest !==
+              bindGitObjectId(result.resultRevision.revision.tree, this.dependencies.sha256)
+                .descriptorDigest ||
+            member.member.completionFactDigest !== result.completionFactDigest
+          ) {
+            throw new TypeError("Integration member does not match its workspace result bindings");
+          }
+          insertMember.run(
+            record.integrationId,
+            ordinal,
+            member.workspaceId,
+            member.resultId,
+            member.member.memberDigest,
+            canonicalStringify(member.member),
+          );
+        }
+      } else {
+        const current = parseRunnerValue<IntegrationAttemptRecord>(existing.canonical_attempt);
+        if (canonicalStringify(integrationIntentIdentity(current)) !== canonical) {
+          throw new TypeError("Integration identity is already bound to different content");
+        }
+        result = current;
+      }
+      this.#fault("before-integration-intent-commit");
+      this.#database.exec("COMMIT");
+      this.#fault("after-integration-intent-commit-before-ack");
+      return result;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  claimIntegrationSlot(input: IntegrationSlotClaimInput): IntegrationSlotClaimResult {
+    validateRunnerIdentity(input.ownerId, "ownerId");
+    validateTimestamp(input.currentTime, "currentTime");
+    validateTimestamp(input.expiresAt, "expiresAt");
+    if (Date.parse(input.expiresAt) <= Date.parse(input.currentTime)) {
+      throw new TypeError("Integration slot expiry must be later than currentTime");
+    }
+    const slotResourceKey = integrationSlotResourceKey(input.repositoryId, this.dependencies);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const attempt = this.#requiredIntegration(
+        input.repositoryId,
+        input.runId,
+        input.integrationId,
+      );
+      const lease = this.#database
+        .prepare<[string], LeaseRow>(
+          "SELECT resource_key, owner_id, fence, expires_at FROM leases WHERE resource_key = ?",
+        )
+        .get(slotResourceKey);
+      if (attempt.state !== "intent") {
+        if (
+          attempt.ownerId === input.ownerId &&
+          lease?.owner_id === input.ownerId &&
+          lease.fence === attempt.fence &&
+          Date.parse(lease.expires_at) > Date.parse(input.currentTime)
+        ) {
+          if (Date.parse(input.expiresAt) > Date.parse(lease.expires_at)) {
+            this.#database
+              .prepare(
+                `UPDATE leases SET expires_at = ?
+                 WHERE resource_key = ? AND owner_id = ? AND fence = ?`,
+              )
+              .run(input.expiresAt, slotResourceKey, input.ownerId, lease.fence);
+          }
+          this.#database.exec("COMMIT");
+          return { type: "replay", attempt };
+        }
+        if (lease !== undefined && Date.parse(lease.expires_at) > Date.parse(input.currentTime)) {
+          this.#database.exec("COMMIT");
+          return { type: "busy", attempt };
+        }
+      }
+      let fence = 1;
+      if (lease === undefined) {
+        this.#database
+          .prepare(
+            "INSERT INTO leases(resource_key, owner_id, fence, expires_at) VALUES (?, ?, 1, ?)",
+          )
+          .run(slotResourceKey, input.ownerId, input.expiresAt);
+      } else if (Date.parse(lease.expires_at) > Date.parse(input.currentTime)) {
+        if (lease.owner_id !== input.ownerId) {
+          this.#database.exec("COMMIT");
+          return { type: "busy", attempt };
+        }
+        fence = lease.fence;
+        if (Date.parse(input.expiresAt) > Date.parse(lease.expires_at)) {
+          this.#database
+            .prepare(
+              `UPDATE leases SET expires_at = ?
+               WHERE resource_key = ? AND owner_id = ? AND fence = ?`,
+            )
+            .run(input.expiresAt, slotResourceKey, input.ownerId, fence);
+        }
+      } else {
+        fence = lease.fence + 1;
+        this.#database
+          .prepare(
+            `UPDATE leases SET owner_id = ?, fence = ?, expires_at = ?
+             WHERE resource_key = ?`,
+          )
+          .run(input.ownerId, fence, input.expiresAt, slotResourceKey);
+      }
+      const claimed = deepFreezeRunnerValue<IntegrationAttemptRecord>({
+        ...attempt,
+        state: "claimed",
+        ownerId: input.ownerId,
+        fence,
+        slotResourceKey,
+      });
+      this.#database
+        .prepare(
+          `UPDATE runner_integration_attempts
+           SET state = 'claimed', owner_id = ?, fence = ?, slot_resource_key = ?,
+               canonical_attempt = ?
+           WHERE integration_id = ?`,
+        )
+        .run(
+          input.ownerId,
+          fence,
+          slotResourceKey,
+          canonicalStringify(claimed),
+          input.integrationId,
+        );
+      this.#fault("before-integration-claim-commit");
+      this.#database.exec("COMMIT");
+      this.#fault("after-integration-claim-commit-before-ack");
+      return { type: "claimed", attempt: claimed };
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordIntegrationState(
+    repositoryId: string,
+    runId: string,
+    integrationId: string,
+    state: IntegrationAttemptState,
+    ownerId: string,
+    fence: number,
+    currentTime: string,
+  ): IntegrationAttemptRecord {
+    validateTimestamp(currentTime, "currentTime");
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.#requiredIntegration(repositoryId, runId, integrationId);
+      this.#assertIntegrationFence(current, ownerId, fence, currentTime);
+      if (!isAllowedIntegrationTransition(current.state, state)) {
+        throw new TypeError(
+          `Integration state cannot transition from ${current.state} to ${state}`,
+        );
+      }
+      if (current.state === state) {
+        this.#database.exec("COMMIT");
+        return current;
+      }
+      const updated = deepFreezeRunnerValue({ ...current, state });
+      this.#database
+        .prepare(
+          `UPDATE runner_integration_attempts SET state = ?, canonical_attempt = ?
+           WHERE integration_id = ?`,
+        )
+        .run(state, canonicalStringify(updated), integrationId);
+      if (terminalIntegrationState(state) && updated.slotResourceKey !== undefined) {
+        const release = this.#database
+          .prepare(
+            `UPDATE leases SET expires_at = '0000-01-01T00:00:00.000Z'
+             WHERE resource_key = ? AND owner_id = ? AND fence = ?`,
+          )
+          .run(updated.slotResourceKey, ownerId, fence);
+        if (release.changes !== 1) {
+          throw new StaleLeaseFenceError(updated.slotResourceKey, fence);
+        }
+      }
+      this.#database.exec("COMMIT");
+      return updated;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordIntegrationGate(
+    repositoryId: string,
+    runId: string,
+    integrationId: string,
+    gate: IntegrationGateRecord,
+    ownerId: string,
+    fence: number,
+    currentTime: string,
+  ): IntegrationAttemptRecord {
+    validateIntegrationGate(gate);
+    validateTimestamp(currentTime, "currentTime");
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.#requiredIntegration(repositoryId, runId, integrationId);
+      this.#assertIntegrationFence(current, ownerId, fence, currentTime);
+      if (current.state !== "validating" && current.state !== "gate-failed") {
+        throw new TypeError("Integration gate requires a validating attempt");
+      }
+      const canonicalEvidence = canonicalStringify(gate.evidence);
+      const existing = this.#database
+        .prepare<[string], { canonical_evidence: string; evaluation_digest: string }>(
+          `SELECT canonical_evidence, evaluation_digest FROM runner_integration_gates
+           WHERE integration_id = ?`,
+        )
+        .get(integrationId);
+      if (existing === undefined) {
+        this.#database
+          .prepare(
+            `INSERT INTO runner_integration_gates(
+               integration_id, policy_digest, reading_digest, evaluation_digest,
+               decision, canonical_evidence
+             ) VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            integrationId,
+            gate.policyDigest,
+            gate.readingDigest,
+            gate.evaluationDigest,
+            gate.decision,
+            canonicalEvidence,
+          );
+      } else if (
+        existing.evaluation_digest !== gate.evaluationDigest ||
+        existing.canonical_evidence !== canonicalEvidence
+      ) {
+        throw new TypeError("Integration gate is immutable once recorded");
+      }
+      const state = gate.decision === "passed" ? "validating" : "gate-failed";
+      const updated = deepFreezeRunnerValue<IntegrationAttemptRecord>({ ...current, state, gate });
+      this.#database
+        .prepare(
+          `UPDATE runner_integration_attempts SET state = ?, canonical_attempt = ?
+           WHERE integration_id = ?`,
+        )
+        .run(state, canonicalStringify(updated), integrationId);
+      this.#database.exec("COMMIT");
+      return updated;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordIntegrationBarrier(
+    repositoryId: string,
+    runId: string,
+    integrationId: string,
+    barrierValue: IntegrationBarrier,
+    ownerId: string,
+    fence: number,
+    currentTime: string,
+  ): IntegrationAttemptRecord {
+    validateTimestamp(currentTime, "currentTime");
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.#requiredIntegration(repositoryId, runId, integrationId);
+      this.#assertIntegrationFence(current, ownerId, fence, currentTime);
+      if (current.state !== "published" && current.state !== "barrier-recorded") {
+        throw new TypeError("Integration barrier requires a published attempt");
+      }
+      const barrier = validateIntegrationBarrier(barrierValue, this.dependencies.sha256);
+      assertBarrierMatchesAttempt(barrier, current);
+      if (current.barrier !== undefined) {
+        if (canonicalStringify(current.barrier) !== canonicalStringify(barrier)) {
+          throw new TypeError("Integration barrier is immutable once recorded");
+        }
+        this.#database.exec("COMMIT");
+        return current;
+      }
+      const updated = deepFreezeRunnerValue<IntegrationAttemptRecord>({
+        ...current,
+        state: "barrier-recorded",
+        barrier,
+      });
+      this.#database
+        .prepare(
+          `UPDATE runner_integration_attempts
+           SET state = 'barrier-recorded', barrier_digest = ?, canonical_barrier = ?,
+               canonical_attempt = ?
+           WHERE integration_id = ?`,
+        )
+        .run(
+          barrier.barrierDigest,
+          canonicalStringify(barrier),
+          canonicalStringify(updated),
+          integrationId,
+        );
+      if (updated.slotResourceKey !== undefined) {
+        this.#database
+          .prepare(
+            `UPDATE leases SET expires_at = '0000-01-01T00:00:00.000Z'
+             WHERE resource_key = ? AND owner_id = ? AND fence = ?`,
+          )
+          .run(updated.slotResourceKey, ownerId, fence);
+      }
+      this.#fault("before-integration-barrier-commit");
+      this.#database.exec("COMMIT");
+      this.#fault("after-integration-barrier-commit-before-ack");
+      return updated;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordCompletionEligibility(input: CompletionEligibilityInput): CompletionEligibilityRecord {
+    validateRunnerIdentity(input.submissionId, "submissionId");
+    validateRunnerIdentity(input.dispatchId, "dispatchId");
+    if (typeof input.terminalCurrentWriter !== "boolean") {
+      throw new TypeError("terminalCurrentWriter must be boolean");
+    }
+    const binding = this.#requiredBinding(input.repositoryId, input.runId);
+    let barrierDigest: string | undefined;
+    let eligible = input.terminalCurrentWriter;
+    if (binding.execution.workspaceMode === "repository") {
+      if (
+        input.workspaceId !== undefined ||
+        input.resultId !== undefined ||
+        input.integrationId !== undefined
+      ) {
+        throw new TypeError("Repository completion eligibility forbids workspace authority");
+      }
+    } else {
+      if (
+        input.workspaceId === undefined ||
+        input.resultId === undefined ||
+        input.integrationId === undefined
+      ) {
+        throw new TypeError("Worktree completion eligibility requires workspace and integration");
+      }
+      const workspace = this.#requiredWorkspace(input.repositoryId, input.runId, input.workspaceId);
+      const result = this.#requiredResult(input.repositoryId, input.runId, input.resultId);
+      const integration = this.#requiredIntegration(
+        input.repositoryId,
+        input.runId,
+        input.integrationId,
+      );
+      if (
+        workspace.dispatchId !== input.dispatchId ||
+        result.workspaceId !== workspace.workspaceId ||
+        !integration.members.some(
+          (member) =>
+            member.workspaceId === workspace.workspaceId &&
+            member.resultId === result.resultId &&
+            member.member.completionFactDigest === result.completionFactDigest,
+        )
+      ) {
+        throw new TypeError("Completion eligibility does not match its integration member");
+      }
+      barrierDigest = integration.barrier?.barrierDigest;
+      eligible =
+        eligible &&
+        workspace.state === "captured" &&
+        integration.state === "barrier-recorded" &&
+        barrierDigest !== undefined;
+    }
+    const record = deepFreezeRunnerValue<CompletionEligibilityRecord>({
+      ...input,
+      mode: binding.execution.workspaceMode,
+      ...(barrierDigest === undefined ? {} : { barrierDigest }),
+      eligible,
+    });
+    const run = this.#requireRun(input.repositoryId, input.runId);
+    const canonical = canonicalStringify(record);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#database
+        .prepare(
+          `INSERT INTO runner_completion_eligibility(
+           submission_id, run_key, dispatch_id, mode, terminal_current_writer,
+           workspace_id, result_id, integration_id, barrier_digest, eligible,
+           canonical_eligibility
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(submission_id) DO UPDATE SET
+           terminal_current_writer = excluded.terminal_current_writer,
+           barrier_digest = excluded.barrier_digest,
+           eligible = excluded.eligible,
+           canonical_eligibility = excluded.canonical_eligibility`,
+        )
+        .run(
+          record.submissionId,
+          run.run_key,
+          record.dispatchId,
+          record.mode,
+          record.terminalCurrentWriter ? 1 : 0,
+          record.workspaceId ?? null,
+          record.resultId ?? null,
+          record.integrationId ?? null,
+          record.barrierDigest ?? null,
+          record.eligible ? 1 : 0,
+          canonical,
+        );
+      this.#fault("before-completion-eligibility-commit");
+      this.#database.exec("COMMIT");
+      this.#fault("after-completion-eligibility-commit-before-ack");
+      return record;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  completionAdmission(submissionId: string): "accepted" | "deferred" {
+    validateRunnerIdentity(submissionId, "submissionId");
+    const row = this.#database
+      .prepare<[string], { eligible: number }>(
+        "SELECT eligible FROM runner_completion_eligibility WHERE submission_id = ?",
+      )
+      .get(submissionId);
+    return row?.eligible === 1 ? "accepted" : "deferred";
+  }
+
+  #requireRun(repositoryId: string, runId: string): { readonly run_key: string } {
+    validateRunnerIdentity(repositoryId, "repositoryId");
+    validateRunnerIdentity(runId, "runId");
+    const row = this.#database
+      .prepare<[string, string], { run_key: string }>(
+        "SELECT run_key FROM runner_runs WHERE repository_id = ? AND run_id = ?",
+      )
+      .get(repositoryId, runId);
+    if (row === undefined) throw new TypeError("Runner run is not configured");
+    return row;
+  }
+
+  #requiredBinding(repositoryId: string, runId: string): RunExecutionBinding {
+    const binding = this.loadRunExecution(repositoryId, runId);
+    if (binding === undefined) throw new TypeError("Run execution policy is not bound");
+    return binding;
+  }
+
+  #requiredWorkspace(repositoryId: string, runId: string, workspaceId: string): WorkspaceRecord {
+    const run = this.#requireRun(repositoryId, runId);
+    const row = this.#database
+      .prepare<[string, string], { canonical_workspace: string }>(
+        `SELECT canonical_workspace FROM runner_workspaces
+         WHERE workspace_id = ? AND run_key = ?`,
+      )
+      .get(workspaceId, run.run_key);
+    if (row === undefined) throw new TypeError("Workspace is not configured for this run");
+    return parseRunnerValue(row.canonical_workspace);
+  }
+
+  #requiredResult(repositoryId: string, runId: string, resultId: string): WorkspaceResultRecord {
+    const run = this.#requireRun(repositoryId, runId);
+    const row = this.#database
+      .prepare<[string, string], { canonical_result: string }>(
+        `SELECT r.canonical_result FROM runner_workspace_results r
+         JOIN runner_workspaces w ON w.workspace_id = r.workspace_id
+         WHERE r.result_id = ? AND w.run_key = ?`,
+      )
+      .get(resultId, run.run_key);
+    if (row === undefined) throw new TypeError("Workspace result is not configured for this run");
+    return parseRunnerValue(row.canonical_result);
+  }
+
+  #requiredIntegration(
+    repositoryId: string,
+    runId: string,
+    integrationId: string,
+  ): IntegrationAttemptRecord {
+    const run = this.#requireRun(repositoryId, runId);
+    const row = this.#database
+      .prepare<[string, string], { canonical_attempt: string }>(
+        `SELECT canonical_attempt FROM runner_integration_attempts
+         WHERE integration_id = ? AND run_key = ?`,
+      )
+      .get(integrationId, run.run_key);
+    if (row === undefined)
+      throw new TypeError("Integration attempt is not configured for this run");
+    return parseRunnerValue(row.canonical_attempt);
+  }
+
+  #assertIntegrationFence(
+    attempt: IntegrationAttemptRecord,
+    ownerId: string,
+    fence: number,
+    currentTime: string,
+  ): void {
+    if (
+      attempt.ownerId !== ownerId ||
+      attempt.fence !== fence ||
+      attempt.slotResourceKey === undefined
+    ) {
+      throw new StaleLeaseFenceError(attempt.slotResourceKey ?? "integration-slot", fence);
+    }
+    const lease = this.#database
+      .prepare<[string], LeaseRow>(
+        "SELECT resource_key, owner_id, fence, expires_at FROM leases WHERE resource_key = ?",
+      )
+      .get(attempt.slotResourceKey);
+    if (
+      lease?.owner_id !== ownerId ||
+      lease.fence !== fence ||
+      Date.parse(lease.expires_at) <= Date.parse(currentTime)
+    ) {
+      throw new StaleLeaseFenceError(attempt.slotResourceKey, fence);
+    }
+  }
+
+  #fault(point: SqliteWorkspaceAuthorityFaultPoint): void {
     this.#faultInjector?.(point);
   }
 }
@@ -2231,6 +3398,282 @@ function validateRunnerAmount(amount: number, subject: string): void {
   }
 }
 
+function validateRunnerCapacityState(capacity: RunnerCapacityState): void {
+  if (capacity.resource !== "writer") {
+    throw new TypeError("Runner capacity resource must be writer");
+  }
+  if (!Number.isSafeInteger(capacity.limit) || capacity.limit < 1) {
+    throw new TypeError("capacity limit must be a positive safe integer");
+  }
+  validateRunnerAmount(capacity.occupied, "occupied capacity");
+  if (capacity.occupied > capacity.limit) {
+    throw new TypeError("Occupied runner capacity must not exceed its limit");
+  }
+}
+
+function validateRunExecutionBinding(input: RunExecutionBinding): RunExecutionBinding {
+  validateRunnerIdentity(input.repositoryId, "repositoryId");
+  validateRunnerIdentity(input.runId, "runId");
+  validateRunnerDigest(input.configurationSnapshotDigest, "configurationSnapshotDigest");
+  const execution = validateParallelExecutionPolicy(input.execution);
+  return deepFreezeRunnerValue({
+    repositoryId: input.repositoryId,
+    runId: input.runId,
+    configurationSnapshotDigest: input.configurationSnapshotDigest,
+    execution,
+  });
+}
+
+function validateParallelExecutionPolicy(input: ParallelExecutionPolicy): ParallelExecutionPolicy {
+  if (input === null || typeof input !== "object") {
+    throw new TypeError("Execution policy must be an object");
+  }
+  const expectedKeys = [
+    "failurePolicy",
+    ...(input.workspaceMode === "worktree" ? ["integrationRef"] : []),
+    "maxWriterConcurrency",
+    "workspaceMode",
+  ].sort();
+  if (Object.keys(input).sort().join(",") !== expectedKeys.join(",")) {
+    throw new TypeError("Execution policy must contain exactly its normalized fields");
+  }
+  if (input.workspaceMode !== "repository" && input.workspaceMode !== "worktree") {
+    throw new TypeError("Execution workspaceMode must be repository or worktree");
+  }
+  if (input.failurePolicy !== "continue" && input.failurePolicy !== "fail-fast") {
+    throw new TypeError("Execution failurePolicy must be continue or fail-fast");
+  }
+  if (!Number.isSafeInteger(input.maxWriterConcurrency) || input.maxWriterConcurrency < 1) {
+    throw new TypeError("Execution maxWriterConcurrency must be a positive safe integer");
+  }
+  if (input.workspaceMode === "repository") {
+    if (input.maxWriterConcurrency !== 1 || input.integrationRef !== undefined) {
+      throw new TypeError("Repository execution requires one writer and no integration ref");
+    }
+  } else if (
+    typeof input.integrationRef !== "string" ||
+    !isFullLocalBranchRefForStorage(input.integrationRef)
+  ) {
+    throw new TypeError("Worktree execution requires a full local integration ref");
+  }
+  return deepFreezeRunnerValue(JSON.parse(canonicalStringify(input)) as ParallelExecutionPolicy);
+}
+
+function validateDefinitionGeneration(value: number): void {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new TypeError("definitionGeneration must be a positive safe integer");
+  }
+}
+
+function validateIntegrationAttemptInput(
+  input: IntegrationAttemptInput,
+  dependencies: RuntimeDependencies,
+): void {
+  validateRunnerIdentity(input.repositoryId, "repositoryId");
+  validateRunnerIdentity(input.runId, "runId");
+  validateRunnerIdentity(input.integrationId, "integrationId");
+  validateRunnerIdentity(input.phaseId, "phaseId");
+  validateDefinitionGeneration(input.definitionGeneration);
+  validateRunnerDigest(input.fanInDigest, "fanInDigest");
+  validateRunnerIdentity(input.prepareEffectId, "prepareEffectId");
+  validateRunnerIdentity(input.inspectEffectId, "inspectEffectId");
+  if (!isFullLocalBranchRefForStorage(input.targetRef)) {
+    throw new TypeError("Integration target must be a full local branch ref");
+  }
+  if (!Array.isArray(input.members) || input.members.length === 0) {
+    throw new TypeError("Integration attempt requires at least one member");
+  }
+  const identities = new Set<string>();
+  let priorTaskId: string | undefined;
+  for (const member of input.members) {
+    validateRunnerIdentity(member.workspaceId, "workspaceId");
+    validateRunnerIdentity(member.resultId, "resultId");
+    validateIntegrationMember(member.member, dependencies);
+    if (priorTaskId !== undefined && priorTaskId >= member.member.taskId) {
+      throw new TypeError("Integration members must be task-sorted and unique");
+    }
+    priorTaskId = member.member.taskId;
+    const identity = `${member.workspaceId}\u0000${member.resultId}`;
+    if (identities.has(identity)) throw new TypeError("Integration members must be unique");
+    identities.add(identity);
+  }
+  const expectedFanIn = canonicalDigest(
+    canonicalValue({ members: input.members.map(({ member }) => member) }),
+    dependencies.sha256,
+  );
+  if (input.fanInDigest !== expectedFanIn) {
+    throw new TypeError("Integration fan-in digest does not match its exact members");
+  }
+}
+
+function validateIntegrationMember(
+  member: IntegrationMember,
+  dependencies: RuntimeDependencies,
+): void {
+  validateRunnerIdentity(member.taskId, "member.taskId");
+  validateDefinitionGeneration(member.definitionGeneration);
+  for (const [field, value] of [
+    ["contextDigest", member.contextDigest],
+    ["baseRevisionDigest", member.baseRevisionDigest],
+    ["resultTreeDigest", member.resultTreeDigest],
+    ["completionFactDigest", member.completionFactDigest],
+    ["memberDigest", member.memberDigest],
+  ] as const) {
+    validateRunnerDigest(value, field);
+  }
+  const expected = canonicalDigest(
+    canonicalValue({
+      taskId: member.taskId,
+      definitionGeneration: member.definitionGeneration,
+      contextDigest: member.contextDigest,
+      baseRevisionDigest: member.baseRevisionDigest,
+      resultTreeDigest: member.resultTreeDigest,
+      completionFactDigest: member.completionFactDigest,
+    }),
+    dependencies.sha256,
+  );
+  if (member.memberDigest !== expected) {
+    throw new TypeError("Integration member digest does not match its exact bindings");
+  }
+}
+
+function validateIntegrationGate(gate: IntegrationGateRecord): void {
+  validateRunnerDigest(gate.policyDigest, "policyDigest");
+  validateRunnerDigest(gate.readingDigest, "readingDigest");
+  validateRunnerDigest(gate.evaluationDigest, "evaluationDigest");
+  if (gate.decision !== "passed" && gate.decision !== "failed") {
+    throw new TypeError("Integration gate decision must be passed or failed");
+  }
+  canonicalStringify(gate.evidence);
+}
+
+function integrationIntentIdentity(attempt: IntegrationAttemptRecord): IntegrationAttemptRecord {
+  return {
+    repositoryId: attempt.repositoryId,
+    runId: attempt.runId,
+    integrationId: attempt.integrationId,
+    phaseId: attempt.phaseId,
+    definitionGeneration: attempt.definitionGeneration,
+    targetRef: attempt.targetRef,
+    fanInDigest: attempt.fanInDigest,
+    members: attempt.members,
+    prepareEffectId: attempt.prepareEffectId,
+    inspectEffectId: attempt.inspectEffectId,
+    state: "intent",
+  };
+}
+
+function assertBarrierMatchesAttempt(
+  barrier: IntegrationBarrier,
+  attempt: IntegrationAttemptRecord,
+): void {
+  if (
+    barrier.phaseId !== attempt.phaseId ||
+    barrier.definitionGeneration !== attempt.definitionGeneration ||
+    barrier.targetRef !== attempt.targetRef ||
+    barrier.fanInDigest !== attempt.fanInDigest ||
+    canonicalStringify(barrier.members) !==
+      canonicalStringify(attempt.members.map(({ member }) => member))
+  ) {
+    throw new TypeError("Integration barrier does not match its durable attempt");
+  }
+  if (
+    attempt.gate === undefined ||
+    attempt.gate.decision !== "passed" ||
+    barrier.gatePolicyDigest !== attempt.gate.policyDigest ||
+    barrier.gateReadingDigest !== attempt.gate.readingDigest ||
+    barrier.gateEvaluationDigest !== attempt.gate.evaluationDigest
+  ) {
+    throw new TypeError("Integration barrier does not match its passed gate authority");
+  }
+}
+
+function integrationSlotResourceKey(
+  repositoryId: string,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): string {
+  return `integration-slot-${canonicalDigest(
+    canonicalValue({ repositoryId, resource: "integration-slot" }),
+    dependencies.sha256,
+  )}`;
+}
+
+function isAllowedWorkspaceTransition(
+  current: WorkspaceLifecycleState,
+  next: WorkspaceLifecycleState,
+): boolean {
+  if (current === next) return true;
+  const allowed: Readonly<Record<WorkspaceLifecycleState, readonly WorkspaceLifecycleState[]>> = {
+    intent: ["prepared", "failed", "unknown"],
+    prepared: ["capture-intent", "captured", "failed", "unknown"],
+    "capture-intent": ["captured", "failed", "unknown"],
+    captured: ["removal-intent"],
+    "removal-intent": ["removed", "failed", "unknown"],
+    removed: [],
+    failed: [],
+    unknown: ["prepared", "captured", "removed", "failed"],
+  };
+  return allowed[current].includes(next);
+}
+
+function isAllowedIntegrationTransition(
+  current: IntegrationAttemptState,
+  next: IntegrationAttemptState,
+): boolean {
+  if (current === next) return true;
+  const terminal: readonly IntegrationAttemptState[] = [
+    "conflicted",
+    "target-moved",
+    "rework-required",
+    "cancelled",
+    "failed",
+  ];
+  if (terminal.includes(current) || current === "barrier-recorded") return false;
+  const allowed: Partial<
+    Readonly<Record<IntegrationAttemptState, readonly IntegrationAttemptState[]>>
+  > = {
+    claimed: ["candidate-created", "cancelled", "failed", "unknown"],
+    "candidate-created": ["validating", "conflicted", "cancelled", "failed", "unknown"],
+    validating: ["gate-failed", "publishing", "rework-required", "cancelled", "failed", "unknown"],
+    "gate-failed": ["rework-required"],
+    publishing: ["published", "target-moved", "failed", "unknown"],
+    published: ["barrier-recorded", "target-moved"],
+    unknown: ["claimed", "candidate-created", "validating", "publishing", "published", ...terminal],
+  };
+  return allowed[current]?.includes(next) ?? false;
+}
+
+function terminalIntegrationState(state: IntegrationAttemptState): boolean {
+  return [
+    "barrier-recorded",
+    "conflicted",
+    "target-moved",
+    "rework-required",
+    "cancelled",
+    "failed",
+  ].includes(state);
+}
+
+function isFullLocalBranchRefForStorage(value: string): boolean {
+  return (
+    value.startsWith("refs/heads/") &&
+    value.length <= 1_024 &&
+    !value.includes("..") &&
+    !value.includes("@{") &&
+    !["~", "^", ":", "?", "*", "[", "\\"].some((character) => value.includes(character)) &&
+    value
+      .slice("refs/heads/".length)
+      .split("/")
+      .every(
+        (component) =>
+          component.length > 0 &&
+          !component.startsWith(".") &&
+          !component.endsWith(".") &&
+          !component.endsWith(".lock"),
+      )
+  );
+}
+
 function isRunnerTerminal(status: EffectOutcome["status"]): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
 }
@@ -2364,6 +3807,10 @@ export class SqliteContextBroker {
     return this.#loadBroker().loadWorkerDispatch(dispatchId);
   }
 
+  listWorkerDispatches(repositoryId: string, runId: string) {
+    return this.#loadBroker().listWorkerDispatches(repositoryId, runId);
+  }
+
   loadWorkerDispatchProgress(dispatchId: string) {
     return this.#loadBroker().loadWorkerDispatchProgress(dispatchId);
   }
@@ -2420,7 +3867,7 @@ export class SqliteContextBroker {
     try {
       const pending = this.#loadAuthority().completionOutbox.get(submissionId);
       if (pending === undefined || pending.delivered) return false;
-      this.#completionFacts.admitCompletionFact(pending.fact);
+      if (this.#completionFacts.admitCompletionFact(pending.fact) === "deferred") return false;
       this.#database.exec("BEGIN IMMEDIATE");
       let committed = false;
       try {
@@ -3214,6 +4661,7 @@ function validateConfigurationSnapshot(
   if (!isPlainRecord(canonical)) throw new TypeError("Configuration snapshot must be an object");
   const requiredKeys = [
     "apiVersion",
+    "execution",
     "graph",
     "schemas",
     "roles",
@@ -3230,9 +4678,10 @@ function validateConfigurationSnapshot(
   ) {
     throw new TypeError("Configuration snapshot must have the exact canonical shape");
   }
-  if (canonical.apiVersion !== "senawa.dev/configuration-snapshot/v1alpha1") {
+  if (canonical.apiVersion !== "senawa.dev/configuration-snapshot/v1alpha2") {
     throw new TypeError("Configuration snapshot apiVersion is unsupported");
   }
+  validateSnapshotExecution(canonical.execution);
   const graph = validateWorkflowGraph(canonical.graph, dependencies.sha256);
   const registryKeys = [
     "schemas",
@@ -3264,7 +4713,7 @@ function validateConfigurationSnapshot(
     throw new TypeError("Configuration snapshot componentDigests must be an object");
   }
   const componentDigests = canonical.componentDigests;
-  const componentKeys = ["graph", ...registryKeys] as const;
+  const componentKeys = ["execution", "graph", ...registryKeys] as const;
   if (
     Object.keys(canonical.componentDigests).length !== componentKeys.length ||
     componentKeys.some((key) => !isSha256Digest(componentDigests[key]))
@@ -3285,6 +4734,70 @@ function validateConfigurationSnapshot(
     throw new TypeError("Configuration snapshot digest does not match canonical content");
   }
   return { snapshotDigest, graph, canonical };
+}
+
+function validateSnapshotExecution(value: unknown): void {
+  if (!isPlainRecord(value)) {
+    throw new TypeError("Configuration snapshot execution policy must be an object");
+  }
+  const commonKeys = ["workspaceMode", "maxWriterConcurrency", "failurePolicy"];
+  const expectedKeys =
+    value.workspaceMode === "worktree" ? [...commonKeys, "integrationRef"] : commonKeys;
+  if (
+    Object.keys(value).length !== expectedKeys.length ||
+    expectedKeys.some((key) => !Object.hasOwn(value, key))
+  ) {
+    throw new TypeError("Configuration snapshot execution policy has an invalid shape");
+  }
+  if (value.workspaceMode !== "repository" && value.workspaceMode !== "worktree") {
+    throw new TypeError("Configuration snapshot workspace mode is invalid");
+  }
+  if (
+    typeof value.maxWriterConcurrency !== "number" ||
+    !Number.isSafeInteger(value.maxWriterConcurrency) ||
+    value.maxWriterConcurrency < 1 ||
+    (value.workspaceMode === "repository" && value.maxWriterConcurrency !== 1)
+  ) {
+    throw new TypeError("Configuration snapshot writer concurrency is invalid");
+  }
+  if (value.failurePolicy !== "continue" && value.failurePolicy !== "fail-fast") {
+    throw new TypeError("Configuration snapshot failure policy is invalid");
+  }
+  if (
+    value.workspaceMode === "worktree" &&
+    (typeof value.integrationRef !== "string" || !isFullLocalBranchRef(value.integrationRef))
+  ) {
+    throw new TypeError("Configuration snapshot integration ref is invalid");
+  }
+}
+
+function isFullLocalBranchRef(value: string): boolean {
+  if (!value.startsWith("refs/heads/") || value.length > 1_024 || value.includes(".."))
+    return false;
+  if (
+    value.includes("@{") ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 0x21 || code === 0x7f;
+    })
+  ) {
+    return false;
+  }
+  if (["~", "^", ":", "?", "*", "[", "\\"].some((character) => value.includes(character))) {
+    return false;
+  }
+  return value
+    .slice("refs/heads/".length)
+    .split("/")
+    .every(
+      (component) =>
+        component.length > 0 &&
+        component !== "." &&
+        component !== ".." &&
+        !component.startsWith(".") &&
+        !component.endsWith(".") &&
+        !component.endsWith(".lock"),
+    );
 }
 
 function normalizeAmendmentRows(snapshot: AuthoritySnapshot): NormalizedAmendmentRows {
@@ -4029,6 +5542,7 @@ function verifyDatabase(
   verifyNormalizedSnapshot(database, parseSnapshot(state.canonical_json), dependencies);
   verifyContextTables(database, dependencies);
   verifyAmendmentTables(database, dependencies);
+  verifyParallelWorkspaceTables(database, dependencies);
   verifySupervisorTables(database);
   if (!verifyAssets) return;
   for (const descriptor of readAssetDescriptors(database)) {
@@ -4057,6 +5571,391 @@ function verifyContextTables(
   verifyNormalizedContextAuthority(database, authority, dependencies.sha256);
   verifyAllContextAssetManifests(database, dependencies.sha256);
   verifyDurableContextReads(database, authority);
+}
+
+function verifyParallelWorkspaceTables(
+  database: Database.Database,
+  dependencies: RuntimeDependencies,
+): void {
+  const capacityRows = database
+    .prepare<
+      [],
+      {
+        run_key: string;
+        capacity_limit: number;
+        occupied: number;
+        expected_occupied: number;
+      }
+    >(
+      `SELECT c.run_key, c.capacity_limit, c.occupied,
+              COALESCE(SUM(CASE WHEN r.released = 0 THEN r.amount ELSE 0 END), 0)
+                AS expected_occupied
+       FROM runner_capacities c
+       LEFT JOIN runner_capacity_reservations r
+         ON r.run_key = c.run_key AND r.resource_key = c.resource_key
+       GROUP BY c.run_key, c.resource_key, c.capacity_limit, c.occupied
+       ORDER BY c.run_key`,
+    )
+    .all();
+  const runnerRunCount = database
+    .prepare<[], { count: number }>("SELECT count(*) AS count FROM runner_runs")
+    .get()?.count;
+  if (
+    runnerRunCount === undefined ||
+    capacityRows.length !== runnerRunCount ||
+    capacityRows.some(
+      (row) =>
+        row.capacity_limit < 1 ||
+        row.occupied !== row.expected_occupied ||
+        row.occupied > row.capacity_limit,
+    )
+  ) {
+    throw new Error("SQLite runner capacity authority does not match its reservations");
+  }
+
+  const reservationRows = database
+    .prepare<
+      [],
+      {
+        intent_id: string;
+        resource_key: string;
+        amount: number;
+        released: number;
+        released_at: string | null;
+        canonical_intent: string;
+        canonical_outcome: string | null;
+      }
+    >(
+      `SELECT r.intent_id, r.resource_key, r.amount, r.released, r.released_at,
+              i.canonical_intent,
+              (SELECT o.canonical_outcome FROM runner_effect_outcomes o
+               WHERE o.intent_id = r.intent_id ORDER BY o.commit_cursor DESC LIMIT 1)
+                AS canonical_outcome
+       FROM runner_capacity_reservations r
+       JOIN runner_effect_intents i ON i.intent_id = r.intent_id
+       ORDER BY r.intent_id`,
+    )
+    .all();
+  for (const row of reservationRows) {
+    const intent = parseRunnerValue<EffectIntent>(row.canonical_intent);
+    const reservation = intent.command.capacityReservation;
+    const terminal =
+      row.canonical_outcome === null
+        ? false
+        : isRunnerTerminal(parseRunnerValue<EffectOutcome>(row.canonical_outcome).status);
+    if (
+      reservation?.resource !== row.resource_key ||
+      reservation.amount !== row.amount ||
+      (row.released === 1) !== terminal ||
+      (row.released_at !== null) !== terminal
+    ) {
+      throw new Error("SQLite runner capacity reservation does not match its effect lifecycle");
+    }
+  }
+
+  const bindingRows = database
+    .prepare<
+      [],
+      {
+        run_key: string;
+        repository_id: string;
+        run_id: string;
+        configuration_snapshot_digest: string;
+        workspace_mode: string;
+        max_writer_concurrency: number;
+        failure_policy: string;
+        integration_ref: string | null;
+        canonical_binding: string;
+      }
+    >("SELECT * FROM runner_execution_bindings ORDER BY run_key")
+    .all();
+  const bindings = new Map<string, RunExecutionBinding>();
+  for (const row of bindingRows) {
+    const binding = validateRunExecutionBinding(parseRunnerValue(row.canonical_binding));
+    assertCanonicalStorageRecord(row.canonical_binding, binding, "run execution binding");
+    if (
+      binding.repositoryId !== row.repository_id ||
+      binding.runId !== row.run_id ||
+      binding.configurationSnapshotDigest !== row.configuration_snapshot_digest ||
+      binding.execution.workspaceMode !== row.workspace_mode ||
+      binding.execution.maxWriterConcurrency !== row.max_writer_concurrency ||
+      binding.execution.failurePolicy !== row.failure_policy ||
+      (binding.execution.integrationRef ?? null) !== row.integration_ref
+    ) {
+      throw new Error("SQLite run execution binding columns diverge from canonical authority");
+    }
+    bindings.set(row.run_key, binding);
+  }
+
+  const workspaceRows = database
+    .prepare<
+      [],
+      {
+        workspace_id: string;
+        run_key: string;
+        repository_id: string;
+        dispatch_id: string;
+        task_id: string;
+        definition_generation: number;
+        mode: string;
+        state: WorkspaceLifecycleState;
+        base_revision_digest: string;
+        prepare_effect_id: string;
+        inspect_effect_id: string;
+        canonical_workspace: string;
+      }
+    >("SELECT * FROM runner_workspaces ORDER BY workspace_id")
+    .all();
+  const workspaces = new Map<string, WorkspaceRecord>();
+  for (const row of workspaceRows) {
+    const workspace = parseRunnerValue<WorkspaceRecord>(row.canonical_workspace);
+    assertCanonicalStorageRecord(row.canonical_workspace, workspace, "workspace");
+    const baseRevision = bindGitRevision(workspace.baseRevision.revision, dependencies.sha256);
+    const binding = bindings.get(row.run_key);
+    if (
+      canonicalStringify(baseRevision) !== canonicalStringify(workspace.baseRevision) ||
+      workspace.workspaceId !== row.workspace_id ||
+      workspace.repositoryId !== row.repository_id ||
+      workspace.dispatchId !== row.dispatch_id ||
+      workspace.taskId !== row.task_id ||
+      workspace.definitionGeneration !== row.definition_generation ||
+      workspace.mode !== row.mode ||
+      workspace.state !== row.state ||
+      workspace.baseRevision.descriptorDigest !== row.base_revision_digest ||
+      workspace.prepareEffectId !== row.prepare_effect_id ||
+      workspace.inspectEffectId !== row.inspect_effect_id ||
+      binding?.execution.workspaceMode !== workspace.mode
+    ) {
+      throw new Error("SQLite workspace columns diverge from canonical authority");
+    }
+    workspaces.set(workspace.workspaceId, workspace);
+  }
+
+  const resultRows = database
+    .prepare<
+      [],
+      {
+        result_id: string;
+        workspace_id: string;
+        result_tree_digest: string;
+        result_revision_digest: string;
+        completion_fact_digest: string;
+        capture_effect_id: string;
+        inspect_effect_id: string;
+        recorded_at: string;
+        canonical_result: string;
+      }
+    >("SELECT * FROM runner_workspace_results ORDER BY result_id")
+    .all();
+  const results = new Map<string, WorkspaceResultRecord>();
+  for (const row of resultRows) {
+    const result = parseRunnerValue<WorkspaceResultRecord>(row.canonical_result);
+    assertCanonicalStorageRecord(row.canonical_result, result, "workspace result");
+    const revision = bindGitRevision(result.resultRevision.revision, dependencies.sha256);
+    const tree = bindGitObjectId(result.resultRevision.revision.tree, dependencies.sha256);
+    if (
+      canonicalStringify(revision) !== canonicalStringify(result.resultRevision) ||
+      result.resultId !== row.result_id ||
+      result.workspaceId !== row.workspace_id ||
+      tree.descriptorDigest !== row.result_tree_digest ||
+      revision.descriptorDigest !== row.result_revision_digest ||
+      result.completionFactDigest !== row.completion_fact_digest ||
+      result.captureEffectId !== row.capture_effect_id ||
+      result.inspectEffectId !== row.inspect_effect_id ||
+      result.recordedAt !== row.recorded_at ||
+      !workspaces.has(result.workspaceId)
+    ) {
+      throw new Error("SQLite workspace result columns diverge from canonical authority");
+    }
+    results.set(result.resultId, result);
+  }
+
+  const attemptRows = database
+    .prepare<
+      [],
+      {
+        integration_id: string;
+        run_key: string;
+        repository_id: string;
+        phase_id: string;
+        definition_generation: number;
+        target_ref: string;
+        fan_in_digest: string;
+        state: IntegrationAttemptState;
+        owner_id: string | null;
+        fence: number | null;
+        slot_resource_key: string | null;
+        prepare_effect_id: string;
+        inspect_effect_id: string;
+        barrier_digest: string | null;
+        canonical_barrier: string | null;
+        canonical_attempt: string;
+      }
+    >("SELECT * FROM runner_integration_attempts ORDER BY integration_id")
+    .all();
+  const attempts = new Map<string, IntegrationAttemptRecord>();
+  for (const row of attemptRows) {
+    const attempt = parseRunnerValue<IntegrationAttemptRecord>(row.canonical_attempt);
+    assertCanonicalStorageRecord(row.canonical_attempt, attempt, "integration attempt");
+    validateIntegrationAttemptInput(
+      {
+        repositoryId: attempt.repositoryId,
+        runId: attempt.runId,
+        integrationId: attempt.integrationId,
+        phaseId: attempt.phaseId,
+        definitionGeneration: attempt.definitionGeneration,
+        targetRef: attempt.targetRef,
+        fanInDigest: attempt.fanInDigest,
+        members: attempt.members,
+        prepareEffectId: attempt.prepareEffectId,
+        inspectEffectId: attempt.inspectEffectId,
+      },
+      dependencies,
+    );
+    const barrier =
+      row.canonical_barrier === null
+        ? undefined
+        : validateIntegrationBarrier(row.canonical_barrier, dependencies.sha256);
+    if (
+      attempt.integrationId !== row.integration_id ||
+      attempt.repositoryId !== row.repository_id ||
+      attempt.phaseId !== row.phase_id ||
+      attempt.definitionGeneration !== row.definition_generation ||
+      attempt.targetRef !== row.target_ref ||
+      attempt.fanInDigest !== row.fan_in_digest ||
+      attempt.state !== row.state ||
+      (attempt.ownerId ?? null) !== row.owner_id ||
+      (attempt.fence ?? null) !== row.fence ||
+      (attempt.slotResourceKey ?? null) !== row.slot_resource_key ||
+      attempt.prepareEffectId !== row.prepare_effect_id ||
+      attempt.inspectEffectId !== row.inspect_effect_id ||
+      (attempt.barrier?.barrierDigest ?? null) !== row.barrier_digest ||
+      canonicalStringify(attempt.barrier ?? null) !== canonicalStringify(barrier ?? null) ||
+      bindings.get(row.run_key)?.execution.integrationRef !== attempt.targetRef
+    ) {
+      throw new Error("SQLite integration attempt columns diverge from canonical authority");
+    }
+    attempts.set(attempt.integrationId, attempt);
+  }
+
+  const memberRows = database
+    .prepare<
+      [],
+      {
+        integration_id: string;
+        ordinal: number;
+        workspace_id: string;
+        result_id: string;
+        member_digest: string;
+        canonical_member: string;
+      }
+    >("SELECT * FROM runner_integration_members ORDER BY integration_id, ordinal")
+    .all();
+  for (const row of memberRows) {
+    const attempt = attempts.get(row.integration_id);
+    const expected = attempt?.members[row.ordinal];
+    if (
+      expected === undefined ||
+      expected.workspaceId !== row.workspace_id ||
+      expected.resultId !== row.result_id ||
+      expected.member.memberDigest !== row.member_digest ||
+      canonicalStringify(expected.member) !== row.canonical_member ||
+      !workspaces.has(row.workspace_id) ||
+      !results.has(row.result_id)
+    ) {
+      throw new Error("SQLite integration member rows diverge from canonical authority");
+    }
+  }
+  if (
+    memberRows.length !==
+    [...attempts.values()].reduce((total, attempt) => total + attempt.members.length, 0)
+  ) {
+    throw new Error("SQLite integration member rows do not exactly cover attempts");
+  }
+
+  const gateRows = database
+    .prepare<
+      [],
+      {
+        integration_id: string;
+        policy_digest: string;
+        reading_digest: string;
+        evaluation_digest: string;
+        decision: "passed" | "failed";
+        canonical_evidence: string;
+      }
+    >("SELECT * FROM runner_integration_gates ORDER BY integration_id")
+    .all();
+  for (const row of gateRows) {
+    const gate = attempts.get(row.integration_id)?.gate;
+    if (
+      gate === undefined ||
+      gate.policyDigest !== row.policy_digest ||
+      gate.readingDigest !== row.reading_digest ||
+      gate.evaluationDigest !== row.evaluation_digest ||
+      gate.decision !== row.decision ||
+      canonicalStringify(gate.evidence) !== row.canonical_evidence
+    ) {
+      throw new Error("SQLite integration gate rows diverge from canonical authority");
+    }
+  }
+  if (gateRows.length !== [...attempts.values()].filter(({ gate }) => gate !== undefined).length) {
+    throw new Error("SQLite integration gate rows do not exactly cover attempts");
+  }
+
+  const eligibilityRows = database
+    .prepare<
+      [],
+      {
+        submission_id: string;
+        run_key: string;
+        dispatch_id: string;
+        mode: "repository" | "worktree";
+        terminal_current_writer: number;
+        workspace_id: string | null;
+        result_id: string | null;
+        integration_id: string | null;
+        barrier_digest: string | null;
+        eligible: number;
+        canonical_eligibility: string;
+      }
+    >("SELECT * FROM runner_completion_eligibility ORDER BY submission_id")
+    .all();
+  for (const row of eligibilityRows) {
+    const record = parseRunnerValue<CompletionEligibilityRecord>(row.canonical_eligibility);
+    assertCanonicalStorageRecord(row.canonical_eligibility, record, "completion eligibility");
+    const attempt = row.integration_id === null ? undefined : attempts.get(row.integration_id);
+    const expectedEligible =
+      row.terminal_current_writer === 1 &&
+      (row.mode === "repository" ||
+        (row.workspace_id !== null &&
+          workspaces.get(row.workspace_id)?.state === "captured" &&
+          row.result_id !== null &&
+          results.get(row.result_id)?.workspaceId === row.workspace_id &&
+          attempt?.state === "barrier-recorded" &&
+          attempt.barrier?.barrierDigest === row.barrier_digest));
+    if (
+      record.submissionId !== row.submission_id ||
+      record.dispatchId !== row.dispatch_id ||
+      record.mode !== row.mode ||
+      record.terminalCurrentWriter !== (row.terminal_current_writer === 1) ||
+      (record.workspaceId ?? null) !== row.workspace_id ||
+      (record.resultId ?? null) !== row.result_id ||
+      (record.integrationId ?? null) !== row.integration_id ||
+      (record.barrierDigest ?? null) !== row.barrier_digest ||
+      record.eligible !== (row.eligible === 1) ||
+      record.eligible !== expectedEligible ||
+      bindings.get(row.run_key)?.execution.workspaceMode !== record.mode
+    ) {
+      throw new Error("SQLite completion eligibility diverges from durable authority");
+    }
+  }
+}
+
+function assertCanonicalStorageRecord(serialized: string, value: unknown, label: string): void {
+  if (canonicalStringify(value) !== serialized) {
+    throw new Error(`SQLite ${label} must use exact canonical JSON`);
+  }
 }
 
 function verifyAmendmentTables(

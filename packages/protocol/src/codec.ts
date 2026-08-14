@@ -18,6 +18,7 @@ import {
   type ReceiptPage,
   type ReceiptStatus,
   type RecordAmendmentDecisionPayload,
+  type RecordIntegrationBarrierPayload,
   type RunIdentity,
   type SubmitAmendmentProposalPayload,
   type SupervisorAdmissionFacts,
@@ -95,6 +96,7 @@ const INTENT_TYPES = new Set<CommandIntent["type"]>([
   "withdraw-amendment-proposal",
   "record-amendment-decision",
   "apply-approved-amendment",
+  "record-integration-barrier",
   "create-escalation",
   "grant-allowance",
 ]);
@@ -287,6 +289,27 @@ export function decodeApplyApprovedAmendmentPayload(
 
 export function encodeApplyApprovedAmendmentPayload(input: unknown): string {
   return canonicalStringify(decodeApplyApprovedAmendmentPayload(input));
+}
+
+export function decodeRecordIntegrationBarrierPayload(
+  input: string | unknown,
+): RecordIntegrationBarrierPayload {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "integrationId",
+    "configurationSnapshotDigest",
+    "barrier",
+  ]);
+  identity(object.integrationId, "$.integrationId");
+  digest(object.configurationSnapshotDigest, "$.configurationSnapshotDigest");
+  return Object.freeze({
+    integrationId: object.integrationId as string,
+    configurationSnapshotDigest: object.configurationSnapshotDigest as string,
+    barrier: jsonValue(object.barrier, "$.barrier"),
+  });
+}
+
+export function encodeRecordIntegrationBarrierPayload(input: unknown): string {
+  return canonicalStringify(decodeRecordIntegrationBarrierPayload(input));
 }
 
 export function decodeAuthenticatedPrincipal(input: string | unknown): AuthenticatedPrincipal {

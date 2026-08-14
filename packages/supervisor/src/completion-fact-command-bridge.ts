@@ -5,12 +5,20 @@ import {
   PROTOCOL_VERSION,
   type SupervisorAllocationFact,
 } from "@senawa/protocol";
-import type { CompletionFact, CompletionFactPort, ContextBrokerClient } from "@senawa/runtime";
+import type {
+  CompletionFact,
+  CompletionFactAdmission,
+  CompletionFactPort,
+  ContextBrokerClient,
+} from "@senawa/runtime";
 import type { SqliteSupervisorAuthority } from "./command-queue.js";
 
 export interface CompletionFactCommandBridgeOptions {
   readonly authority: SqliteSupervisorAuthority;
   readonly broker: () => ContextBrokerClient;
+  readonly completionEligibility?: {
+    completionAdmission(submissionId: string, fact?: CompletionFact): CompletionFactAdmission;
+  };
   currentTime(): string;
   readonly afterAccept?: (fact: CompletionFact) => void;
 }
@@ -18,17 +26,26 @@ export interface CompletionFactCommandBridgeOptions {
 export class CompletionFactCommandBridge implements CompletionFactPort {
   readonly authority: SqliteSupervisorAuthority;
   readonly #broker: () => ContextBrokerClient;
+  readonly #completionEligibility:
+    | {
+        completionAdmission(submissionId: string, fact?: CompletionFact): CompletionFactAdmission;
+      }
+    | undefined;
   readonly #currentTime: () => string;
   readonly #afterAccept: ((fact: CompletionFact) => void) | undefined;
 
   constructor(options: CompletionFactCommandBridgeOptions) {
     this.authority = options.authority;
     this.#broker = options.broker;
+    this.#completionEligibility = options.completionEligibility;
     this.#currentTime = options.currentTime;
     this.#afterAccept = options.afterAccept;
   }
 
-  admitCompletionFact(fact: CompletionFact): void {
+  admitCompletionFact(fact: CompletionFact): CompletionFactAdmission {
+    if (this.#completionEligibility?.completionAdmission(fact.submissionId, fact) === "deferred") {
+      return "deferred";
+    }
     const stored = this.#broker().loadWorkerDispatch(fact.dispatchId);
     if (stored === undefined) throw new TypeError("Completion fact dispatch is not registered");
     if (
@@ -67,6 +84,7 @@ export class CompletionFactCommandBridge implements CompletionFactPort {
       }),
     });
     this.#afterAccept?.(fact);
+    return "accepted";
   }
 }
 

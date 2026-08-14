@@ -18,6 +18,7 @@ export interface ProductionCopilotSdkPortOptions {
   readonly repositoryDirectory: string;
   readonly workingDirectory: string;
   readonly baseDirectory: string;
+  readonly allowRepositoryWorkingDirectory?: boolean;
   readonly sharedClient?: CopilotClient;
   readonly sharedClientConfiguredForEmptyMode?: true;
 }
@@ -47,7 +48,13 @@ export class ProductionCopilotSdkPort implements CopilotSdkPort {
       realpath(options.workingDirectory),
       realpath(options.baseDirectory),
     ]);
-    assertOutsideRepository(workingDirectory, repositoryDirectory, "working directory");
+    if (options.allowRepositoryWorkingDirectory === true) {
+      if (workingDirectory !== repositoryDirectory) {
+        assertOutsideRepository(workingDirectory, repositoryDirectory, "working directory");
+      }
+    } else {
+      assertOutsideRepository(workingDirectory, repositoryDirectory, "working directory");
+    }
     assertOutsideRepository(baseDirectory, repositoryDirectory, "base directory");
     if (options.sharedClient !== undefined && options.sharedClientConfiguredForEmptyMode !== true) {
       throw new TypeError("A shared Copilot client requires explicit empty-mode acknowledgement");

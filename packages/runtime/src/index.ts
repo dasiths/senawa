@@ -4,5 +4,7 @@ export * from "./in-memory-runner-authority.js";
 export * from "./ports.js";
 export * from "./prompt-renderer.js";
 export * from "./runner.js";
+export * from "./scheduler.js";
 export * from "./simulated-worker.js";
 export * from "./task-currentness.js";
+export * from "./workspace-authority.js";

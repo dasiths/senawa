@@ -7,6 +7,7 @@ import type {
 } from "./contracts.js";
 
 const CATEGORIES: readonly ConfigurationComponentCategory[] = Object.freeze([
+  "execution",
   "graph",
   "schemas",
   "roles",
@@ -24,9 +25,11 @@ export function detectConfigurationDrift(
     (category) => accepted.componentDigests[category] !== current.componentDigests[category],
   );
   const changedKeys = changedCategories.flatMap((category) =>
-    category === "graph"
-      ? changedGraphKeys(accepted, current)
-      : changedRegistryKeys(accepted[category], current[category]),
+    category === "execution"
+      ? ["/execution"]
+      : category === "graph"
+        ? changedGraphKeys(accepted, current)
+        : changedRegistryKeys(accepted[category], current[category]),
   );
   return Object.freeze({
     hasDrift: accepted.snapshotDigest !== current.snapshotDigest,

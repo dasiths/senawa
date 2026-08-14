@@ -55,10 +55,11 @@ afterEach(() => {
 
 describe("SupervisorRunController async lease loop", () => {
   it("renews a delayed host lease and prevents a live-owner steal", async () => {
-    const fixture = createFixture();
+    const fixture = createFixture(2);
     let currentTime = "2026-08-13T12:00:00.000Z";
     let finish: (() => void) | undefined;
     let started: (() => void) | undefined;
+    let startedCount = 0;
     const hostStarted = new Promise<void>((resolve) => {
       started = resolve;
     });
@@ -67,7 +68,8 @@ describe("SupervisorRunController async lease loop", () => {
     });
     const host: AsyncEffectHost = {
       async dispatch(intent) {
-        started?.();
+        startedCount += 1;
+        if (startedCount === 2) started?.();
         await hostGate;
         return {
           status: "completed",
@@ -87,6 +89,7 @@ describe("SupervisorRunController async lease loop", () => {
       runnerAuthority: fixture.runner,
       asyncEffectHost: host,
       timer: fixture.timer,
+      runnerBatchSize: 2,
     });
     const pending = controller.runOnceAsync({
       repositoryId,
@@ -112,24 +115,40 @@ describe("SupervisorRunController async lease loop", () => {
     finish?.();
 
     await expect(pending).resolves.toMatchObject({
-      runner: { type: "committed", outcome: { status: "completed" } },
+      runner: {
+        type: "batch",
+        results: [
+          { type: "committed", outcome: { status: "completed" } },
+          { type: "committed", outcome: { status: "completed" } },
+        ],
+      },
       lease: { expiresAt: "2026-08-13T12:00:40.000Z" },
     });
     fixture.close();
   });
 
   it("aborts on renewal failure, keeps the uncertain lease, and permits later takeover", async () => {
-    const fixture = createFixture();
+    const fixture = createFixture(2);
     let currentTime = "2026-08-13T12:00:00.000Z";
     let started: (() => void) | undefined;
+    let startedCount = 0;
+    let abortedCount = 0;
     const hostStarted = new Promise<void>((resolve) => {
       started = resolve;
     });
     const host: AsyncEffectHost = {
       async dispatch(_intent, { signal }) {
-        started?.();
+        startedCount += 1;
+        if (startedCount === 2) started?.();
         await new Promise<void>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(new Error("raw abort")), { once: true });
+          signal.addEventListener(
+            "abort",
+            () => {
+              abortedCount += 1;
+              reject(new Error("raw abort"));
+            },
+            { once: true },
+          );
         });
         throw new Error("unreachable");
       },
@@ -145,6 +164,7 @@ describe("SupervisorRunController async lease loop", () => {
       runnerAuthority: fixture.runner,
       asyncEffectHost: host,
       timer: fixture.timer,
+      runnerBatchSize: 2,
     });
     const pending = controller.runOnceAsync({
       repositoryId,
@@ -158,6 +178,13 @@ describe("SupervisorRunController async lease loop", () => {
     fixture.timer.fire();
 
     await expect(pending).rejects.toBeInstanceOf(AsyncRunnerCancelledError);
+    expect(abortedCount).toBe(2);
+    expect(fixture.runner.load({ repositoryId, runId }).effects).toHaveLength(2);
+    expect(
+      fixture.runner
+        .load({ repositoryId, runId })
+        .effects.every(({ outcome }) => outcome === undefined),
+    ).toBe(true);
     const takeover = fixture.supervisor.acquireRunLease(
       repositoryId,
       runId,
@@ -168,9 +195,128 @@ describe("SupervisorRunController async lease loop", () => {
     expect(takeover.fence).toBe(2);
     fixture.close();
   });
+
+  it.each([
+    ["continue", [false, true]],
+    ["fail-fast", [false, false]],
+  ] as const)("applies %s fencing after committing every sibling", async (policy, expected) => {
+    const fixture = createFixture(2);
+    const host: AsyncEffectHost = {
+      async dispatch(intent) {
+        return {
+          status: intent.command.taskScope.taskId === "task_controller-1" ? "failed" : "completed",
+          observedAt: "2026-08-13T12:00:00.000Z",
+          usage: { unit: intent.command.budgetReservation.unit, amount: 1 },
+        };
+      },
+      async inspect() {
+        return { status: "unknown", observedAt: "2026-08-13T12:00:00.000Z" };
+      },
+      async cancel() {
+        return { status: "cancelled", observedAt: "2026-08-13T12:00:00.000Z" };
+      },
+    };
+    const controller = new SupervisorRunController({
+      authority: fixture.supervisor,
+      runnerAuthority: fixture.runner,
+      asyncEffectHost: host,
+      timer: fixture.timer,
+      runnerBatchSize: 2,
+      failurePolicyForRun: () => policy,
+    });
+
+    await expect(
+      controller.runOnceAsync({
+        repositoryId,
+        runId,
+        ownerId: "owner_controller",
+        currentTime: () => "2026-08-13T12:00:00.000Z",
+        attemptId: `attempt_controller-${policy}`,
+      }),
+    ).resolves.toMatchObject({
+      runner: {
+        type: "batch",
+        results: [
+          { type: "committed", outcome: { status: "failed" } },
+          { type: "committed", outcome: { status: "completed" } },
+        ],
+      },
+    });
+    expect(
+      fixture.runner
+        .load({ repositoryId, runId })
+        .taskScopes.map(({ claimsAccepted }) => claimsAccepted),
+    ).toEqual(expected);
+    fixture.close();
+  });
+
+  it("aborts a pending fail-fast sibling and durably commits every observation", async () => {
+    const fixture = createFixture(2);
+    let pendingAborted = false;
+    const host: AsyncEffectHost = {
+      async dispatch(intent, { signal }) {
+        if (intent.command.taskScope.taskId === "task_controller-1") {
+          await Promise.resolve();
+          return {
+            status: "failed",
+            observedAt: "2026-08-13T12:00:00.000Z",
+            usage: { unit: intent.command.budgetReservation.unit, amount: 1 },
+          };
+        }
+        const aborted = new Promise<void>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              pendingAborted = true;
+              reject(new Error("cohort aborted"));
+            },
+            { once: true },
+          );
+        });
+        await aborted;
+        throw new Error("unreachable");
+      },
+      async inspect() {
+        return { status: "unknown", observedAt: "2026-08-13T12:00:00.000Z" };
+      },
+      async cancel() {
+        return { status: "cancelled", observedAt: "2026-08-13T12:00:00.000Z" };
+      },
+    };
+    const controller = new SupervisorRunController({
+      authority: fixture.supervisor,
+      runnerAuthority: fixture.runner,
+      asyncEffectHost: host,
+      timer: fixture.timer,
+      runnerBatchSize: 2,
+      failurePolicyForRun: () => "fail-fast",
+    });
+
+    await expect(
+      controller.runOnceAsync({
+        repositoryId,
+        runId,
+        ownerId: "owner_controller",
+        currentTime: () => "2026-08-13T12:00:00.000Z",
+        attemptId: "attempt_controller-immediate-fail-fast",
+      }),
+    ).resolves.toMatchObject({
+      runner: {
+        results: [
+          { type: "committed", outcome: { status: "failed" } },
+          { type: "committed", outcome: { status: "cancelled" } },
+        ],
+      },
+    });
+    expect(pendingAborted).toBe(true);
+    expect(
+      fixture.runner.load({ repositoryId, runId }).effects.map(({ outcome }) => outcome?.status),
+    ).toEqual(["failed", "cancelled"]);
+    fixture.close();
+  });
 });
 
-function createFixture(): {
+function createFixture(commandCount = 1): {
   supervisor: SqliteSupervisorAuthority;
   runner: SqliteRunnerAuthority;
   timer: ManualTimer;
@@ -189,7 +335,10 @@ function createFixture(): {
     repositoryId,
     runId,
     contextDigest,
-    taskScopes: [{ ...effectTaskScope(), claimsAccepted: true }],
+    taskScopes: Array.from({ length: commandCount }, (_, index) => ({
+      ...effectTaskScope(index + 1),
+      claimsAccepted: true,
+    })),
     budgets: [{ unit: "model-millidollars", limit: 10 }],
     lease: {
       owner: "owner_controller",
@@ -197,7 +346,7 @@ function createFixture(): {
       expiresAt: "2026-08-13T12:00:30.000Z",
     },
   });
-  runner.enqueue(effectCommand());
+  for (let index = 1; index <= commandCount; index += 1) runner.enqueue(effectCommand(index));
   return {
     supervisor,
     runner,
@@ -209,28 +358,28 @@ function createFixture(): {
   };
 }
 
-function effectCommand(): QueuedEffectCommand {
+function effectCommand(index = 1): QueuedEffectCommand {
   return {
-    sequence: 1,
-    commandId: "command_controller-effect",
+    sequence: index,
+    commandId: `command_controller-effect-${index}`,
     repositoryId,
     runId,
-    operationId: "operation_controller-effect",
+    operationId: `operation_controller-effect-${index}`,
     kind: "worker",
-    taskScope: effectTaskScope(),
+    taskScope: effectTaskScope(index),
     contextDigest,
     inputDigest: "b".repeat(64),
-    input: { dispatchId: "dispatch_controller" },
+    input: { dispatchId: `dispatch_controller-${index}` },
     budgetReservation: { unit: "model-millidollars", amount: 5 },
     queuedAt: "2026-08-13T12:00:00.000Z",
     maxReconciliationAttempts: 2,
   };
 }
 
-function effectTaskScope() {
+function effectTaskScope(index = 1) {
   return {
     runId,
-    taskId: "task_controller",
+    taskId: `task_controller-${index}`,
     definitionGeneration: 1,
     acceptedContextDigest: contextDigest,
     fenceGeneration: 1,

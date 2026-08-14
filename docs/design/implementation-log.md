@@ -51,7 +51,7 @@ Each phase records:
 | 7. Context broker and serial workers | Complete | `4009bd8` | Pushed |
 | 8. Local supervisor, HTTP, SSE, and CLI | Complete | `e580bad` | Pushed |
 | 9. Additive amendments | Complete | `9aa37af` | Pushed |
-| 10. Optional parallel workspaces and integration | Not started | Pending | Pending |
+| 10. Optional parallel workspaces and integration | In progress (10A through 10D complete) | Pending | Pending |
 | 11. Local portal | Not started | Pending | Pending |
 | 12. Remote control-plane protocol | Not started | Pending | Pending |
 | 13. Reporting, packaging, and hardening | Not started | Pending | Pending |
@@ -4547,6 +4547,792 @@ SDK invocation was used in Phase 9.
 
 Phase 9 was committed as `9aa37af` (`feat: add approved workflow amendments`)
 and pushed to `origin/redesign/workflow-state-machine` on 2026-08-13.
+
+## Decision D-063: Version execution policy and canonical integration planning
+
+* Date: 2026-08-13
+* Status: Accepted and implemented for Phase 10A
+* Phase: Phase 10A
+* Decision: Move the exact workflow configuration and configuration snapshot
+  APIs to `v1alpha2`. Materialize normalized execution policy in every snapshot,
+  while retaining workflow amendments at `v1alpha1` and preserving the accepted
+  policy unchanged. Derive readiness from exact current-generation task facts.
+  Bind raw typed Git object and revision descriptors into separate canonical
+  Senawa SHA-256 digests, sorted integration members, fan-in, and exact
+  integration barriers.
+* Alternatives: Extend both exact shapes without a version change; add a
+  compatibility decoder; let amendments modify execution policy; treat raw Git
+  OIDs as Senawa digests; retain member completion order; or put readiness and
+  Git descriptor behavior in runtime.
+* Rationale: Exact accepted and persisted shapes changed, and this alpha has no
+  compatibility requirement. Immutable execution policy prevents additive
+  amendments from widening writer authority. Pure graph planning remains
+  deterministic and browser-safe. Typed raw OIDs avoid confusing Git SHA-1 with
+  Senawa SHA-256, while sorted member records make fan-in independent of worker
+  timing.
+* Consequence: Current workflow documents must use
+  `senawa.dev/workflow/v1alpha2`, and persisted configuration snapshots use
+  `senawa.dev/configuration-snapshot/v1alpha2`. Phase 10B can consume the pure
+  readiness frontier and normalized policy, but runtime scheduling, capacity,
+  protocol commands, persistence migrations, Git adapters, and supervisor
+  composition remain absent.
+
+## Phase 10A log
+
+### Decisions
+
+Omitted execution input normalizes to repository mode, one writer, and
+`continue`. Repository mode rejects `integrationRef` and concurrency above one.
+Worktree mode requires a syntactically valid full local `refs/heads/` ref.
+Workspace mode and failure policy enums are exact, and writer concurrency must
+be a positive safe integer.
+
+Execution policy participates in its own component digest, snapshot digest,
+drift category, `/execution` drift key, SQLite exact snapshot validation, and
+generated examples. Amendment compilation copies the accepted policy unchanged.
+
+Readiness validates one current-generation status fact per graph task,
+normalizes fact arrival order, excludes superseded definitions, and selects
+pending tasks whose dependencies have accepted accounting. An optional exact
+integration barrier requirement fences worktree-backed dependency readiness.
+
+Git object IDs retain their raw `sha1` or `sha256` format and length. Canonical
+object and revision descriptor digests are Senawa SHA-256 values. Integration
+barriers bind the target ref, before and after revisions, sorted task members,
+fan-in, gate policy, readings, evaluation, integrated outcome, and barrier
+digest. All six completion permutations for three members produce the same
+barrier.
+
+### Deviations
+
+No architecture deviation was required. The workflow and snapshot API bump
+follows exact-shape semantics from the research. The amendment API remains
+unchanged because its exact shape did not change and execution policy remains
+outside amendment authority.
+
+### Validation
+
+Passed on 2026-08-13:
+
+* Focused configuration suite: 77 tests
+* Focused pure kernel readiness and integration suites: 36 tests
+* Focused SQLite snapshot selection: 2 tests passed and 98 skipped
+* Combined affected configuration, kernel, SQLite, and CLI suites: 226 tests
+* Root build, including the existing execution-host native helper
+* Clean workspace typecheck
+* Complete offline suite: 42 files and 844 tests passed; the live SDK file and
+  one test remained skipped without explicit opt-in
+* Biome check across 143 files
+* Architecture boundaries across 232 source files
+* Documentation links across 18 Markdown files
+* `git diff --check`
+
+No Git worktree operation or live SDK invocation was used.
+
+### Review
+
+No independent review was requested for this contained subphase. Phase 10 final
+review remains in Phase 10F.
+
+### Commit and push
+
+No commit or push was performed, as required for Phase 10A.
+
+### Remaining risks
+
+Phase 10A defines policy and pure records only. Runtime batching and capacity,
+durable integration authority, Git and workspace adapters, supervisor
+composition, temporary-repository Git journeys, and completion deferral remain
+for Phases 10B through 10F.
+
+## Decision D-064: Batch effects under one lease with reversible capacity
+
+* Date: 2026-08-13
+* Status: Accepted and implemented for Phase 10B
+* Phase: Phase 10B
+* Decision: Add browser-safe runtime execution policy and scheduler limit
+  contracts, deterministic task and operation ordered sibling planning,
+  explicit continue and fail-fast actions, and independent writer capacity
+  reservations. Persist in-memory capacity and spend atomically with the effect
+  intent. Hold capacity through active and unknown outcomes, then release it
+  once on the first terminal outcome. Persist and claim a bounded set before
+  host observation. Use all-settled async observation and commit each observed
+  sibling under the current run lease.
+* Alternatives: Use independent supervisor cycles; derive concurrency from
+  spend; dispatch before all sibling claims exist; abandon sibling commits when
+  one host call fails; or add migration 006 and production composition in this
+  subphase.
+* Rationale: One run lease preserves deterministic scheduling and fencing.
+  Reversible capacity models occupancy without changing spend accounting.
+  Persisting and claiming the complete prefix before host calls fixes sibling
+  membership independently from response timing. All-settled observation
+  prevents one sibling failure from hiding another durable result.
+* Consequence: `runOnce` remains a one-transition compatibility wrapper.
+  `SupervisorRunController` defaults to one but can run a test-selected batch
+  under one renewal loop and shared abort signal. The deterministic in-memory
+  authority owns Phase 10B capacity semantics. SQLite exposes no durable writer
+  capacity until migration 006 in Phase 10C, and production effective-limit
+  composition remains assigned to Phase 10E.
+
+## Phase 10B log
+
+### Decisions
+
+The runtime effective writer limit is the minimum of workflow, supervisor,
+host, and available durable capacity. Repository mode fixes its workflow writer
+limit at one. Stable task and operation ordering selects the same bounded prefix
+for every ready-fact and queue permutation.
+
+Cancellation and deadline reconciliation precede ordinary reconciliation. All
+reconciliation precedes new starts. Continue fences only failed tasks.
+Fail-fast stops new admission, fences sibling tasks, and requests cancellation
+for active and unknown sibling effects in stable order.
+
+In-memory intent persistence checks spend and capacity before changing either
+resource. Active and unknown outcomes retain both reservations. A terminal
+outcome or terminal escalation settles spend and releases capacity once; exact
+terminal replay cannot release again.
+
+Both fenced runners persist and claim the bounded plans before observation.
+Async batches use `Promise.allSettled`, retain plan order while committing every
+fulfilled observation, and obtain the current lease before each mutation. One
+abort signal is supplied to all active siblings.
+
+### Deviations
+
+No architecture deviation was required. The planned durable SQLite capacity
+tables remain in Phase 10C with migration 006. Phase 10B proves the authority
+contract and deterministic semantics in memory while preserving SQLite serial
+conformance. The supervisor batch option is test-selectable and defaults to
+one; no production configuration or app composition changed.
+
+### Validation
+
+Passed on 2026-08-13:
+
+* Runtime scheduler and in-memory runner conformance: 51 tests
+* Combined scheduler, runner, and supervisor focused set: 53 tests
+* Complete supervisor package: 115 tests
+* Complete SQLite package: 100 tests
+* Affected runtime, storage, testing, and supervisor project compilation
+* Touched TypeScript Biome check and formatting
+* Root build and workspace typecheck
+* Complete offline suite: 43 files and 856 tests passed; the live SDK file and
+  one test remained skipped without explicit opt-in
+* Biome check across 145 files
+* Architecture boundaries across 236 source files
+* Documentation links across 18 Markdown files
+* `git diff --check`
+
+No Git worktree operation, migration 006, Git adapter, production composition,
+live SDK invocation, commit, or push was used.
+
+### Review
+
+No independent review was requested for this contained subphase. Phase 10 final
+review remains in Phase 10F.
+
+### Commit and push
+
+No commit or push was performed, as required for Phase 10B.
+
+### Remaining risks
+
+Phase 10C must make capacity, workspace, integration, and completion eligibility
+durable. Phase 10D retains all Git and filesystem adapters. Phase 10E must map
+the normalized configuration policy into supervisor, host, and durable capacity
+limits and compose explicit worktree execution. No cross-effect durable sibling
+fence is claimed by Phase 10B.
+
+## Decision D-060: Keep parallel integration authority synthetic and fenced before Git
+
+* Date: 2026-08-13
+* Status: Accepted and implemented for Phase 10C
+* Phase: Phase 10C
+* Decision: Migration 006 owns strict writer capacity, workspace, captured
+  result, integration attempt, member, gate, barrier, and completion eligibility
+  records. Runtime and storage ports carry typed kernel Git descriptor bindings
+  and stable effect identities but no paths or filesystem authority. Synthetic
+  immutable records exercise the complete authority lifecycle until Phase 10D
+  supplies real Git effects.
+* Alternatives: Add Git behavior while defining storage; put workspace paths in
+  runtime contracts; infer integration from a caller-provided digest;
+  acknowledge completion before publication; use spend as reversible occupancy.
+* Rationale: Git and SQLite cannot share a transaction. Intent-first identities,
+  inspection, fenced state, immutable descriptors, and exact barriers provide a
+  restartable authority without pretending that Git effects already exist.
+  Keeping paths out of runtime preserves browser safety and package boundaries.
+* Consequence: Spend and writer capacity reserve atomically at intent. Active and
+  unknown effects retain occupancy, and terminal release occurs once through a
+  durable reservation flag. One immediate transaction acquires the repository
+  integration slot and changes the attempt to active; a partial unique index
+  permits one active attempt, and expired takeover increments its fence.
+* Consequence: Protocol `v1alpha2` adds the exact trusted
+  `record-integration-barrier` command. Run instantiation binds the exact
+  configuration snapshot digest and execution policy. Repository mode forbids
+  barriers; worktree gates and closure require the exact current full kernel
+  barrier from a `trusted-supervisor` principal.
+* Consequence: Completion fact delivery returns `accepted` or `deferred`.
+  Deferred outbox rows remain pending, and worktree eligibility requires current
+  terminal writer authority, captured result membership, published integration,
+  and the recorded barrier. Phase 10E must wire production dispatch identities
+  to these eligibility methods.
+
+## Phase 10C log
+
+### Decisions
+
+Migration 006 materializes writer capacity one for previously configured serial
+runs and creates no released-schema compatibility layer. New runner runs persist
+their exact capacity. Capacity contention, spend contention, active and unknown
+retention, terminal settlement, and one-time release run through shared
+in-memory and SQLite conformance.
+
+Workspace and integration methods validate exact canonical records and kernel
+Git object and revision bindings. Stable prepare, capture, and inspection effect
+identities support future lost-response reconciliation. No raw filesystem path,
+Git command, fake Git adapter, or repository mutation was introduced.
+
+Integration slot ownership uses the existing lease table. Lease acquisition or
+higher-fence takeover and the attempt transition to `claimed` occur in one
+`BEGIN IMMEDIATE`. Every subsequent integration state, gate, and barrier update
+asserts the same slot fence inside its immediate transaction.
+
+### Deviations
+
+No architecture deviation was required. The exact empty runtime snapshot seed
+from migration 001 advances to runtime snapshot `v1alpha2` in migration 006.
+Nonempty legacy runtime snapshots are not accepted, consistent with the alpha
+no-compatibility policy.
+
+### Validation
+
+Affected protocol, runtime, context, supervisor bridge, and SQLite suites passed
+193 tests. Five focused parallel durability tests cover independent
+connections, pre-commit rollback, post-commit acknowledgement loss, takeover,
+reopen, backup, restore, and coordinated corruption. The complete Phase 10C
+validation passed:
+
+* Root build and workspace typecheck
+* Complete offline suite: 43 files and 868 tests passed; the opt-in live SDK
+  file and one test remained skipped
+* Biome check across 147 files
+* Architecture boundaries across 240 source files
+* Documentation links across 18 Markdown files
+* `git diff --check`
+* SQLite authority benchmark: four required passing windows with a 16.42 ms
+  median window p99 against the 25 ms threshold
+
+### Review
+
+No independent review was requested for this contained subphase. Phase 10 final
+review remains assigned to Phase 10F.
+
+### Commit and push
+
+No commit or push was performed, as required by the Phase 10C request.
+
+### Remaining risks
+
+Phase 10D retains every real Git and filesystem effect. Phase 10E must compose
+those adapters, derive terminal current-writer facts from production dispatches,
+and bind the completion bridge to SQLite eligibility. No production composition,
+live SDK invocation, Git operation, or worktree mutation was performed.
+
+## Decision D-065: Isolate Git effects behind verified execution-host adapters
+
+* Date: 2026-08-13
+* Status: Accepted and implemented for Phase 10D
+* Phase: Phase 10D
+* Decision: Reuse the existing native bounded process supervisor for an argv-only
+  Git command port. Require a verifier-produced canonical repository capability
+  before constructing workspace or integration adapters. Own detached locked
+  worktrees beneath one separate canonical root, capture through the workspace
+  index and deterministic Git plumbing, validate candidates in temporary owned
+  worktrees, and publish through one old-object `update-ref` compare-and-swap.
+  Expose only root-bound custom file tools to workers.
+* Alternatives: Spawn Git directly without the process supervisor; use shell
+  command strings; rely on Git version text; create task branches; integrate in
+  completion order; mutate the target before gates; use reset, clean, checkout,
+  or prune for cleanup; enable SDK built-in filesystem or Git tools.
+* Rationale: The existing supervisor already provides bounded output, timeout,
+  cancellation, and complete descendant cleanup. A verifier-produced capability
+  keeps every mutating method behind one canonical safety decision. Sorted Git
+  plumbing produces recoverable immutable objects without exposing partial work
+  or mutating refs before semantic validation. Custom file tools preserve the
+  SDK empty-mode boundary and bind all worker file authority to one dispatch.
+* Consequence: Worktree mode requires Linux x64 with glibc, the packaged native
+  supervisor, a known Git executable, a separately owned workspace root, a
+  non-bare SHA-1 or SHA-256 repository, an unoccupied full local target ref, no
+  submodules, and no configured clean, smudge, or process filters. Phase 10E
+  must construct these adapters only for explicit worktree mode and must never
+  construct them for repository mode.
+
+## Phase 10D log
+
+### Decisions
+
+Git receives a fixed isolated environment and command-line config that disables
+system and global config, prompts, pagers, hooks, replacement objects, fsmonitor,
+and external diff execution. Every command uses literal argv and `shell: false`
+through the native process supervisor.
+
+Repository verification checks canonical top-level identity, non-bare mode,
+filesystem ownership, SHA-1 or SHA-256 format, exact target commit and tree,
+strict full local ref syntax, submodules, configured external filters, and target
+occupancy in strict NUL worktree porcelain.
+
+Workspace paths derive from stable ID hashes under the exact owned root.
+Preparation, inspection, capture, and cleanup require exact detached, locked,
+contained state. Capture includes edits, additions, deletions, untracked files,
+and modes. Cleanup unlocks and force-removes only the exact verified path and
+never invokes reset, clean, checkout, branch deletion, or prune.
+
+Integration sorts stable member IDs and binds that order to a deterministic
+`merge-tree` and `commit-tree` sequence. Candidate creation does not mutate a
+ref. Validation runs an injected gate callback in an owned detached candidate
+worktree. Publication executes one exact target/new/old compare-and-swap and
+inspection classifies old, new, other, or missing state, including a successful
+update whose response was lost.
+
+Worker file authority consists of four custom list, read, write, and patch tools
+bound to the exact dispatch working root. Built-ins, MCP, host Git operations,
+additional directories, config discovery, instructions, hooks, arbitrary
+permissions, and live SDK use remain disabled or absent.
+
+### Deviations
+
+No architecture deviation was required. Capture uses the isolated worktree's
+own index rather than a second temporary index, which is safe because each
+detached workspace is exclusively owned by one dispatch. Multi-member fan-in
+uses the researched deterministic sorted sequence because Git `merge-tree`
+accepts two commit inputs per operation.
+
+### Validation
+
+Focused validation passed the execution-host package build and 48 tests across
+five files. Real Git tests cover SHA-1 and SHA-256 repositories, verification,
+detached locked preparation, inspect, capture fidelity, cancellation, exact
+cleanup, disjoint integration, all six three-member input permutations, text,
+rename/delete, and binary conflicts, semantic gate failure, one-shot publish,
+target movement, replay, and lost-response inspection. File tests cover
+traversal, symlink, oversize, stale patch, UTF-8, and atomic replacement guards.
+
+Every real Git test created a fresh canonical repository beneath the OS
+temporary directory, asserted it was outside `/workspaces/senawa`, initialized,
+configured, and committed there, removed every fixture-linked worktree, compared
+the Senawa `git worktree list --porcelain` output before and after, and deleted
+the fixture root.
+
+The final complete execution-host directory passed 83 tests with one opt-in live SDK
+test skipped. Root build, workspace typecheck, Biome across 156 files,
+architecture boundaries across 259 source files, documentation links across 18
+files, and `git diff --check` passed. The final focused set gained one additional
+immutable-base mismatch case for 49 tests.
+
+The first complete offline run passed 893 tests and timed out one unchanged
+production-composition case at five seconds under concurrent load. Its immediate
+isolated rerun passed all three tests in 2.82 seconds. The second complete run
+passed 894 tests across 47 files with only the opt-in live SDK test skipped.
+
+After the final immutable-base case, another concurrent complete run passed 894
+tests and repeated the same unchanged five-second production-composition
+timeout. The file again passed all three tests in isolation in 2.81 seconds. No
+Phase 10D adapter test or other repository test failed.
+
+An audit scan found six temporary roots left by the initial fixture setup
+failure before the fixture could return and register teardown. All six were
+canonical `/tmp/senawa-git-repository-*` paths with no linked worktree. They
+were removed, setup now cleans its root on every exception, and repeated real
+Git suites leave no matching temporary roots.
+
+### Review
+
+No independent review was requested for this contained subphase. Phase 10 final
+review remains assigned to Phase 10F.
+
+### Commit and push
+
+No commit or push was performed, as required for Phase 10D.
+
+### Remaining risks
+
+Phase 10E must compose repository mode without constructing a Git adapter and
+explicit worktree mode with durable effect identities, eligibility, batch
+limits, and supervisor lifecycle. Production composition, live SDK calls,
+commit, push, and final independent review remain absent.
+
+## Decision D-066: Compose workspace effects through per-run durable authority
+
+* Date: 2026-08-13
+* Status: Accepted and implemented for Phase 10E
+* Phase: Phase 10E
+* Decision: Resolve workspace mode from each instantiated run's immutable
+  execution binding. Route repository workers to the exact registered root with
+  one writer and no Git host construction. Route explicit worktree effects
+  through a composite host backed by Phase 10C authority and Phase 10D adapters.
+  Recompute completion eligibility from committed runner and integration facts,
+  and submit the trusted barrier command before recording workspace barrier
+  authority.
+* Alternatives: Select one process-wide workspace mode; reuse one fixed-root SDK
+  client; release completion when a worker returns; let publication input assert
+  writer settlement; retry target updates without inspection; or expose direct
+  Git mutation routes.
+* Rationale: One supervisor can own runs with different immutable policies.
+  Per-run selection preserves the repository no-Git guarantee, while per-root
+  clients and file ports isolate worktree writers. Durable outcome and barrier
+  checks close the worker-return race and preserve restart convergence across
+  the SQLite and Git transaction boundary.
+* Consequence: Production worktree mode lazily verifies Git only when its first
+  worktree effect runs. The default integration gate fails closed unless app
+  composition injects configured validation. Live multi-client SDK behavior is
+  not claimed by offline tests. Rework is a new durable attempt and consumes
+  the existing generic runner budgets; terminal attempts expire but retain the
+  slot lease row so the next claim advances its fence.
+
+## Phase 10E log
+
+### Decisions
+
+`DynamicWorkspaceEffectHost` binds missing Phase 10C execution records from the
+shared runtime authority, caches one mode-specific host per run, and never calls
+the Git factory for repository mode. `WorkspaceEffectHost` binds each worktree
+worker to a durable root, unwraps the exact worker payload, caches one worker
+host per root, and enforces host occupancy.
+
+`DurableWorkspaceEffectHost` persists or replays workspace and integration
+intent before Git. It prepares, captures, merges, validates, publishes, records
+the trusted barrier, and cleans exact owned worktrees. Inspection reconstructs
+paths from stable IDs, retries publication only while the target remains old,
+records a lost successful update when the target is new, and persists target
+movement otherwise.
+
+The daemon owns independent SDK base directories per canonical working root.
+Repository sessions use the exact registered repository root. Worktree sessions
+receive only root-scoped custom file tools. SDK state and worktree ownership
+roots remain outside the consumer repository and linked worktrees.
+
+Completion outbox delivery supplies the full fact to
+`DurableCompletionEligibility`. The resolver requires an exact current
+completed writer outcome. Worktree facts additionally require a matching
+workspace, captured result digest, integration member, published target, and
+recorded barrier. Publication itself cannot assert completion eligibility.
+
+Supervisor failure handling runs after every all-settled batch while the run
+lease remains live. Continue fences only failed task scopes. Fail-fast fences
+the same-admission sibling cohort and requests cancellation for active or
+unknown siblings. Repository writer failure therefore survives restart as a
+task fence instead of pretending direct file edits rolled back.
+
+### Deviations
+
+No public status or mutation route was added. Existing shared service status is
+sufficient, and the SQLite integration-slot owner, fence, and expiry query is an
+internal read-only diagnostic. The default semantic validation callback fails
+closed because no universal command can represent consumer-configured sensors.
+
+### Validation
+
+Focused Phase 10E validation passed repository daemon composition, production
+completion, supervisor controller and service, SQLite authority, execution-host
+Git and workspace adapters, and the app worktree black-box. The black-box uses
+one fresh OS-temporary repository and deterministic fake workers through the
+production composition port. It covers two disjoint siblings, two same-file
+conflicting siblings, semantic gate failure, durable rework, unrelated
+continuation, higher-fence slot reuse, authority reopen, publication, exact
+barrier, target content, four-worktree cleanup, and unchanged Senawa worktree
+porcelain state.
+
+The focused aggregate passed 322 tests with one opt-in live SDK test skipped
+before the repository restart fixture was corrected for required failure
+fencing. Its immediate app rerun passed 11 tests. Controller-specific validation
+passed four tests for renewal, lease-loss abort, continue, and fail-fast.
+
+The final root build, workspace typecheck, and Biome check across 161 files
+passed. The complete offline suite passed 901 tests and skipped the one opt-in
+live SDK test; the unchanged amendment recovery test exceeded its five-second
+timeout under concurrent load. Its immediate isolated rerun passed all three
+file tests in 2.78 seconds. Architecture boundaries passed across 269 source
+files, documentation links passed across 18 Markdown files, and `git diff
+--check` passed.
+
+After the final cancellation and target-moved recovery repairs, root typecheck
+and lint passed again. The final complete offline rerun passed 902 tests across
+49 files and skipped only the opt-in live SDK test; no timeout repeated.
+
+The SQLite benchmark passed all four required windows with a 17.09 ms median
+window p99 against the 25 ms threshold. The final real Git audit passed 26 tests
+across the Phase 10D adapters and Phase 10E app journey, preserved exact
+before-and-after Senawa worktree porcelain output, reported the single mounted
+checkout only, and left no matching temporary repository roots.
+
+### Review
+
+Independent review remains assigned to Phase 10F.
+
+### Commit and push
+
+No commit or push was performed, as required for Phase 10E.
+
+### Remaining risks
+
+The live Copilot SDK path has not exercised simultaneous per-root clients. The
+offline fake-worker path proves root and host-cap isolation. Semantic rework
+requires a newly queued durable attempt and is bounded by its runner budget;
+there is no implicit unbounded model retry. The default integration gate rejects
+publication until consumer composition supplies validation.
+
+## Phase 10F initial review rejection and repairs
+
+### Review disposition
+
+The initial Phase 10F independent review on 2026-08-14 rejected Phase 10. The
+review found missing production stage orchestration, publication before a
+current integration-slot claim, non-semantic completion attempt selection,
+pathname time-of-check/time-of-use races, non-atomic multi-file patch claims,
+post-batch fail-fast cancellation, and incomplete barrier-split and acceptance
+coverage. Phase 10F remains in progress. Final independent re-review is not
+complete.
+
+### Repair decisions
+
+Production scheduling now runs under the acquired supervisor run lease before
+effects. It derives readiness from the immutable runtime graph, accepted task
+accounting, registered dispatch seeds, runner outcomes, workspace results,
+integration attempts, and the current runtime barrier. Stable SQLite runner
+commands are the durable stage ledger. Repository mode admits direct workers
+serially. Worktree mode emits prepare, wrapped worker, capture, prepare
+integration, validate, publish, trusted barrier, completion eligibility, and
+cleanup stages one durable transition at a time. The current batch size is the
+minimum of workflow, supervisor, host, and available durable writer capacity.
+
+Integration publication now claims or reasserts the exact current slot before
+inspection and again before compare-and-swap. Every integration state, gate,
+and barrier transaction receives authority time and rejects an expired lease.
+Published workspace authority records only the exact current runtime barrier. A
+different authoritative barrier transitions the attempt to `target-moved` and
+cannot release completion.
+
+Completion eligibility now selects exactly one `barrier-recorded` attempt whose
+workspace result, completion fact digest, integration member, and barrier member
+all match the submitted fact and whose barrier is the current runtime barrier.
+Failed and rework attempts are ignored. Zero successful matches defer; multiple
+successful matches fail closed.
+
+Workspace file operations now use a packaged C17 helper with a no-follow root
+directory descriptor and Linux `openat2` resolution using `RESOLVE_BENEATH`,
+`RESOLVE_NO_SYMLINKS`, and `RESOLVE_NO_MAGICLINKS`. Writes and patches stage,
+sync, and rename through an opened parent descriptor under a root lock. Patch
+authority is explicitly one file. It revalidates the compared target inode
+immediately before rename. The TypeScript client serializes each instance, and
+the root lock serializes independent instances.
+
+Async fail-fast batches receive policy before host execution. A cohort-local
+abort controller is linked to the outer lease signal. The first failed or
+cancelled observation aborts pending siblings, and every fulfilled failure or
+cohort cancellation is committed before failure-policy fences are applied.
+
+### Added repair coverage
+
+The repair suite adds these cases:
+
+* Production repository convergence from runtime and dispatch facts without
+  manual runner setup or effect enqueue
+* Production worktree convergence through the complete authority-derived stage
+  graph with a real OS-temporary Git repository and trusted command callback
+* Effective production batch minimum across workflow, supervisor, host, and
+  durable capacity limits
+* Immediate fail-fast abort of a never-resolving sibling with both observations
+  committed
+* Expired integration owner refusal, higher-fence takeover, and stale host
+  refusal before Git compare-and-swap
+* Crash after trusted runtime barrier commit and before workspace barrier record,
+  followed by idempotent inspection recovery
+* Failed lexically earlier semantic attempt, successful later attempt, and
+  ambiguous successful barrier refusal
+* Descriptor-confined target symlink swap and concurrent expected-text race
+* One-file patch contract enforcement
+
+### Validation during repair
+
+Focused validation passed root build and 174 affected tests across production
+repository and worktree composition, semantic completion eligibility,
+supervisor fail-fast behavior, runner conformance, SQLite authority, and
+workspace file confinement. Post-format validation passed the root build and 19
+highest-risk tests.
+
+The complete offline suite passed 907 tests across 50 files and skipped only the
+opt-in live SDK test. Root typecheck, Biome across 163 files, architecture
+boundaries across 273 source files, documentation links across 18 Markdown
+files, and `git diff --check` passed. The SQLite authority benchmark passed four
+required windows with a 16.77 ms median window p99 against the 25 ms threshold.
+One concurrent complete run timed out the unchanged amendment recovery test at
+five seconds after 906 tests passed. The file passed all three tests in
+isolation, and the immediate ordinary complete rerun passed all 907 tests.
+
+The final traced Git audit ran the command, workspace, integration, and
+production worktree suites with all fixture roots beneath
+`/tmp/senawa-phase10-git-audit-7weCjR`. It captured 870 exact Git `execve`
+records covering 15 command families and 20 fresh repository roots. Every
+fixture directory and the audit root were removed. Senawa worktree porcelain
+before and after was the same single checkout at commit `246f5a5` on
+`redesign/workflow-state-machine`. The exact argv ledger remains at
+`/tmp/senawa-phase10-git-argv-final.txt` for review.
+
+No commit, push, live SDK invocation, or Senawa worktree mutation was performed.
+Final independent re-review remains Phase 10F work.
+
+## Phase 10F second review rejection and repairs
+
+### Review disposition
+
+The second Phase 10F independent re-review on 2026-08-14 rejected Phase 10.
+The review found that production still admitted historical dispatches and
+integration results, runner configuration could not admit a legitimate later
+task generation, publication retained an inspection-to-compare-and-swap fence
+window, same-owner integration claims did not renew durable expiry, semantic
+rework lacked an explicit third-attempt refusal test, and parent-directory
+substitution during mutation was not covered. Phase 10F remains in progress.
+Final independent re-review is not complete.
+
+### Repair decisions
+
+Production scheduling now derives one exact current dispatch cohort from graph
+task identity and definition generation plus context-broker durable currentness.
+Only claim-accepting scopes whose accepted context and fence match the dispatch
+are eligible. Multiple matching scopes or dispatches fail closed. Repository
+workers, worktree stages, readiness, and integration membership consume that
+same cohort. Integration resolves only deterministic workspace and result
+identities for current dispatches and counts semantic retries within the exact
+current phase generation and fan-in digest.
+
+Runner authority now exposes transactional `ensureTaskScopesAndBudgets`
+admission. In-memory and SQLite implementations add a new current scope
+idempotently, refuse reopening a fenced scope, add or increase only supplied
+budget limits, and preserve reserved, spent, unreported, and occupied capacity.
+The production scheduler increases budgets only for scopes not already admitted.
+
+Git publication now requires an authority callback after final target inspection
+and immediately before `update-ref`. The durable workspace host renews or
+reclaims the integration slot in that callback, reasserts the `publishing`
+state, and carries the returned owner and fence into all post-publication state
+writes. SQLite same-owner replay extends the live slot expiry inside the same
+immediate transaction. Authority refusal is not handled as a lost Git response.
+
+Semantic integration remains bounded to two attempts for one exact current
+fan-in. After two failed gates, production emits no third prepare command,
+publication, trusted barrier, or cleanup command. Workspace file mutation keeps
+using the opened parent directory descriptor if its pathname is renamed and
+replaced by a symlink, and never writes through the replacement path.
+
+### Added second-review coverage
+
+The second repair suite adds these cases:
+
+* Exact generation-two dispatch selection with generation-one history ignored
+* Duplicate exact-current dispatch ambiguity refusal
+* Later task-generation admission preserving spend and occupied capacity
+* Fenced stale generation ignored without host dispatch or spend
+* Production effective writer batch size one plus two-sibling atomic capacity
+  and spend exhaustion coverage
+* Same-owner slot renewal and competing-owner exclusion past the old expiry
+* Forced slot takeover exactly between final inspection and Git compare-and-swap
+* Higher-fence publication retry after the stale owner is refused
+* Trusted runtime barrier crash, authority reopen, and conflicting barrier
+  recovery refusal without workspace completion
+* Two failed semantic integration attempts with no third attempt enqueued
+* Parent directory rename and outside symlink substitution during native mutation
+
+### Validation during second repairs
+
+Focused build and test validation passed 192 tests across eight affected files.
+The set covered runner admission in memory and SQLite, exact-current production
+selection, stale-generation spend refusal, continue and fail-fast sibling
+policies, Git publication compare-and-swap fencing, same-owner slot renewal,
+real Git takeover and conflicting barrier recovery, bounded semantic rework,
+and descriptor-confined target and parent swap races.
+
+Root build, typecheck, and Biome passed. The first complete concurrent test run
+passed 913 tests, skipped the opt-in live SDK test, and hit the unchanged
+five-second amendment recovery timeout after its affected-suite pass. The test
+passed alone in 2.4 seconds. The immediate complete rerun passed 914 tests across
+50 files and skipped only the live SDK test. Architecture boundaries passed
+across 273 source files, documentation links passed across 18 Markdown files,
+and `git diff --check` passed.
+
+The SQLite authority benchmark passed all four required windows with a
+17.12 ms median window p99 against the 25 ms threshold. Every Git test used a
+fresh OS-temporary repository. Affected and complete test audits found no leaked
+Git fixture roots. Senawa worktree porcelain before and after remained the same
+single checkout at commit `246f5a5` on `redesign/workflow-state-machine`, and no
+Senawa service, process supervisor, or workspace helper process remained.
+
+No commit, push, live SDK invocation, or Senawa worktree mutation was performed.
+Final independent re-review remains Phase 10F work.
+
+## Decision D-067: Linearize current workspace authority before publication
+
+* Date: 2026-08-14
+* Status: Accepted and implemented for Phase 10
+* Phase: Phase 10F
+* Decision: Derive production stages only from exact current graph generations,
+  context-broker scope currentness, and durable results. Admit later current
+  runner scopes transactionally without resetting accounting. Reassert a
+  renewed or higher-fence integration slot after final target inspection and
+  immediately before Git compare-and-swap publication.
+* Alternatives: Keep runner configuration immutable after first dispatch;
+  include all historical results in rework; rely on an earlier slot claim; or
+  treat Git's old-object compare-and-swap as sufficient without current Senawa
+  ownership.
+* Rationale: A later task generation is legitimate only when its exact scope is
+  current, while historical work must not spend or enter fan-in. Git ref CAS
+  prevents stale target content but does not prove that the publishing Senawa
+  owner still holds the integration slot.
+* Consequence: Scheduler ambiguity fails closed. New current scopes and budget
+  limits can be added without reopening fences or resetting spend. Rework uses
+  one current result per task and stops after two attempts. Publication cannot
+  invoke `update-ref` unless the final authority callback renews or takes over
+  the slot and returns the fence used for post-publication records.
+
+## Phase 10F final review and validation
+
+Two independent review rounds rejected Phase 10 before final approval. The
+first found five correctness gaps in production stage orchestration,
+publication fencing, completion selection, workspace file confinement, and
+fail-fast timing. The second found stale-generation scheduling and one
+remaining inspection-to-CAS takeover window. Each finding received an owning
+code repair and an adversarial regression.
+
+Final independent re-review found no P0, P1, P2, or P3 findings. It verified
+exact current dispatch selection, transactional later-scope admission, bounded
+rework, post-inspection publication authority, same-owner expiry renewal,
+higher-fence takeover, immediate fail-fast cancellation, descriptor-confined
+file mutation, split-barrier recovery, repository default isolation, and
+temporary-repository worktree safety.
+
+Final validation passed on 2026-08-14:
+
+* Frozen install across all 10 workspace projects
+* Root build, including both execution-host native helpers
+* Clean workspace typecheck
+* Biome check across 163 files
+* Complete offline suite: 50 files and 914 tests passed
+* Live Copilot SDK probe: one test skipped without explicit opt-in settings
+* Architecture boundaries across 273 source files
+* Documentation links across 18 Markdown files
+* SQLite authority benchmark: 4 of 5 independent windows passed, with a 20.98
+  ms median window p99 against the unchanged 25 ms threshold
+* `git diff --check` and process-residue checks
+* Exact before-and-after Senawa worktree porcelain equality, with one checkout
+  at `246f5a5` on `redesign/workflow-state-machine`
+* No remaining `/tmp/senawa-git-repository-*` or
+  `/tmp/senawa-workspace-production-*` roots
+
+No live SDK invocation or worktree mutation in `/workspaces/senawa` was used.
+
+### Commit and push
+
+Pending final Phase 10 delivery.
 
 ## Entry template
 

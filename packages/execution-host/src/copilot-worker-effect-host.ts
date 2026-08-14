@@ -11,6 +11,7 @@ import {
 } from "@senawa/runtime";
 import type { CopilotSdkPort } from "./copilot-sdk-port.js";
 import { CopilotSerialWorkerAdapter, type CopilotWorkerRunResult } from "./copilot-worker.js";
+import type { WorkspaceFilePort } from "./workspace-files.js";
 
 const MAX_TIMER_MILLISECONDS = 2_147_483_647;
 
@@ -33,6 +34,7 @@ export interface CopilotWorkerEffectHostOptions {
   readonly sdk: CopilotSdkPort;
   readonly workingDirectory: string;
   readonly sessionBaseDirectory?: string;
+  readonly workspaceFiles?: WorkspaceFilePort;
 }
 
 export class CopilotWorkerEffectHost implements AsyncEffectHost {
@@ -41,6 +43,7 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
   readonly adapter: CopilotSerialWorkerAdapter;
   readonly workingDirectory: string;
   readonly sessionBaseDirectory: string | undefined;
+  readonly workspaceFiles: WorkspaceFilePort | undefined;
   readonly #active = new Map<string, AbortController>();
 
   constructor(options: CopilotWorkerEffectHostOptions) {
@@ -49,6 +52,7 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
     this.adapter = new CopilotSerialWorkerAdapter(options.sdk, options.broker.dependencies.sha256);
     this.workingDirectory = options.workingDirectory;
     this.sessionBaseDirectory = options.sessionBaseDirectory;
+    this.workspaceFiles = options.workspaceFiles;
   }
 
   async dispatch(
@@ -93,6 +97,7 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
         ...(this.sessionBaseDirectory === undefined
           ? {}
           : { sessionBaseDirectory: this.sessionBaseDirectory }),
+        ...(this.workspaceFiles === undefined ? {} : { workspaceFiles: this.workspaceFiles }),
         timeoutMs: input.timeoutMs,
         signal: AbortSignal.any([context.signal, localAbort.signal]),
       });

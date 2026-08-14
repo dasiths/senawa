@@ -13,7 +13,11 @@ import {
   type SupervisorLogPage,
   type SupervisorServiceStatus,
 } from "./contracts.js";
-import { SupervisorRunController, type SupervisorTimer } from "./run-controller.js";
+import {
+  SupervisorRunController,
+  type SupervisorRunControllerOptions,
+  type SupervisorTimer,
+} from "./run-controller.js";
 
 const DEFAULT_STARTUP_CYCLE_LIMIT = 1_024;
 
@@ -39,6 +43,13 @@ export interface SupervisorServiceOptions {
   readonly deliverCompletionOutboxOnce?: () => boolean;
   readonly deliverAmendmentProposalOutboxOnce?: () => boolean;
   readonly timer?: SupervisorTimer;
+  readonly runnerBatchSize?: number;
+  readonly failurePolicyForRun?: SupervisorRunControllerOptions["failurePolicyForRun"];
+  readonly scheduleBeforeEffects?: SupervisorRunControllerOptions["scheduleBeforeEffects"];
+  readonly listSchedulableRuns?: () => readonly {
+    readonly repositoryId: string;
+    readonly runId: string;
+  }[];
   readonly closeables?: readonly SupervisorCloseable[];
 }
 
@@ -73,6 +84,7 @@ export class SupervisorService {
   readonly #effectHostConfigured: boolean;
   readonly #controller: SupervisorRunController;
   readonly #runnerAuthority: SqliteRunnerAuthority | undefined;
+  readonly #listSchedulableRuns: SupervisorServiceOptions["listSchedulableRuns"];
   readonly #startedAt: string;
   #listeners: readonly SupervisorListenerStatus[] = [];
   #startedListeners: SupervisorListener[] = [];
@@ -101,6 +113,7 @@ export class SupervisorService {
     this.#closeables = options.closeables ?? [];
     this.#effectHostConfigured =
       options.effectHost !== undefined || options.asyncEffectHost !== undefined;
+    this.#listSchedulableRuns = options.listSchedulableRuns;
     this.#runnerAuthority =
       options.effectHost === undefined && options.asyncEffectHost === undefined
         ? undefined
@@ -131,6 +144,15 @@ export class SupervisorService {
             deliverAmendmentProposalOutboxOnce: options.deliverAmendmentProposalOutboxOnce,
           }),
       ...(options.timer === undefined ? {} : { timer: options.timer }),
+      ...(options.runnerBatchSize === undefined
+        ? {}
+        : { runnerBatchSize: options.runnerBatchSize }),
+      ...(options.failurePolicyForRun === undefined
+        ? {}
+        : { failurePolicyForRun: options.failurePolicyForRun }),
+      ...(options.scheduleBeforeEffects === undefined
+        ? {}
+        : { scheduleBeforeEffects: options.scheduleBeforeEffects }),
     });
     this.#startedAt = this.#now();
   }
@@ -329,8 +351,9 @@ export class SupervisorService {
     const wake = wakes[0];
     const amendmentProposal = this.authority.listPendingAmendmentProposalRuns()[0];
     const runnable = this.authority.listRunnableRuns()[0];
+    const schedulable = this.#listSchedulableRuns?.()[0];
     const amendmentRecovery = this.authority.listApprovedAmendmentRecoveries()[0];
-    const target = wake ?? amendmentProposal ?? amendmentRecovery ?? runnable;
+    const target = wake ?? amendmentProposal ?? amendmentRecovery ?? runnable ?? schedulable;
     if (target === undefined) return { worked: false, pendingWakeCount: 0 };
     if (this.#state === "draining") {
       return { worked: false, pendingWakeCount: wakes.length };

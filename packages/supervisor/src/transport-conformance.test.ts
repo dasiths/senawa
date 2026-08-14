@@ -738,6 +738,8 @@ function instantiateSubmission(commandId: string): CommandSubmission {
     intent: "instantiate-run",
     payload: {
       workflowId: runtimeFixture.workflowId,
+      configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+      execution: runtimeFixture.execution,
       graph: createRuntimeGraph(),
       phase: runtimeFixture.phase,
       approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },

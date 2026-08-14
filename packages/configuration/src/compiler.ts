@@ -39,6 +39,7 @@ import {
   type ConfigurationDoctorResult,
   type ConfigurationRegistryEntry,
   type ConfigurationSnapshot,
+  type ExecutionPolicy,
   WORKFLOW_AMENDMENT_API_VERSION,
   WORKFLOW_CONFIGURATION_API_VERSION,
   type WorkflowAmendmentCompilationInput,
@@ -53,6 +54,7 @@ const MAX_SENSOR_ATTEMPTS = 10_000;
 type CanonicalObject = CanonicalValue & Readonly<Record<string, CanonicalValue>>;
 
 interface ParsedWorkflow {
+  readonly execution: ExecutionPolicy;
   readonly workflow: ParsedWorkflowDeclaration;
   readonly schemas: readonly ParsedSchema[];
   readonly roles: readonly ParsedRole[];
@@ -187,6 +189,7 @@ interface DiagnosticCollector {
 }
 
 interface LoweredConfiguration {
+  readonly execution: ExecutionPolicy;
   readonly input: NormalizedWorkflowInput;
   readonly sourceById: ReadonlyMap<string, { readonly pointer: string }>;
 }
@@ -221,6 +224,7 @@ const ROOT_FIELDS = [
   "phases",
   "projectedWork",
 ];
+const OPTIONAL_ROOT_FIELDS = ["execution"];
 const MAX_LIST_ITEMS = 256;
 const AMENDMENT_ROOT_FIELDS = [
   "apiVersion",
@@ -285,7 +289,7 @@ function diagnoseLoweredConfiguration(
   if (diagnosis.graph === undefined || collector.diagnostics.length > 0) {
     return undefined;
   }
-  return createConfigurationSnapshot(diagnosis.graph, registries, sha256);
+  return createConfigurationSnapshot(diagnosis.graph, registries, lowered.execution, sha256);
 }
 
 export function compileWorkflowConfiguration(
@@ -362,7 +366,14 @@ export function doctorWorkflowAmendment(
 
   const registries = registriesFromSnapshot(baseSnapshot);
   validateAmendmentSemantics(parsed, baseSnapshot, collector);
-  const lowered = lowerAmendment(parsed, baseInput, registries.gateKeysByPhase, collector, sha256);
+  const lowered = lowerAmendment(
+    parsed,
+    baseInput,
+    baseSnapshot.execution,
+    registries.gateKeysByPhase,
+    collector,
+    sha256,
+  );
   const resultSnapshot = diagnoseLoweredConfiguration(
     lowered.candidate,
     registries,
@@ -496,7 +507,7 @@ function parseDocument(
   value: CanonicalValue,
   collector: DiagnosticCollector,
 ): ParsedWorkflow | undefined {
-  const document = exactObject(value, "", ROOT_FIELDS, [], collector);
+  const document = exactObject(value, "", ROOT_FIELDS, OPTIONAL_ROOT_FIELDS, collector);
   if (document === undefined) return undefined;
   if (document.apiVersion !== WORKFLOW_CONFIGURATION_API_VERSION) {
     addDiagnostic(
@@ -509,6 +520,7 @@ function parseDocument(
   if (document.kind !== "Workflow") {
     addDiagnostic(collector, "invalid-kind", "/kind", "kind must be Workflow");
   }
+  const execution = parseExecution(document.execution, collector);
   const workflow = parseWorkflow(document.workflow, collector);
   const schemas = parseSchemas(document.schemas, collector);
   const roles = parseRoles(document.roles, collector);
@@ -518,6 +530,7 @@ function parseDocument(
   const phases = parsePhases(document.phases, collector);
   const projectedWork = parseProjectedWork(document.projectedWork, collector);
   if (
+    execution === undefined ||
     workflow === undefined ||
     schemas === undefined ||
     roles === undefined ||
@@ -529,7 +542,147 @@ function parseDocument(
   ) {
     return undefined;
   }
-  return { workflow, schemas, roles, modelPolicies, sensors, gates, phases, projectedWork };
+  return {
+    execution,
+    workflow,
+    schemas,
+    roles,
+    modelPolicies,
+    sensors,
+    gates,
+    phases,
+    projectedWork,
+  };
+}
+
+function parseExecution(
+  value: CanonicalValue | undefined,
+  collector: DiagnosticCollector,
+): ExecutionPolicy | undefined {
+  if (value === undefined) {
+    return Object.freeze({
+      workspaceMode: "repository",
+      maxWriterConcurrency: 1,
+      failurePolicy: "continue",
+    });
+  }
+  const object = exactObject(
+    value,
+    "/execution",
+    [],
+    ["workspaceMode", "maxWriterConcurrency", "failurePolicy", "integrationRef"],
+    collector,
+  );
+  if (object === undefined) return undefined;
+  const workspaceMode = object.workspaceMode ?? "repository";
+  if (workspaceMode !== "repository" && workspaceMode !== "worktree") {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      "/execution/workspaceMode",
+      "workspaceMode must be repository or worktree",
+    );
+  }
+  const maxWriterConcurrency =
+    object.maxWriterConcurrency === undefined
+      ? 1
+      : parsePositiveInteger(
+          object.maxWriterConcurrency,
+          "/execution/maxWriterConcurrency",
+          collector,
+        );
+  const failurePolicy = object.failurePolicy ?? "continue";
+  if (failurePolicy !== "continue" && failurePolicy !== "fail-fast") {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      "/execution/failurePolicy",
+      "failurePolicy must be continue or fail-fast",
+    );
+  }
+  const integrationRef = object.integrationRef;
+  const validIntegrationRef =
+    integrationRef === undefined ||
+    (typeof integrationRef === "string" && isFullLocalBranchRef(integrationRef));
+  if (!validIntegrationRef) {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      "/execution/integrationRef",
+      "integrationRef must be a full refs/heads branch ref",
+    );
+  }
+  if (workspaceMode === "repository" && integrationRef !== undefined) {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      "/execution/integrationRef",
+      "repository mode forbids integrationRef",
+    );
+  }
+  if (
+    workspaceMode === "repository" &&
+    maxWriterConcurrency !== undefined &&
+    maxWriterConcurrency > 1
+  ) {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      "/execution/maxWriterConcurrency",
+      "repository mode permits exactly one writer",
+    );
+  }
+  if (workspaceMode === "worktree" && integrationRef === undefined) {
+    addDiagnostic(
+      collector,
+      "missing-field",
+      "/execution/integrationRef",
+      "worktree mode requires integrationRef",
+    );
+  }
+  if (
+    (workspaceMode !== "repository" && workspaceMode !== "worktree") ||
+    maxWriterConcurrency === undefined ||
+    (failurePolicy !== "continue" && failurePolicy !== "fail-fast") ||
+    !validIntegrationRef ||
+    (workspaceMode === "repository" &&
+      (integrationRef !== undefined || maxWriterConcurrency > 1)) ||
+    (workspaceMode === "worktree" && integrationRef === undefined)
+  ) {
+    return undefined;
+  }
+  const common = { workspaceMode, maxWriterConcurrency, failurePolicy } as const;
+  return Object.freeze(
+    workspaceMode === "worktree" ? { ...common, integrationRef } : common,
+  ) as ExecutionPolicy;
+}
+
+function isFullLocalBranchRef(value: string): boolean {
+  if (!value.startsWith("refs/heads/") || value.length > 1_024 || value.includes("..")) {
+    return false;
+  }
+  if (
+    value.includes("@{") ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 0x21 || code === 0x7f;
+    })
+  ) {
+    return false;
+  }
+  if (["~", "^", ":", "?", "*", "[", "\\"].some((character) => value.includes(character))) {
+    return false;
+  }
+  const components = value.slice("refs/heads/".length).split("/");
+  return components.every(
+    (component) =>
+      component.length > 0 &&
+      component !== "." &&
+      component !== ".." &&
+      !component.startsWith(".") &&
+      !component.endsWith(".") &&
+      !component.endsWith(".lock"),
+  );
 }
 
 function parseWorkflow(
@@ -1320,6 +1473,7 @@ function validateConfigurationSnapshot(value: unknown, sha256: Sha256): Configur
   if (!isRecord(snapshot)) throw new TypeError("Base configuration snapshot must be an object");
   const expectedKeys = [
     "apiVersion",
+    "execution",
     "graph",
     "schemas",
     "roles",
@@ -1342,6 +1496,7 @@ function validateConfigurationSnapshot(value: unknown, sha256: Sha256): Configur
     );
   }
   const graph = validateWorkflowGraph(snapshot.graph, sha256);
+  const execution = validateSnapshotExecution(snapshot.execution);
   const registries: ValidatedRegistries = {
     schemas: validateSnapshotRegistry(snapshot.schemas, "schemas", sha256),
     roles: validateSnapshotRegistry(snapshot.roles, "roles", sha256),
@@ -1351,11 +1506,20 @@ function validateConfigurationSnapshot(value: unknown, sha256: Sha256): Configur
     projections: validateSnapshotRegistry(snapshot.projections, "projections", sha256),
     gateKeysByPhase: new Map(),
   };
-  const expected = createConfigurationSnapshot(graph, registries, sha256);
+  const expected = createConfigurationSnapshot(graph, registries, execution, sha256);
   if (canonicalSerialize(snapshot) !== canonicalSerialize(canonicalValue(expected))) {
     throw new TypeError("Base configuration snapshot does not match its exact canonical digests");
   }
   return expected;
+}
+
+function validateSnapshotExecution(value: unknown): ExecutionPolicy {
+  const collector: DiagnosticCollector = { locator: "snapshot://execution", diagnostics: [] };
+  const execution = parseExecution(canonicalValue(value), collector);
+  if (execution === undefined || collector.diagnostics.length > 0) {
+    throw new TypeError("Base configuration snapshot execution policy is invalid");
+  }
+  return execution;
 }
 
 function validateSnapshotRegistry(
@@ -1396,6 +1560,7 @@ function validateSnapshotRegistry(
 function lowerAmendment(
   parsed: ParsedAmendment,
   baseInput: NormalizedWorkflowInput,
+  execution: ExecutionPolicy,
   gateKeysByPhase: ReadonlyMap<string, readonly string[]>,
   collector: DiagnosticCollector,
   sha256: Sha256,
@@ -1441,6 +1606,7 @@ function lowerAmendment(
   return {
     operations,
     candidate: {
+      execution,
       input: {
         workflow: baseInput.workflow,
         phases: [...baseInput.phases, ...phases],
@@ -1501,6 +1667,7 @@ function lowerConfiguration(
   const executableWork = loweredWork.map(({ task }) => task);
   const criteria = loweredWork.flatMap((item) => item.criteria);
   return {
+    execution: parsed.execution,
     input: {
       workflow: {
         id: workflowIdentity,
@@ -1634,6 +1801,7 @@ function normalizeEvidencePolicy(policy: ParsedEvidencePolicy) {
 function createConfigurationSnapshot(
   graph: ReturnType<typeof compileWorkflowGraph>,
   registries: ValidatedRegistries,
+  execution: ExecutionPolicy,
   sha256: Sha256,
 ): ConfigurationSnapshot {
   const contentRegistries = {
@@ -1645,6 +1813,7 @@ function createConfigurationSnapshot(
     projections: registries.projections,
   };
   const componentDigests = {
+    execution: canonicalDigest(canonicalValue(execution), sha256),
     graph: canonicalDigest(canonicalValue(graph), sha256),
     schemas: canonicalDigest(canonicalValue(contentRegistries.schemas), sha256),
     roles: canonicalDigest(canonicalValue(contentRegistries.roles), sha256),
@@ -1655,6 +1824,7 @@ function createConfigurationSnapshot(
   };
   const content = {
     apiVersion: CONFIGURATION_SNAPSHOT_API_VERSION,
+    execution,
     graph,
     ...contentRegistries,
     componentDigests,

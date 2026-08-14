@@ -16,11 +16,14 @@ import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import {
   type AccountingAssessment,
+  bindGitObjectId,
+  bindGitRevision,
   type CompletionSubmission,
   canonicalDigest,
   canonicalValue,
   consumerKey,
   createAmendmentProposal,
+  createIntegrationBarrier,
   createPhaseCandidate,
   createSensorReading,
   criterionId,
@@ -28,6 +31,7 @@ import {
   definitionGeneration,
   digestAccountingAssessment,
   digestSelectedTaskSet,
+  phaseId,
   sha256Digest,
   taskId,
 } from "@senawa/kernel";
@@ -78,6 +82,7 @@ import {
   SqliteContextBroker,
   type SqliteFaultPoint,
   SqliteRunnerAuthority,
+  SqliteWorkspaceIntegrationAuthority,
   StaleAuthorityRevisionError,
   StaleLeaseFenceError,
   UnsupportedSchemaVersionError,
@@ -118,6 +123,373 @@ afterEach(() => {
 
 registerRunnerAuthorityConformance("SQLite", () => createRunnerConformanceHarness());
 registerContextBrokerConformance("SQLite", () => createSqliteContextBrokerHarness());
+
+describe("SQLite parallel workspace authority", () => {
+  it.each([
+    ["before-integration-claim-commit", "claimed"],
+    ["after-integration-claim-commit-before-ack", "replay"],
+  ] as const)("recovers an integration slot claim across %s", (faultPoint, expectedType) => {
+    const sandbox = createSandbox();
+    const runner = configuredSqliteRunner(new SqliteRunnerAuthority(sandbox.options));
+    let injected = false;
+    let authority = new SqliteWorkspaceIntegrationAuthority({
+      ...sandbox.options,
+      faultInjector(point) {
+        if (!injected && point === faultPoint) {
+          injected = true;
+          throw new Error(`fault at ${point}`);
+        }
+      },
+    });
+    const fixture = configureSyntheticIntegration(authority);
+    const claim = {
+      ...fixture.claim,
+      ownerId: "integration-owner-crash",
+      currentTime: runnerFixture.currentTime,
+      expiresAt: "2026-08-12T12:10:00.000Z",
+    };
+    expect(() => authority.claimIntegrationSlot(claim)).toThrow(`fault at ${faultPoint}`);
+    authority.close();
+
+    authority = new SqliteWorkspaceIntegrationAuthority(sandbox.options);
+    expect(authority.claimIntegrationSlot(claim).type).toBe(expectedType);
+    authority.close();
+    runner.close();
+    sandbox.dispose();
+  });
+
+  it("backs up and restores parallel authority and rejects coordinated corruption", async () => {
+    const sandbox = createSandbox();
+    const runner = configuredSqliteRunner(new SqliteRunnerAuthority(sandbox.options));
+    const workspaceAuthority = new SqliteWorkspaceIntegrationAuthority(sandbox.options);
+    const fixture = configureSyntheticIntegration(workspaceAuthority);
+    workspaceAuthority.claimIntegrationSlot({
+      ...fixture.claim,
+      ownerId: "integration-owner-backup",
+      currentTime: runnerFixture.currentTime,
+      expiresAt: "2026-08-12T12:10:00.000Z",
+    });
+    workspaceAuthority.close();
+    runner.close();
+
+    const authority = new SqliteAuthority(sandbox.options);
+    const backupPath = join(sandbox.root, "parallel-authority-backup");
+    await authority.backup(backupPath);
+    authority.close();
+    const restoredDatabasePath = join(sandbox.root, "parallel-restored.db");
+    const restoredAssetDirectory = join(sandbox.root, "parallel-restored-assets");
+    const restored = restoreSqliteAuthority({
+      dependencies,
+      databasePath: restoredDatabasePath,
+      assetDirectory: restoredAssetDirectory,
+      backupPath,
+    });
+    restored.close();
+    const restoredWorkspace = new SqliteWorkspaceIntegrationAuthority({
+      databasePath: restoredDatabasePath,
+      dependencies,
+    });
+    expect(
+      restoredWorkspace.loadRunExecution(runnerFixture.repositoryId, runnerFixture.runId),
+    ).toMatchObject({ execution: { workspaceMode: "worktree" } });
+    restoredWorkspace.close();
+
+    const database = new Database(sandbox.options.databasePath);
+    database
+      .prepare(
+        `UPDATE runner_workspaces
+         SET base_revision_digest = ? WHERE workspace_id = 'workspace-takeover'`,
+      )
+      .run("f".repeat(64));
+    database.close();
+    expect(() => new SqliteAuthority(sandbox.options)).toThrow(
+      "SQLite workspace columns diverge from canonical authority",
+    );
+    sandbox.dispose();
+  });
+
+  it("persists synthetic workspace integration authority and defers completion until the barrier", () => {
+    const sandbox = createSandbox();
+    const runner = configuredSqliteRunner(new SqliteRunnerAuthority(sandbox.options));
+    const authority = new SqliteWorkspaceIntegrationAuthority(sandbox.options);
+    const baseRevision = gitRevision("1", "2");
+    const resultRevision = gitRevision("3", "4");
+    const completionFactDigest = "5".repeat(64);
+    const binding = {
+      repositoryId: runnerFixture.repositoryId,
+      runId: runnerFixture.runId,
+      configurationSnapshotDigest: "6".repeat(64),
+      execution: {
+        workspaceMode: "worktree" as const,
+        maxWriterConcurrency: 2,
+        failurePolicy: "continue" as const,
+        integrationRef: "refs/heads/senawa/integration",
+      },
+    };
+    authority.bindRunExecution(binding);
+    expect(authority.bindRunExecution(binding)).toEqual(binding);
+    expect(() =>
+      authority.bindRunExecution({ ...binding, configurationSnapshotDigest: "7".repeat(64) }),
+    ).toThrow("different content");
+
+    const workspace = authority.persistWorkspaceIntent({
+      repositoryId: runnerFixture.repositoryId,
+      runId: runnerFixture.runId,
+      workspaceId: "workspace-alpha",
+      dispatchId: "dispatch-alpha",
+      taskId: runnerFixture.taskId,
+      definitionGeneration: 1,
+      baseRevision,
+      prepareEffectId: "effect-prepare-workspace-alpha",
+      inspectEffectId: "effect-inspect-workspace-alpha",
+    });
+    expect(workspace.state).toBe("intent");
+    expect(
+      authority.recordWorkspaceState(
+        runnerFixture.repositoryId,
+        runnerFixture.runId,
+        workspace.workspaceId,
+        "prepared",
+      ).state,
+    ).toBe("prepared");
+    const result = authority.persistWorkspaceResult({
+      repositoryId: runnerFixture.repositoryId,
+      runId: runnerFixture.runId,
+      resultId: "result-alpha",
+      workspaceId: workspace.workspaceId,
+      resultRevision,
+      completionFactDigest,
+      captureEffectId: "effect-capture-workspace-alpha",
+      inspectEffectId: "effect-inspect-result-alpha",
+      recordedAt: runnerFixture.currentTime,
+    });
+    const gate = {
+      policyDigest: "8".repeat(64),
+      readingDigest: "9".repeat(64),
+      evaluationDigest: "a".repeat(64),
+      decision: "passed" as const,
+      evidence: { sensor: "synthetic" },
+    };
+    const barrier = createIntegrationBarrier(
+      {
+        phaseId: phaseId("phase_parallel"),
+        definitionGeneration: definitionGeneration(1),
+        graphRevisionDigest: "b".repeat(64) as ReturnType<typeof sha256Digest>,
+        targetRef: binding.execution.integrationRef,
+        beforeRevision: baseRevision,
+        afterRevision: resultRevision,
+        members: [
+          {
+            taskId: taskId(runnerFixture.taskId),
+            definitionGeneration: definitionGeneration(1),
+            contextDigest: runnerFixture.contextDigest as ReturnType<typeof sha256Digest>,
+            baseRevisionDigest: bindGitRevision(baseRevision, deterministicSha256).descriptorDigest,
+            resultTreeDigest: bindGitObjectId(resultRevision.tree, deterministicSha256)
+              .descriptorDigest,
+            completionFactDigest: completionFactDigest as ReturnType<typeof sha256Digest>,
+          },
+        ],
+        gatePolicyDigest: gate.policyDigest as ReturnType<typeof sha256Digest>,
+        gateReadingDigest: gate.readingDigest as ReturnType<typeof sha256Digest>,
+        gateEvaluationDigest: gate.evaluationDigest as ReturnType<typeof sha256Digest>,
+        outcome: "integrated",
+      },
+      deterministicSha256,
+    );
+    const attempt = authority.persistIntegrationIntent({
+      repositoryId: runnerFixture.repositoryId,
+      runId: runnerFixture.runId,
+      integrationId: "integration-alpha",
+      phaseId: barrier.phaseId,
+      definitionGeneration: barrier.definitionGeneration,
+      targetRef: barrier.targetRef,
+      fanInDigest: barrier.fanInDigest,
+      members: [
+        {
+          workspaceId: workspace.workspaceId,
+          resultId: result.resultId,
+          member: requiredIntegrationMember(barrier.members),
+        },
+      ],
+      prepareEffectId: "effect-prepare-integration-alpha",
+      inspectEffectId: "effect-inspect-integration-alpha",
+    });
+    expect(attempt.state).toBe("intent");
+    const claim = authority.claimIntegrationSlot({
+      repositoryId: runnerFixture.repositoryId,
+      runId: runnerFixture.runId,
+      integrationId: attempt.integrationId,
+      ownerId: "integration-owner-primary",
+      currentTime: runnerFixture.currentTime,
+      expiresAt: "2026-08-12T12:10:00.000Z",
+    });
+    expect(claim).toMatchObject({ type: "claimed", attempt: { state: "claimed", fence: 1 } });
+    expect(
+      authority.claimIntegrationSlot({
+        repositoryId: runnerFixture.repositoryId,
+        runId: runnerFixture.runId,
+        integrationId: attempt.integrationId,
+        ownerId: "integration-owner-primary",
+        currentTime: "2026-08-12T12:05:00.000Z",
+        expiresAt: "2026-08-12T12:30:00.000Z",
+      }),
+    ).toMatchObject({ type: "replay", attempt: { fence: 1 } });
+    const competing = new SqliteWorkspaceIntegrationAuthority(sandbox.options);
+    expect(
+      competing.claimIntegrationSlot({
+        repositoryId: runnerFixture.repositoryId,
+        runId: runnerFixture.runId,
+        integrationId: attempt.integrationId,
+        ownerId: "integration-owner-secondary",
+        currentTime: runnerFixture.currentTime,
+        expiresAt: "2026-08-12T12:20:00.000Z",
+      }),
+    ).toMatchObject({ type: "busy", attempt: { fence: 1 } });
+    expect(
+      competing.claimIntegrationSlot({
+        repositoryId: runnerFixture.repositoryId,
+        runId: runnerFixture.runId,
+        integrationId: attempt.integrationId,
+        ownerId: "integration-owner-secondary",
+        currentTime: "2026-08-12T12:15:00.000Z",
+        expiresAt: "2026-08-12T12:40:00.000Z",
+      }),
+    ).toMatchObject({ type: "busy", attempt: { fence: 1 } });
+    authority.recordIntegrationState(
+      runnerFixture.repositoryId,
+      runnerFixture.runId,
+      attempt.integrationId,
+      "candidate-created",
+      "integration-owner-primary",
+      1,
+      runnerFixture.currentTime,
+    );
+    authority.recordIntegrationState(
+      runnerFixture.repositoryId,
+      runnerFixture.runId,
+      attempt.integrationId,
+      "validating",
+      "integration-owner-primary",
+      1,
+      runnerFixture.currentTime,
+    );
+    authority.recordIntegrationGate(
+      runnerFixture.repositoryId,
+      runnerFixture.runId,
+      attempt.integrationId,
+      gate,
+      "integration-owner-primary",
+      1,
+      runnerFixture.currentTime,
+    );
+    authority.recordIntegrationState(
+      runnerFixture.repositoryId,
+      runnerFixture.runId,
+      attempt.integrationId,
+      "publishing",
+      "integration-owner-primary",
+      1,
+      runnerFixture.currentTime,
+    );
+    authority.recordIntegrationState(
+      runnerFixture.repositoryId,
+      runnerFixture.runId,
+      attempt.integrationId,
+      "published",
+      "integration-owner-primary",
+      1,
+      runnerFixture.currentTime,
+    );
+    const eligibility = {
+      submissionId: "submission-alpha",
+      repositoryId: runnerFixture.repositoryId,
+      runId: runnerFixture.runId,
+      dispatchId: workspace.dispatchId,
+      terminalCurrentWriter: true,
+      workspaceId: workspace.workspaceId,
+      resultId: result.resultId,
+      integrationId: attempt.integrationId,
+    };
+    expect(authority.recordCompletionEligibility(eligibility).eligible).toBe(false);
+    expect(authority.completionAdmission(eligibility.submissionId)).toBe("deferred");
+    authority.recordIntegrationBarrier(
+      runnerFixture.repositoryId,
+      runnerFixture.runId,
+      attempt.integrationId,
+      barrier,
+      "integration-owner-primary",
+      1,
+      runnerFixture.currentTime,
+    );
+    expect(authority.recordCompletionEligibility(eligibility)).toMatchObject({
+      eligible: true,
+      barrierDigest: barrier.barrierDigest,
+    });
+    expect(authority.completionAdmission(eligibility.submissionId)).toBe("accepted");
+
+    authority.close();
+    const reopened = new SqliteWorkspaceIntegrationAuthority(sandbox.options);
+    expect(reopened.loadRunExecution(runnerFixture.repositoryId, runnerFixture.runId)).toEqual(
+      binding,
+    );
+    expect(reopened.completionAdmission(eligibility.submissionId)).toBe("accepted");
+    reopened.close();
+    competing.close();
+    runner.close();
+    sandbox.dispose();
+  });
+
+  it("takes over an expired integration slot at a higher fence", () => {
+    const sandbox = createSandbox();
+    const runner = configuredSqliteRunner(new SqliteRunnerAuthority(sandbox.options));
+    const authority = new SqliteWorkspaceIntegrationAuthority(sandbox.options);
+    const fixture = configureSyntheticIntegration(authority);
+    expect(
+      authority.claimIntegrationSlot({
+        ...fixture.claim,
+        ownerId: "integration-owner-first",
+        currentTime: runnerFixture.currentTime,
+        expiresAt: "2026-08-12T12:01:00.000Z",
+      }),
+    ).toMatchObject({ type: "claimed", attempt: { fence: 1 } });
+    expect(() =>
+      authority.recordIntegrationState(
+        runnerFixture.repositoryId,
+        runnerFixture.runId,
+        fixture.integrationId,
+        "candidate-created",
+        "integration-owner-first",
+        1,
+        "2026-08-12T12:02:00.000Z",
+      ),
+    ).toThrow(StaleLeaseFenceError);
+    expect(
+      authority.claimIntegrationSlot({
+        ...fixture.claim,
+        ownerId: "integration-owner-takeover",
+        currentTime: "2026-08-12T12:02:00.000Z",
+        expiresAt: "2026-08-12T12:12:00.000Z",
+      }),
+    ).toMatchObject({
+      type: "claimed",
+      attempt: { ownerId: "integration-owner-takeover", fence: 2 },
+    });
+    expect(() =>
+      authority.recordIntegrationState(
+        runnerFixture.repositoryId,
+        runnerFixture.runId,
+        fixture.integrationId,
+        "candidate-created",
+        "integration-owner-first",
+        1,
+        "2026-08-12T12:02:00.000Z",
+      ),
+    ).toThrow(StaleLeaseFenceError);
+    authority.close();
+    runner.close();
+    sandbox.dispose();
+  });
+});
 
 describe("SQLite context broker durability", () => {
   it("replays exact read bytes after reopen with one charge and no raw token on disk", async () => {
@@ -346,6 +718,7 @@ describe("SQLite context broker durability", () => {
       completionFacts: {
         admitCompletionFact(fact) {
           delivered.add(fact.submissionId);
+          return "accepted";
         },
       },
     });
@@ -374,6 +747,7 @@ describe("SQLite context broker durability", () => {
       completionFacts: {
         admitCompletionFact(fact) {
           reentrantResult = broker.deliverCompletionFact(fact.submissionId);
+          return "accepted";
         },
       },
     });
@@ -1863,6 +2237,30 @@ describe("SQLite amendment authority", () => {
     fixture.close();
     sandbox.dispose();
   });
+
+  it("accepts only exact normalized execution policy in configuration snapshots", () => {
+    const sandbox = createSandbox();
+    const authority = new SqliteAuthority(sandbox.options);
+    try {
+      const snapshot = amendmentConfigurationSnapshot(createRuntimeGraph());
+      expect(authority.putConfigurationSnapshot(snapshot)).toBe(snapshot.snapshotDigest);
+
+      const forged = JSON.parse(JSON.stringify(snapshot)) as Record<string, unknown>;
+      forged.execution = {
+        workspaceMode: "repository",
+        maxWriterConcurrency: 2,
+        failurePolicy: "continue",
+      };
+      expect(() => authority.putConfigurationSnapshot(forged)).toThrow(/writer concurrency/);
+
+      const legacy = JSON.parse(JSON.stringify(snapshot)) as Record<string, unknown>;
+      delete legacy.execution;
+      expect(() => authority.putConfigurationSnapshot(legacy)).toThrow(/exact canonical shape/);
+    } finally {
+      authority.close();
+      sandbox.dispose();
+    }
+  });
 });
 
 describe("SQLite authority durability", () => {
@@ -2473,7 +2871,7 @@ describe("SQLite authority durability", () => {
     const authority = new SqliteAuthority(sandbox.options);
     try {
       authority.submit(instantiateCommand("command_cas-removal"), admission());
-      const emptySnapshot = '{"runs":[],"version":"senawa.dev/runtime-memory/v1alpha1"}';
+      const emptySnapshot = '{"runs":[],"version":"senawa.dev/runtime-memory/v1alpha2"}';
       authority.compareAndSwapSnapshot(authority.revision(), emptySnapshot);
       expect(authority.toCanonicalJson()).toBe(emptySnapshot);
       authority.close();
@@ -2634,7 +3032,7 @@ describe("SQLite authority durability", () => {
 
     const newerPath = join(sandbox.root, "newer.db");
     const newer = new Database(newerPath);
-    newer.pragma("user_version = 6");
+    newer.pragma("user_version = 7");
     newer.close();
     expect(
       () =>
@@ -2986,8 +3384,14 @@ function amendmentProposalInput(
 function amendmentConfigurationSnapshot(graph: ReturnType<typeof createRuntimeGraph>) {
   const empty = Object.freeze([]);
   const emptyDigest = canonicalDigest(canonicalValue(empty), deterministicSha256);
+  const execution = Object.freeze({
+    workspaceMode: "repository",
+    maxWriterConcurrency: 1,
+    failurePolicy: "continue",
+  });
   const content = {
-    apiVersion: "senawa.dev/configuration-snapshot/v1alpha1",
+    apiVersion: "senawa.dev/configuration-snapshot/v1alpha2",
+    execution,
     graph,
     schemas: empty,
     roles: empty,
@@ -2996,6 +3400,7 @@ function amendmentConfigurationSnapshot(graph: ReturnType<typeof createRuntimeGr
     gates: empty,
     projections: empty,
     componentDigests: {
+      execution: canonicalDigest(canonicalValue(execution), deterministicSha256),
       graph: canonicalDigest(canonicalValue(graph), deterministicSha256),
       schemas: emptyDigest,
       roles: emptyDigest,
@@ -3129,6 +3534,117 @@ function configuredSqliteRunner(authority: SqliteRunnerAuthority): SqliteRunnerA
   return authority;
 }
 
+function gitRevision(commit: string, tree: string) {
+  return {
+    commit: { objectFormat: "sha1" as const, oid: commit.repeat(40) },
+    tree: { objectFormat: "sha1" as const, oid: tree.repeat(40) },
+  };
+}
+
+function requiredIntegrationMember<T>(members: readonly T[]): T {
+  const member = members[0];
+  if (member === undefined) throw new Error("Synthetic integration barrier requires one member");
+  return member;
+}
+
+function configureSyntheticIntegration(authority: SqliteWorkspaceIntegrationAuthority) {
+  const baseRevision = gitRevision("1", "2");
+  const resultRevision = gitRevision("3", "4");
+  const completionFactDigest = "5".repeat(64);
+  authority.bindRunExecution({
+    repositoryId: runnerFixture.repositoryId,
+    runId: runnerFixture.runId,
+    configurationSnapshotDigest: "6".repeat(64),
+    execution: {
+      workspaceMode: "worktree",
+      maxWriterConcurrency: 2,
+      failurePolicy: "continue",
+      integrationRef: "refs/heads/senawa/integration",
+    },
+  });
+  const workspace = authority.persistWorkspaceIntent({
+    repositoryId: runnerFixture.repositoryId,
+    runId: runnerFixture.runId,
+    workspaceId: "workspace-takeover",
+    dispatchId: "dispatch-takeover",
+    taskId: runnerFixture.taskId,
+    definitionGeneration: 1,
+    baseRevision,
+    prepareEffectId: "effect-prepare-workspace-takeover",
+    inspectEffectId: "effect-inspect-workspace-takeover",
+  });
+  authority.recordWorkspaceState(
+    runnerFixture.repositoryId,
+    runnerFixture.runId,
+    workspace.workspaceId,
+    "prepared",
+  );
+  const result = authority.persistWorkspaceResult({
+    repositoryId: runnerFixture.repositoryId,
+    runId: runnerFixture.runId,
+    resultId: "result-takeover",
+    workspaceId: workspace.workspaceId,
+    resultRevision,
+    completionFactDigest,
+    captureEffectId: "effect-capture-workspace-takeover",
+    inspectEffectId: "effect-inspect-result-takeover",
+    recordedAt: runnerFixture.currentTime,
+  });
+  const barrier = createIntegrationBarrier(
+    {
+      phaseId: phaseId("phase_parallel"),
+      definitionGeneration: definitionGeneration(1),
+      graphRevisionDigest: "b".repeat(64) as ReturnType<typeof sha256Digest>,
+      targetRef: "refs/heads/senawa/integration",
+      beforeRevision: baseRevision,
+      afterRevision: resultRevision,
+      members: [
+        {
+          taskId: taskId(runnerFixture.taskId),
+          definitionGeneration: definitionGeneration(1),
+          contextDigest: runnerFixture.contextDigest as ReturnType<typeof sha256Digest>,
+          baseRevisionDigest: bindGitRevision(baseRevision, deterministicSha256).descriptorDigest,
+          resultTreeDigest: bindGitObjectId(resultRevision.tree, deterministicSha256)
+            .descriptorDigest,
+          completionFactDigest: completionFactDigest as ReturnType<typeof sha256Digest>,
+        },
+      ],
+      gatePolicyDigest: "8".repeat(64) as ReturnType<typeof sha256Digest>,
+      gateReadingDigest: "9".repeat(64) as ReturnType<typeof sha256Digest>,
+      gateEvaluationDigest: "a".repeat(64) as ReturnType<typeof sha256Digest>,
+      outcome: "integrated",
+    },
+    deterministicSha256,
+  );
+  const integrationId = "integration-takeover";
+  authority.persistIntegrationIntent({
+    repositoryId: runnerFixture.repositoryId,
+    runId: runnerFixture.runId,
+    integrationId,
+    phaseId: barrier.phaseId,
+    definitionGeneration: barrier.definitionGeneration,
+    targetRef: barrier.targetRef,
+    fanInDigest: barrier.fanInDigest,
+    members: [
+      {
+        workspaceId: workspace.workspaceId,
+        resultId: result.resultId,
+        member: requiredIntegrationMember(barrier.members),
+      },
+    ],
+    prepareEffectId: "effect-prepare-integration-takeover",
+    inspectEffectId: "effect-inspect-integration-takeover",
+  });
+  return {
+    integrationId,
+    claim: {
+      repositoryId: runnerFixture.repositoryId,
+      runId: runnerFixture.runId,
+      integrationId,
+    },
+  };
+}
+
 function createRunnerConformanceHarness(): RunnerAuthorityConformanceHarness {
   const sandbox = createSandbox();
   const authority = new SqliteRunnerAuthority(sandbox.options);
@@ -3146,6 +3662,7 @@ function createRunnerConformanceHarness(): RunnerAuthorityConformanceHarness {
     queryEvents: authority.queryEvents.bind(authority),
     queryProjection: authority.queryProjection.bind(authority),
     queryBudgets: authority.queryBudgets.bind(authority),
+    queryCapacities: authority.queryCapacities.bind(authority),
   };
 }
 
@@ -3171,6 +3688,7 @@ function createSqliteContextBrokerHarnessAt(databasePath: string, cleanup: () =>
       admitCompletionFact(fact) {
         if (!completionFacts.some((entry) => JSON.stringify(entry) === JSON.stringify(fact)))
           completionFacts.push(fact);
+        return "accepted";
       },
     },
     busyTimeoutMs: 500,
@@ -3468,6 +3986,8 @@ function instantiateCommand(commandId: string) {
     intent: "instantiate-run",
     payload: {
       workflowId: runtimeFixture.workflowId,
+      configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+      execution: runtimeFixture.execution,
       graph: createRuntimeGraph(),
       phase: runtimeFixture.phase,
       approvalPolicy: { policy: "no-approval" as const },

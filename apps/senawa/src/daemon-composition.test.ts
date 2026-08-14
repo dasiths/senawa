@@ -14,7 +14,14 @@ import {
   releaseUnixSocketLock,
   SqliteSupervisorAuthority,
 } from "@senawa/supervisor";
-import { createWorkerExecutionFixture, deterministicSha256, runtimeFixture } from "@senawa/testing";
+import {
+  createRuntimeGraph,
+  createWorkerExecutionFixture,
+  deterministicSha256,
+  runtimeCommand,
+  runtimeFixture,
+  runtimePrincipal,
+} from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   type OwnedCopilotSdkPort,
@@ -59,13 +66,14 @@ describe("daemon worker composition", () => {
     ).toBe(true);
   });
 
-  it("allows first dispatch but blocks missing-metadata durable recovery after reopen", async () => {
+  it("fences a failed repository writer and preserves the fence after reopen", async () => {
     const { environment } = sandbox("senawa-daemon-worker-");
     const dependencies: RuntimeDependencies = {
       ...runtimeDependencies,
       sha256: deterministicSha256,
     };
     const sdks: FakeOwnedSdk[] = [];
+    let gitFactoryCalls = 0;
     const composition = {
       runtimeDependencies: dependencies,
       createCopilotSdk: async (options: { workingDirectory: string; baseDirectory: string }) => {
@@ -73,9 +81,14 @@ describe("daemon worker composition", () => {
         sdks.push(sdk);
         return sdk;
       },
+      createGitHost: async () => {
+        gitFactoryCalls += 1;
+        throw new Error("Repository mode must not construct the Git adapter host");
+      },
     };
     let started = await startSenawaService(environment, composition);
-    const worker = createWorkerExecutionFixture();
+    const graph = createRuntimeGraph();
+    const worker = createWorkerExecutionFixture(graph);
     const broker = new SqliteContextBroker({
       databasePath: started.paths.databasePath,
       dependencies: {
@@ -91,6 +104,29 @@ describe("daemon worker composition", () => {
       taskScope: workerTaskScope(worker),
     });
     broker.close();
+    started.service.authority.accept({
+      envelope: runtimeCommand({
+        commandId: "command_daemon-instantiate",
+        intent: "instantiate-run",
+        payload: {
+          workflowId: runtimeFixture.workflowId,
+          configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+          execution: runtimeFixture.execution,
+          graph,
+          phase: runtimeFixture.phase,
+          approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
+          escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+        },
+      }),
+      createAdmission: () => ({
+        currentTime: runtimeFixture.currentTime,
+        facts: { source: "daemon-composition-test" },
+        allocations: [1, 2, 3].map((ordinal) => ({
+          kind: "stream-event" as const,
+          id: `stream-event-daemon-instantiate-${ordinal}`,
+        })),
+      }),
+    });
     const firstCommand = workerCommand(worker, 1, "first");
     const runner = new SqliteRunnerAuthority({
       databasePath: started.paths.databasePath,
@@ -116,65 +152,37 @@ describe("daemon worker composition", () => {
       databasePath: started.paths.databasePath,
       dependencies,
     });
-    const firstEffect = firstResult.load({
+    const firstSnapshot = firstResult.load({
       repositoryId: runtimeFixture.repositoryId,
       runId: runtimeFixture.runId,
-    }).effects[0];
+    });
+    const firstEffect = firstSnapshot.effects[0];
     expect(firstEffect).toMatchObject({ outcome: { status: "failed", origin: "dispatch" } });
+    expect(firstSnapshot.taskScopes).toEqual([
+      expect.objectContaining({ taskId: worker.dispatch.task.taskId, claimsAccepted: false }),
+    ]);
     firstResult.close();
     expect(sdks[0]?.createCalls).toBe(1);
+    expect(gitFactoryCalls).toBe(0);
     expect(started.service.authority.operationalSnapshot().startedSessionIds).toEqual([]);
     await started.service.stop();
     const lock = acquireUnixSocketLock(started.paths.socketPath);
     releaseUnixSocketLock(lock);
     expect(existsSync(started.paths.socketPath)).toBe(false);
 
-    const seedAuthority = new SqliteSupervisorAuthority({
-      databasePath: started.paths.databasePath,
-      assetDirectory: started.paths.assetDirectory,
-      dependencies,
-    });
-    const seedRunner = new SqliteRunnerAuthority({
-      databasePath: started.paths.databasePath,
-      dependencies,
-    });
-    const secondCommand = workerCommand(worker, 2, "recovery");
-    const currentTime = new Date().toISOString();
-    const lease = seedAuthority.acquireRunLease(
-      runtimeFixture.repositoryId,
-      runtimeFixture.runId,
-      "owner_seed-recovery",
-      currentTime,
-      new Date(Date.now() + 30_000).toISOString(),
-    );
-    seedRunner.enqueue(secondCommand);
-    seedRunner.persistIntent({
-      repositoryId: runtimeFixture.repositoryId,
-      runId: runtimeFixture.runId,
-      lease: { owner: lease.ownerId, fence: lease.fence, expiresAt: lease.expiresAt },
-      currentTime,
-      attemptId: "attempt_seed-recovery",
-      command: secondCommand,
-    });
-    seedAuthority.releaseRunLease(lease, currentTime);
-    seedRunner.close();
-    seedAuthority.close();
-
     started = await startSenawaService(environment, composition);
     const status = await started.service.status();
     expect(status).toMatchObject({
-      health: "degraded",
+      health: "healthy",
       sdkSessionStore: {
-        status: "degraded",
-        expectedSessionCount: 1,
-        missingSessionIds: [worker.dispatch.dispatchId],
+        status: "healthy",
+        expectedSessionCount: 0,
+        missingSessionIds: [],
       },
     });
-    expect(sdks[1]?.metadataCalls).toBeGreaterThan(0);
     expect(sdks[1]?.createCalls).toBe(0);
-    expect(started.service.authority.operationalSnapshot().startedSessionIds).toEqual([
-      worker.dispatch.dispatchId,
-    ]);
+    expect(gitFactoryCalls).toBe(0);
+    expect(started.service.authority.operationalSnapshot().startedSessionIds).toEqual([]);
     await started.service.stop();
   });
 

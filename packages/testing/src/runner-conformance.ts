@@ -11,6 +11,7 @@ import type {
   QueuedEffectCommand,
   RunnerAuthorityPort,
   RunnerBudgetState,
+  RunnerCapacityState,
   RunnerEffectEvent,
   RunnerEffectReceipt,
   RunnerLeaseFact,
@@ -55,6 +56,7 @@ export interface RunnerAuthorityConformanceHarness {
   queryEvents(repositoryId: string, runId: string): readonly RunnerEffectEvent[];
   queryProjection(repositoryId: string, runId: string): RunnerProjection;
   queryBudgets(repositoryId: string, runId: string): readonly RunnerBudgetState[];
+  queryCapacities(repositoryId: string, runId: string): readonly RunnerCapacityState[];
 }
 
 export type RunnerAuthorityConformanceFactory = () => RunnerAuthorityConformanceHarness;

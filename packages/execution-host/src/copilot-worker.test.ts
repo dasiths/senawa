@@ -36,7 +36,16 @@ import type {
   CopilotSdkTool,
   CopilotSdkToolResult,
 } from "./copilot-sdk-port.js";
-import { COPILOT_WORKER_TOOL_NAMES, CopilotSerialWorkerAdapter } from "./copilot-worker.js";
+import {
+  COPILOT_WORKER_TOOL_NAMES,
+  COPILOT_WORKSPACE_TOOL_NAMES,
+  CopilotSerialWorkerAdapter,
+} from "./copilot-worker.js";
+import type {
+  WorkspaceFileEntry,
+  WorkspaceFilePatchChange,
+  WorkspaceFilePort,
+} from "./workspace-files.js";
 
 const sha256: Sha256 = {
   digest(bytes) {
@@ -139,6 +148,83 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect(required(filteredSdk.createCalls[0]).tools.map(({ name }) => name)).toEqual([
       "submit_completion",
     ]);
+  });
+
+  it("adds only four dispatch-bound workspace tools while retaining empty SDK mode", async () => {
+    const sdk = new FakeSdkPort();
+    const workspaceFiles = new FakeWorkspaceFiles(sdk.workingDirectory);
+    const fixture = harness(sdk, { workspaceFiles });
+    const outputs: CopilotSdkToolResult[] = [];
+    sdk.onSend = async (config, session) => {
+      const tools = new Map(config.tools.map((candidate) => [candidate.name, candidate]));
+      outputs.push(
+        await invoke(required(tools.get("senawa_list_workspace")), session.sessionId, "list", {
+          path: ".",
+          maxEntries: 10,
+        }),
+        await invoke(required(tools.get("senawa_read_workspace_file")), session.sessionId, "read", {
+          path: "src/a.txt",
+          maxBytes: 64,
+        }),
+        await invoke(
+          required(tools.get("senawa_write_workspace_file")),
+          session.sessionId,
+          "write",
+          {
+            path: "src/a.txt",
+            content: "written\n",
+          },
+        ),
+        await invoke(
+          required(tools.get("senawa_apply_workspace_patch")),
+          session.sessionId,
+          "patch",
+          {
+            changes: [
+              {
+                path: "src/a.txt",
+                expectedText: "written\n",
+                replacementText: "patched\n",
+              },
+            ],
+          },
+        ),
+      );
+      expect(config.availableTools).toEqual([
+        ...COPILOT_WORKSPACE_TOOL_NAMES,
+        ...COPILOT_WORKER_TOOL_NAMES,
+      ]);
+      expect(config).toMatchObject({
+        excludedTools: ["builtin:*", "mcp:*"],
+        enableHostGitOperations: false,
+        additionalDirectories: [],
+        mcpServers: {},
+      });
+      for (const configuredTool of config.tools) {
+        expectClosedObjectSchemas(configuredTool.parameters);
+      }
+    };
+
+    const result = await fixture.adapter.run(fixture.input);
+
+    expect(result.status).toBe("missing-completion");
+    expect(outputs.every(({ resultType }) => resultType === "success")).toBe(true);
+    expect(workspaceFiles.calls.map(({ operation }) => operation)).toEqual([
+      "list",
+      "read",
+      "write",
+      "patch",
+    ]);
+  });
+
+  it("refuses a workspace file port that is not bound to the dispatch root", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk, { workspaceFiles: new FakeWorkspaceFiles("/tmp/other-root") });
+
+    await expect(fixture.adapter.run(fixture.input)).rejects.toThrow(
+      "exact dispatch working directory",
+    );
+    expect(sdk.createCalls).toHaveLength(0);
   });
 
   it("denies every permission and unknown tool independently without broker mutation", async () => {
@@ -693,6 +779,7 @@ function harness(
     readonly signal?: AbortSignal;
     readonly maxSubmissions?: number;
     readonly provider?: string;
+    readonly workspaceFiles?: WorkspaceFilePort;
   } = {},
 ) {
   const capabilities = options.capabilities ?? ALL_CAPABILITIES;
@@ -769,6 +856,7 @@ function harness(
     broker,
     grantTokens,
     workingDirectory: "/tmp/senawa-copilot/work",
+    ...(options.workspaceFiles === undefined ? {} : { workspaceFiles: options.workspaceFiles }),
     sessionBaseDirectory: sdk.baseDirectory,
     timeoutMs: options.timeoutMs ?? 1_000,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -833,6 +921,30 @@ function invoke(
   args: unknown,
 ): Promise<CopilotSdkToolResult> {
   return tool.handler(args, { sessionId, toolCallId, toolName: tool.name });
+}
+
+class FakeWorkspaceFiles implements WorkspaceFilePort {
+  readonly calls: { readonly operation: "list" | "read" | "write" | "patch" }[] = [];
+
+  constructor(readonly root: string) {}
+
+  async list(_path: string, _maxEntries?: number): Promise<readonly WorkspaceFileEntry[]> {
+    this.calls.push({ operation: "list" });
+    return [{ path: "src/a.txt", type: "file", size: 7 }];
+  }
+
+  async read(_path: string, _maxBytes?: number): Promise<string> {
+    this.calls.push({ operation: "read" });
+    return "before\n";
+  }
+
+  async write(_path: string, _content: string): Promise<void> {
+    this.calls.push({ operation: "write" });
+  }
+
+  async applyPatch(_changes: readonly WorkspaceFilePatchChange[]): Promise<void> {
+    this.calls.push({ operation: "patch" });
+  }
 }
 
 function derived(

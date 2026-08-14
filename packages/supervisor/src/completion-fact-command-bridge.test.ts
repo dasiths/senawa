@@ -48,6 +48,8 @@ describe("CompletionFactCommandBridge", () => {
       intent: "instantiate-run",
       payload: {
         workflowId: runtimeFixture.workflowId,
+        configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+        execution: runtimeFixture.execution,
         graph,
         phase: runtimeFixture.phase,
         approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
@@ -101,14 +103,22 @@ describe("CompletionFactCommandBridge", () => {
         dispatchId === fact.dispatchId ? stored : undefined,
     } as unknown as ContextBrokerClient;
     let faultAfterAccept = true;
+    let eligibility: "accepted" | "deferred" = "deferred";
     const bridge = new CompletionFactCommandBridge({
       authority,
       broker: () => broker,
+      completionEligibility: {
+        completionAdmission: () => eligibility,
+      },
       currentTime: () => runtimeFixture.currentTime,
       afterAccept: () => {
         if (faultAfterAccept) throw new Error("fault after queue commit");
       },
     });
+
+    expect(bridge.admitCompletionFact(fact)).toBe("deferred");
+    expect(authority.operationalSnapshot().pending.queuedCommands).toBe(0);
+    eligibility = "accepted";
 
     expect(() => bridge.admitCompletionFact(fact)).toThrow("fault after queue commit");
     expect(authority.operationalSnapshot().pending.queuedCommands).toBe(1);
