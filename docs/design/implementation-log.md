@@ -54,7 +54,7 @@ Each phase records:
 | 10. Optional parallel workspaces and integration | Complete | `0e63add` | Pushed |
 | 11. Local portal | Complete | `5fdd242` | Pushed |
 | 12. Remote control-plane protocol | Complete | `48b2ce4` | Pushed |
-| 13. Reporting, packaging, and hardening | Complete | Pending | Pending |
+| 13. Reporting, packaging, and hardening | Complete | `017b1eb` | Pushed |
 | 14. Standard delivery workflow authoring | Not started | Pending | Pending |
 | 15. Consumer documentation and adoption journeys | Not started | Pending | Pending |
 
@@ -7411,7 +7411,9 @@ review reported no remaining critical, high, or medium findings.
 
 ### Commit and push
 
-Implementation commit and push are pending this closeout update.
+* Implementation commit: `017b1eb` (`feat: complete senawa alpha`)
+* Push: `origin/redesign/workflow-state-machine` advanced from `f888037` to
+  `017b1eb` on 2026-08-14.
 
 ## Entry template
 
