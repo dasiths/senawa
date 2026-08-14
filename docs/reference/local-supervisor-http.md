@@ -1,7 +1,7 @@
 ---
 title: Local Supervisor HTTP Reference
 description: Alpha Unix-socket and loopback HTTP transport and security contracts
-ms.date: 2026-08-13
+ms.date: 2026-08-14
 ms.topic: reference
 ---
 
@@ -44,10 +44,54 @@ The shared handler exposes these exact routes:
 * `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/amendments`
 * `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/amendments/{amendmentId}`
 * `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/amendments/{amendmentId}/source`
+* `GET /api/v1alpha1/repositories?after={repositoryId}&limit={count}`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs?after={runId}&limit={count}`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/overview`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/graph`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/graph/nodes?revision={digest}&after={offset}&limit={count}`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/graph/edges?revision={digest}&after={offset}&limit={count}`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/records/{kind}/{digest}`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/needs`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/allowances/{escalationCommandId}`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/questions`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/questions/{submissionId}`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/artifacts`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/artifacts/{artifactId}`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/artifacts/{artifactId}/content?offset={offset}&length={count}`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/artifacts/{artifactId}/download`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/workspaces`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/integrations`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/activity/receipts`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/activity/events`
 
 Receipt and event page queries accept optional `after` and `limit` parameters.
 The SSE route accepts optional `after`; `Last-Event-ID` is also accepted when it
 does not conflict with the query cursor.
+
+Portal discovery pages are lexically ordered and contain at most 100 entries.
+Graph node and edge pages require the exact graph revision and contain at most
+200 entries. Activity windows accept either `after` or `before`, never both,
+contain at most 100 entries, and remain ascending within each returned window.
+Artifact previews read at most 64 KiB and advertise the browser JSON viewer's
+500-node budget.
+
+The run overview contains workflow, context, runner, workspace, human, portal,
+graph, and lifecycle cursors. A client loads overview A, bounded resources, then
+overview B. Any vector change invalidates the assembled view. Portal DTOs omit
+canonical repository paths, grant tokens, SDK session identities, worker prompt
+packs, secrets, target refs, and raw process output.
+
+Human needs are derived from immutable question, candidate, amendment,
+escalation, integration, and ending records. No portal table owns mutable need
+status. An escalation permits `grant-allowance` only when its exact allowance
+review joins the unresolved escalation, matching-unit current budget, allowance
+policy, run control, and runtime graph authority. The response supplies the
+escalation and policy digests, current limit, ceiling, maximum increase,
+resulting maximum, and graph plus run-mode guards. Missing, resolved,
+inconsistent, or stale facts produce no grantable review. Worker artifact
+metadata remains `metadata-only` until the exact digest, size, media type, and
+installed bytes verify. Downloads always use a fixed server-derived filename,
+`application/octet-stream`, attachment disposition, and `nosniff`.
 
 Command acceptance returns status `202`, the exact canonical acceptance DTO,
 and a receipt `Location`. Other JSON responses use canonical protocol DTOs or a
@@ -139,11 +183,36 @@ with status `303` to `/portal/`. It sets a host-only `senawa_session` cookie wit
 marked `Secure`. The raw session token is stored only in the cookie; the server
 retains its digest.
 
-`GET /api/v1alpha1/session` returns the separate CSRF token once for an
-authenticated session. The server retains only its digest. Every other loopback
-API request requires a valid session cookie. Mutations also require the exact
-loopback `Origin` and `X-Senawa-CSRF`; reads reject a present nonmatching
-`Origin`. Initial bootstrap consumption does not require `Origin`.
+`GET /api/v1alpha1/session` returns the session expiry, capabilities, and a
+secret-free CSRF mode. Before issuance the mode is `available`. After another
+tab or the current tab claims the token, subsequent GET responses report
+`read-only`. `POST /api/v1alpha1/session` returns the separate CSRF token once
+and then returns conflict. The server retains only its digest and never returns
+the cookie or token through the descriptor.
+
+Every other loopback API request requires a valid session cookie. Mutations also
+require the exact loopback `Origin` and `X-Senawa-CSRF`; reads reject a present
+nonmatching `Origin`. Initial bootstrap consumption does not require `Origin`.
+Session expiry terminates SSE and makes API, shell, and asset requests fail.
+
+## Portal Static Assets
+
+The app may inject a verified `PortalAssetSource` loaded from
+`SENAWA_PORTAL_MANIFEST`. The manifest and every asset must be canonical,
+regular, unique, within one canonical root, free of symbolic-link components,
+and exact for SHA-256 digest, byte length, and allowlisted content type. Files
+that are unknown, unmanifested, or requested through traversal are not served.
+
+Authenticated loopback requests can read only `GET /portal/` and exact
+`GET /portal/assets/{name}` entries. The shell uses `Cache-Control: no-store`.
+Hashed assets use one-year immutable caching and a digest ETag. Both set the
+fixed no-inline content security policy, `Cross-Origin-Resource-Policy:
+same-origin`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`,
+and `X-Frame-Options: DENY`. No CORS, service worker, arbitrary path fallback,
+or IPC static route exists.
+
+When the manifest is missing or invalid, the loopback shell returns a typed
+`503` response. Daemon IPC and portal query APIs remain available.
 
 ## Request Hardening
 
@@ -196,5 +265,6 @@ proof and excludes cycles, recovery, and stop. Backup stops the owned Copilot
 SDK client, verifies the service is still drained, then copies SQLite and SDK
 state. The client is not restarted by the backup operation.
 
-Portal static files remain outside the current alpha surface. Worktree
-execution remains assigned to Phase 10.
+The protocol-only browser application and Playwright journeys remain Phase 11C
+and Phase 11D work. Phase 11B hosts only a future verified manifest and does not
+add a browser package or frontend.

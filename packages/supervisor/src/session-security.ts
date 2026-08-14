@@ -24,6 +24,11 @@ export interface PortalSession {
   readonly expiresAt: number;
 }
 
+export interface PortalSessionState {
+  readonly expiresAt: number;
+  readonly csrfMode: "available" | "read-only";
+}
+
 export interface PortalSessionSecurityOptions {
   readonly clock: SupervisorClock;
   readonly random: SupervisorRandom;
@@ -89,6 +94,17 @@ export class PortalSessionSecurity {
   sessionRemainingMs(token: string | undefined): number | undefined {
     const expiresAt = this.sessionExpiresAt(token);
     return expiresAt === undefined ? undefined : Math.max(0, expiresAt - this.#clock.now());
+  }
+
+  sessionState(token: string | undefined): PortalSessionState | undefined {
+    this.#purgeExpired();
+    if (token === undefined || !TOKEN_PATTERN.test(token)) return undefined;
+    const record = this.#sessions.get(digestKey(token));
+    if (record === undefined || record.expiresAt <= this.#clock.now()) return undefined;
+    return Object.freeze({
+      expiresAt: record.expiresAt,
+      csrfMode: record.csrfDigest === undefined ? "available" : "read-only",
+    });
   }
 
   issueCsrf(sessionToken: string): string | undefined {

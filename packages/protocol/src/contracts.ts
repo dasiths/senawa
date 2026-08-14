@@ -51,7 +51,35 @@ export type CommandIntent =
   | { readonly type: "apply-approved-amendment" }
   | { readonly type: "record-integration-barrier" }
   | { readonly type: "create-escalation" }
-  | { readonly type: "grant-allowance" };
+  | { readonly type: "answer-question" }
+  | { readonly type: "grant-allowance" }
+  | { readonly type: "pause-run" }
+  | { readonly type: "resume-run" }
+  | { readonly type: "end-run" };
+
+export interface AnswerQuestionPayload {
+  readonly submissionId: OpaqueIdentity;
+  readonly questionDigest: string;
+  readonly contextDigest: string;
+  readonly taskId: OpaqueIdentity;
+  readonly definitionGeneration: number;
+  readonly answer: JsonValue;
+}
+
+export interface GrantAllowancePayload {
+  readonly escalationCommandId: OpaqueIdentity;
+  readonly operationId: OpaqueIdentity;
+  readonly escalationDigest: string;
+  readonly policyDigest: string;
+  readonly unit: string;
+  readonly expectedLimit: number;
+  readonly expectedRunModeRevision: number;
+  readonly increaseBy: number;
+}
+
+export interface RunControlPayload {
+  readonly expectedRunModeRevision: number;
+}
 
 export interface SubmitAmendmentProposalPayload {
   readonly proposal: JsonValue;

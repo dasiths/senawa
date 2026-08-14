@@ -13,6 +13,7 @@ import {
   decodeSupervisorReceipt,
   type EventReplayPage,
   type JsonValue,
+  PORTAL_CAPABILITIES,
   PROTOCOL_LIMITS,
   PROTOCOL_VERSION,
   type ProjectionEnvelope,
@@ -30,6 +31,7 @@ import {
   SupervisorServiceUnavailableError,
 } from "./command-queue.js";
 import type { AmendmentReviewRecord } from "./contracts.js";
+import { type PortalApi, PortalApiError } from "./portal-api.js";
 
 export type SupervisorIngressTransportKind = "cli" | "http";
 
@@ -114,11 +116,17 @@ export interface SupervisorApiClient {
 export class SupervisorApi implements SupervisorApiClient {
   readonly authority: SqliteSupervisorAuthority;
   readonly queryAuthority: SqliteAuthority;
+  readonly portal: PortalApi | undefined;
   readonly #capabilities: CapabilityHandshake;
 
-  constructor(authority: SqliteSupervisorAuthority, peerId = "supervisor_local") {
+  constructor(
+    authority: SqliteSupervisorAuthority,
+    peerId = "supervisor_local",
+    portal?: PortalApi,
+  ) {
     this.authority = authority;
     this.queryAuthority = authority.commandAuthority;
+    this.portal = portal;
     this.#capabilities = decodeCapabilityHandshake({
       apiVersion: PROTOCOL_VERSION,
       peerId,
@@ -127,9 +135,10 @@ export class SupervisorApi implements SupervisorApiClient {
         "amendment-review",
         "command-submit",
         "event-replay",
+        ...(portal === undefined ? [] : PORTAL_CAPABILITIES),
         "projection-read",
         "receipt-read",
-      ],
+      ].sort(),
     });
   }
 
@@ -369,6 +378,9 @@ function mapApiError(error: unknown): SupervisorApiError {
           409,
           "Event cursor precedes the available replay range",
         );
+  }
+  if (error instanceof PortalApiError) {
+    return new SupervisorApiError(error.code, error.status, error.message);
   }
   if (error instanceof SupervisorCommandConflictError) {
     return new SupervisorApiError(

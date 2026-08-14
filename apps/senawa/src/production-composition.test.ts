@@ -222,6 +222,7 @@ describe("production worker composition", () => {
             },
             approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
             escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+            allowancePolicy: runtimeFixture.allowancePolicy,
           },
         }),
         admission("2026-08-13T12:00:00.000Z"),
@@ -466,6 +467,7 @@ describe("production worker composition", () => {
           phase: runtimeFixture.phase,
           approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
           escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+          allowancePolicy: runtimeFixture.allowancePolicy,
         },
       }),
       createAdmission: () => ({

@@ -91,7 +91,11 @@ import {
   type RuntimeQueryPort,
   type SerializableAuthorityPort,
 } from "./ports.js";
-import type { ParallelExecutionPolicy, RunExecutionBinding } from "./workspace-authority.js";
+import type {
+  ParallelExecutionPolicy,
+  RunExecutionBinding,
+  RunnerAllowancePolicy,
+} from "./workspace-authority.js";
 
 const SNAPSHOT_VERSION = "senawa.dev/runtime-memory/v1alpha2" as const;
 
@@ -125,6 +129,7 @@ interface RuntimeRunRecords {
   readonly phase: PhaseGenerationReference;
   readonly approvalPolicy: PhaseApprovalPolicyInput;
   readonly escalationPolicyDigest: Sha256Digest;
+  readonly allowancePolicy: RunnerAllowancePolicy;
   readonly assessments: readonly AcceptedAccountingAssessment[];
   readonly candidate?: PhaseCandidate;
   readonly gateEvidence?: GateEvidence;
@@ -202,10 +207,20 @@ interface StoredAdmission {
   readonly authorizationDecision: boolean;
   readonly allocations: readonly StoredAllocation[];
   readonly trustedAmendmentQuiescence?: AmendmentQuiescenceFact;
+  readonly trustedHumanAuthority?: TrustedHumanAuthorityDecision;
 }
 
 export interface TrustedRuntimeCommandFacts {
   readonly amendmentQuiescence?: AmendmentQuiescenceFact;
+  readonly humanAuthority?: TrustedHumanAuthorityDecision;
+}
+
+export interface TrustedHumanAuthorityDecision {
+  readonly result?: JsonValue;
+  readonly refusal?: {
+    readonly code: string;
+    readonly message: string;
+  };
 }
 
 export interface RuntimeAuthorityRun {
@@ -377,6 +392,9 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
         ...(trustedFacts.amendmentQuiescence === undefined
           ? {}
           : { trustedAmendmentQuiescence: trustedFacts.amendmentQuiescence }),
+        ...(trustedFacts.humanAuthority === undefined
+          ? {}
+          : { trustedHumanAuthority: trustedFacts.humanAuthority }),
       },
     });
     return terminal;
@@ -474,6 +492,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
           runId: runIdentity,
           configurationSnapshotDigest: records.configurationSnapshotDigest,
           execution: records.execution,
+          allowancePolicy: records.allowancePolicy,
         });
   }
 
@@ -566,7 +585,9 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       terminalError.message.length === 0 ||
       terminalError.details !== undefined
     ) {
-      throw new TypeError("Stored post-execution refusal has invalid error semantics");
+      throw new TypeError(
+        `Stored post-execution refusal has invalid error semantics: ${terminalError.code}`,
+      );
     }
 
     const submittedHistory = sourceRun.receiptHistory.filter(
@@ -672,6 +693,12 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
         );
       case "record-integration-barrier":
         return this.recordIntegrationBarrier(command, run);
+      case "answer-question":
+      case "grant-allowance":
+      case "pause-run":
+      case "resume-run":
+      case "end-run":
+        return trustedHumanAuthorityResult(trustedFacts.humanAuthority);
       default:
         throw new RuntimeRefusal("unsupported-intent", "Intent is not implemented in this slice");
     }
@@ -693,6 +720,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       "phase",
       "approvalPolicy",
       "escalationPolicyDigest",
+      "allowancePolicy",
     ]);
     const graph = validateWorkflowGraph(payload.graph, this.dependencies.sha256);
     const configurationSnapshotDigest = requiredDigest(
@@ -700,6 +728,10 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       "configurationSnapshotDigest",
     );
     const execution = validateRuntimeExecutionPolicy(payload.execution);
+    const escalationPolicyDigest = requiredDigest(
+      payload.escalationPolicyDigest,
+      "escalationPolicyDigest",
+    );
     const content = {
       type: "run-instantiated",
       sequence: 1,
@@ -732,9 +764,10 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       execution,
       phase: payload.phase as unknown as PhaseGenerationReference,
       approvalPolicy: payload.approvalPolicy as unknown as PhaseApprovalPolicyInput,
-      escalationPolicyDigest: requiredDigest(
-        payload.escalationPolicyDigest,
-        "escalationPolicyDigest",
+      escalationPolicyDigest,
+      allowancePolicy: validateRunnerAllowancePolicy(
+        payload.allowancePolicy,
+        escalationPolicyDigest,
       ),
       assessments: [],
     };
@@ -1934,6 +1967,42 @@ function requiredDigest(value: unknown, field: string): Sha256Digest {
   return value;
 }
 
+function validateRunnerAllowancePolicy(
+  value: unknown,
+  escalationPolicyDigest: Sha256Digest,
+): RunnerAllowancePolicy {
+  const submitted = exactObject(value, "runner allowance policy", ["policyDigest", "ceilings"]);
+  const policyDigest = requiredDigest(submitted.policyDigest, "allowance policy digest");
+  if (policyDigest !== escalationPolicyDigest) {
+    throw new TypeError("Allowance policy digest must match the escalation policy digest");
+  }
+  if (!Array.isArray(submitted.ceilings)) {
+    throw new TypeError("Allowance policy ceilings must be an array");
+  }
+  const seen = new Set<string>();
+  const ceilings = submitted.ceilings.map((value, index) => {
+    const ceiling = exactObject(value, `allowance policy ceiling ${index}`, ["unit", "maximum"]);
+    const unit = requiredString(ceiling.unit, "allowance policy unit");
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/u.test(unit) || seen.has(unit)) {
+      throw new TypeError("Allowance policy units must be unique lowercase tokens");
+    }
+    if (!Number.isSafeInteger(ceiling.maximum) || (ceiling.maximum as number) < 0) {
+      throw new TypeError("Allowance policy maximum must be a non-negative safe integer");
+    }
+    seen.add(unit);
+    return Object.freeze({ unit, maximum: ceiling.maximum as number });
+  });
+  if (
+    ceilings.some((ceiling, index) => {
+      const previous = ceilings[index - 1];
+      return previous !== undefined && previous.unit >= ceiling.unit;
+    })
+  ) {
+    throw new TypeError("Allowance policy ceilings must be sorted by unit");
+  }
+  return Object.freeze({ policyDigest, ceilings: Object.freeze(ceilings) });
+}
+
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== "string") {
     throw new RuntimeRefusal("invalid-payload", `${field} must be a string`);
@@ -2230,7 +2299,7 @@ function parseStoredAdmission(value: unknown): StoredAdmission {
     value,
     "stored command admission",
     ["currentTime", "facts", "authorizationDecision", "allocations"],
-    ["trustedAmendmentQuiescence"],
+    ["trustedAmendmentQuiescence", "trustedHumanAuthority"],
   );
   const currentTime = requiredString(admission.currentTime, "currentTime");
   validateTimestamp(currentTime, "currentTime");
@@ -2243,6 +2312,7 @@ function parseStoredAdmission(value: unknown): StoredAdmission {
   const trustedAmendmentQuiescence = admission.trustedAmendmentQuiescence as
     | AmendmentQuiescenceFact
     | undefined;
+  const trustedHumanAuthority = parseTrustedHumanAuthority(admission.trustedHumanAuthority);
   return {
     currentTime,
     facts: canonicalValue(admission.facts) as unknown as JsonValue,
@@ -2255,7 +2325,52 @@ function parseStoredAdmission(value: unknown): StoredAdmission {
       return { kind: allocation.kind, id: validateOpaqueIdentity(allocation.id) };
     }),
     ...(trustedAmendmentQuiescence === undefined ? {} : { trustedAmendmentQuiescence }),
+    ...(trustedHumanAuthority === undefined ? {} : { trustedHumanAuthority }),
   };
+}
+
+function parseTrustedHumanAuthority(value: unknown): TrustedHumanAuthorityDecision | undefined {
+  if (value === undefined) return undefined;
+  const submitted = exactObject(value, "trusted human authority", [], ["result", "refusal"]);
+  if ((submitted.result === undefined) === (submitted.refusal === undefined)) {
+    throw new TypeError("Trusted human authority must contain exactly one result or refusal");
+  }
+  if (submitted.refusal !== undefined) {
+    const refusal = exactObject(submitted.refusal, "trusted human authority refusal", [
+      "code",
+      "message",
+    ]);
+    return Object.freeze({
+      refusal: Object.freeze({
+        code: requiredString(refusal.code, "trusted refusal code"),
+        message: requiredString(refusal.message, "trusted refusal message"),
+      }),
+    });
+  }
+  return Object.freeze({
+    result: canonicalValue(submitted.result) as unknown as JsonValue,
+  });
+}
+
+function trustedHumanAuthorityResult(
+  decision: TrustedHumanAuthorityDecision | undefined,
+): JsonValue {
+  if (decision === undefined) {
+    throw new RuntimeRefusal(
+      "trusted-authority-required",
+      "Command requires trusted storage authority",
+    );
+  }
+  if (decision.refusal !== undefined) {
+    throw new RuntimeRefusal(decision.refusal.code, decision.refusal.message);
+  }
+  if (decision.result === undefined) {
+    throw new RuntimeRefusal(
+      "invalid-trusted-authority",
+      "Trusted storage authority lacks a result",
+    );
+  }
+  return decision.result;
 }
 
 function parseRuntimeRunRecords(
@@ -2272,6 +2387,7 @@ function parseRuntimeRunRecords(
       "phase",
       "approvalPolicy",
       "escalationPolicyDigest",
+      "allowancePolicy",
       "assessments",
     ],
     [
@@ -2332,6 +2448,10 @@ function parseRuntimeRunRecords(
     }
     return { assessmentDigest, assessment };
   });
+  const escalationPolicyDigest = requiredDigest(
+    submitted.escalationPolicyDigest,
+    "escalationPolicyDigest",
+  );
   let records: RuntimeRunRecords = {
     runEvents,
     configurationSnapshotDigest: requiredDigest(
@@ -2341,9 +2461,10 @@ function parseRuntimeRunRecords(
     execution: validateRuntimeExecutionPolicy(submitted.execution),
     phase: phase as unknown as PhaseGenerationReference,
     approvalPolicy,
-    escalationPolicyDigest: requiredDigest(
-      submitted.escalationPolicyDigest,
-      "escalationPolicyDigest",
+    escalationPolicyDigest,
+    allowancePolicy: validateRunnerAllowancePolicy(
+      submitted.allowancePolicy,
+      escalationPolicyDigest,
     ),
     assessments,
     ...(submitted.candidate === undefined
@@ -2654,19 +2775,18 @@ function replaySerializedRun(
       (firstCursorByCommand.get(right.commandId) as number),
   );
   for (const stored of commands) {
-    const storedIntent = decodeCommandEnvelope(stored.canonicalEnvelope).intent.type;
     if (
       stored.receipt.status !== "completed" &&
       stored.receipt.error !== undefined &&
-      (!isAmendmentIntent(storedIntent) ||
-        [
-          "command-expired",
-          "unauthorized",
-          "payload-digest-mismatch",
-          "repository-run-conflict",
-          "run-repository-mismatch",
-          "invalid-command",
-        ].includes(stored.receipt.error.code))
+      stored.admission.trustedHumanAuthority === undefined &&
+      [
+        "command-expired",
+        "unauthorized",
+        "payload-digest-mismatch",
+        "repository-run-conflict",
+        "run-repository-mismatch",
+        "invalid-command",
+      ].includes(stored.receipt.error.code)
     ) {
       service.restoreNonEffectCommand(run, stored, snapshotRuns);
       continue;
@@ -2690,6 +2810,9 @@ function replaySerializedRun(
         ...(stored.admission.trustedAmendmentQuiescence === undefined
           ? {}
           : { amendmentQuiescence: stored.admission.trustedAmendmentQuiescence }),
+        ...(stored.admission.trustedHumanAuthority === undefined
+          ? {}
+          : { humanAuthority: stored.admission.trustedHumanAuthority }),
       },
     );
     if (allocationIndex !== stored.admission.allocations.length) {
@@ -2705,15 +2828,6 @@ function replaySerializedRun(
       throw new TypeError("Stored command receipt or authorization decision does not match replay");
     }
   }
-}
-
-function isAmendmentIntent(intent: CommandIntent["type"]): boolean {
-  return [
-    "submit-amendment-proposal",
-    "withdraw-amendment-proposal",
-    "record-amendment-decision",
-    "apply-approved-amendment",
-  ].includes(intent);
 }
 
 function exactObject(

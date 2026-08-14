@@ -1,7 +1,7 @@
 ---
 title: Redesign Implementation Log
 description: Decisions, validation, and review outcomes for the Senawa alpha redesign
-ms.date: 2026-08-13
+ms.date: 2026-08-14
 ms.topic: reference
 ---
 
@@ -52,7 +52,7 @@ Each phase records:
 | 8. Local supervisor, HTTP, SSE, and CLI | Complete | `e580bad` | Pushed |
 | 9. Additive amendments | Complete | `9aa37af` | Pushed |
 | 10. Optional parallel workspaces and integration | Complete | `0e63add` | Pushed |
-| 11. Local portal | Not started | Pending | Pending |
+| 11. Local portal | In progress, 11A through 11C complete | Pending | Pending |
 | 12. Remote control-plane protocol | Not started | Pending | Pending |
 | 13. Reporting, packaging, and hardening | Not started | Pending | Pending |
 | 14. Consumer documentation and adoption journeys | Not started | Pending | Pending |
@@ -5334,6 +5334,606 @@ No live SDK invocation or worktree mutation in `/workspaces/senawa` was used.
 
 Phase 10 was committed as `0e63add` (`feat: add isolated parallel execution`)
 and pushed to `origin/redesign/workflow-state-machine` on 2026-08-14.
+
+## Decision D-068: Bind human authority to transactional source records
+
+* Date: 2026-08-14
+* Status: Accepted for Phase 11A
+* Phase: 11
+* Decision: Evaluate question answers, allowance grants, and run control inside
+  the existing SQLite command transaction. Capture the exact trusted decision
+  in runtime command replay metadata, then persist immutable authority records
+  only for a completed receipt. Require each run to bind an explicit allowance
+  policy digest and per-unit maximums without defaults or compatibility
+  inference.
+* Alternatives: Trust worker question fields at command ingress; let clients
+  supply allowance ceilings; mutate historical worker context; model pause as
+  daemon lifecycle; infer ended state without an immutable event.
+* Rationale: One immediate transaction prevents independent connections from
+  changing question, context, budget, escalation, or run-mode facts between
+  validation and mutation. Captured trusted decisions preserve deterministic
+  replay without granting runtime direct storage access.
+* Consequence: Migration 007 owns Phase 11A authority tables. Phase 11B uses
+  migration 008 for bounded portal projections. The production scheduler can
+  discover a durable fresh-dispatch requirement but cannot invoke a model or
+  mutate the historical dispatch automatically.
+
+## Phase 11A log
+
+### Decisions
+
+* `answer-question` binds submission, canonical question digest, context
+  digest, task generation, task context revision, exact object digest,
+  principal, and answer time. It records a new dispatch requirement and leaves
+  the prior context, dispatch, and session unchanged.
+* `grant-allowance` binds one exact runner escalation, runtime policy digest,
+  unit, expected current limit, and increment. Storage changes only the named
+  limit and preserves reserved, spent, and unreported accounting.
+* Pause blocks stage enqueue and new intent persistence. Existing intents,
+  active effects, unknown effects, completion delivery, and reconciliation
+  remain runnable. Resume requires the exact paused revision.
+* End requires `release-manager`, fences every current task scope, requests
+  cancellation for every nonterminal effect, and remains `ending` until all
+  effects are terminal. The terminal transition appends a separate immutable
+  system event and has no daemon lifecycle effect.
+* Runner escalation command identities remain opaque runner identities rather
+  than protocol command identities. No reassignment, model escalation, waiver,
+  or broad escalation response command was added.
+
+### Deviations
+
+* Migration 007 was implemented in Phase 11A because durability could not be
+  represented honestly by deferring answer, allowance, and run-control tables
+  to Phase 11B. Portal revisions and sanitized query projections move to
+  migration 008.
+* No portal package, frontend, static asset, portal query route, live SDK call,
+  Git mutation, commit, or push was performed, as required by the bounded
+  request.
+
+### Validation
+
+Focused validation passed on 2026-08-14:
+
+* Protocol codec suite: 51 tests
+* Phase 11A SQLite authority suite: 3 tests
+* Complete SQLite suite: 109 tests
+* Context, runner, runtime, scheduler, and supervisor controller suites: 95
+  tests
+* Production composition and supervisor transport/controller suites: 53 tests
+* Workspace typecheck
+
+Repository-wide validation passed on 2026-08-14:
+
+* Root build, including execution-host native helpers
+* Clean workspace typecheck
+* Biome check across 164 files
+* Complete offline suite: 51 files and 924 tests passed
+* Live Copilot SDK probe: one test skipped without explicit opt-in settings
+* Architecture boundaries across 274 source files
+* Documentation links across 18 Markdown files
+* SQLite authority benchmark: 4 of 5 independent windows passed, with a 20.34
+  ms median window p99 against the unchanged 25 ms threshold
+* `git diff --check` and process-residue checks
+
+### Review
+
+Local implementation review verified protocol behavior-free boundaries,
+storage-produced trust, unchanged historical dispatches, exact allowance
+accounting, run-mode admission, cancellation-aware terminal convergence, and
+the absence of portal reads or UI.
+
+### Commit and push
+
+No commit or push was performed, as required by the Phase 11A request.
+
+### Remaining risks
+
+* Phase 11B must expose bounded, sanitized projections and human-need queries;
+  current authority methods are backend scheduling surfaces only.
+* A trusted future planner must satisfy fresh-dispatch requirements by creating
+  a new context and dispatch that includes the immutable answer. Phase 11A
+  intentionally performs no automatic model invocation.
+
+## Decision D-069: Derive bounded portal reads from canonical authority
+
+* Date: 2026-08-14
+* Status: Accepted for Phase 11B
+* Phase: 11
+* Decision: Keep portal DTOs behavior-free in protocol, maintain independent
+  trigger-driven per-run source revisions in migration 008, and assemble
+  bounded sanitized reads through a storage query authority injected into a
+  supervisor-owned portal API. Keep human needs derived from immutable source
+  records. Treat worker asset metadata as unavailable until installed bytes
+  verify against the exact digest, size, and media type. Load optional static
+  files through an app-owned verified in-memory manifest source.
+* Alternatives: Return canonical storage rows; maintain mutable portal need
+  state; infer one global freshness cursor; expose repository paths and raw
+  process outcomes; let supervisor import a browser package; serve an arbitrary
+  static directory.
+* Rationale: Independent revisions make overview A and overview B consistency
+  checks observable across connections. Bounded protocol DTOs prevent storage
+  shapes and local secrets from becoming browser contracts. Derived needs avoid
+  a second authority. Verified manifest and asset bytes make availability a
+  cryptographic fact rather than a metadata claim.
+* Consequence: Phase 11C can depend only on protocol and loopback HTTP. It must
+  implement the client-side overview A, resources, overview B retry, JSON node
+  budget, and pending receipt state. Static shell hosting remains unavailable
+  until a generated manifest is supplied.
+
+## Phase 11B log
+
+### Decisions
+
+* Portal protocol pages reject unknown fields and enforce lexical discovery,
+  200 graph records, 100 activity records, 64 KiB artifact chunks, and the
+  shared 10,000-node JSON ceiling. Graph pages require an exact revision.
+* Migration 008 records workflow, context, runner, workspace, human, and portal
+  revisions per run. Source mutations advance their cursor and the aggregate
+  portal cursor in the same transaction through triggers or the verified asset
+  installation transaction.
+* Repository display values use opaque repository identities. Query DTOs omit
+  canonical paths, grant tokens, SDK session identities, prompt packs, target
+  refs, raw process details, and unsanitized diagnostics.
+* Questions expose the exact immutable submission, question digest, answer,
+  and fresh-dispatch requirement. Human needs derive pending question,
+  candidate approval, amendment decision or application, escalation,
+  integration conflict or rework, and uncertain ending state.
+* Static hosting accepts only an app-injected `PortalAssetSource`. The app
+  manifest loader rejects symbolic links, traversal, unknown types, duplicate
+  entries, digest or size drift, and unmanifested files before retaining bytes
+  in memory.
+* `GET /api/v1alpha1/session` is a secret-free descriptor. The first
+  authenticated `POST` returns CSRF once. Later GET requests remain valid and
+  report read-only mode, while later POST requests conflict.
+
+### Deviations
+
+* Activity tail and backward windows use explicit `/activity/receipts` and
+  `/activity/events` routes. Existing forward receipt and event routes retain
+  their v1alpha1 response contracts for CLI and transport compatibility.
+* Integration summaries return fixed sanitized state diagnostics. Raw Git and
+  effect output remains unavailable because no trusted sanitized diagnostic
+  producer exists yet.
+* No portal package, frontend, Vite, Playwright, live SDK invocation, Git
+  mutation, commit, or push was performed, as required by the bounded request.
+
+### Validation
+
+Focused validation passed on 2026-08-14:
+
+* Phase 11B protocol, SQLite, supervisor route, transport, session, HTTP
+  security, manifest, and daemon composition suite: 8 files and 84 tests
+* Portal SQLite backup, restore, corruption, independent connection, graph,
+  activity, question, human-need, and artifact byte tests
+* Authenticated IPC and loopback transport equality with real SQLite authority
+* Hostile 10,000-element JSON, 201-node graph page, 101-record activity page,
+  64 KiB preview, traversal, symlink, digest drift, and hostile string tests
+
+Repository-wide validation passed on 2026-08-14:
+
+* Root build, including both execution-host native helpers
+* Clean workspace typecheck
+* Biome check across 172 files
+* Complete offline suite: 54 files and 941 tests passed
+* Live Copilot SDK probe: one test skipped without explicit opt-in settings
+* Architecture boundaries across 290 source files
+* Documentation links across 18 Markdown files
+* SQLite authority benchmark: 4 of 5 windows passed, with a 19.97 ms median
+  window p99 against the unchanged 25 ms threshold
+* `git diff --check`
+
+Standard parallel full-suite attempts intermittently timed out one existing
+production amendment test at its five-second limit. The test passed in
+isolation in 2.37 seconds, one standard complete rerun passed, and the final
+complete suite passed with `--maxWorkers=4`.
+
+### Review
+
+Local implementation review verified protocol browser safety, exact route and
+query bounds, source-specific revision advancement, no mutable human-need
+authority, installed-byte verification, static manifest isolation, loopback
+session expiry, IPC-only lifecycle routes, and the absence of frontend or Git
+effects. Repository compiler, lint, boundary, documentation, test, and
+benchmark gates supplied executable review evidence. No additional subagent was
+launched because the bounded Phase Implementor protocol forbids follow-on
+orchestration.
+
+### Commit and push
+
+No commit or push was performed, as required by the Phase 11B request.
+
+### Remaining risks
+
+* Phase 11C must render dynamic values as inert text and implement vector-aware
+  resynchronization, pending receipt recovery, and bounded JSON expansion.
+* Worker asset metadata does not install bytes automatically. Only exact bytes
+  installed through the content-addressed authority become previewable or
+  downloadable.
+* A trusted sanitized integration diagnostic producer remains future work. The
+  portal exposes fixed state explanations without raw process or Git output.
+
+## Decision D-070: Keep portal authority in protocol and browser uncertainty
+
+* Date: 2026-08-14
+* Status: Accepted for Phase 11C
+* Phase: 11
+* Decision: Build a frameworkless browser package with protocol as its only
+  production dependency. Keep all authority server-side. Represent browser
+  uncertainty through one immutable reducer, revision-keyed caches, exact
+  pending canonical submissions, explicit session and connection states, and
+  overview-vector consistency checks. Generate a canonical static asset
+  manifest during the pinned Vite 8.2.1 production build.
+* Alternatives: Add a frontend framework; import supervisor clients or runtime
+  records; persist projections in IndexedDB; optimistically update authority;
+  silently issue new command identities after lost responses; serve arbitrary
+  static output.
+* Rationale: Protocol-only browser code preserves authority direction and keeps
+  hostile rendering auditable. Exact pending bytes and cursor vectors make
+  uncertainty visible instead of inferring success from transport behavior.
+  Vite supplies deterministic content-hashed bundling without a browser runtime
+  dependency.
+* Consequence: Browser state persists only CSRF expiry and pending canonical
+  commands in session storage. Any 401 is terminal, a replay gap clears run
+  caches, and reconnect waits for overview A, bounded resources, and matching
+  overview B. Phase 11D must prove these behaviors in real Chromium.
+
+## Phase 11C log
+
+### Decisions
+
+* The package uses browser DOM APIs and local system font families. No framework,
+  icon runtime, web font, external request, service worker, or active document
+  preview was added.
+* Vite emits one shell and flat content-hashed JavaScript and CSS names under
+  `dist/static`. A build plugin writes canonical
+  `senawa.dev/portal-assets/v1alpha1` metadata with SHA-256, exact byte length,
+  content type, and relative path for every asset.
+* A single reducer owns booting, read-write, read-only, expired, and invalid
+  sessions; connecting, live, reconnecting, gap, resyncing, and offline
+  connections; route and run selection; revision caches; pending receipts;
+  human needs; and ephemeral dialog, filter, disclosure, and focus state.
+* Pending submissions store command identity, canonical submission, and payload
+  digest before POST. Missing receipt recovery permits one exact retry only in
+  the same restored session. A new session performs lookup only and never
+  silently repeats the mutation.
+* Fixed DOM factories use text properties for dynamic values. JSON renders at
+  most 500 visible nodes and 4 KiB per string, graph pages remain 200 records,
+  activity windows remain 100 records, and artifact previews remain 64 KiB.
+* Controls derive from capabilities and current run mode. Exact human review
+  objects load and verify before confirmation. Trusted amendment application,
+  barriers, daemon lifecycle, and direct recovery remain absent.
+
+### Deviations
+
+* No licensed local font files were present, so the portal uses purposeful local
+  sans and monospace families with no network dependency.
+* DOM behavior is not simulated with jsdom. Pure state, session, transport,
+  reconnect, pending recovery, bounded rendering models, and static sink scans
+  provide Phase 11C coverage. Phase 11D owns native dialog, keyboard, layout,
+  zoom, responsive, screenshot, and complete browser journey proof.
+* No live SDK call, Git mutation, worktree operation, server start, Playwright,
+  commit, or push was performed, as required by the bounded request.
+
+### Validation
+
+Focused validation passed on 2026-08-14:
+
+* Portal production build: one external shell, one content-hashed CSS asset,
+  one content-hashed JavaScript asset, and one canonical verified manifest
+* Portal and app manifest compatibility: 10 files and 22 tests
+* Portal package and root TypeScript project references
+* Architecture boundaries across 307 source files
+* Targeted Biome check across portal and root integration files
+
+Repository-wide validation passed on 2026-08-14:
+
+* Root build, including the portal Vite production bundle and both
+  execution-host native helpers
+* Clean workspace typecheck
+* Repository Biome check
+* Complete offline suite: 63 files and 961 tests passed
+* Live Copilot SDK probe: one test skipped without explicit opt-in settings
+* Architecture boundaries across 310 source files
+* Documentation links across 18 Markdown files
+* `git diff --check`
+
+### Review
+
+Executable review covers protocol-only imports, Node built-in refusal, exact
+pending bytes, terminal session behavior, vector comparison, reconnect gating,
+hostile source scans, generated manifest integrity, and app loader acceptance.
+No additional subagent was launched because the bounded Phase Implementor
+protocol forbids follow-on orchestration.
+
+### Commit and push
+
+No commit or push was performed, as required by the Phase 11C request.
+
+### Remaining risks
+
+* Real browser layout, overlap, focus, native dialog, reduced-motion, zoom,
+  mobile target, and screenshot claims remain unproven until Phase 11D.
+* Complete question, approval, amendment, allowance, run-control, stale refusal,
+  reconnect, gap, hostile artifact, conflict, and rework journeys remain Phase
+  11D work.
+* Native EventSource has no catch-all listener for future named event types.
+  Unknown records remain inert and visible through bounded activity polling,
+  while overview polling preserves freshness for unrecognized stream events.
+
+## Decision D-071: Project exact allowance authority for portal review
+
+* Date: 2026-08-14
+* Status: Accepted for the Phase 11C allowance follow-up
+* Phase: 11
+* Decision: Add a strict browser-safe allowance review DTO and one exact portal
+  query that joins the named unresolved runner escalation, matching-unit current
+  budget, allowance policy, run control, and runtime authority snapshot. Bind
+  `grant-allowance` to the projected escalation digest, policy digest, current
+  limit, graph revision, and run-mode revision. Advertise the human command only
+  when the complete projection validates.
+* Alternatives: Enrich the generic immutable JSON body without a strict codec;
+  let the browser derive the policy ceiling or current limit; expose separate
+  budget and policy reads; retain the unconfirmable Phase 11C dialog.
+* Rationale: One exact authority projection prevents the browser from composing
+  hidden facts across independently changing reads. Strict codec arithmetic and
+  transactional command guards make missing, altered, resolved, and stale data
+  fail closed before authority expands.
+* Consequence: Phase 11D can execute the allowance browser journey through an
+  escalation-specific read. A run-mode transition or graph change invalidates
+  the open dialog, and pending command persistence and exact retry behavior stay
+  unchanged.
+
+## Phase 11C allowance review follow-up log
+
+### Decisions
+
+* `PortalAllowanceReview` carries the exact escalation command identity and
+  digest, operation, unit, requested and available amounts, current limit,
+  allowance policy digest, ceiling, maximum increase, resulting maximum, graph
+  revision, and current grantable run mode plus revision.
+* The codec rejects unknown or missing fields, non-escalating amounts,
+  non-grantable modes, and inconsistent ceiling arithmetic.
+* `getAllowanceReview` uses one `LIMIT 1` joined SQLite query. It returns no
+  record for a resolution, missing budget or policy, policy/runtime mismatch,
+  absent graph, ending or ended run, malformed authority, or exhausted ceiling.
+* The allowance human need retains no grant command unless the exact projection
+  exists and its escalation digest matches. The portal rechecks the projection
+  against the current overview before confirmation and again while constructing
+  the command draft.
+* The dialog displays unit, current limit, requested and available amounts,
+  ceiling, and maximum result. Its numeric input is capped by the
+  authority-produced maximum increase, and the displayed result updates from
+  the exact current limit.
+* The grant payload now carries the reviewed run-mode revision. SQLite verifies
+  it and the command graph revision in the same command transaction as
+  escalation, policy, budget, and ceiling guards. Existing canonical pending
+  storage and exact retry logic did not change.
+
+### Deviations
+
+* A dedicated `/allowances/{escalationCommandId}` read was added instead of
+  overloading the generic immutable record body. This preserves exact protocol
+  validation without changing unrelated review records.
+* No Playwright work, broad frontend redesign, server start, live SDK call, Git
+  or worktree mutation, commit, or push was performed.
+
+### Validation
+
+Focused validation passed on 2026-08-14:
+
+* Protocol codecs, SQLite authority and integrity, portal allowance view model,
+  browser transport, pending recovery, and supervisor routing: 7 files and 101
+  tests
+* Exact codec tampering, policy inconsistency, stale graph and run-mode,
+  resolved-record omission, bounded input, and stale overview cases
+
+Repository-wide validation passed on 2026-08-14:
+
+* Root build, including the portal bundle and execution-host native helpers
+* Clean workspace typecheck
+* Biome check across 200 files
+* Complete capped offline suite: 64 files and 966 tests passed
+* Live Copilot SDK probe: one test skipped without explicit opt-in settings
+* Architecture boundaries across 315 source files
+* Documentation links across 18 Markdown files
+* `git diff --check`
+
+One initial parallel full-suite attempt timed out the existing production
+amendment recovery test at its five-second limit. The test passed alone in 2.47
+seconds, and the complete rerun passed with `--maxWorkers=4`.
+
+### Review
+
+Executable review covers exact DTO shape and tampering, one-row authority
+assembly, unresolved and integrity behavior, transactional run-mode freshness,
+transport decoding, current-overview verification, input ceiling enforcement,
+and unchanged pending recovery. No additional subagent was launched because the
+bounded Phase Implementor protocol forbids follow-on orchestration.
+
+### Commit and push
+
+No commit or push was performed, as required by this follow-up request.
+
+### Remaining risks
+
+* Phase 11D still owns real Chromium allowance confirmation, stale-dialog,
+  keyboard, focus, responsive layout, screenshot, and overlap evidence.
+
+## Decision D-072: Use `.senawa/workflow.json` as the default consumer configuration
+
+* Date: 2026-08-14
+* Status: Accepted for Phase 13
+* Phase: 13
+* Decision: Change the default `senawa init` destination from `senawa.json` to
+  `.senawa/workflow.json`. The alpha stores workflow structure, schemas, roles,
+  model policy, sensors, gates, and execution policy in that one canonical JSON
+  document. An explicit init path continues to create exactly the requested
+  file and no init path may overwrite an existing file or directory.
+* Alternatives: Retain root `senawa.json`; create multiple workflow and sensor
+  files immediately; add imports and configuration-directory resolution in the
+  portal phase.
+* Rationale: A dedicated project directory gives consumers a stable home for
+  Senawa-owned configuration without introducing unplanned merge, import,
+  traversal, and provenance semantics. The existing compiler already validates
+  one complete document, so moving that document in Phase 13 changes packaging
+  and discovery without weakening deterministic configuration authority.
+* Consequence: Until Phase 13 lands, the implemented CLI still defaults to
+  `senawa.json`. Phase 13 must migrate CLI defaults, durable directory creation,
+  doctor discovery, references, examples, and clean-install tests together.
+  Multi-file configuration remains deferred unless fresh Phase 13 evidence
+  justifies a complete deterministic contract.
+
+## Decision D-073: Keep browser validation inference-free and repeat it for final human review
+
+* Date: 2026-08-14
+* Status: Accepted
+* Phase: 11 and final pull request
+* Decision: Keep the Phase 11 Playwright suite on deterministic local authority
+  fixtures with no worker adapter or model invocation. Run it where portal
+  behavior is introduced, then rerun the complete desktop/mobile matrix after
+  Phase 14 and present its screenshots and offline interaction journey for human
+  review before creating the final pull request. Live worker smoke testing stays
+  separate and requires explicit cost-labelled opt-in.
+* Alternatives: Defer every browser test until all implementation phases; add a
+  browser flag that silently swaps live inference for fixtures; let Playwright
+  inherit the live-worker environment.
+* Rationale: Phase-local browser validation found authority replay, pending
+  recovery, verified-form, and cross-run loading defects that unit tests did not
+  expose. Deterministic fixture mode already provides the requested no-inference
+  behavior, while a final rerun and human review catch cross-phase presentation
+  regressions without spending credits.
+* Consequence: `pnpm test:portal` remains an offline gate and must fail closed if
+  a future composition attempts worker or model access. The final PR gate repeats
+  the suite after all phases. `SENAWA_COPILOT_LIVE=1` remains a distinct,
+  explicit live-probe choice and is never set by Playwright.
+
+## Decision D-074: Fence every portal authority view by run, route, and stream generation
+
+* Date: 2026-08-14
+* Status: Accepted for Phase 11D
+* Phase: 11
+* Decision: Treat selected repository/run, route, reviewed dialog object, pending
+  command identity, and EventSource generation as distinct authority boundaries.
+  An asynchronous read may publish only while its captured run and route remain
+  selected. Run changes immediately invalidate the prior stream and reviewed
+  dialog. Events arriving during an active assembly force one post-active load.
+  Pending commands survive session expiry for lookup-only recovery, but no new
+  session may repost them. Terminal receipts must match command, repository, and
+  run before clearing uncertainty.
+* Alternatives: Let periodic polling repair cross-run races; retain old streams
+  until the replacement overview completes; clear pending bytes on every 401;
+  preserve form state by making every keystroke a reducer action; rely only on
+  final receipt status.
+* Rationale: Portal state is advisory until it names exact immutable authority.
+  Allowing asynchronous work, reviewed values, streams, or receipts to cross an
+  identity boundary can display or submit authority for the wrong run. Explicit
+  generations and exact identity checks fail closed while preserving bounded
+  recovery and responsive interaction.
+* Consequence: Same-run loads coalesce, but run/route changes wait and execute a
+  new assembly. Stale callbacks become inert. A newly bootstrapped session may
+  query retained command IDs but never replay their canonical POST. Browser tests
+  exercise overlapping loads, event races, old-source callbacks, rerenders,
+  session expiry, and rebootstrap.
+
+## Phase 11D log
+
+### Decisions
+
+* Playwright global setup creates one fresh OS-temporary state directory and
+  SQLite authority per invocation, starts the production loopback portal with a
+  disabled effect scheduler, and removes the state after completion.
+* Desktop and mobile projects execute production assets, strict loopback
+  sessions, hash routes, hostile records, bounded viewers, activity paging,
+  native dialogs, keyboard navigation, compact rail behavior, session expiry,
+  reconnect, replay gaps, and screenshots.
+* The browser harness composes no execution host, worker adapter, Copilot SDK, or
+  model route. `SENAWA_COPILOT_LIVE` is not read or set by Playwright.
+* Reviewed form values survive unrelated rerenders only while the same immutable
+  dialog object remains open. Source replacement, session loss, gap recovery, or
+  run selection destroys the reviewed form.
+* Pending canonical submissions are stored before POST. Session expiry deletes
+  session and CSRF authority but retains pending identity. A new session performs
+  receipt lookup only and never retries the command POST.
+* Run and route identity guard every asynchronous portal publication. Stream
+  generations guard source callbacks, timers, and reconnect preflight promises.
+  An event racing an active assembly queues one post-active authoritative read.
+* Expired sessions retain no stale authority vector, cache, human queue, or
+  current-data claim. Artifact preview cache keys include repository, run, and
+  artifact identity.
+* Compact closed attention rails are inert and `aria-hidden`. Desktop and mobile
+  browser checks enforce connected control geometry and computed 4.5:1 contrast
+  for the run selector and Needs button.
+
+### Deviations
+
+* Browser system-test setup imports the app composition root from a package test
+  directory. The boundary checker permits only `packages/*/tests/browser/**` to
+  import apps and self-tests that production package source remains forbidden.
+* Screenshots are deterministic evidence plus explicit human inspection, but not
+  pixel-diff baselines. Stable visual baselines remain a Phase 13 or final-review
+  hardening item because font and Chromium platform variance require a declared
+  acceptance policy.
+* No live SDK call, model inference, credit use, Git mutation, or worktree
+  operation occurred. `/workspaces/senawa` remained the only worktree.
+
+### Validation
+
+Definitive repository validation passed on 2026-08-14:
+
+* Root build, including TypeScript project references, production Vite portal
+  assets, and execution-host native helpers
+* Clean workspace typecheck
+* Biome check across 206 files
+* Complete capped offline suite: 64 files and 974 tests passed
+* Live Copilot SDK probe: one test skipped without explicit opt-in settings
+* Architecture boundaries across 320 source files
+* Documentation links across 18 Markdown files
+* `git diff --check`
+* Single worktree proof: only `/workspaces/senawa`
+
+Definitive real-browser validation passed on 2026-08-14:
+
+* 15 Chromium tests with one worker and zero retries
+* Desktop and Pixel 5 overview, review, amendment, conflict, and expired
+  screenshots
+* Strict static assets, hash reload, 200 percent CSS-scale layout, mobile target
+  size, overlap, clipping, keyboard tree and tab navigation, hostile content,
+  artifact policy, and bounded activity paging
+* Cursor replay deduplication, one failed reconnect preflight followed by bounded
+  recovery, typed replay-gap resynchronization, stale queued timer fencing, and
+  old-source invalidation
+* Exact allowance, question, amendment, candidate approval, pause, resume, and
+  permanent-end journeys
+* Lost response across session expiry followed by lookup-only rebootstrap with
+  exactly one command POST
+* Reviewed-value preservation, cross-run dialog teardown, overlapping run loads,
+  and an event racing a captured final overview read
+
+### Review
+
+Independent authority and browser reviews initially found reviewed decision
+reset, cross-run run-control submission, pending identity loss, receipt identity
+omission, reconnect liveness, stale expiry projections, unscoped artifact
+previews, compact rail accessibility, header contrast, state-dependent refusal
+replay, cross-run load publication, old-stream callbacks, same-run event
+coalescing, and stale reconnect timer side effects. Each finding received a
+focused executable regression and repair. Final narrow re-review reported no
+remaining critical, high, or medium findings.
+
+### Commit and push
+
+Implementation commit and push are pending this log update.
+
+### Remaining risks
+
+* Pixel-diff screenshot baselines require a declared cross-platform policy and
+  remain final hardening work. Current screenshots, layout assertions, computed
+  contrast, and human inspection are authoritative Phase 11 evidence.
+* Broader concurrent-writer stress across every portal query family remains a
+  Phase 13 hardening opportunity. Current overview A/resources/overview B vector
+  assembly, direct storage tests, overlap tests, and event-race tests pass.
+* The complete inference-free browser matrix and screenshots must run again for
+  the final human review after Phase 14, as required by Decision D-073.
 
 ## Entry template
 

@@ -63,6 +63,13 @@ export const runtimeFixture = Object.freeze({
   criterionId: criterionId("criterion_verified"),
   dependencyBarrierDigest: sha256Digest("b".repeat(64)),
   escalationPolicyDigest: sha256Digest("c".repeat(64)),
+  allowancePolicy: Object.freeze({
+    policyDigest: sha256Digest("c".repeat(64)),
+    ceilings: Object.freeze([
+      Object.freeze({ unit: "model-millidollars", maximum: 10_000 }),
+      Object.freeze({ unit: "spend-nano", maximum: 10_000 }),
+    ]),
+  }),
   configurationSnapshotDigest: sha256Digest("d".repeat(64)),
   execution: Object.freeze({
     workspaceMode: "repository" as const,
@@ -126,7 +133,10 @@ export function createRuntimeGraph(revision = 1) {
   );
 }
 
-export function createWorkerExecutionFixture(graph = createRuntimeGraph()) {
+export function createWorkerExecutionFixture(
+  graph = createRuntimeGraph(),
+  capabilities: readonly string[] = ["worker.submit.completion"],
+) {
   const contextTask = {
     taskId: runtimeFixture.task.taskId,
     definitionGeneration: runtimeFixture.task.definitionGeneration,
@@ -149,7 +159,7 @@ export function createWorkerExecutionFixture(graph = createRuntimeGraph()) {
         orderedRoutesDigest: sha256Digest("4".repeat(64)),
       },
       role: { key: consumerKey("implementer"), roleDigest: sha256Digest("5".repeat(64)) },
-      capabilities: ["worker.submit.completion"],
+      capabilities,
       budgets: [{ unit: "spend-nano", limit: 2_000 }],
     },
     deterministicSha256,
@@ -160,7 +170,7 @@ export function createWorkerExecutionFixture(graph = createRuntimeGraph()) {
     ordinal: 1,
     workerPrincipalId: "principal_worker",
     roleKey: consumerKey("implementer"),
-    capabilities: ["worker.submit.completion"],
+    capabilities,
     promptPackDigest: sha256Digest("0".repeat(64)),
   };
   const provisional = createWorkerDispatch(dispatchInput, context, deterministicSha256);

@@ -711,18 +711,19 @@ export class SqliteSupervisorAuthority {
         .prepare<[], { repository_id: string; run_id: string }>(
           `SELECT r.repository_id, r.run_id
            FROM runner_runs r
-           WHERE EXISTS (
+           LEFT JOIN run_control_state control ON control.run_key = r.run_key
+           WHERE ((control.mode IS NULL OR control.mode = 'running') AND EXISTS (
              SELECT 1 FROM runner_commands c
              WHERE c.run_key = r.run_key AND NOT EXISTS (
                SELECT 1 FROM runner_effect_intents i WHERE i.command_id = c.command_id
              )
-           ) OR EXISTS (
+           )) OR ((control.mode IS NULL OR control.mode IN ('running', 'paused', 'ending')) AND EXISTS (
              SELECT 1 FROM runner_effect_intents i
              WHERE i.run_key = r.run_key AND NOT EXISTS (
                SELECT 1 FROM runner_effect_outcomes o
                WHERE o.intent_id = i.intent_id AND o.status IN ('completed', 'failed', 'cancelled')
              )
-           )
+           ))
            ORDER BY r.repository_id, r.run_id`,
         )
         .all()

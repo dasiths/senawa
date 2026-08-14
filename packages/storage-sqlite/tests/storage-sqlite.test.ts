@@ -75,12 +75,14 @@ import {
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CURRENT_SCHEMA_VERSION,
   LeaseUnavailableError,
   restoreSqliteAuthority,
   SqliteAuthority,
   type SqliteAuthorityOptions,
   SqliteContextBroker,
   type SqliteFaultPoint,
+  SqlitePortalQueryAuthority,
   SqliteRunnerAuthority,
   SqliteWorkspaceIntegrationAuthority,
   StaleAuthorityRevisionError,
@@ -225,6 +227,7 @@ describe("SQLite parallel workspace authority", () => {
         failurePolicy: "continue" as const,
         integrationRef: "refs/heads/senawa/integration",
       },
+      allowancePolicy: runtimeFixture.allowancePolicy,
     };
     authority.bindRunExecution(binding);
     expect(authority.bindRunExecution(binding)).toEqual(binding);
@@ -2506,8 +2509,10 @@ describe("SQLite authority durability", () => {
     try {
       const graph = createRuntimeGraph();
       expect(
-        authority.submit(instantiateCommand("command_journey-instantiate"), journeyAdmission.at())
-          .status,
+        authority.submit(
+          instantiateCommand("command_journey-instantiate", "approval-required"),
+          journeyAdmission.at(),
+        ).status,
       ).toBe("completed");
       authority = reopen(authority, sandbox.options);
 
@@ -2545,6 +2550,27 @@ describe("SQLite authority durability", () => {
         ).status,
       ).toBe("completed");
       authority = reopen(authority, sandbox.options);
+      const portal = new SqlitePortalQueryAuthority(sandbox.options);
+      expect(portal.listRuns(runtimeFixture.repositoryId).runs).toHaveLength(1);
+
+      expect(
+        authority.submit(
+          runtimeCommand({
+            commandId: "command_journey-approval",
+            intent: "record-authority-decision",
+            payload: { decision: "approve" },
+            expectedGraphRevision: graph.revisionDigest,
+            exactObjectDigest: gate.candidateDigest,
+          }),
+          journeyAdmission.at(),
+        ).status,
+      ).toBe("completed");
+      authority = reopen(authority, sandbox.options);
+      expect(portal.listRuns(runtimeFixture.repositoryId).runs).toHaveLength(1);
+      expect(
+        portal.getRunOverview(runtimeFixture.repositoryId, runtimeFixture.runId),
+      ).toBeDefined();
+      portal.close();
 
       const closure = authority.submit(
         runtimeCommand({
@@ -2563,7 +2589,7 @@ describe("SQLite authority durability", () => {
       ).toMatchObject({ status: "closed" });
       expect(
         authority.queryReceiptHistory(runtimeFixture.repositoryId, runtimeFixture.runId),
-      ).toHaveLength(12);
+      ).toHaveLength(15);
       const firstReceiptPage = authority.queryReceiptPage(
         runtimeFixture.repositoryId,
         runtimeFixture.runId,
@@ -2572,17 +2598,17 @@ describe("SQLite authority durability", () => {
       );
       expect(firstReceiptPage.receipts.map(({ cursor }) => cursor)).toEqual([1, 2, 3, 4, 5]);
       expect(firstReceiptPage).toEqual(
-        expect.objectContaining({ latestCursor: 12, hasMore: true }),
+        expect.objectContaining({ latestCursor: 15, hasMore: true }),
       );
       expect(
-        authority.queryReceiptPage(runtimeFixture.repositoryId, runtimeFixture.runId, 5, 7),
-      ).toEqual(expect.objectContaining({ latestCursor: 12, hasMore: false }));
+        authority.queryReceiptPage(runtimeFixture.repositoryId, runtimeFixture.runId, 5, 10),
+      ).toEqual(expect.objectContaining({ latestCursor: 15, hasMore: false }));
       expect(
-        authority.queryEventPage(runtimeFixture.repositoryId, runtimeFixture.runId, 10, 2),
+        authority.queryEventPage(runtimeFixture.repositoryId, runtimeFixture.runId, 13, 2),
       ).toEqual(
         expect.objectContaining({
           earliestAvailableCursor: 1,
-          latestCursor: 12,
+          latestCursor: 15,
           hasMore: false,
         }),
       );
@@ -3032,7 +3058,7 @@ describe("SQLite authority durability", () => {
 
     const newerPath = join(sandbox.root, "newer.db");
     const newer = new Database(newerPath);
-    newer.pragma("user_version = 7");
+    newer.pragma(`user_version = ${CURRENT_SCHEMA_VERSION + 1}`);
     newer.close();
     expect(
       () =>
@@ -3561,6 +3587,7 @@ function configureSyntheticIntegration(authority: SqliteWorkspaceIntegrationAuth
       failurePolicy: "continue",
       integrationRef: "refs/heads/senawa/integration",
     },
+    allowancePolicy: runtimeFixture.allowancePolicy,
   });
   const workspace = authority.persistWorkspaceIntent({
     repositoryId: runnerFixture.repositoryId,
@@ -3980,7 +4007,15 @@ function admission() {
   return createAdmissionFixture().at();
 }
 
-function instantiateCommand(commandId: string) {
+function instantiateCommand(
+  commandId: string,
+  approvalPolicy: "no-approval" | "approval-required" = "no-approval",
+) {
+  const authority = runtimeCommand({
+    commandId: "command_principal-template",
+    intent: "pause-run",
+    payload: { expectedRunModeRevision: 0 },
+  }).principal;
   return runtimeCommand({
     commandId,
     intent: "instantiate-run",
@@ -3990,8 +4025,12 @@ function instantiateCommand(commandId: string) {
       execution: runtimeFixture.execution,
       graph: createRuntimeGraph(),
       phase: runtimeFixture.phase,
-      approvalPolicy: { policy: "no-approval" as const },
+      approvalPolicy:
+        approvalPolicy === "no-approval"
+          ? { policy: "no-approval" }
+          : { policy: "approval-required", authority },
       escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+      allowancePolicy: runtimeFixture.allowancePolicy,
     },
   });
 }

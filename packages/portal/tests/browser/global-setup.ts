@@ -1,0 +1,916 @@
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { runtimeDependencies, startSenawaService } from "../../../../apps/senawa/dist/daemon.js";
+import {
+  bindGitObjectId,
+  bindGitRevision,
+  canonicalDigest,
+  canonicalValue,
+  compileWorkflowGraph,
+  consumerKey,
+  createAmendmentProposal,
+  createIntegrationBarrier,
+  createPhaseCandidate,
+  createWorkerContextBase,
+  createWorkerDispatch,
+  defineGate,
+  definitionGeneration,
+  deriveCompletionRequirements,
+  digestAccountingAssessment,
+  digestSelectedTaskSet,
+  runId as kernelRunId,
+  sha256Digest,
+  taskId,
+} from "../../../kernel/dist/index.js";
+import {
+  type CommandEnvelope,
+  canonicalBytes,
+  decodeCommandEnvelope,
+  PROTOCOL_VERSION,
+} from "../../../protocol/dist/index.js";
+import { type RuntimeDependencies, renderPromptPack } from "../../../runtime/dist/index.js";
+import {
+  SqliteAuthority,
+  SqliteContextBroker,
+  SqliteRunnerAuthority,
+  SqliteWorkspaceIntegrationAuthority,
+} from "../../../storage-sqlite/dist/index.js";
+import { HttpSupervisorClient, readPrivateCredential } from "../../../supervisor/dist/index.js";
+import { runtimeCommand, runtimeFixture } from "../../../testing/dist/index.js";
+
+const NOW = "2026-08-14T00:00:00.000Z";
+const RUNS = Object.freeze({
+  journey: "run_portal-journey",
+  workspace: "run_portal-workspace",
+});
+
+let allocation = 0;
+const productionSha256 = runtimeDependencies.sha256;
+
+export default async function globalSetup(): Promise<() => Promise<void>> {
+  const root = mkdtempSync(join(tmpdir(), "senawa-portal-browser-"));
+  chmodSync(root, 0o700);
+  const environment: NodeJS.ProcessEnv = {
+    XDG_RUNTIME_DIR: join(root, "runtime"),
+    XDG_STATE_HOME: join(root, "state"),
+    SENAWA_PORTAL_MANIFEST: resolve("packages/portal/dist/manifest.json"),
+    SENAWA_PORTAL_PORT: "0",
+  };
+  const databasePath = join(environment.XDG_STATE_HOME ?? root, "senawa", "authority.db");
+  const assetDirectory = join(environment.XDG_STATE_HOME ?? root, "senawa", "assets");
+  mkdirSync(join(environment.XDG_STATE_HOME ?? root, "senawa"), { recursive: true, mode: 0o700 });
+  const dependencies: RuntimeDependencies = runtimeDependencies;
+  seedAuthority({ databasePath, assetDirectory, dependencies });
+
+  let sessionNow = Date.parse(NOW);
+  const started = await startSenawaService(environment, {
+    runtimeDependencies: dependencies,
+    portalSessionClock: { now: () => sessionNow },
+    scheduleBeforeEffects: () => ({ worked: false }),
+  });
+  const status = await started.service.status();
+  const socketPath = status.listeners.find(({ kind }) => kind === "ipc")?.address;
+  const origin = status.listeners.find(({ kind }) => kind === "loopback")?.address;
+  if (socketPath === undefined || origin === undefined)
+    throw new Error("Portal listeners are absent");
+  const credential = readPrivateCredential(started.paths.credentialPath);
+  const ipc = new HttpSupervisorClient({ socketPath, credential: credential.token });
+  const control = await startControlServer({
+    bootstrap: async () => `${origin}${(await ipc.createPortalSession()).path}`,
+    advanceSession: () => {
+      sessionNow += 9 * 60 * 60 * 1_000;
+    },
+  });
+  process.env.SENAWA_E2E_CONTROL_ORIGIN = control.origin;
+  process.env.SENAWA_E2E_REPOSITORY_ID = repositoryForRun(RUNS.journey);
+  process.env.SENAWA_E2E_RUNS = JSON.stringify(RUNS);
+
+  return async () => {
+    delete process.env.SENAWA_E2E_CONTROL_ORIGIN;
+    delete process.env.SENAWA_E2E_REPOSITORY_ID;
+    delete process.env.SENAWA_E2E_RUNS;
+    await closeServer(control.server);
+    await started.service.stop();
+    rmSync(root, { recursive: true, force: true });
+  };
+}
+
+interface AuthorityOptions {
+  readonly databasePath: string;
+  readonly assetDirectory: string;
+  readonly dependencies: RuntimeDependencies;
+}
+
+function seedAuthority(options: AuthorityOptions): void {
+  const authority = new SqliteAuthority(options);
+  const graph = portalGraph();
+  const compactGraph = portalGraph(false);
+  seedHumanRun(authority, options, graph, RUNS.journey, true);
+  seedWorkspaceRun(authority, options, compactGraph);
+  authority.close();
+}
+
+function seedHumanRun(
+  authority: SqliteAuthority,
+  options: AuthorityOptions,
+  graph: ReturnType<typeof portalGraph>,
+  runId: string,
+  withActivity: boolean,
+): void {
+  const suffix = runToken(runId);
+  const repositoryId = repositoryForRun(runId);
+  instantiate(authority, graph, runId, "repository", "approval-required");
+  const worker = workerForRun(graph, runId, ["worker.submit.question", "worker.submit.asset"]);
+  const broker = new SqliteContextBroker({
+    databasePath: options.databasePath,
+    dependencies: {
+      sha256: productionSha256,
+      currentTime: () => NOW,
+      issueGrantToken: () => new Uint8Array(32).fill(7),
+    },
+  });
+  broker.registerDispatch({
+    context: worker.context,
+    dispatch: worker.dispatch,
+    completionRequirements: worker.completionRequirements,
+    taskScope: taskScope(runId, worker.context.contextDigest),
+  });
+  const question = {
+    prompt: `Choose the exact deployment target for ${runId} <script>blocked()</script>`,
+    details: { choices: ["staging", "production"], markup: "<svg onload=blocked()>" },
+  };
+  broker.admitSubmission({
+    submission: {
+      apiVersion: PROTOCOL_VERSION,
+      submissionId: `submission_question-${suffix}`,
+      repositoryId,
+      runId,
+      dispatchId: worker.dispatch.dispatchId,
+      task: worker.dispatch.task,
+      contextId: worker.dispatch.contextId,
+      contextDigest: worker.dispatch.contextDigest,
+      principalId: worker.dispatch.worker.principalId,
+      type: "question",
+      question,
+    },
+  });
+  seedArtifacts(authority, broker, worker, runId);
+  broker.close();
+
+  const amendment = amendmentProposal(graph, worker.context.contextDigest, runId);
+  authority.putConfigurationSnapshot(amendment.baseSnapshot);
+  authority.putConfigurationSnapshot(amendment.resultSnapshot);
+  submit(
+    authority,
+    commandForRun(
+      fixtureCommand({
+        commandId: `command_amendment-${suffix}`,
+        intent: "submit-amendment-proposal",
+        payload: { proposal: amendment.proposal },
+        expectedGraphRevision: graph.revisionDigest,
+        exactObjectDigest: amendment.proposal.proposalDigest,
+      }),
+      runId,
+    ),
+  );
+
+  const completion = submit(
+    authority,
+    commandForRun(
+      fixtureCommand({
+        commandId: `command_completion-${suffix}`,
+        intent: "submit-completion",
+        payload: {
+          submission: {
+            task: worker.dispatch.task,
+            disposition: "completed",
+            summary: "Browser fixture completion",
+            criteria: [{ criterionId: runtimeFixture.criterionId, disposition: "satisfied" }],
+            evidence: [],
+          },
+        },
+        expectedDefinitionRevision: worker.dispatch.task.contextRevisionDigest,
+        expectedGraphRevision: graph.revisionDigest,
+      }),
+      runId,
+    ),
+  );
+  if (completion.status !== "completed") {
+    throw new Error(`Completion fixture was refused: ${JSON.stringify(completion)}`);
+  }
+  const assessment = (
+    completion.result as { assessment: Parameters<typeof digestAccountingAssessment>[0] }
+  ).assessment;
+  const gateDefinition = defineGate(
+    { key: consumerKey("release"), blocking: [], advisory: [] },
+    productionSha256,
+  );
+  const candidate = createPhaseCandidate(
+    {
+      phase: runtimeFixture.phase,
+      graphRevisionDigest: graph.revisionDigest,
+      selectedTaskSetDigest: digestSelectedTaskSet([worker.dispatch.task], productionSha256),
+      tasks: [worker.dispatch.task],
+      acceptedAccountingAssessments: [
+        {
+          assessmentDigest: digestAccountingAssessment(assessment, productionSha256),
+          assessment,
+        },
+      ],
+      dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
+      gatePolicyDigest: gateDefinition.policyDigest,
+    },
+    graph,
+    productionSha256,
+  );
+  const gate = submit(
+    authority,
+    commandForRun(
+      fixtureCommand({
+        commandId: `command_gate-${suffix}`,
+        intent: "evaluate-gate",
+        payload: {
+          phase: runtimeFixture.phase,
+          dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
+          gateDefinition,
+          readings: [],
+        },
+        expectedGraphRevision: graph.revisionDigest,
+        exactObjectDigest: candidate.candidateDigest,
+      }),
+      runId,
+    ),
+  );
+  if (gate.status !== "completed") {
+    throw new Error(`Gate fixture was refused: ${JSON.stringify(gate)}`);
+  }
+  seedAllowance(authority, options, runId, worker.context.contextDigest, graph.revisionDigest);
+
+  if (withActivity) {
+    for (let index = 0; index < 30; index += 1) {
+      submit(
+        authority,
+        commandForRun(
+          fixtureCommand({
+            commandId: `command_activity-${index}`,
+            intent: "pause-run",
+            payload: { expectedRunModeRevision: 900 + index },
+            roles: ["reader"],
+          }),
+          runId,
+        ),
+      );
+    }
+  }
+}
+
+function seedArtifacts(
+  authority: SqliteAuthority,
+  broker: SqliteContextBroker,
+  worker: ReturnType<typeof workerForRun>,
+  runId: string,
+): void {
+  const suffix = runToken(runId);
+  const repositoryId = repositoryForRun(runId);
+  const json = new TextEncoder().encode(
+    JSON.stringify({
+      hostile: "<script src=https://invalid.example/x.js></script><svg onload=blocked()>",
+      nodes: Array.from({ length: 9_990 }, () => ""),
+    }),
+  );
+  const text = new TextEncoder().encode("Verified text <img src=x onerror=blocked()>\n".repeat(50));
+  const active = new TextEncoder().encode(
+    "<svg xmlns='http://www.w3.org/2000/svg'><script/></svg>",
+  );
+  const assets = [
+    { id: `asset_json-${suffix}`, bytes: json, mediaType: "application/json", install: true },
+    { id: `asset_text-${suffix}`, bytes: text, mediaType: "text/plain", install: true },
+    { id: `asset_active-${suffix}`, bytes: active, mediaType: "image/svg+xml", install: true },
+    {
+      id: `asset_missing-${suffix}`,
+      bytes: new TextEncoder().encode("metadata only"),
+      mediaType: "text/plain",
+      install: false,
+    },
+  ] as const;
+  for (const asset of assets) {
+    const contentDigest = productionSha256.digest(asset.bytes);
+    broker.admitSubmission({
+      submission: {
+        apiVersion: PROTOCOL_VERSION,
+        submissionId: `submission_${asset.id.slice("asset_".length)}`,
+        repositoryId,
+        runId,
+        dispatchId: worker.dispatch.dispatchId,
+        task: worker.dispatch.task,
+        contextId: worker.dispatch.contextId,
+        contextDigest: worker.dispatch.contextDigest,
+        principalId: worker.dispatch.worker.principalId,
+        type: "asset",
+        asset: {
+          assetId: asset.id,
+          contentDigest,
+          byteLength: asset.bytes.byteLength,
+          mediaType: asset.mediaType,
+          sensitivity: "internal",
+          summary: `${asset.id} <a href='https://invalid.example'>blocked link</a>`,
+        },
+      },
+    });
+    if (asset.install) authority.putAsset(asset.bytes, asset.mediaType);
+  }
+}
+
+function seedAllowance(
+  authority: SqliteAuthority,
+  options: AuthorityOptions,
+  runId: string,
+  contextDigest: string,
+  graphRevision: string,
+): void {
+  const suffix = runToken(runId);
+  const repositoryId = repositoryForRun(runId);
+  const runner = new SqliteRunnerAuthority(options);
+  const lease = {
+    owner: `runner-owner-${suffix}`,
+    fence: 1,
+    expiresAt: "2026-08-14T00:10:00.000Z",
+  };
+  runner.configureRun({
+    repositoryId,
+    runId,
+    contextDigest,
+    taskScopes: [{ ...taskScope(runId, contextDigest), claimsAccepted: true }],
+    budgets: [{ unit: "model-millidollars", limit: 1 }],
+    lease,
+  });
+  runner.bindAllowancePolicy(repositoryId, runId, runtimeFixture.allowancePolicy);
+  const command = {
+    sequence: 1,
+    commandId: `runner-command-${suffix}`,
+    repositoryId,
+    runId,
+    operationId: `operation-${suffix}`,
+    kind: "worker" as const,
+    taskScope: taskScope(runId, contextDigest),
+    contextDigest,
+    inputDigest: "b".repeat(64),
+    input: { dispatchId: `dispatch-${suffix}` },
+    budgetReservation: { unit: "model-millidollars", amount: 5 },
+    queuedAt: NOW,
+    maxReconciliationAttempts: 2,
+  };
+  runner.enqueue(command);
+  const result = runner.persistIntent({
+    repositoryId,
+    runId,
+    lease,
+    currentTime: NOW,
+    attemptId: `attempt-${suffix}`,
+    command,
+  });
+  if (result.type !== "escalated") throw new Error("Allowance fixture did not escalate");
+  if (graphRevision.length !== 64) throw new Error("Graph revision fixture is invalid");
+  runner.close();
+  void authority;
+}
+
+function seedWorkspaceRun(
+  authority: SqliteAuthority,
+  options: AuthorityOptions,
+  graph: ReturnType<typeof portalGraph>,
+): void {
+  instantiate(authority, graph, RUNS.workspace, "worktree");
+  const repositoryId = repositoryForRun(RUNS.workspace);
+  const runner = new SqliteRunnerAuthority(options);
+  runner.configureRun({
+    repositoryId,
+    runId: RUNS.workspace,
+    contextDigest: runtimeFixture.task.contextRevisionDigest,
+    taskScopes: [
+      {
+        ...taskScope(RUNS.workspace, runtimeFixture.task.contextRevisionDigest),
+        claimsAccepted: true,
+      },
+    ],
+    budgets: [{ unit: "model-millidollars", limit: 10 }],
+    lease: {
+      owner: "runner-owner-workspace",
+      fence: 1,
+      expiresAt: "2026-08-14T00:10:00.000Z",
+    },
+  });
+  runner.bindAllowancePolicy(repositoryId, RUNS.workspace, runtimeFixture.allowancePolicy);
+  runner.close();
+  const workspace = new SqliteWorkspaceIntegrationAuthority(options);
+  workspace.bindRunExecution({
+    repositoryId,
+    runId: RUNS.workspace,
+    configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+    execution: {
+      workspaceMode: "worktree",
+      maxWriterConcurrency: 2,
+      failurePolicy: "continue",
+      integrationRef: "refs/heads/senawa/integration",
+    },
+    allowancePolicy: runtimeFixture.allowancePolicy,
+  });
+  const baseRevision = gitRevision("1", "2");
+  const resultRevision = gitRevision("3", "4");
+  const workspaceRecord = workspace.persistWorkspaceIntent({
+    repositoryId,
+    runId: RUNS.workspace,
+    workspaceId: "workspace-browser",
+    dispatchId: "dispatch-browser",
+    taskId: runtimeFixture.task.taskId,
+    definitionGeneration: 1,
+    baseRevision,
+    prepareEffectId: "effect-prepare-browser",
+    inspectEffectId: "effect-inspect-browser",
+  });
+  workspace.recordWorkspaceState(
+    repositoryId,
+    RUNS.workspace,
+    workspaceRecord.workspaceId,
+    "prepared",
+  );
+  const result = workspace.persistWorkspaceResult({
+    repositoryId,
+    runId: RUNS.workspace,
+    resultId: "result-browser",
+    workspaceId: workspaceRecord.workspaceId,
+    resultRevision,
+    completionFactDigest: "5".repeat(64),
+    captureEffectId: "effect-capture-browser",
+    inspectEffectId: "effect-result-browser",
+    recordedAt: NOW,
+  });
+  const barrier = createIntegrationBarrier(
+    {
+      phaseId: runtimeFixture.phase.phaseId,
+      definitionGeneration: runtimeFixture.phase.definitionGeneration,
+      graphRevisionDigest: graph.revisionDigest,
+      targetRef: "refs/heads/senawa/integration",
+      beforeRevision: baseRevision,
+      afterRevision: resultRevision,
+      members: [
+        {
+          taskId: runtimeFixture.task.taskId,
+          definitionGeneration: runtimeFixture.task.definitionGeneration,
+          contextDigest: runtimeFixture.task.contextRevisionDigest,
+          baseRevisionDigest: bindGitRevision(baseRevision, productionSha256).descriptorDigest,
+          resultTreeDigest: bindGitObjectId(resultRevision.tree, productionSha256).descriptorDigest,
+          completionFactDigest: "5".repeat(64) as ReturnType<typeof sha256Digest>,
+        },
+      ],
+      gatePolicyDigest: "8".repeat(64) as ReturnType<typeof sha256Digest>,
+      gateReadingDigest: "9".repeat(64) as ReturnType<typeof sha256Digest>,
+      gateEvaluationDigest: "a".repeat(64) as ReturnType<typeof sha256Digest>,
+      outcome: "integrated",
+    },
+    productionSha256,
+  );
+  const member = barrier.members[0];
+  if (member === undefined) throw new Error("Integration barrier member is absent");
+  for (const [integrationId, terminal] of [
+    ["integration-attempt-1-conflict", "conflicted"],
+    ["integration-rework-2-required", "rework-required"],
+  ] as const) {
+    workspace.persistIntegrationIntent({
+      repositoryId,
+      runId: RUNS.workspace,
+      integrationId,
+      phaseId: barrier.phaseId,
+      definitionGeneration: barrier.definitionGeneration,
+      targetRef: barrier.targetRef,
+      fanInDigest: barrier.fanInDigest,
+      members: [{ workspaceId: workspaceRecord.workspaceId, resultId: result.resultId, member }],
+      prepareEffectId: `effect-prepare-${integrationId}`,
+      inspectEffectId: `effect-inspect-${integrationId}`,
+    });
+    const ownerId = `owner-${integrationId}`;
+    const claim = workspace.claimIntegrationSlot({
+      repositoryId,
+      runId: RUNS.workspace,
+      integrationId,
+      ownerId,
+      currentTime: NOW,
+      expiresAt: "2026-08-14T13:00:00.000Z",
+    });
+    if (claim.type !== "claimed") throw new Error("Integration fixture was not claimed");
+    const fence = claim.attempt.fence;
+    if (fence === undefined) throw new Error("Integration fixture fence is absent");
+    workspace.recordIntegrationState(
+      repositoryId,
+      RUNS.workspace,
+      integrationId,
+      "candidate-created",
+      ownerId,
+      fence,
+      NOW,
+    );
+    if (terminal === "conflicted") {
+      workspace.recordIntegrationState(
+        repositoryId,
+        RUNS.workspace,
+        integrationId,
+        terminal,
+        ownerId,
+        fence,
+        NOW,
+      );
+    } else {
+      workspace.recordIntegrationState(
+        repositoryId,
+        RUNS.workspace,
+        integrationId,
+        "validating",
+        ownerId,
+        fence,
+        NOW,
+      );
+      workspace.recordIntegrationGate(
+        repositoryId,
+        RUNS.workspace,
+        integrationId,
+        {
+          policyDigest: "8".repeat(64),
+          readingDigest: "9".repeat(64),
+          evaluationDigest: "a".repeat(64),
+          decision: "failed",
+          evidence: { sanitized: "<script>inert</script>" },
+        },
+        ownerId,
+        fence,
+        NOW,
+      );
+      workspace.recordIntegrationState(
+        repositoryId,
+        RUNS.workspace,
+        integrationId,
+        terminal,
+        ownerId,
+        fence,
+        NOW,
+      );
+    }
+  }
+  workspace.close();
+}
+
+function portalGraph(hostile = true) {
+  return compileWorkflowGraph(
+    {
+      workflow: {
+        id: runtimeFixture.workflowId,
+        key: consumerKey("portal"),
+        generation: definitionGeneration(1),
+        source: { locator: "fixture://portal", pointer: "" },
+      },
+      phases: [
+        {
+          id: runtimeFixture.phase.phaseId,
+          key: consumerKey("delivery"),
+          generation: runtimeFixture.phase.definitionGeneration,
+          parentId: runtimeFixture.workflowId,
+          source: { locator: "fixture://portal", pointer: "/phases/delivery" },
+        },
+      ],
+      executableWork: [
+        {
+          id: runtimeFixture.task.taskId,
+          key: consumerKey("verify"),
+          generation: runtimeFixture.task.definitionGeneration,
+          parentId: runtimeFixture.phase.phaseId,
+          source: { locator: "fixture://portal", pointer: "/tasks/verify" },
+          completionPolicy: {
+            criteria: [{ criterionId: runtimeFixture.criterionId, required: true }],
+            evidencePolicy: { mode: "none", requirements: [] },
+          },
+          input: hostile
+            ? {
+                hostile:
+                  "<script>blocked()</script><svg onload=blocked()><a href=https://invalid.example>blocked</a>",
+                long: "x".repeat(4_200),
+              }
+            : {},
+        },
+      ],
+      criteria: [
+        {
+          id: runtimeFixture.criterionId,
+          key: consumerKey("verified"),
+          generation: definitionGeneration(1),
+          parentId: runtimeFixture.task.taskId,
+          source: { locator: "fixture://portal", pointer: "/criteria/verified" },
+        },
+      ],
+    },
+    productionSha256,
+  );
+}
+
+function workerForRun(
+  graph: ReturnType<typeof portalGraph>,
+  runId: string,
+  capabilities: readonly string[],
+) {
+  const suffix = runToken(runId);
+  const task = {
+    taskId: runtimeFixture.task.taskId,
+    definitionGeneration: runtimeFixture.task.definitionGeneration,
+  };
+  const context = createWorkerContextBase(
+    {
+      task,
+      graphRevisionDigest: graph.revisionDigest,
+      configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+      contracts: [],
+      dependencyBarrier: { task, dependencies: [] },
+      assets: [],
+      repositoryBase: {
+        commitDigest: "1".repeat(64) as ReturnType<typeof sha256Digest>,
+        treeDigest: "2".repeat(64) as ReturnType<typeof sha256Digest>,
+      },
+      modelPolicy: {
+        key: consumerKey("worker-policy"),
+        policyDigest: "3".repeat(64) as ReturnType<typeof sha256Digest>,
+        orderedRoutesDigest: "4".repeat(64) as ReturnType<typeof sha256Digest>,
+      },
+      role: {
+        key: consumerKey("implementer"),
+        roleDigest: "5".repeat(64) as ReturnType<typeof sha256Digest>,
+      },
+      capabilities,
+      budgets: [{ unit: "spend-nano", limit: 2_000 }],
+    },
+    productionSha256,
+  );
+  const input = {
+    repositoryId: repositoryForRun(runId),
+    runId: kernelRunId(runId),
+    ordinal: 1,
+    workerPrincipalId: `principal_${suffix}`,
+    roleKey: consumerKey("implementer"),
+    capabilities,
+    promptPackDigest: "0".repeat(64) as ReturnType<typeof sha256Digest>,
+  };
+  const provisional = createWorkerDispatch(input, context, productionSha256);
+  const prompt = renderPromptPack(context, provisional, productionSha256, 65_536);
+  const dispatch = createWorkerDispatch(
+    { ...input, promptPackDigest: prompt.digest },
+    context,
+    productionSha256,
+  );
+  const completionRequirements = deriveCompletionRequirements(
+    graph,
+    [dispatch.task],
+    productionSha256,
+  )[0];
+  if (completionRequirements === undefined) throw new Error("Worker requirements are absent");
+  return { context, dispatch, completionRequirements };
+}
+
+function instantiate(
+  authority: SqliteAuthority,
+  graph: ReturnType<typeof portalGraph>,
+  runId: string,
+  workspaceMode: "repository" | "worktree",
+  approvalPolicy: "no-approval" | "approval-required" = "no-approval",
+): void {
+  const suffix = runToken(runId);
+  submit(
+    authority,
+    commandForRun(
+      fixtureCommand({
+        commandId: `command_instantiate-${suffix}`,
+        intent: "instantiate-run",
+        payload: {
+          workflowId: runtimeFixture.workflowId,
+          configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+          execution:
+            workspaceMode === "repository"
+              ? runtimeFixture.execution
+              : {
+                  workspaceMode: "worktree",
+                  maxWriterConcurrency: 2,
+                  failurePolicy: "continue",
+                  integrationRef: "refs/heads/senawa/integration",
+                },
+          graph,
+          phase: runtimeFixture.phase,
+          approvalPolicy:
+            approvalPolicy === "no-approval"
+              ? { policy: "no-approval" }
+              : {
+                  policy: "approval-required",
+                  authority: fixtureCommand({
+                    commandId: "command_principal-template",
+                    intent: "pause-run",
+                    payload: { expectedRunModeRevision: 0 },
+                  }).principal,
+                },
+          escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+          allowancePolicy: runtimeFixture.allowancePolicy,
+        },
+      }),
+      runId,
+    ),
+  );
+}
+
+function amendmentProposal(
+  graph: ReturnType<typeof portalGraph>,
+  contextDigest: string,
+  runId: string,
+) {
+  const baseSnapshot = configurationSnapshot(graph);
+  const provisional = createAmendmentProposal(
+    amendmentInput(graph, contextDigest, baseSnapshot.snapshotDigest, "f".repeat(64), runId),
+    productionSha256,
+  );
+  const resultSnapshot = configurationSnapshot(provisional.reviewedResultGraph);
+  const proposal = createAmendmentProposal(
+    amendmentInput(
+      graph,
+      contextDigest,
+      baseSnapshot.snapshotDigest,
+      resultSnapshot.snapshotDigest,
+      runId,
+    ),
+    productionSha256,
+  );
+  return { baseSnapshot, resultSnapshot, proposal };
+}
+
+function amendmentInput(
+  graph: ReturnType<typeof portalGraph>,
+  contextDigest: string,
+  baseSnapshotDigest: string,
+  resultSnapshotDigest: string,
+  runId: string,
+) {
+  return {
+    source: {
+      kind: "human" as const,
+      request: `Add sanitized package verification for ${runId} <script>blocked()</script>`,
+    },
+    baseGraph: graph,
+    baseContextDigest: sha256Digest(contextDigest),
+    baseConfigurationSnapshotDigest: sha256Digest(baseSnapshotDigest),
+    resultConfigurationSnapshotDigest: sha256Digest(resultSnapshotDigest),
+    operations: [
+      {
+        kind: "add-task" as const,
+        task: {
+          id: taskId("task_package"),
+          key: consumerKey("package"),
+          generation: definitionGeneration(1),
+          parentId: runtimeFixture.phase.phaseId,
+          dependsOn: [runtimeFixture.task.taskId],
+          source: { locator: "fixture://amendment", pointer: "/tasks/package" },
+          completionPolicy: {
+            criteria: [],
+            evidencePolicy: { mode: "none" as const, requirements: [] },
+          },
+        },
+        criteria: [],
+      },
+    ],
+    phaseCandidateHistory: [],
+  };
+}
+
+function configurationSnapshot(graph: ReturnType<typeof portalGraph>) {
+  const empty = Object.freeze([]);
+  const emptyDigest = canonicalDigest(canonicalValue(empty), productionSha256);
+  const execution = Object.freeze({
+    workspaceMode: "repository",
+    maxWriterConcurrency: 1,
+    failurePolicy: "continue",
+  });
+  const content = {
+    apiVersion: "senawa.dev/configuration-snapshot/v1alpha2",
+    execution,
+    graph,
+    schemas: empty,
+    roles: empty,
+    modelPolicies: empty,
+    sensors: empty,
+    gates: empty,
+    projections: empty,
+    componentDigests: {
+      execution: canonicalDigest(canonicalValue(execution), productionSha256),
+      graph: canonicalDigest(canonicalValue(graph), productionSha256),
+      schemas: emptyDigest,
+      roles: emptyDigest,
+      modelPolicies: emptyDigest,
+      sensors: emptyDigest,
+      gates: emptyDigest,
+      projections: emptyDigest,
+    },
+  };
+  return canonicalValue({
+    ...content,
+    snapshotDigest: canonicalDigest(canonicalValue(content), productionSha256),
+  }) as unknown as typeof content & { readonly snapshotDigest: string };
+}
+
+function commandForRun(command: CommandEnvelope, runId: string): CommandEnvelope {
+  return decodeCommandEnvelope({
+    ...command,
+    repositoryId: repositoryForRun(runId),
+    runId,
+    transport: { kind: "cli", requestId: `request_${command.commandId}` },
+  });
+}
+
+function fixtureCommand(input: Parameters<typeof runtimeCommand>[0]): CommandEnvelope {
+  const command = runtimeCommand(input);
+  return decodeCommandEnvelope({
+    ...command,
+    payloadDigest: productionSha256.digest(canonicalBytes(command.payload)),
+  });
+}
+
+function submit(authority: SqliteAuthority, command: CommandEnvelope) {
+  return authority.submit(command, {
+    currentTime: NOW,
+    facts: { source: "portal-browser-fixture" },
+    allocateId: () => `stream-event-browser-${++allocation}`,
+  });
+}
+
+function taskScope(runId: string, contextDigest: string) {
+  return {
+    runId,
+    taskId: runtimeFixture.task.taskId,
+    definitionGeneration: runtimeFixture.task.definitionGeneration,
+    acceptedContextDigest: contextDigest,
+    fenceGeneration: 1,
+  };
+}
+
+function runToken(runId: string): string {
+  if (!runId.startsWith("run_")) throw new Error("Fixture run identity is invalid");
+  return runId.slice("run_".length);
+}
+
+function repositoryForRun(runId: string): string {
+  return `repository_${runToken(runId)}`;
+}
+
+function gitRevision(commit: string, tree: string) {
+  return {
+    commit: { objectFormat: "sha1" as const, oid: commit.repeat(40) },
+    tree: { objectFormat: "sha1" as const, oid: tree.repeat(40) },
+  };
+}
+
+async function startControlServer(actions: {
+  readonly bootstrap: () => Promise<string>;
+  readonly advanceSession: () => void;
+}): Promise<{ readonly origin: string; readonly server: Server }> {
+  const server = createServer(async (request, response) => {
+    try {
+      if (request.method === "GET" && request.url === "/bootstrap") {
+        return json(response, 200, { url: await actions.bootstrap() });
+      }
+      if (request.method === "POST" && request.url === "/advance-session") {
+        actions.advanceSession();
+        return json(response, 204, {});
+      }
+      return json(response, 404, { error: "not-found" });
+    } catch (error) {
+      return json(response, 500, {
+        error: error instanceof Error ? error.message : "fixture-error",
+      });
+    }
+  });
+  await new Promise<void>((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolvePromise());
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string")
+    throw new Error("Control server has no port");
+  return { origin: `http://127.0.0.1:${address.port}`, server };
+}
+
+function json(response: import("node:http").ServerResponse, status: number, body: unknown): void {
+  const value = JSON.stringify(body);
+  response.writeHead(status, {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(value),
+  });
+  response.end(value);
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    server.close((error) => (error === undefined ? resolvePromise() : reject(error)));
+    server.closeAllConnections();
+  });
+}

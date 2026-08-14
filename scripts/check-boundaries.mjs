@@ -78,6 +78,12 @@ if (supervisorDependencies.some((dependency) => !allowedSupervisorDependencies.h
   violations.push("packages/supervisor/package.json: supervisor has an unsupported dependency");
 }
 
+const portalManifest = JSON.parse(await readFile("packages/portal/package.json", "utf8"));
+const portalDependencies = Object.keys(portalManifest.dependencies ?? {});
+if (portalDependencies.length !== 1 || portalDependencies[0] !== "@senawa/protocol") {
+  violations.push("packages/portal/package.json: portal may depend only on protocol in production");
+}
+
 for (const file of [...packageFiles, ...appFiles]) {
   const content = await readFile(file, "utf8");
   violations.push(...checkSource(file, content));
@@ -101,8 +107,14 @@ function checkSource(file, content) {
   const isRuntime = file.startsWith("packages/runtime/");
   const isConfiguration = file.startsWith("packages/configuration/");
   const isExecutionHost = file.startsWith("packages/execution-host/");
+  const isPortal = file.startsWith("packages/portal/src/") && !file.endsWith(".test.ts");
   const isPackage = file.startsWith("packages/");
-  if (isPackage && /(?:from\s+|import\s*(?:\(\s*)?)["'][^"']*apps\//u.test(content)) {
+  const isBrowserSystemTest = /^packages\/[^/]+\/tests\/browser\//u.test(file);
+  if (
+    isPackage &&
+    !isBrowserSystemTest &&
+    /(?:from\s+|import\s*(?:\(\s*)?)["'][^"']*apps\//u.test(content)
+  ) {
     findings.push(`${file}: packages cannot import apps`);
   }
   if (isPackage && !file.endsWith(".test.ts") && content.includes("@senawa/testing")) {
@@ -117,6 +129,12 @@ function checkSource(file, content) {
           ? "runtime"
           : "configuration";
     findings.push(`${file}: ${packageName} cannot import Node modules`);
+  }
+  if (isPortal && hasNodeRuntimeImport(content)) {
+    findings.push(`${file}: portal production source cannot import Node modules`);
+  }
+  if (isPortal && /@senawa\/(?!protocol(?:["'/]|$))[a-z0-9-]+/u.test(content)) {
+    findings.push(`${file}: portal production source may import only protocol`);
   }
   if (isProtocol && content.includes("@senawa/kernel")) {
     findings.push(`${file}: protocol cannot import kernel behavior`);
@@ -209,6 +227,8 @@ function verifyRules() {
   const cases = [
     ["packages/kernel/src/bad.ts", 'import "node:fs";', "cannot import Node modules"],
     ["packages/protocol/src/bad.ts", 'import "node:http";', "cannot import Node modules"],
+    ["packages/portal/src/bad.ts", 'import "node:crypto";', "cannot import Node modules"],
+    ["packages/portal/src/bad.ts", 'import "@senawa/kernel";', "may import only protocol"],
     ["packages/runtime/src/bad.ts", 'import "node:fs";', "cannot import Node modules"],
     ["packages/configuration/src/bad.ts", 'import "node:fs";', "cannot import Node modules"],
     ["packages/kernel/src/bad.ts", 'import os from "os";', "cannot import Node modules"],
@@ -302,6 +322,14 @@ function verifyRules() {
     if (!checkSource(file, content).some((finding) => finding.includes(expected))) {
       throw new Error(`Boundary self-test failed for ${file} (${content}): ${expected}`);
     }
+  }
+  if (
+    checkSource(
+      "packages/example/tests/browser/global-setup.ts",
+      'import "../../../../apps/senawa/src/main.js";',
+    ).some((finding) => finding.includes("cannot import apps"))
+  ) {
+    throw new Error("Boundary self-test rejected browser system-test composition");
   }
 }
 

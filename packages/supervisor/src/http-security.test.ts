@@ -34,6 +34,7 @@ import {
   loadOrCreateLocalCredential,
   prepareUnixSocketPath,
 } from "./local-security.js";
+import { PORTAL_CONTENT_SECURITY_POLICY, type PortalAssetSource } from "./portal-assets.js";
 import { InMemoryRunEventNotifier } from "./run-event-notifier.js";
 import { PortalSessionSecurity } from "./session-security.js";
 import { SseEventSource } from "./sse.js";
@@ -46,6 +47,7 @@ interface SecurityFixture {
   readonly ipcHandler: SupervisorHttpHandler;
   readonly ipc: SupervisorHttpServerHandle;
   readonly loopback: SupervisorHttpServerHandle;
+  readonly sessions: PortalSessionSecurity;
 }
 
 let fixture: SecurityFixture;
@@ -95,9 +97,10 @@ beforeEach(async () => {
         sessions,
         loopbackOrigin: origin,
         contextFactory,
+        portalAssets: testPortalAssets(),
       }),
   );
-  fixture = { root, authority, api, credential, ipcHandler, ipc, loopback };
+  fixture = { root, authority, api, credential, ipcHandler, ipc, loopback, sessions };
 });
 
 afterEach(async () => {
@@ -108,6 +111,93 @@ afterEach(async () => {
 });
 
 describe("supervisor HTTP security", () => {
+  it("serves only authenticated verified portal assets with strict immutable headers", async () => {
+    const origin = required(fixture.loopback.origin);
+    expectError(await raw({ origin, path: "/portal/" }), 401, "unauthorized");
+    const bootstrap = await createBootstrap();
+    const redirect = await raw({ origin, path: bootstrap.path });
+    const cookie = required(redirect.headers["set-cookie"]?.[0]?.split(";", 1)[0]);
+
+    const shell = await raw({ origin, path: "/portal/", headers: { Cookie: cookie } });
+    expect(shell.status).toBe(200);
+    expect(shell.body).toBe("<!doctype html><main id=app></main>");
+    expect(shell.headers["content-security-policy"]).toBe(PORTAL_CONTENT_SECURITY_POLICY);
+    expect(shell.headers["cross-origin-resource-policy"]).toBe("same-origin");
+    expect(shell.headers["referrer-policy"]).toBe("no-referrer");
+    expect(shell.headers["x-content-type-options"]).toBe("nosniff");
+    expect(shell.headers["x-frame-options"]).toBe("DENY");
+    expect(shell.headers["cache-control"]).toBe("no-store");
+    expect(shell.headers["access-control-allow-origin"]).toBeUndefined();
+
+    const asset = await raw({
+      origin,
+      path: "/portal/assets/app.abc123.js",
+      headers: { Cookie: cookie },
+    });
+    expect(asset.status).toBe(200);
+    expect(asset.body).toBe("console.log('portal')");
+    expect(asset.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+    expect(asset.headers.etag).toBe(`"sha256-${"a".repeat(64)}"`);
+    const unchanged = await raw({
+      origin,
+      path: "/portal/assets/app.abc123.js",
+      headers: { Cookie: cookie, "If-None-Match": required(asset.headers.etag as string) },
+    });
+    expect(unchanged.status).toBe(304);
+    expect(unchanged.body).toBe("");
+
+    expectError(
+      await raw({
+        origin,
+        path: "/portal/assets/%3Cscript%3E.js",
+        headers: { Cookie: cookie },
+      }),
+      400,
+      "invalid-request",
+    );
+    const missing = await raw({
+      origin,
+      path: "/portal/assets/missing.abc123.js",
+      headers: { Cookie: cookie },
+    });
+    expectError(missing, 404, "not-found");
+    expect(missing.body).not.toContain("missing.abc123.js");
+
+    const unavailable = await startLoopbackSupervisorServer(
+      0,
+      (unavailableOrigin) =>
+        new SupervisorHttpHandler({
+          api: fixture.api,
+          transport: "loopback",
+          sessions: fixture.sessions,
+          loopbackOrigin: unavailableOrigin,
+          contextFactory: (_request, transportKind) => ({
+            principal: runtimePrincipal,
+            transportKind,
+            requestId: "request_unavailable-assets",
+            admission: {
+              currentTime: runtimeFixture.currentTime,
+              facts: {},
+              allocator: { allocationsFor: () => [] },
+            },
+          }),
+        }),
+    );
+    try {
+      expectError(
+        await raw({
+          origin: required(unavailable.origin),
+          path: "/portal/",
+          headers: { Cookie: cookie },
+        }),
+        503,
+        "service-unavailable",
+      );
+    } finally {
+      await unavailable.close();
+    }
+  });
+
   it("authenticates every IPC request without reflecting credential or hostile output", async () => {
     const valid = await raw({
       socketPath: required(fixture.ipc.socketPath),
@@ -161,15 +251,35 @@ describe("supervisor HTTP security", () => {
     expectError(await raw({ origin, path: bootstrap.path }), 401, "unauthorized");
     expectError(await raw({ origin, path: "/api/v1alpha1/session" }), 401, "unauthorized");
 
-    const csrfResponse = await raw({
+    const descriptor = await raw({
       origin,
       path: "/api/v1alpha1/session",
       headers: { Cookie: cookie },
     });
+    expect(descriptor.status).toBe(200);
+    expect(JSON.parse(descriptor.body)).toMatchObject({ csrfMode: "available" });
+    const csrfResponse = await raw({
+      origin,
+      method: "POST",
+      path: "/api/v1alpha1/session",
+      headers: { Cookie: cookie, Origin: origin },
+    });
     expect(csrfResponse.status).toBe(200);
     const csrf = (JSON.parse(csrfResponse.body) as { csrfToken: string }).csrfToken;
+    const readOnly = await raw({
+      origin,
+      path: "/api/v1alpha1/session",
+      headers: { Cookie: cookie },
+    });
+    expect(readOnly.status).toBe(200);
+    expect(JSON.parse(readOnly.body)).toMatchObject({ csrfMode: "read-only" });
     expectError(
-      await raw({ origin, path: "/api/v1alpha1/session", headers: { Cookie: cookie } }),
+      await raw({
+        origin,
+        method: "POST",
+        path: "/api/v1alpha1/session",
+        headers: { Cookie: cookie, Origin: origin },
+      }),
       409,
       "command-conflict",
     );
@@ -261,6 +371,7 @@ describe("supervisor HTTP security", () => {
           sessions,
           loopbackOrigin: origin,
           sse: new SseEventSource({ api: eventApi, notifier, heartbeatMs: 10_000 }),
+          portalAssets: testPortalAssets(),
           contextFactory: () => {
             throw new Error("Context is not used by SSE");
           },
@@ -281,6 +392,25 @@ describe("supervisor HTTP security", () => {
       await new Promise((resolve) => setTimeout(resolve, 40));
       expect(body).not.toContain("phase-started");
       expect(body).not.toContain("afterExpiry");
+      const expiredCookie = `senawa_session=${session.token}`;
+      expectError(
+        await raw({
+          origin: required(server.origin),
+          path: "/portal/",
+          headers: { Cookie: expiredCookie },
+        }),
+        401,
+        "unauthorized",
+      );
+      expectError(
+        await raw({
+          origin: required(server.origin),
+          path: "/api/v1alpha1/capabilities",
+          headers: { Cookie: expiredCookie },
+        }),
+        401,
+        "unauthorized",
+      );
     } finally {
       await server.close();
     }
@@ -825,6 +955,30 @@ function ipcHeaders(token: string): Record<string, string> {
 function expectError(response: RawResponse, status: number, code: string): void {
   expect(response.status).toBe(status);
   expect(decodeErrorEnvelope(response.body)).toMatchObject({ code });
+}
+
+function testPortalAssets(): PortalAssetSource {
+  const shellBytes = new TextEncoder().encode("<!doctype html><main id=app></main>");
+  const scriptBytes = new TextEncoder().encode("console.log('portal')");
+  return Object.freeze({
+    shell: () => ({
+      name: "index.html",
+      digest: "b".repeat(64),
+      byteLength: shellBytes.byteLength,
+      contentType: "text/html; charset=utf-8",
+      bytes: shellBytes,
+    }),
+    asset: (name: string) =>
+      name === "app.abc123.js"
+        ? {
+            name,
+            digest: "a".repeat(64),
+            byteLength: scriptBytes.byteLength,
+            contentType: "text/javascript; charset=utf-8",
+            bytes: scriptBytes,
+          }
+        : undefined,
+  });
 }
 
 function invalidButFramedSubmission() {

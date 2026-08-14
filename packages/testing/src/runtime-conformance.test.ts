@@ -143,6 +143,7 @@ function instantiate(service: RuntimeCommandService, commandId = "command_instan
       phase: runtimeFixture.phase,
       approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
       escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+      allowancePolicy: runtimeFixture.allowancePolicy,
     },
   });
   const receipt = service.submit(command, admission.at());
@@ -885,7 +886,9 @@ describe("transport-independent runtime command conformance", () => {
         commandId: "command_restore-expired",
       };
     }
-    expect(() => restore(forgedTerminal)).toThrow(/deterministic refusal/);
+    expect(() => restore(forgedTerminal)).toThrow(
+      /deterministic refusal|receipt or authorization decision/u,
+    );
   });
 
   it("rejects malformed and oversized protocol inputs before creating receipts", () => {
@@ -1397,6 +1400,7 @@ function instantiatePayload() {
     phase: runtimeFixture.phase,
     approvalPolicy: { policy: "approval-required" as const, authority: runtimePrincipal },
     escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+    allowancePolicy: runtimeFixture.allowancePolicy,
   };
 }
 

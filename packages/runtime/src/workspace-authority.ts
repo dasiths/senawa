@@ -17,6 +17,15 @@ export interface RunExecutionBinding {
   readonly runId: string;
   readonly configurationSnapshotDigest: string;
   readonly execution: ParallelExecutionPolicy;
+  readonly allowancePolicy: RunnerAllowancePolicy;
+}
+
+export interface RunnerAllowancePolicy {
+  readonly policyDigest: string;
+  readonly ceilings: readonly {
+    readonly unit: string;
+    readonly maximum: number;
+  }[];
 }
 
 export type WorkspaceLifecycleState =

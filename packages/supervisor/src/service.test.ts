@@ -251,6 +251,7 @@ describe("SupervisorService lifecycle", () => {
         phase: runtimeFixture.phase,
         approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
         escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+        allowancePolicy: runtimeFixture.allowancePolicy,
       },
     });
     authority.accept({
@@ -308,6 +309,7 @@ describe("SupervisorService lifecycle", () => {
         phase: runtimeFixture.phase,
         approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
         escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+        allowancePolicy: runtimeFixture.allowancePolicy,
       },
     });
     authority.accept({

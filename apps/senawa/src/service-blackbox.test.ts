@@ -126,6 +126,7 @@ describe("built supervisor service and thin CLI", () => {
         },
         approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
         escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+        allowancePolicy: runtimeFixture.allowancePolicy,
       },
     });
     expect(
@@ -709,6 +710,7 @@ describe("built supervisor service and thin CLI", () => {
         phase: runtimeFixture.phase,
         approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
         escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+        allowancePolicy: runtimeFixture.allowancePolicy,
       },
     });
     const { principal: _principal, transport: _transport, ...submission } = command;

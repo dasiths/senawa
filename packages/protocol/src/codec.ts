@@ -1,5 +1,6 @@
 import {
   type AmendmentDecisionKind,
+  type AnswerQuestionPayload,
   type ApplyApprovedAmendmentPayload,
   type AssuranceLevel,
   type AuthenticatedPrincipal,
@@ -11,6 +12,7 @@ import {
   type ErrorEnvelope,
   type EventReplayPage,
   type EventStreamFrame,
+  type GrantAllowancePayload,
   type JsonValue,
   type OpaqueIdentity,
   PROTOCOL_VERSION,
@@ -19,6 +21,7 @@ import {
   type ReceiptStatus,
   type RecordAmendmentDecisionPayload,
   type RecordIntegrationBarrierPayload,
+  type RunControlPayload,
   type RunIdentity,
   type SubmitAmendmentProposalPayload,
   type SupervisorAdmissionFacts,
@@ -98,7 +101,11 @@ const INTENT_TYPES = new Set<CommandIntent["type"]>([
   "apply-approved-amendment",
   "record-integration-barrier",
   "create-escalation",
+  "answer-question",
   "grant-allowance",
+  "pause-run",
+  "resume-run",
+  "end-run",
 ]);
 const RECEIPT_STATUSES = new Set<ReceiptStatus>([
   "queued",
@@ -210,6 +217,79 @@ export function decodeCommandSubmission(input: string | unknown): CommandSubmiss
 
 export function encodeCommandSubmission(input: unknown): string {
   return canonicalStringify(decodeCommandSubmission(input));
+}
+
+export function decodeAnswerQuestionPayload(input: string | unknown): AnswerQuestionPayload {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "submissionId",
+    "questionDigest",
+    "contextDigest",
+    "taskId",
+    "definitionGeneration",
+    "answer",
+  ]);
+  identity(object.submissionId, "$.submissionId");
+  digest(object.questionDigest, "$.questionDigest");
+  digest(object.contextDigest, "$.contextDigest");
+  identity(object.taskId, "$.taskId");
+  positiveSequence(object.definitionGeneration, "$.definitionGeneration");
+  return Object.freeze({
+    submissionId: object.submissionId as string,
+    questionDigest: object.questionDigest as string,
+    contextDigest: object.contextDigest as string,
+    taskId: object.taskId as string,
+    definitionGeneration: object.definitionGeneration as number,
+    answer: jsonValue(object.answer, "$.answer"),
+  });
+}
+
+export function encodeAnswerQuestionPayload(input: unknown): string {
+  return canonicalStringify(decodeAnswerQuestionPayload(input));
+}
+
+export function decodeGrantAllowancePayload(input: string | unknown): GrantAllowancePayload {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "escalationCommandId",
+    "operationId",
+    "escalationDigest",
+    "policyDigest",
+    "unit",
+    "expectedLimit",
+    "expectedRunModeRevision",
+    "increaseBy",
+  ]);
+  identity(object.escalationCommandId, "$.escalationCommandId");
+  identity(object.operationId, "$.operationId");
+  digest(object.escalationDigest, "$.escalationDigest");
+  digest(object.policyDigest, "$.policyDigest");
+  token(object.unit, "$.unit");
+  cursor(object.expectedLimit, "$.expectedLimit");
+  cursor(object.expectedRunModeRevision, "$.expectedRunModeRevision");
+  positiveSequence(object.increaseBy, "$.increaseBy");
+  return Object.freeze({
+    escalationCommandId: object.escalationCommandId as string,
+    operationId: object.operationId as string,
+    escalationDigest: object.escalationDigest as string,
+    policyDigest: object.policyDigest as string,
+    unit: object.unit as string,
+    expectedLimit: object.expectedLimit as number,
+    expectedRunModeRevision: object.expectedRunModeRevision as number,
+    increaseBy: object.increaseBy as number,
+  });
+}
+
+export function encodeGrantAllowancePayload(input: unknown): string {
+  return canonicalStringify(decodeGrantAllowancePayload(input));
+}
+
+export function decodeRunControlPayload(input: string | unknown): RunControlPayload {
+  const object = exactObject(decodeWireValue(input), "$", ["expectedRunModeRevision"]);
+  cursor(object.expectedRunModeRevision, "$.expectedRunModeRevision");
+  return Object.freeze({ expectedRunModeRevision: object.expectedRunModeRevision as number });
+}
+
+export function encodeRunControlPayload(input: unknown): string {
+  return canonicalStringify(decodeRunControlPayload(input));
 }
 
 export function decodeSubmitAmendmentProposalPayload(

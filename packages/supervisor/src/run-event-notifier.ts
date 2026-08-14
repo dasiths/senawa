@@ -3,9 +3,11 @@ import type { MutableRunEventNotifier } from "./contracts.js";
 export class InMemoryRunEventNotifier implements MutableRunEventNotifier {
   readonly #subscribers = new Map<string, Set<() => void>>();
   readonly #onNotify: (() => void) | undefined;
+  readonly #defer: boolean;
 
-  constructor(onNotify?: () => void) {
+  constructor(onNotify?: () => void, defer = false) {
     this.#onNotify = onNotify;
+    this.#defer = defer;
   }
 
   subscribe(repositoryId: string, runId: string, callback: () => void): () => void {
@@ -20,6 +22,14 @@ export class InMemoryRunEventNotifier implements MutableRunEventNotifier {
   }
 
   notify(repositoryId: string, runId: string): void {
+    if (this.#defer) {
+      queueMicrotask(() => this.#dispatch(repositoryId, runId));
+      return;
+    }
+    this.#dispatch(repositoryId, runId);
+  }
+
+  #dispatch(repositoryId: string, runId: string): void {
     try {
       this.#onNotify?.();
     } catch {

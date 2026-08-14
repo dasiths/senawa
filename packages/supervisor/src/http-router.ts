@@ -1,4 +1,4 @@
-import { validateOpaqueIdentity } from "@senawa/protocol";
+import { PORTAL_LIMITS, type PortalRecordKind, validateOpaqueIdentity } from "@senawa/protocol";
 
 const MAX_REQUEST_TARGET_LENGTH = 2_048;
 const DECIMAL_PATTERN = /^(?:0|[1-9][0-9]*)$/u;
@@ -25,7 +25,71 @@ export type SupervisorHttpRoute =
     }
   | { readonly kind: "portal-session-bootstrap" }
   | { readonly kind: "portal-bootstrap"; readonly token: string }
-  | { readonly kind: "portal-session" }
+  | { readonly kind: "portal-session-descriptor" | "portal-session-csrf" }
+  | { readonly kind: "portal-shell" }
+  | { readonly kind: "portal-asset"; readonly name: string }
+  | { readonly kind: "portal-repository-list"; readonly after?: string; readonly limit?: number }
+  | {
+      readonly kind: "portal-run-list";
+      readonly repositoryId: string;
+      readonly after?: string;
+      readonly limit?: number;
+    }
+  | {
+      readonly kind:
+        | "portal-run-overview"
+        | "portal-graph-summary"
+        | "portal-human-needs"
+        | "portal-question-list"
+        | "portal-artifact-list"
+        | "portal-workspace-list"
+        | "portal-integration-list";
+      readonly repositoryId: string;
+      readonly runId: string;
+      readonly after?: string;
+      readonly limit?: number;
+    }
+  | {
+      readonly kind: "portal-graph-nodes" | "portal-graph-edges";
+      readonly repositoryId: string;
+      readonly runId: string;
+      readonly graphRevision: string;
+      readonly afterCursor?: number;
+      readonly limit?: number;
+    }
+  | {
+      readonly kind: "portal-record";
+      readonly repositoryId: string;
+      readonly runId: string;
+      readonly recordKind: PortalRecordKind;
+      readonly digest: string;
+    }
+  | {
+      readonly kind:
+        | "portal-allowance-review"
+        | "portal-question"
+        | "portal-artifact"
+        | "portal-artifact-download";
+      readonly repositoryId: string;
+      readonly runId: string;
+      readonly resourceId: string;
+    }
+  | {
+      readonly kind: "portal-artifact-content";
+      readonly repositoryId: string;
+      readonly runId: string;
+      readonly resourceId: string;
+      readonly offset: number;
+      readonly length: number;
+    }
+  | {
+      readonly kind: "portal-receipt-window" | "portal-event-window";
+      readonly repositoryId: string;
+      readonly runId: string;
+      readonly afterCursor?: number;
+      readonly beforeCursor?: number;
+      readonly limit?: number;
+    }
   | {
       readonly kind:
         | "supervisor-status"
@@ -46,10 +110,20 @@ export class SupervisorHttpRouteError extends Error {
 }
 
 export function matchSupervisorHttpRoute(method: string, target: string): SupervisorHttpRoute {
+  if (target === "/portal/") {
+    if (method !== "GET") {
+      throw new SupervisorHttpRouteError(405, "Method is not allowed for this route");
+    }
+    return { kind: "portal-shell" };
+  }
   const { segments, query } = parseRequestTarget(target);
-  const route = matchPath(segments, query);
+  let route = matchPath(segments, query);
+  if (route.kind === "portal-session-descriptor" && method === "POST") {
+    route = { kind: "portal-session-csrf" };
+  }
   const expectedMethod =
     route.kind === "commands" ||
+    route.kind === "portal-session-csrf" ||
     route.kind === "portal-session-bootstrap" ||
     route.kind === "supervisor-drain" ||
     route.kind === "supervisor-stop" ||
@@ -169,7 +243,27 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
   }
   if (samePath(segments, ["api", "v1alpha1", "session"])) {
     requireQuery(query, []);
-    return { kind: "portal-session" };
+    return { kind: "portal-session-descriptor" };
+  }
+  if (segments.length === 3 && samePath(segments.slice(0, 2), ["portal", "assets"])) {
+    requireQuery(query, []);
+    return { kind: "portal-asset", name: validateAssetName(segments[2]) };
+  }
+  if (samePath(segments, ["api", "v1alpha1", "repositories"])) {
+    const page = lexicalPage(query, PORTAL_LIMITS.maxDiscoveryItems);
+    return { kind: "portal-repository-list", ...page };
+  }
+  if (
+    segments.length === 5 &&
+    samePath(segments.slice(0, 3), ["api", "v1alpha1", "repositories"]) &&
+    segments[4] === "runs"
+  ) {
+    const page = lexicalPage(query, PORTAL_LIMITS.maxDiscoveryItems);
+    return {
+      kind: "portal-run-list",
+      repositoryId: validateIdentity(segments[3]),
+      ...page,
+    };
   }
   if (
     segments.length >= 7 &&
@@ -179,6 +273,135 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
     const repositoryId = validateIdentity(segments[3]);
     const runId = validateIdentity(segments[5]);
     const suffix = segments.slice(6);
+    if (samePath(suffix, ["overview"])) {
+      requireQuery(query, []);
+      return { kind: "portal-run-overview", repositoryId, runId };
+    }
+    if (samePath(suffix, ["graph"])) {
+      requireQuery(query, []);
+      return { kind: "portal-graph-summary", repositoryId, runId };
+    }
+    if (samePath(suffix, ["graph", "nodes"]) || samePath(suffix, ["graph", "edges"])) {
+      requireQuery(query, ["revision", "after", "limit"], ["revision"]);
+      const graphRevision = query.get("revision");
+      if (graphRevision === null || !/^[0-9a-f]{64}$/u.test(graphRevision)) throw badTarget();
+      const afterCursor = optionalInteger(query, "after", 0, Number.MAX_SAFE_INTEGER);
+      const limit = optionalInteger(query, "limit", 1, PORTAL_LIMITS.maxGraphItems);
+      return {
+        kind: suffix[1] === "nodes" ? "portal-graph-nodes" : "portal-graph-edges",
+        repositoryId,
+        runId,
+        graphRevision,
+        ...(afterCursor === undefined ? {} : { afterCursor }),
+        ...(limit === undefined ? {} : { limit }),
+      };
+    }
+    if (suffix.length === 3 && suffix[0] === "records") {
+      requireQuery(query, []);
+      return {
+        kind: "portal-record",
+        repositoryId,
+        runId,
+        recordKind: validateRecordKind(suffix[1]),
+        digest: validateDigest(suffix[2]),
+      };
+    }
+    if (samePath(suffix, ["needs"])) {
+      return {
+        kind: "portal-human-needs",
+        repositoryId,
+        runId,
+        ...lexicalPage(query, PORTAL_LIMITS.maxHumanNeeds),
+      };
+    }
+    if (suffix.length === 2 && suffix[0] === "allowances") {
+      requireQuery(query, []);
+      return {
+        kind: "portal-allowance-review",
+        repositoryId,
+        runId,
+        resourceId: validateIdentity(suffix[1]),
+      };
+    }
+    if (samePath(suffix, ["questions"])) {
+      return {
+        kind: "portal-question-list",
+        repositoryId,
+        runId,
+        ...lexicalPage(query, PORTAL_LIMITS.maxHumanNeeds),
+      };
+    }
+    if (suffix.length === 2 && suffix[0] === "questions") {
+      requireQuery(query, []);
+      return {
+        kind: "portal-question",
+        repositoryId,
+        runId,
+        resourceId: validateIdentity(suffix[1]),
+      };
+    }
+    if (samePath(suffix, ["artifacts"])) {
+      return {
+        kind: "portal-artifact-list",
+        repositoryId,
+        runId,
+        ...lexicalPage(query, PORTAL_LIMITS.maxArtifactItems),
+      };
+    }
+    if (suffix.length === 2 && suffix[0] === "artifacts") {
+      requireQuery(query, []);
+      return {
+        kind: "portal-artifact",
+        repositoryId,
+        runId,
+        resourceId: validateIdentity(suffix[1]),
+      };
+    }
+    if (suffix.length === 3 && suffix[0] === "artifacts" && suffix[2] === "content") {
+      requireQuery(query, ["offset", "length"], ["offset", "length"]);
+      return {
+        kind: "portal-artifact-content",
+        repositoryId,
+        runId,
+        resourceId: validateIdentity(suffix[1]),
+        offset: requiredInteger(query, "offset", 0, Number.MAX_SAFE_INTEGER),
+        length: requiredInteger(query, "length", 1, PORTAL_LIMITS.maxArtifactPreviewBytes),
+      };
+    }
+    if (suffix.length === 3 && suffix[0] === "artifacts" && suffix[2] === "download") {
+      requireQuery(query, []);
+      return {
+        kind: "portal-artifact-download",
+        repositoryId,
+        runId,
+        resourceId: validateIdentity(suffix[1]),
+      };
+    }
+    if (samePath(suffix, ["workspaces"])) {
+      return {
+        kind: "portal-workspace-list",
+        repositoryId,
+        runId,
+        ...lexicalPage(query, PORTAL_LIMITS.maxWorkspaceItems),
+      };
+    }
+    if (samePath(suffix, ["integrations"])) {
+      return {
+        kind: "portal-integration-list",
+        repositoryId,
+        runId,
+        ...lexicalPage(query, PORTAL_LIMITS.maxIntegrationItems),
+      };
+    }
+    if (samePath(suffix, ["activity", "receipts"]) || samePath(suffix, ["activity", "events"])) {
+      const window = activityWindow(query);
+      return {
+        kind: suffix[1] === "receipts" ? "portal-receipt-window" : "portal-event-window",
+        repositoryId,
+        runId,
+        ...window,
+      };
+    }
     if (samePath(suffix, ["receipts"])) {
       return pageRoute("receipt-page", repositoryId, runId, query);
     }
@@ -238,6 +461,37 @@ function pageRoute(
   };
 }
 
+function lexicalPage(
+  query: URLSearchParams,
+  maximum: number,
+): { readonly after?: string; readonly limit?: number } {
+  requireQuery(query, ["after", "limit"]);
+  const after = query.get("after") ?? undefined;
+  if (after !== undefined) validateIdentity(after);
+  const limit = optionalInteger(query, "limit", 1, maximum);
+  return {
+    ...(after === undefined ? {} : { after }),
+    ...(limit === undefined ? {} : { limit }),
+  };
+}
+
+function activityWindow(query: URLSearchParams): {
+  readonly afterCursor?: number;
+  readonly beforeCursor?: number;
+  readonly limit?: number;
+} {
+  requireQuery(query, ["after", "before", "limit"]);
+  const afterCursor = optionalInteger(query, "after", 0, Number.MAX_SAFE_INTEGER);
+  const beforeCursor = optionalInteger(query, "before", 0, Number.MAX_SAFE_INTEGER);
+  if (afterCursor !== undefined && beforeCursor !== undefined) throw badTarget();
+  const limit = optionalInteger(query, "limit", 1, PORTAL_LIMITS.maxActivityItems);
+  return {
+    ...(afterCursor === undefined ? {} : { afterCursor }),
+    ...(beforeCursor === undefined ? {} : { beforeCursor }),
+    ...(limit === undefined ? {} : { limit }),
+  };
+}
+
 function requireQuery(
   query: URLSearchParams,
   allowed: readonly string[],
@@ -262,6 +516,34 @@ function optionalInteger(
   if (!DECIMAL_PATTERN.test(raw)) throw badTarget();
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw badTarget();
+  return value;
+}
+
+function requiredInteger(
+  query: URLSearchParams,
+  key: string,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = optionalInteger(query, key, minimum, maximum);
+  if (value === undefined) throw badTarget();
+  return value;
+}
+
+function validateDigest(value: string | undefined): string {
+  if (value === undefined || !/^[0-9a-f]{64}$/u.test(value)) throw badTarget();
+  return value;
+}
+
+function validateRecordKind(value: string | undefined): PortalRecordKind {
+  if (!new Set(["candidate", "gate", "decision", "closure", "escalation"]).has(value ?? "")) {
+    throw notFound();
+  }
+  return value as PortalRecordKind;
+}
+
+function validateAssetName(value: string | undefined): string {
+  if (value === undefined || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/u.test(value)) throw badTarget();
   return value;
 }
 

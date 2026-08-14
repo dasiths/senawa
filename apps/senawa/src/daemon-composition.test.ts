@@ -11,6 +11,8 @@ import type { QueuedEffectCommand, RuntimeDependencies } from "@senawa/runtime";
 import { SqliteContextBroker, SqliteRunnerAuthority } from "@senawa/storage-sqlite";
 import {
   acquireUnixSocketLock,
+  HttpSupervisorClient,
+  readPrivateCredential,
   releaseUnixSocketLock,
   SqliteSupervisorAuthority,
 } from "@senawa/supervisor";
@@ -116,6 +118,7 @@ describe("daemon worker composition", () => {
           phase: runtimeFixture.phase,
           approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
           escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+          allowancePolicy: runtimeFixture.allowancePolicy,
         },
       }),
       createAdmission: () => ({
@@ -199,6 +202,36 @@ describe("daemon worker composition", () => {
       },
     });
     await started.service.stop();
+  });
+
+  it("keeps daemon IPC and portal queries available when the static manifest is missing", async () => {
+    const { environment } = sandbox("senawa-daemon-missing-portal-", false);
+    environment.SENAWA_PORTAL_PORT = "0";
+    const started = await startSenawaService(environment);
+    try {
+      const status = await started.service.status();
+      const ipcAddress = status.listeners.find(({ kind }) => kind === "ipc")?.address;
+      const loopbackAddress = status.listeners.find(({ kind }) => kind === "loopback")?.address;
+      if (ipcAddress === undefined || loopbackAddress === undefined) {
+        throw new Error("Expected IPC and loopback listeners");
+      }
+      const credential = readPrivateCredential(started.paths.credentialPath);
+      const ipc = new HttpSupervisorClient({
+        socketPath: ipcAddress,
+        credential: credential.token,
+      });
+      const loopback = new HttpSupervisorClient({ baseUrl: loopbackAddress });
+      expect((await ipc.capabilities()).capabilities).toContain("portal-read-discovery");
+      await loopback.consumePortalBootstrap((await ipc.createPortalSession()).path);
+      expect(await loopback.listPortalRepositories()).toMatchObject({ repositories: [] });
+      const shell = await loopback.raw("GET", "/portal/");
+      expect(shell.status).toBe(503);
+      expect(JSON.parse(shell.body)).toMatchObject({ code: "service-unavailable" });
+      const lifecycle = await loopback.raw("GET", "/supervisor/v1alpha1/status");
+      expect(lifecycle.status).toBe(404);
+    } finally {
+      await started.service.stop();
+    }
   });
 
   it("removes the Unix socket and lock when a later listener fails to start", async () => {

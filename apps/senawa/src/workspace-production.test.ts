@@ -119,6 +119,7 @@ describe("production workspace composition", () => {
               phase: runtimeFixture.phase,
               approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
               escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+              allowancePolicy: runtimeFixture.allowancePolicy,
             },
           }),
           repositoryId: "repository_workspace-production",
@@ -143,6 +144,7 @@ describe("production workspace composition", () => {
       runId: "run_workspace-production",
       configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
       execution,
+      allowancePolicy: runtimeFixture.allowancePolicy,
     });
     const verified = await verifyGitRepository(fixture.command, {
       repositoryRoot: fixture.repositoryRoot,
@@ -734,6 +736,7 @@ describe("production workspace composition", () => {
               phase: runtimeFixture.phase,
               approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
               escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+              allowancePolicy: runtimeFixture.allowancePolicy,
             },
           }),
           repositoryId: runtimeFixture.repositoryId,

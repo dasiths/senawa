@@ -1,7 +1,7 @@
 ---
 title: CLI Reference
 description: Local supervisor, workflow, and configuration commands for Senawa alpha
-ms.date: 2026-08-13
+ms.date: 2026-08-14
 ms.topic: reference
 ---
 
@@ -76,6 +76,13 @@ Create a one-time portal bootstrap URL when the service has a loopback listener:
 ```bash
 senawa portal
 ```
+
+The command creates the capability through authenticated IPC and opens no
+daemon lifecycle route on loopback. Phase 11B exposes bounded portal query APIs
+and can host only a verified manifest supplied through
+`SENAWA_PORTAL_MANIFEST`. Without that generated manifest, the authenticated
+portal shell returns a typed unavailable response while service and query
+commands remain operational. The browser application is deferred to Phase 11C.
 
 Create a sensor-free `senawa.dev/workflow/v1alpha2` JSON example without
 overwriting an existing destination:

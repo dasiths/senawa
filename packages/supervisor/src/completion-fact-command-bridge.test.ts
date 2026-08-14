@@ -54,6 +54,7 @@ describe("CompletionFactCommandBridge", () => {
         phase: runtimeFixture.phase,
         approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
         escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+        allowancePolicy: runtimeFixture.allowancePolicy,
       },
     });
     authority.accept({

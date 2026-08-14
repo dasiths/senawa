@@ -8,11 +8,18 @@ import {
   PROTOCOL_LIMITS,
   PROTOCOL_VERSION,
 } from "@senawa/protocol";
+import { PageQueryError } from "@senawa/runtime";
 import { type AuthenticatedIngressContext, type SupervisorApi, SupervisorApiError } from "./api.js";
 import { SupervisorServiceUnavailableError } from "./command-queue.js";
 import type { SupervisorLogPage, SupervisorServiceStatus } from "./contracts.js";
 import { matchSupervisorHttpRoute, SupervisorHttpRouteError } from "./http-router.js";
 import { authenticateLocalCredential, type LocalCredential } from "./local-security.js";
+import { PortalApiError } from "./portal-api.js";
+import {
+  PORTAL_CONTENT_SECURITY_POLICY,
+  type PortalAsset,
+  type PortalAssetSource,
+} from "./portal-assets.js";
 import { type PortalSessionSecurity, readCookie } from "./session-security.js";
 import type { SseEventSource } from "./sse.js";
 
@@ -43,6 +50,7 @@ export interface SupervisorHttpHandlerOptions {
   readonly sse?: SseEventSource;
   readonly requestTimeoutMs?: number;
   readonly operations?: SupervisorOperations;
+  readonly portalAssets?: PortalAssetSource;
 }
 
 export interface SupervisorOperations {
@@ -64,6 +72,7 @@ export class SupervisorHttpHandler {
   readonly #sse: SseEventSource | undefined;
   readonly #requestTimeoutMs: number;
   readonly #operations: SupervisorOperations | undefined;
+  readonly #portalAssets: PortalAssetSource | undefined;
 
   constructor(options: SupervisorHttpHandlerOptions) {
     this.#api = options.api;
@@ -77,6 +86,7 @@ export class SupervisorHttpHandler {
     this.#sse = options.sse;
     this.#requestTimeoutMs = options.requestTimeoutMs ?? 15_000;
     this.#operations = options.operations;
+    this.#portalAssets = options.portalAssets;
     if (this.#transport === "ipc" && this.#credential === undefined) {
       throw new TypeError("IPC HTTP requires a local credential");
     }
@@ -226,7 +236,20 @@ export class SupervisorHttpHandler {
           response.end();
           return;
         }
-        case "portal-session": {
+        case "portal-session-descriptor": {
+          requireLoopback(this.#transport);
+          requireNoBody(request);
+          const state = this.#requiredSessions().sessionState(requiredValue(sessionToken));
+          if (state === undefined)
+            throw httpError("unauthorized", 401, "Portal session is invalid");
+          return sendJson(response, 200, {
+            apiVersion: PROTOCOL_VERSION,
+            expiresAt: new Date(state.expiresAt).toISOString(),
+            csrfMode: state.csrfMode,
+            capabilities: this.#api.capabilities().capabilities,
+          });
+        }
+        case "portal-session-csrf": {
           requireLoopback(this.#transport);
           requireNoBody(request);
           const csrfToken = this.#requiredSessions().issueCsrf(requiredValue(sessionToken));
@@ -234,6 +257,252 @@ export class SupervisorHttpHandler {
             throw httpError("command-conflict", 409, "CSRF token was already delivered");
           }
           return sendJson(response, 200, { csrfToken });
+        }
+        case "portal-shell":
+          requireLoopback(this.#transport);
+          requireNoBody(request);
+          return sendPortalAsset(response, request, this.#requiredPortalAssets().shell(), true);
+        case "portal-asset":
+          requireLoopback(this.#transport);
+          requireNoBody(request);
+          return sendPortalAsset(
+            response,
+            request,
+            this.#requiredPortalAssets().asset(route.name),
+            false,
+          );
+        case "portal-repository-list":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().query.listRepositories(route.after, route.limit),
+          );
+        case "portal-run-list":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().query.listRuns(route.repositoryId, route.after, route.limit),
+          );
+        case "portal-run-overview":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().required(
+              this.#requiredPortal().query.getRunOverview(route.repositoryId, route.runId),
+              "Run overview",
+            ),
+          );
+        case "portal-graph-summary":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().required(
+              this.#requiredPortal().query.getGraphSummary(route.repositoryId, route.runId),
+              "Graph",
+            ),
+          );
+        case "portal-graph-nodes":
+        case "portal-graph-edges": {
+          requireNoBody(request);
+          const query = this.#requiredPortal().query;
+          const value =
+            route.kind === "portal-graph-nodes"
+              ? query.listGraphNodes(
+                  route.repositoryId,
+                  route.runId,
+                  route.graphRevision,
+                  route.afterCursor,
+                  route.limit,
+                )
+              : query.listGraphEdges(
+                  route.repositoryId,
+                  route.runId,
+                  route.graphRevision,
+                  route.afterCursor,
+                  route.limit,
+                );
+          return sendJson(response, 200, value);
+        }
+        case "portal-record":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().required(
+              this.#requiredPortal().query.getImmutableRecord(
+                route.repositoryId,
+                route.runId,
+                route.recordKind,
+                route.digest,
+              ),
+              "Immutable review record",
+            ),
+          );
+        case "portal-human-needs":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().query.listHumanNeeds(
+              route.repositoryId,
+              route.runId,
+              route.after,
+              route.limit,
+            ),
+          );
+        case "portal-allowance-review":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().required(
+              this.#requiredPortal().query.getAllowanceReview(
+                route.repositoryId,
+                route.runId,
+                route.resourceId,
+              ),
+              "Allowance review",
+            ),
+          );
+        case "portal-question-list":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().query.listQuestions(
+              route.repositoryId,
+              route.runId,
+              route.after,
+              route.limit,
+            ),
+          );
+        case "portal-question":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().required(
+              this.#requiredPortal().query.getQuestion(
+                route.repositoryId,
+                route.runId,
+                route.resourceId,
+              ),
+              "Question",
+            ),
+          );
+        case "portal-artifact-list":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().query.listArtifacts(
+              route.repositoryId,
+              route.runId,
+              route.after,
+              route.limit,
+            ),
+          );
+        case "portal-artifact":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().required(
+              this.#requiredPortal().query.getArtifact(
+                route.repositoryId,
+                route.runId,
+                route.resourceId,
+              ),
+              "Artifact",
+            ),
+          );
+        case "portal-artifact-content":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().required(
+              this.#requiredPortal().query.readArtifactContent(
+                route.repositoryId,
+                route.runId,
+                route.resourceId,
+                route.offset,
+                route.length,
+              ),
+              "Artifact content",
+            ),
+          );
+        case "portal-artifact-download": {
+          requireNoBody(request);
+          const download = this.#requiredPortal().required(
+            this.#requiredPortal().query.downloadArtifact(
+              route.repositoryId,
+              route.runId,
+              route.resourceId,
+            ),
+            "Artifact download",
+          );
+          response.writeHead(200, {
+            "Cache-Control": "no-store",
+            "Content-Disposition": `attachment; filename="${download.filename}"`,
+            "Content-Length": download.bytes.byteLength,
+            "Content-Type": "application/octet-stream",
+            "X-Content-Type-Options": "nosniff",
+          });
+          response.end(download.bytes);
+          return;
+        }
+        case "portal-workspace-list":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().query.listWorkspaces(
+              route.repositoryId,
+              route.runId,
+              route.after,
+              route.limit,
+            ),
+          );
+        case "portal-integration-list":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().query.listIntegrations(
+              route.repositoryId,
+              route.runId,
+              route.after,
+              route.limit,
+            ),
+          );
+        case "portal-receipt-window":
+        case "portal-event-window": {
+          requireNoBody(request);
+          const query = {
+            ...(route.afterCursor === undefined ? {} : { after: route.afterCursor }),
+            ...(route.beforeCursor === undefined ? {} : { before: route.beforeCursor }),
+            ...(route.limit === undefined ? {} : { limit: route.limit }),
+          };
+          return sendJson(
+            response,
+            200,
+            route.kind === "portal-receipt-window"
+              ? this.#requiredPortal().query.listReceiptWindow(
+                  route.repositoryId,
+                  route.runId,
+                  query,
+                )
+              : this.#requiredPortal().query.listEventWindow(
+                  route.repositoryId,
+                  route.runId,
+                  query,
+                ),
+          );
         }
         case "event-stream":
           requireNoBody(request);
@@ -274,7 +543,14 @@ export class SupervisorHttpHandler {
 
   #authenticate(request: IncomingMessage, routeKind: string): string | undefined {
     if (this.#transport === "ipc") {
-      if (routeKind === "portal-bootstrap" || routeKind === "portal-session") throw notFound();
+      if (
+        routeKind === "portal-bootstrap" ||
+        routeKind === "portal-session-descriptor" ||
+        routeKind === "portal-session-csrf" ||
+        routeKind === "portal-shell" ||
+        routeKind === "portal-asset"
+      )
+        throw notFound();
       return undefined;
     }
     if (routeKind.startsWith("supervisor-")) throw notFound();
@@ -295,12 +571,14 @@ export class SupervisorHttpHandler {
     if (request.method === "POST") {
       if (originValues[0] !== this.#loopbackOrigin)
         throw httpError("forbidden", 403, "Origin is required");
-      const csrfValues = request.headersDistinct["x-senawa-csrf"] ?? [];
-      if (
-        csrfValues.length !== 1 ||
-        !this.#requiredSessions().validateCsrf(requiredValue(sessionToken), csrfValues[0])
-      ) {
-        throw httpError("forbidden", 403, "CSRF validation failed");
+      if (routeKind !== "portal-session-csrf") {
+        const csrfValues = request.headersDistinct["x-senawa-csrf"] ?? [];
+        if (
+          csrfValues.length !== 1 ||
+          !this.#requiredSessions().validateCsrf(requiredValue(sessionToken), csrfValues[0])
+        ) {
+          throw httpError("forbidden", 403, "CSRF validation failed");
+        }
       }
     }
     return sessionToken;
@@ -383,6 +661,7 @@ export class SupervisorHttpHandler {
       "X-Content-Type-Options": "nosniff",
     });
     response.flushHeaders();
+    response.write(": connected\n\n");
     const controller = new AbortController();
     const onClose = () => controller.abort();
     const sessionRemainingMs =
@@ -426,6 +705,20 @@ export class SupervisorHttpHandler {
       throw httpError("service-unavailable", 503, "Supervisor operations are unavailable");
     }
     return this.#operations;
+  }
+
+  #requiredPortal() {
+    if (this.#api.portal === undefined) {
+      throw httpError("service-unavailable", 503, "Portal query API is unavailable");
+    }
+    return this.#api.portal;
+  }
+
+  #requiredPortalAssets(): PortalAssetSource {
+    if (this.#portalAssets === undefined) {
+      throw httpError("service-unavailable", 503, "Portal assets are unavailable");
+    }
+    return this.#portalAssets;
   }
 }
 
@@ -537,6 +830,44 @@ function sendJson(
   response.end(body);
 }
 
+function sendPortalAsset(
+  response: ServerResponse,
+  request: IncomingMessage,
+  asset: PortalAsset | undefined,
+  shell: boolean,
+): void {
+  if (asset === undefined) throw notFound();
+  const etag = `"sha256-${asset.digest}"`;
+  const commonHeaders = {
+    "Content-Security-Policy": PORTAL_CONTENT_SECURITY_POLICY,
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+  } as const;
+  const ifNoneMatch = request.headersDistinct["if-none-match"] ?? [];
+  if (!shell && ifNoneMatch.length === 1 && ifNoneMatch[0] === etag) {
+    response.writeHead(304, {
+      ...commonHeaders,
+      "Cache-Control": "public, max-age=31536000, immutable",
+      ETag: etag,
+    });
+    response.end();
+    return;
+  }
+  if (ifNoneMatch.length > 1) {
+    throw httpError("invalid-request", 400, "If-None-Match is invalid");
+  }
+  response.writeHead(200, {
+    ...commonHeaders,
+    "Cache-Control": shell ? "no-store" : "public, max-age=31536000, immutable",
+    "Content-Length": asset.byteLength,
+    "Content-Type": asset.contentType,
+    ...(shell ? {} : { ETag: etag }),
+  });
+  response.end(asset.bytes);
+}
+
 function sendHttpError(response: ServerResponse, error: unknown): void {
   const mapped = mapHttpError(error);
   const envelope: ErrorEnvelope = {
@@ -554,6 +885,14 @@ function mapHttpError(error: unknown): {
   readonly message: string;
 } {
   if (error instanceof SupervisorApiError) return error;
+  if (error instanceof PortalApiError) return error;
+  if (error instanceof PageQueryError) {
+    return {
+      code: "stale-query",
+      status: 409,
+      message: "Portal query cursor or revision is stale",
+    };
+  }
   if (error instanceof SupervisorHttpRouteError) {
     return {
       code: error.status === 404 ? "not-found" : "invalid-request",

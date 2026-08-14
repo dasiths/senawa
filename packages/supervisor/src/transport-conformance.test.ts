@@ -744,6 +744,7 @@ function instantiateSubmission(commandId: string): CommandSubmission {
       phase: runtimeFixture.phase,
       approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
       escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+      allowancePolicy: runtimeFixture.allowancePolicy,
     },
   });
   const { principal: _principal, transport: _transport, ...submission } = envelope;

@@ -9,16 +9,18 @@
   },
   "scripts": {
     "benchmark:sqlite-authority": "pnpm build && node scripts/benchmark-sqlite-authority.mjs",
-    "build": "tsc -b && pnpm --filter @senawa/execution-host build:native",
+    "build": "tsc -b && pnpm --filter @senawa/portal build && pnpm --filter @senawa/execution-host build:native",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "docs:links": "node scripts/check-markdown-links.mjs",
     "format": "biome format --write .",
     "lint": "biome check .",
     "test": "vitest run --passWithNoTests",
+    "test:portal": "pnpm build && playwright test",
     "typecheck": "tsc -b --pretty false"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.4",
+    "@playwright/test": "1.62.1",
     "@types/node": "22.17.2",
     "typescript": "5.8.3",
     "vitest": "3.2.4"

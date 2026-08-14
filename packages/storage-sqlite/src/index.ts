@@ -38,21 +38,66 @@ import {
   validateWorkflowGraph,
 } from "@senawa/kernel";
 import {
+  type CommandEnvelope,
+  canonicalBytes,
   canonicalStringify,
   type DurableReceipt,
+  decodeAnswerQuestionPayload,
   decodeApplyApprovedAmendmentPayload,
   decodeCanonicalJsonValue,
   decodeCommandEnvelope,
   decodeDurableReceipt,
   decodeEventReplayPage,
   decodeEventStreamFrame,
+  decodeGrantAllowancePayload,
+  decodePortalAllowanceReview,
+  decodePortalArtifactContent,
+  decodePortalArtifactPage,
+  decodePortalEventWindow,
+  decodePortalGraphEdgePage,
+  decodePortalGraphNodePage,
+  decodePortalGraphSummary,
+  decodePortalHumanNeedPage,
+  decodePortalImmutableRecord,
+  decodePortalIntegrationPage,
+  decodePortalQuestionPage,
+  decodePortalQuestionRecord,
+  decodePortalReceiptWindow,
+  decodePortalRepositoryPage,
+  decodePortalRunOverview,
+  decodePortalRunPage,
+  decodePortalWorkspacePage,
   decodeReceiptPage,
+  decodeRunControlPayload,
   decodeSupervisorAdmissionFacts,
   decodeSupervisorReceipt,
   decodeSupervisorServiceRecord,
   decodeSupervisorWake,
   type EventReplayPage,
   type EventStreamFrame,
+  type JsonValue,
+  PORTAL_LIMITS,
+  type PortalAllowanceReview,
+  type PortalArtifactContent,
+  type PortalArtifactMetadata,
+  type PortalArtifactPage,
+  type PortalEventWindow,
+  type PortalGraphEdgePage,
+  type PortalGraphNodePage,
+  type PortalGraphSummary,
+  type PortalHumanNeed,
+  type PortalHumanNeedPage,
+  type PortalImmutableRecord,
+  type PortalIntegrationPage,
+  type PortalQuestionPage,
+  type PortalQuestionRecord,
+  type PortalReceiptWindow,
+  type PortalRecordKind,
+  type PortalRepositoryPage,
+  type PortalRunOverview,
+  type PortalRunPage,
+  type PortalSyncVector,
+  type PortalWorkspacePage,
   PROTOCOL_LIMITS,
   PROTOCOL_VERSION,
   type ProjectionEnvelope,
@@ -102,6 +147,7 @@ import {
   type QueuedEffectCommand,
   type RegisterWorkerDispatchInput,
   type RunExecutionBinding,
+  type RunnerAllowancePolicy,
   type RunnerAuthorityPort,
   type RunnerAuthoritySnapshot,
   type RunnerBudgetState,
@@ -122,6 +168,8 @@ import {
   type SubmissionAdmissionResult,
   selectEffectAttemptAction,
   type TaskScopeCurrentness,
+  type TrustedHumanAuthorityDecision,
+  type TrustedRuntimeCommandFacts,
   taskScopeKey,
   type WorkspaceIntegrationAuthorityPort,
   type WorkspaceIntentInput,
@@ -132,7 +180,7 @@ import {
 } from "@senawa/runtime";
 import Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 8;
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 const WAL_AUTOCHECKPOINT_PAGES = 16_384;
 const MIGRATIONS_DIRECTORY = fileURLToPath(new URL("../migrations", import.meta.url));
@@ -156,6 +204,18 @@ export interface SqliteAuthorityOptions {
   readonly dependencies: RuntimeDependencies;
   readonly busyTimeoutMs?: number;
   readonly faultInjector?: (point: SqliteFaultPoint) => void;
+}
+
+export interface SqlitePortalQueryAuthorityOptions {
+  readonly databasePath: string;
+  readonly assetDirectory: string;
+  readonly dependencies: RuntimeDependencies;
+}
+
+export interface PortalArtifactDownload {
+  readonly bytes: Uint8Array;
+  readonly filename: string;
+  readonly digest: string;
 }
 
 export interface AssetDescriptor {
@@ -228,6 +288,28 @@ export interface SqliteRunnerAuthorityOptions {
   readonly faultInjector?: (point: SqliteRunnerFaultPoint) => void;
 }
 
+export type RunControlMode = "running" | "paused" | "ending" | "ended";
+
+export interface RunControlState {
+  readonly repositoryId: string;
+  readonly runId: string;
+  readonly mode: RunControlMode;
+  readonly revision: number;
+  readonly changedAt: string;
+}
+
+export interface FreshDispatchRequirement {
+  readonly submissionId: string;
+  readonly repositoryId: string;
+  readonly runId: string;
+  readonly historicalDispatchId: string;
+  readonly contextDigest: string;
+  readonly taskId: string;
+  readonly definitionGeneration: number;
+  readonly requirementDigest: string;
+  readonly createdAt: string;
+}
+
 export type SqliteWorkspaceAuthorityFaultPoint =
   | "before-workspace-intent-commit"
   | "after-workspace-intent-commit-before-ack"
@@ -279,6 +361,40 @@ interface AssetRow {
   readonly byte_length: number;
   readonly media_type: string | null;
   readonly relative_path: string;
+}
+
+interface PortalRevisionRow {
+  readonly workflow_revision: number;
+  readonly context_revision: number;
+  readonly runner_revision: number;
+  readonly workspace_revision: number;
+  readonly human_revision: number;
+  readonly portal_revision: number;
+}
+
+interface PortalQuestionQueryRow {
+  readonly submission_id: string;
+  readonly canonical_question: string;
+  readonly answer_id: string | null;
+  readonly answer_digest: string | null;
+  readonly canonical_answer: string | null;
+  readonly principal_digest: string | null;
+  readonly answered_at: string | null;
+  readonly requirement_digest: string | null;
+  readonly created_at: string | null;
+  readonly satisfied_by_dispatch_id: string | null;
+  readonly canonical_event: string | null;
+}
+
+interface PortalAllowanceQueryRow {
+  readonly command_id: string;
+  readonly canonical_escalation: string;
+  readonly budget_limit: number;
+  readonly policy_digest: string;
+  readonly canonical_policy: string;
+  readonly mode: RunControlMode;
+  readonly run_mode_revision: number;
+  readonly canonical_authority: string;
 }
 
 interface BackupManifest {
@@ -456,7 +572,7 @@ export class SqliteAuthority
         this.#cachedService = new RuntimeCommandService(this.dependencies, this.#cachedAuthority);
         this.#cachedRevision = before.revision;
       }
-      const trustedFacts =
+      const trustedFacts: TrustedRuntimeCommandFacts =
         command.intent.type === "apply-approved-amendment"
           ? {
               amendmentQuiescence: buildTrustedAmendmentQuiescence(
@@ -467,7 +583,18 @@ export class SqliteAuthority
                 this.dependencies,
               ),
             }
-          : {};
+          : isHumanAuthorityIntent(command.intent.type) &&
+              this.dependencies.authorization.authorize(command.principal, command.intent)
+            ? {
+                humanAuthority: buildTrustedHumanAuthorityDecision(
+                  this.#database,
+                  this.#cachedService,
+                  command,
+                  admission.currentTime,
+                  this.dependencies,
+                ),
+              }
+            : {};
       const receipt = this.#cachedService.submitWithTrustedFacts(input, admission, trustedFacts);
       let after = before.canonical_json;
       if (!this.#cachedCanonicalSnapshot.hasCommand(receipt.commandId)) {
@@ -514,6 +641,22 @@ export class SqliteAuthority
         }
         if (command.intent.type === "apply-approved-amendment" && receipt.status === "completed") {
           this.#fault("after-amendment-application");
+        }
+        if (command.intent.type === "instantiate-run" && receipt.status === "completed") {
+          initializeRunControl(this.#database, command, admission.currentTime);
+        }
+        if (
+          isHumanAuthorityIntent(command.intent.type) &&
+          receipt.status === "completed" &&
+          trustedFacts.humanAuthority?.result !== undefined
+        ) {
+          persistTrustedHumanAuthorityDecision(
+            this.#database,
+            command,
+            admission.currentTime,
+            trustedFacts.humanAuthority.result,
+            this.dependencies,
+          );
         }
         this.#cachedRevision = before.revision + 1;
       }
@@ -650,6 +793,69 @@ export class SqliteAuthority
 
   queryRunScheduling(repositoryId: string, runId: string) {
     return this.#readService().queryRunScheduling(repositoryId, runId);
+  }
+
+  queryRunControl(repositoryId: string, runId: string): RunControlState | undefined {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    const row = this.#database
+      .prepare<[string], { mode: RunControlMode; revision: number; changed_at: string }>(
+        `SELECT mode, revision, changed_at FROM run_control_state
+         WHERE run_key = ?`,
+      )
+      .get(canonicalStringify([repositoryId, runId]));
+    return row === undefined
+      ? undefined
+      : Object.freeze({
+          repositoryId,
+          runId,
+          mode: row.mode,
+          revision: row.revision,
+          changedAt: row.changed_at,
+        });
+  }
+
+  listFreshDispatchRequirements(
+    repositoryId: string,
+    runId: string,
+  ): readonly FreshDispatchRequirement[] {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    return Object.freeze(
+      this.#database
+        .prepare<
+          [string],
+          {
+            submission_id: string;
+            historical_dispatch_id: string;
+            context_digest: string;
+            task_id: string;
+            definition_generation: number;
+            requirement_digest: string;
+            created_at: string;
+          }
+        >(
+          `SELECT submission_id, historical_dispatch_id, context_digest, task_id,
+                  definition_generation, requirement_digest, created_at
+           FROM context_fresh_dispatch_requirements
+           WHERE run_key = ? AND satisfied_by_dispatch_id IS NULL
+           ORDER BY task_id, definition_generation, submission_id`,
+        )
+        .all(canonicalStringify([repositoryId, runId]))
+        .map((row) =>
+          Object.freeze({
+            submissionId: row.submission_id,
+            repositoryId,
+            runId,
+            historicalDispatchId: row.historical_dispatch_id,
+            contextDigest: row.context_digest,
+            taskId: row.task_id,
+            definitionGeneration: row.definition_generation,
+            requirementDigest: row.requirement_digest,
+            createdAt: row.created_at,
+          }),
+        ),
+    );
   }
 
   toCanonicalJson(): string {
@@ -888,6 +1094,20 @@ export class SqliteAuthority
               "INSERT INTO assets(digest, byte_length, media_type, relative_path) VALUES (?, ?, ?, ?)",
             )
             .run(digest, bytes.byteLength, mediaType ?? null, relativePath);
+          this.#database
+            .prepare(
+              `UPDATE portal_run_revisions
+               SET context_revision = context_revision + 1,
+                   portal_revision = portal_revision + 1
+               WHERE EXISTS (
+                 SELECT 1 FROM context_submissions s
+                 WHERE s.repository_id = portal_run_revisions.repository_id
+                   AND s.run_id = portal_run_revisions.run_id
+                   AND s.submission_type = 'asset'
+                   AND json_extract(s.canonical_submission, '$.asset.contentDigest') = ?
+               )`,
+            )
+            .run(digest);
         } else {
           assertSameDescriptor(current, descriptor);
         }
@@ -985,6 +1205,2151 @@ export class SqliteAuthority
   }
 }
 
+export class SqlitePortalQueryAuthority {
+  readonly databasePath: string;
+  readonly assetDirectory: string;
+  readonly dependencies: RuntimeDependencies;
+  readonly #database: Database.Database;
+
+  constructor(options: SqlitePortalQueryAuthorityOptions) {
+    this.databasePath = resolve(options.databasePath);
+    this.assetDirectory = resolve(options.assetDirectory);
+    this.dependencies = options.dependencies;
+    this.#database = openReadConnection(this.databasePath);
+    const version = this.#database.pragma("user_version", { simple: true }) as number;
+    if (version !== CURRENT_SCHEMA_VERSION) {
+      this.#database.close();
+      throw new UnsupportedSchemaVersionError(version);
+    }
+    verifyPortalRevisionTables(this.#database);
+  }
+
+  close(): void {
+    if (this.#database.open) this.#database.close();
+  }
+
+  listRepositories(after?: string, limit = PORTAL_LIMITS.maxDiscoveryItems): PortalRepositoryPage {
+    if (after !== undefined) validateOpaqueIdentity(after);
+    validatePortalLimit(limit, PORTAL_LIMITS.maxDiscoveryItems);
+    const rows = this.#database
+      .prepare<
+        [string, number],
+        { repository_id: string; portal_revision: number; run_count: number }
+      >(
+        `SELECT r.repository_id, MAX(p.portal_revision) AS portal_revision,
+                COUNT(p.run_id) AS run_count
+         FROM repositories r
+         JOIN portal_run_revisions p ON p.repository_id = r.repository_id
+         WHERE r.repository_id > ?
+         GROUP BY r.repository_id
+         ORDER BY r.repository_id LIMIT ?`,
+      )
+      .all(after ?? "", limit + 1);
+    return decodePortalRepositoryPage({
+      apiVersion: PROTOCOL_VERSION,
+      ...(after === undefined ? {} : { after }),
+      hasMore: rows.length > limit,
+      repositories: rows.slice(0, limit).map((row) => ({
+        repositoryId: row.repository_id,
+        displayName: row.repository_id,
+        portalRevision: row.portal_revision,
+        runCount: row.run_count,
+      })),
+    });
+  }
+
+  listRuns(
+    repositoryId: string,
+    after?: string,
+    limit = PORTAL_LIMITS.maxDiscoveryItems,
+  ): PortalRunPage {
+    validateOpaqueIdentity(repositoryId);
+    if (after !== undefined) validateOpaqueIdentity(after);
+    validatePortalLimit(limit, PORTAL_LIMITS.maxDiscoveryItems);
+    const rows = this.#database
+      .prepare<
+        [string, string, number],
+        {
+          run_id: string;
+          cursor: number;
+          projection_generated_at: string | null;
+          mode: RunControlMode | null;
+          run_mode_revision: number | null;
+          changed_at: string | null;
+          workflow_revision: number;
+          context_revision: number;
+          runner_revision: number;
+          workspace_revision: number;
+          human_revision: number;
+          portal_revision: number;
+        }
+      >(
+        `SELECT r.run_id, r.cursor, r.projection_generated_at,
+                c.mode, c.revision AS run_mode_revision, c.changed_at,
+                p.workflow_revision, p.context_revision, p.runner_revision,
+                p.workspace_revision, p.human_revision, p.portal_revision
+         FROM runs r
+         JOIN portal_run_revisions p
+           ON p.repository_id = r.repository_id AND p.run_id = r.run_id
+         LEFT JOIN run_control_state c ON c.run_key = r.run_key
+         WHERE r.repository_id = ? AND r.run_id > ?
+         ORDER BY r.run_id LIMIT ?`,
+      )
+      .all(repositoryId, after ?? "", limit + 1);
+    const service = this.#runtimeService();
+    return decodePortalRunPage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      ...(after === undefined ? {} : { after }),
+      hasMore: rows.length > limit,
+      runs: rows.slice(0, limit).map((row) => {
+        const scheduling = service.queryRunScheduling(repositoryId, row.run_id);
+        if (scheduling === undefined) {
+          throw new Error("Portal run discovery requires an instantiated runtime graph");
+        }
+        const vector = this.#syncVector(repositoryId, row.run_id, scheduling.graph.revisionDigest);
+        const mode = row.mode ?? "running";
+        return {
+          repositoryId,
+          runId: row.run_id,
+          displayName: row.run_id,
+          workflowName: scheduling.graph.workflowId,
+          mode,
+          runModeRevision: row.run_mode_revision ?? 0,
+          terminal: mode === "ended",
+          updatedAt: row.changed_at ?? row.projection_generated_at ?? "1970-01-01T00:00:00.000Z",
+          sync: vector,
+        };
+      }),
+    });
+  }
+
+  getRunOverview(repositoryId: string, runId: string): PortalRunOverview | undefined {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    const row = this.#database
+      .prepare<
+        [string, string],
+        {
+          cursor: number;
+          projection_generated_at: string | null;
+          mode: RunControlMode | null;
+          run_mode_revision: number | null;
+          changed_at: string | null;
+        }
+      >(
+        `SELECT r.cursor, r.projection_generated_at, c.mode,
+                c.revision AS run_mode_revision, c.changed_at
+         FROM runs r LEFT JOIN run_control_state c ON c.run_key = r.run_key
+         WHERE r.repository_id = ? AND r.run_id = ?`,
+      )
+      .get(repositoryId, runId);
+    if (row === undefined) return undefined;
+    const service = this.#runtimeService();
+    const scheduling = service.queryRunScheduling(repositoryId, runId);
+    if (scheduling === undefined) return undefined;
+    const graph = scheduling.graph;
+    const runnerCounts = this.#database
+      .prepare<[string], { active_effects: number; uncertain_effects: number }>(
+        `SELECT
+           COUNT(CASE WHEN latest.status = 'active' THEN 1 END) AS active_effects,
+           COUNT(CASE WHEN latest.status = 'unknown' THEN 1 END) AS uncertain_effects
+         FROM (
+           SELECT o.status
+           FROM runner_effect_outcomes o
+           JOIN runner_effect_intents i ON i.intent_id = o.intent_id
+           WHERE i.run_key = ?
+             AND o.commit_cursor = (
+               SELECT MAX(next.commit_cursor) FROM runner_effect_outcomes next
+               WHERE next.intent_id = o.intent_id
+             )
+         ) latest`,
+      )
+      .get(canonicalStringify([repositoryId, runId])) ?? {
+      active_effects: 0,
+      uncertain_effects: 0,
+    };
+    const counts = graph.nodes.reduce(
+      (current, node) => ({
+        phases: current.phases + (node.kind === "phase" ? 1 : 0),
+        tasks: current.tasks + (node.kind === "task" ? 1 : 0),
+        criteria: current.criteria + (node.kind === "criterion" ? 1 : 0),
+      }),
+      { phases: 0, tasks: 0, criteria: 0 },
+    );
+    const mode = row.mode ?? "running";
+    return decodePortalRunOverview({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      displayName: runId,
+      workflowName: graph.workflowId,
+      mode,
+      runModeRevision: row.run_mode_revision ?? 0,
+      terminal: mode === "ended",
+      updatedAt: row.changed_at ?? row.projection_generated_at ?? "1970-01-01T00:00:00.000Z",
+      sync: this.#syncVector(repositoryId, runId, graph.revisionDigest),
+      counts: {
+        ...counts,
+        humanNeeds: this.#humanNeeds(repositoryId, runId).length,
+        activeEffects: runnerCounts.active_effects,
+        uncertainEffects: runnerCounts.uncertain_effects,
+      },
+    });
+  }
+
+  getGraphSummary(repositoryId: string, runId: string): PortalGraphSummary | undefined {
+    const graph = this.#graph(repositoryId, runId);
+    return graph === undefined
+      ? undefined
+      : decodePortalGraphSummary({
+          apiVersion: PROTOCOL_VERSION,
+          repositoryId,
+          runId,
+          graphRevision: graph.revisionDigest,
+          nodeCount: graph.nodes.length,
+          edgeCount: graph.edges.length,
+          jsonNodeBudget: PORTAL_LIMITS.jsonViewerNodeBudget,
+        });
+  }
+
+  listGraphNodes(
+    repositoryId: string,
+    runId: string,
+    graphRevision: string,
+    after = 0,
+    limit = PORTAL_LIMITS.maxGraphItems,
+  ): PortalGraphNodePage {
+    validatePortalOffset(after);
+    validatePortalLimit(limit, PORTAL_LIMITS.maxGraphItems);
+    const graph = this.#requiredGraphRevision(repositoryId, runId, graphRevision);
+    const nodes = graph.nodes.slice(after, after + limit);
+    return decodePortalGraphNodePage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      graphRevision,
+      after,
+      nextAfter: after + nodes.length,
+      hasMore: after + nodes.length < graph.nodes.length,
+      nodes: nodes.map((node) => {
+        const definition = node.definition;
+        const parentNodeId = "parentId" in definition ? definition.parentId : undefined;
+        const supersededBy = graph.edges.find(
+          (edge) => edge.kind === "supersedes" && edge.to === definition.id,
+        )?.from;
+        return {
+          nodeId: definition.id,
+          kind: node.kind,
+          title: definition.key,
+          definitionGeneration: definition.generation,
+          lifecycle: "defined",
+          ...(parentNodeId === undefined ? {} : { parentNodeId }),
+          ...(definition.source.pointer.length === 0
+            ? {}
+            : { sourcePointer: definition.source.pointer }),
+          ...(definition.input === null ? {} : { normalizedInput: definition.input as JsonValue }),
+          ...(node.kind === "task" ? { completionPolicy: node.definition.completionPolicy } : {}),
+          ...(supersededBy === undefined ? {} : { supersededBy }),
+          humanNeedCount: 0,
+          evidenceCount: 0,
+        };
+      }),
+    });
+  }
+
+  listGraphEdges(
+    repositoryId: string,
+    runId: string,
+    graphRevision: string,
+    after = 0,
+    limit = PORTAL_LIMITS.maxGraphItems,
+  ): PortalGraphEdgePage {
+    validatePortalOffset(after);
+    validatePortalLimit(limit, PORTAL_LIMITS.maxGraphItems);
+    const graph = this.#requiredGraphRevision(repositoryId, runId, graphRevision);
+    const edges = graph.edges.slice(after, after + limit);
+    return decodePortalGraphEdgePage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      graphRevision,
+      after,
+      nextAfter: after + edges.length,
+      hasMore: after + edges.length < graph.edges.length,
+      edges: edges.map((edge) => ({
+        edgeId: this.dependencies.sha256.digest(canonicalBytes(edge)),
+        fromNodeId: edge.from,
+        toNodeId: edge.to,
+        kind:
+          edge.kind === "contains"
+            ? "containment"
+            : edge.kind === "depends-on"
+              ? "dependency"
+              : "supersession",
+      })),
+    });
+  }
+
+  getImmutableRecord(
+    repositoryId: string,
+    runId: string,
+    kind: PortalRecordKind,
+    digestValue: string,
+  ): PortalImmutableRecord | undefined {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    if (!isSha256Digest(digestValue)) throw new TypeError("record digest must be a SHA-256 digest");
+    const graph = this.#graph(repositoryId, runId);
+    if (graph === undefined) return undefined;
+    const run = this.#runtimeRecordRow(repositoryId, runId);
+    if (run === undefined) return undefined;
+    let body: JsonValue | undefined;
+    if (kind === "escalation") {
+      const escalation = this.#database
+        .prepare<[string], { command_id: string; canonical_escalation: string }>(
+          `SELECT command_id, canonical_escalation FROM runner_escalations
+           WHERE run_key = ? ORDER BY command_id`,
+        )
+        .all(canonicalStringify([repositoryId, runId]))
+        .find(
+          (row) =>
+            this.dependencies.sha256.digest(
+              canonicalBytes(decodeCanonicalJsonValue(row.canonical_escalation)),
+            ) === digestValue,
+        );
+      body =
+        escalation === undefined
+          ? undefined
+          : decodeCanonicalJsonValue(escalation.canonical_escalation);
+    } else {
+      const records = decodeCanonicalJsonValue(run.records_json);
+      body = findRuntimeReviewRecord(records, kind, digestValue);
+      if (kind === "candidate" && body !== undefined) {
+        const gateEvidenceDigest = findCandidateGateEvidenceDigest(records, digestValue);
+        body = {
+          candidate: body,
+          ...(gateEvidenceDigest === undefined ? {} : { gateEvidenceDigest }),
+        };
+      }
+    }
+    if (body === undefined) return undefined;
+    return decodePortalImmutableRecord({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      kind,
+      recordId: digestValue,
+      digest: digestValue,
+      graphRevision: graph.revisionDigest,
+      recordedAt: run.projection_generated_at,
+      body,
+    });
+  }
+
+  getAllowanceReview(
+    repositoryId: string,
+    runId: string,
+    escalationCommandId: string,
+  ): PortalAllowanceReview | undefined {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    validateOpaqueIdentity(escalationCommandId);
+    const row = this.#database
+      .prepare<[string, string], PortalAllowanceQueryRow>(
+        `SELECT e.command_id, e.canonical_escalation, b.budget_limit,
+                p.policy_digest, p.canonical_policy, c.mode,
+                c.revision AS run_mode_revision,
+                a.canonical_json AS canonical_authority
+         FROM runner_escalations e
+         JOIN runner_budgets b
+           ON b.run_key = e.run_key
+          AND b.unit = json_extract(e.canonical_escalation, '$.unit')
+         JOIN runner_allowance_policies p ON p.run_key = e.run_key
+         LEFT JOIN runner_allowance_resolutions r
+           ON r.escalation_command_id = e.command_id
+         JOIN run_control_state c ON c.run_key = e.run_key
+         JOIN authority_state a ON a.singleton = 1
+         WHERE e.run_key = ? AND e.command_id = ?
+           AND r.escalation_command_id IS NULL
+         LIMIT 1`,
+      )
+      .get(canonicalStringify([repositoryId, runId]), escalationCommandId);
+    if (row === undefined || (row.mode !== "running" && row.mode !== "paused")) return undefined;
+    try {
+      const escalation = requiredJsonRecord(
+        decodeCanonicalJsonValue(row.canonical_escalation),
+        "Portal allowance escalation",
+      );
+      const policy = requiredJsonRecord(
+        decodeCanonicalJsonValue(row.canonical_policy),
+        "Portal allowance policy",
+      );
+      const ceilings = policy.ceilings;
+      if (!Array.isArray(ceilings)) return undefined;
+      const unit = requiredStringField(escalation.unit, "allowance escalation unit");
+      const ceiling = ceilings.find((value) => optionalJsonRecord(value)?.unit === unit);
+      const maximum = optionalJsonRecord(ceiling)?.maximum;
+      const service = new RuntimeCommandService(
+        this.dependencies,
+        InMemoryAuthority.fromCanonicalJson(row.canonical_authority, this.dependencies),
+      );
+      const execution = service.queryRunExecution(repositoryId, runId);
+      const graph = service.queryRunScheduling(repositoryId, runId)?.graph;
+      if (
+        escalation.commandId !== row.command_id ||
+        policy.policyDigest !== row.policy_digest ||
+        execution === undefined ||
+        canonicalStringify(execution.allowancePolicy) !== row.canonical_policy ||
+        graph === undefined ||
+        typeof maximum !== "number" ||
+        !Number.isSafeInteger(maximum) ||
+        !Number.isSafeInteger(row.budget_limit) ||
+        maximum <= row.budget_limit
+      ) {
+        return undefined;
+      }
+      const escalationDigest = this.dependencies.sha256.digest(canonicalBytes(escalation));
+      const maxIncrease = maximum - row.budget_limit;
+      return decodePortalAllowanceReview({
+        apiVersion: PROTOCOL_VERSION,
+        repositoryId,
+        runId,
+        escalationCommandId: row.command_id,
+        escalationDigest,
+        operationId: escalation.operationId,
+        unit,
+        requested: escalation.requested,
+        available: escalation.available,
+        createdAt: escalation.createdAt,
+        currentLimit: row.budget_limit,
+        maxIncrease,
+        ceiling: maximum,
+        allowancePolicyDigest: row.policy_digest,
+        resultingMax: row.budget_limit + maxIncrease,
+        expectedGraphRevision: graph.revisionDigest,
+        expectedRunMode: row.mode,
+        expectedRunModeRevision: row.run_mode_revision,
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  listHumanNeeds(
+    repositoryId: string,
+    runId: string,
+    after?: string,
+    limit = PORTAL_LIMITS.maxHumanNeeds,
+  ): PortalHumanNeedPage {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    if (after !== undefined) validateOpaqueIdentity(after);
+    validatePortalLimit(limit, PORTAL_LIMITS.maxHumanNeeds);
+    const revision = this.#portalRevision(repositoryId, runId);
+    const all = this.#humanNeeds(repositoryId, runId);
+    const matching = all.filter((need) => after === undefined || need.needId > after);
+    return decodePortalHumanNeedPage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      humanRevision: revision.human_revision,
+      ...(after === undefined ? {} : { after }),
+      hasMore: matching.length > limit,
+      needs: matching.slice(0, limit),
+    });
+  }
+
+  listQuestions(
+    repositoryId: string,
+    runId: string,
+    after?: string,
+    limit = PORTAL_LIMITS.maxHumanNeeds,
+  ): PortalQuestionPage {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    if (after !== undefined) validateOpaqueIdentity(after);
+    validatePortalLimit(limit, PORTAL_LIMITS.maxHumanNeeds);
+    const rows = this.#database
+      .prepare<[string, string, string, number], PortalQuestionQueryRow>(
+        `SELECT q.submission_id, q.canonical_question,
+                a.command_id AS answer_id, a.answer_digest, a.canonical_answer,
+                a.principal_digest, a.answered_at,
+                f.requirement_digest, f.created_at,
+                f.satisfied_by_dispatch_id,
+                (SELECT e.canonical_event FROM context_events e
+                 WHERE e.repository_id = q.repository_id AND e.run_id = q.run_id
+                   AND json_extract(e.canonical_event, '$.payload.submissionId') = q.submission_id
+                 ORDER BY e.cursor LIMIT 1) AS canonical_event
+         FROM context_questions q
+         LEFT JOIN context_question_answers a ON a.submission_id = q.submission_id
+         LEFT JOIN context_fresh_dispatch_requirements f ON f.submission_id = q.submission_id
+         WHERE q.repository_id = ? AND q.run_id = ? AND q.submission_id > ?
+         ORDER BY q.submission_id LIMIT ?`,
+      )
+      .all(repositoryId, runId, after ?? "", limit + 1);
+    const questions = rows
+      .slice(0, limit)
+      .map((row) => this.#portalQuestionRecord(repositoryId, runId, row));
+    return decodePortalQuestionPage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      contextRevision: this.#portalRevision(repositoryId, runId).context_revision,
+      ...(after === undefined ? {} : { after }),
+      hasMore: rows.length > limit,
+      questions,
+    });
+  }
+
+  getQuestion(
+    repositoryId: string,
+    runId: string,
+    submissionId: string,
+  ): PortalQuestionRecord | undefined {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    validateOpaqueIdentity(submissionId);
+    const row = this.#database
+      .prepare<[string, string, string], PortalQuestionQueryRow>(
+        `SELECT q.submission_id, q.canonical_question,
+                a.command_id AS answer_id, a.answer_digest, a.canonical_answer,
+                a.principal_digest, a.answered_at,
+                f.requirement_digest, f.created_at,
+                f.satisfied_by_dispatch_id,
+                (SELECT e.canonical_event FROM context_events e
+                 WHERE e.repository_id = q.repository_id AND e.run_id = q.run_id
+                   AND json_extract(e.canonical_event, '$.payload.submissionId') = q.submission_id
+                 ORDER BY e.cursor LIMIT 1) AS canonical_event
+         FROM context_questions q
+         LEFT JOIN context_question_answers a ON a.submission_id = q.submission_id
+         LEFT JOIN context_fresh_dispatch_requirements f ON f.submission_id = q.submission_id
+         WHERE q.repository_id = ? AND q.run_id = ? AND q.submission_id = ?`,
+      )
+      .get(repositoryId, runId, submissionId);
+    return row === undefined ? undefined : this.#portalQuestionRecord(repositoryId, runId, row);
+  }
+
+  listArtifacts(
+    repositoryId: string,
+    runId: string,
+    after?: string,
+    limit = PORTAL_LIMITS.maxArtifactItems,
+  ): PortalArtifactPage {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    if (after !== undefined) validateOpaqueIdentity(after);
+    validatePortalLimit(limit, PORTAL_LIMITS.maxArtifactItems);
+    const rows = this.#database
+      .prepare<[string, string, string, number], { canonical_submission: string }>(
+        `SELECT canonical_submission FROM context_submissions
+         WHERE repository_id = ? AND run_id = ? AND submission_type = 'asset'
+           AND submission_id > ? ORDER BY submission_id LIMIT ?`,
+      )
+      .all(repositoryId, runId, after ?? "", limit + 1);
+    const artifacts = rows.slice(0, limit).map(({ canonical_submission }) => {
+      const submission = requiredJsonRecord(
+        decodeCanonicalJsonValue(canonical_submission),
+        "Portal worker asset submission",
+      );
+      const asset = requiredJsonRecord(submission.asset, "Portal worker asset metadata");
+      return this.#artifactMetadata(submission, asset);
+    });
+    return decodePortalArtifactPage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      contextRevision: this.#portalRevision(repositoryId, runId).context_revision,
+      ...(after === undefined ? {} : { after }),
+      hasMore: rows.length > limit,
+      artifacts,
+    });
+  }
+
+  getArtifact(
+    repositoryId: string,
+    runId: string,
+    artifactId: string,
+  ): PortalArtifactMetadata | undefined {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    validateOpaqueIdentity(artifactId);
+    const row = this.#database
+      .prepare<[string, string, string], { canonical_submission: string }>(
+        `SELECT canonical_submission FROM context_submissions
+         WHERE repository_id = ? AND run_id = ? AND submission_type = 'asset'
+           AND json_extract(canonical_submission, '$.asset.assetId') = ?`,
+      )
+      .get(repositoryId, runId, artifactId);
+    if (row === undefined) return undefined;
+    const submission = requiredJsonRecord(
+      decodeCanonicalJsonValue(row.canonical_submission),
+      "Portal worker asset submission",
+    );
+    return this.#artifactMetadata(
+      submission,
+      requiredJsonRecord(submission.asset, "Portal worker asset metadata"),
+    );
+  }
+
+  readArtifactContent(
+    repositoryId: string,
+    runId: string,
+    artifactId: string,
+    offset: number,
+    length: number,
+  ): PortalArtifactContent | undefined {
+    validatePortalOffset(offset);
+    validatePortalLimit(length, PORTAL_LIMITS.maxArtifactPreviewBytes);
+    const metadata = this.getArtifact(repositoryId, runId, artifactId);
+    if (metadata === undefined || metadata.availability !== "verified-stored") return undefined;
+    if (offset > metadata.byteLength) throw new TypeError("Artifact offset exceeds byte length");
+    const bytes = this.#verifiedArtifactBytes(metadata);
+    const chunk = bytes.subarray(offset, Math.min(offset + length, bytes.byteLength));
+    let encoding: "utf8" | "base64" = "base64";
+    let content = Buffer.from(chunk).toString("base64");
+    if (metadata.mediaType.startsWith("text/") || metadata.mediaType === "application/json") {
+      try {
+        content = new TextDecoder("utf-8", { fatal: true }).decode(chunk);
+        encoding = "utf8";
+      } catch {
+        // Invalid UTF-8 remains an inert base64 preview.
+      }
+    }
+    return decodePortalArtifactContent({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      artifactId,
+      contentDigest: metadata.contentDigest,
+      offset,
+      byteLength: chunk.byteLength,
+      totalByteLength: metadata.byteLength,
+      encoding,
+      content,
+      complete: offset + chunk.byteLength === metadata.byteLength,
+      jsonNodeBudget: PORTAL_LIMITS.jsonViewerNodeBudget,
+    });
+  }
+
+  downloadArtifact(
+    repositoryId: string,
+    runId: string,
+    artifactId: string,
+  ): PortalArtifactDownload | undefined {
+    const metadata = this.getArtifact(repositoryId, runId, artifactId);
+    if (metadata === undefined || metadata.availability !== "verified-stored") return undefined;
+    return Object.freeze({
+      bytes: this.#verifiedArtifactBytes(metadata),
+      filename: `senawa-artifact-${metadata.contentDigest}.bin`,
+      digest: metadata.contentDigest,
+    });
+  }
+
+  listWorkspaces(
+    repositoryId: string,
+    runId: string,
+    after?: string,
+    limit = PORTAL_LIMITS.maxWorkspaceItems,
+  ): PortalWorkspacePage {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    if (after !== undefined) validateOpaqueIdentity(after);
+    validatePortalLimit(limit, PORTAL_LIMITS.maxWorkspaceItems);
+    const runKey = canonicalStringify([repositoryId, runId]);
+    const rows = this.#database
+      .prepare<
+        [string, string, number],
+        {
+          workspace_id: string;
+          task_id: string;
+          definition_generation: number;
+          dispatch_id: string;
+          mode: "repository" | "worktree";
+          state: string;
+          base_revision_digest: string;
+          result_revision_digest: string | null;
+          recorded_at: string | null;
+          eligible: number | null;
+        }
+      >(
+        `SELECT w.workspace_id, w.task_id, w.definition_generation, w.dispatch_id,
+                w.mode, w.state, w.base_revision_digest,
+                r.result_revision_digest, r.recorded_at,
+                e.eligible
+         FROM runner_workspaces w
+         LEFT JOIN runner_workspace_results r ON r.workspace_id = w.workspace_id
+         LEFT JOIN runner_completion_eligibility e ON e.workspace_id = w.workspace_id
+         WHERE w.run_key = ? AND w.workspace_id > ?
+         ORDER BY w.workspace_id LIMIT ?`,
+      )
+      .all(runKey, after ?? "", limit + 1);
+    const fallbackTime = this.#runTimestamp(repositoryId, runId);
+    return decodePortalWorkspacePage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      workspaceRevision: this.#portalRevision(repositoryId, runId).workspace_revision,
+      ...(after === undefined ? {} : { after }),
+      hasMore: rows.length > limit,
+      workspaces: rows.slice(0, limit).map((row) => ({
+        workspaceId: row.workspace_id,
+        taskId: row.task_id,
+        definitionGeneration: row.definition_generation,
+        dispatchId: row.dispatch_id,
+        mode: row.mode === "worktree" ? "isolated" : "repository",
+        state: row.state,
+        baseDigest: row.base_revision_digest,
+        ...(row.result_revision_digest === null
+          ? {}
+          : { resultDigest: row.result_revision_digest }),
+        completionEligible: row.eligible === 1,
+        updatedAt: row.recorded_at ?? fallbackTime,
+      })),
+    });
+  }
+
+  listIntegrations(
+    repositoryId: string,
+    runId: string,
+    after?: string,
+    limit = PORTAL_LIMITS.maxIntegrationItems,
+  ): PortalIntegrationPage {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    if (after !== undefined) validateOpaqueIdentity(after);
+    validatePortalLimit(limit, PORTAL_LIMITS.maxIntegrationItems);
+    const runKey = canonicalStringify([repositoryId, runId]);
+    const rows = this.#database
+      .prepare<
+        [string, string, number],
+        {
+          integration_id: string;
+          phase_id: string;
+          definition_generation: number;
+          target_ref: string;
+          fan_in_digest: string;
+          state: string;
+          barrier_digest: string | null;
+          gate_digest: string | null;
+          member_count: number;
+        }
+      >(
+        `SELECT i.integration_id, i.phase_id, i.definition_generation,
+                i.target_ref, i.fan_in_digest, i.state, i.barrier_digest,
+                g.evaluation_digest AS gate_digest,
+                COUNT(m.ordinal) AS member_count
+         FROM runner_integration_attempts i
+         LEFT JOIN runner_integration_gates g ON g.integration_id = i.integration_id
+         LEFT JOIN runner_integration_members m ON m.integration_id = i.integration_id
+         WHERE i.run_key = ? AND i.integration_id > ?
+         GROUP BY i.integration_id
+         ORDER BY i.integration_id LIMIT ?`,
+      )
+      .all(runKey, after ?? "", limit + 1);
+    const updatedAt = this.#runTimestamp(repositoryId, runId);
+    return decodePortalIntegrationPage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      workspaceRevision: this.#portalRevision(repositoryId, runId).workspace_revision,
+      ...(after === undefined ? {} : { after }),
+      hasMore: rows.length > limit,
+      integrations: rows.slice(0, limit).map((row) => ({
+        integrationId: row.integration_id,
+        cohortId: row.fan_in_digest,
+        attempt: integrationAttemptOrdinal(row.integration_id),
+        state: row.state,
+        memberCount: row.member_count,
+        targetDigest: this.dependencies.sha256.digest(canonicalBytes(row.target_ref)),
+        ...(row.gate_digest === null ? {} : { gateDigest: row.gate_digest }),
+        ...(row.barrier_digest === null ? {} : { barrierDigest: row.barrier_digest }),
+        ...(integrationDiagnosticForState(row.state) === undefined
+          ? {}
+          : { diagnostic: integrationDiagnosticForState(row.state) }),
+        updatedAt,
+      })),
+    });
+  }
+
+  listReceiptWindow(
+    repositoryId: string,
+    runId: string,
+    query: { readonly after?: number; readonly before?: number; readonly limit?: number } = {},
+  ): PortalReceiptWindow {
+    return this.#activityWindow(repositoryId, runId, "receipts", query) as PortalReceiptWindow;
+  }
+
+  listEventWindow(
+    repositoryId: string,
+    runId: string,
+    query: { readonly after?: number; readonly before?: number; readonly limit?: number } = {},
+  ): PortalEventWindow {
+    return this.#activityWindow(repositoryId, runId, "events", query) as PortalEventWindow;
+  }
+
+  #activityWindow(
+    repositoryId: string,
+    runId: string,
+    field: "receipts" | "events",
+    query: { readonly after?: number; readonly before?: number; readonly limit?: number },
+  ): PortalReceiptWindow | PortalEventWindow {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    if (query.after !== undefined && query.before !== undefined) {
+      throw new PageQueryError("cursor-ahead", "after and before cursors are mutually exclusive");
+    }
+    if (query.after !== undefined) validatePortalOffset(query.after);
+    if (query.before !== undefined) validatePortalOffset(query.before);
+    const limit = query.limit ?? PORTAL_LIMITS.maxActivityItems;
+    validatePortalLimit(limit, PORTAL_LIMITS.maxActivityItems);
+    const runKey = canonicalStringify([repositoryId, runId]);
+    const table = field === "receipts" ? "receipt_history" : "event_frames";
+    const canonicalColumn = field === "receipts" ? "canonical_receipt" : "canonical_frame";
+    const range = this.#database
+      .prepare<[string], { earliest: number | null; latest: number | null }>(
+        `SELECT MIN(cursor) AS earliest, MAX(cursor) AS latest FROM ${table} WHERE run_key = ?`,
+      )
+      .get(runKey) ?? { earliest: null, latest: null };
+    const earliestCursor = range.earliest ?? 0;
+    const latestCursor = range.latest ?? 0;
+    const direction =
+      query.after !== undefined ? "after" : query.before !== undefined ? "before" : "tail";
+    const rows = this.#database
+      .prepare<[string, number, number], { cursor: number; canonical_value: string }>(
+        direction === "after"
+          ? `SELECT cursor, ${canonicalColumn} AS canonical_value FROM ${table}
+             WHERE run_key = ? AND cursor > ? ORDER BY cursor LIMIT ?`
+          : `SELECT cursor, canonical_value FROM (
+               SELECT cursor, ${canonicalColumn} AS canonical_value FROM ${table}
+               WHERE run_key = ? AND cursor < ? ORDER BY cursor DESC LIMIT ?
+             ) ORDER BY cursor`,
+      )
+      .all(
+        runKey,
+        direction === "after" ? (query.after ?? 0) : (query.before ?? Number.MAX_SAFE_INTEGER),
+        limit,
+      );
+    const first = rows.at(0)?.cursor;
+    const last = rows.at(-1)?.cursor;
+    const common = {
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      direction,
+      ...(query.after === undefined ? {} : { after: query.after }),
+      ...(query.before === undefined ? {} : { before: query.before }),
+      earliestCursor,
+      latestCursor,
+      hasEarlier: first !== undefined && first > earliestCursor,
+      hasLater: last !== undefined && last < latestCursor,
+    };
+    return field === "receipts"
+      ? decodePortalReceiptWindow({
+          ...common,
+          receipts: rows.map((row) => decodeDurableReceipt(row.canonical_value)),
+        })
+      : decodePortalEventWindow({
+          ...common,
+          events: rows.map((row) => decodeEventStreamFrame(row.canonical_value)),
+        });
+  }
+
+  #runtimeService(): RuntimeCommandService {
+    const row = this.#database
+      .prepare<[], { canonical_json: string }>(
+        "SELECT canonical_json FROM authority_state WHERE singleton = 1",
+      )
+      .get();
+    if (row === undefined) throw new Error("SQLite authority singleton is missing");
+    return new RuntimeCommandService(
+      this.dependencies,
+      InMemoryAuthority.fromCanonicalJson(row.canonical_json, this.dependencies),
+    );
+  }
+
+  #graph(repositoryId: string, runId: string) {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    return this.#runtimeService().queryRunScheduling(repositoryId, runId)?.graph;
+  }
+
+  #requiredGraphRevision(repositoryId: string, runId: string, graphRevision: string) {
+    if (!isSha256Digest(graphRevision))
+      throw new TypeError("graphRevision must be a SHA-256 digest");
+    const graph = this.#graph(repositoryId, runId);
+    if (graph === undefined) {
+      throw new PageQueryError("cursor-ahead", "Portal graph run does not exist");
+    }
+    if (graph.revisionDigest !== graphRevision) {
+      throw new PageQueryError("cursor-ahead", "Portal graph revision is stale");
+    }
+    return graph;
+  }
+
+  #syncVector(repositoryId: string, runId: string, graphRevision: string): PortalSyncVector {
+    const row = this.#database
+      .prepare<
+        [string, string],
+        {
+          cursor: number;
+          workflow_revision: number;
+          context_revision: number;
+          runner_revision: number;
+          workspace_revision: number;
+          human_revision: number;
+          portal_revision: number;
+        }
+      >(
+        `SELECT r.cursor, p.workflow_revision, p.context_revision,
+                p.runner_revision, p.workspace_revision, p.human_revision,
+                p.portal_revision
+         FROM runs r JOIN portal_run_revisions p
+           ON p.repository_id = r.repository_id AND p.run_id = r.run_id
+         WHERE r.repository_id = ? AND r.run_id = ?`,
+      )
+      .get(repositoryId, runId);
+    if (row === undefined) throw new Error("Portal revision vector is missing");
+    return Object.freeze({
+      workflowCursor: row.cursor,
+      contextRevision: row.context_revision,
+      runnerRevision: row.runner_revision,
+      workspaceRevision: row.workspace_revision,
+      humanRevision: row.human_revision,
+      portalRevision: row.portal_revision,
+      graphRevision,
+      lifecycleRevision: row.workflow_revision,
+    });
+  }
+
+  #portalRevision(repositoryId: string, runId: string): PortalRevisionRow {
+    const row = this.#database
+      .prepare<[string, string], PortalRevisionRow>(
+        `SELECT workflow_revision, context_revision, runner_revision,
+                workspace_revision, human_revision, portal_revision
+         FROM portal_run_revisions WHERE repository_id = ? AND run_id = ?`,
+      )
+      .get(repositoryId, runId);
+    if (row === undefined) throw new Error("Portal revision vector is missing");
+    return row;
+  }
+
+  #runtimeRecordRow(repositoryId: string, runId: string) {
+    return this.#database
+      .prepare<[string, string], { records_json: string; projection_generated_at: string }>(
+        `SELECT records_json, projection_generated_at FROM runs
+         WHERE repository_id = ? AND run_id = ?
+           AND records_json IS NOT NULL AND projection_generated_at IS NOT NULL`,
+      )
+      .get(repositoryId, runId);
+  }
+
+  #portalQuestionRecord(
+    repositoryId: string,
+    runId: string,
+    row: PortalQuestionQueryRow,
+  ): PortalQuestionRecord {
+    const submission = requiredJsonRecord(
+      decodeCanonicalJsonValue(row.canonical_question),
+      "Portal question submission",
+    );
+    const task = requiredJsonRecord(submission.task, "Portal question task");
+    const question = requiredJsonRecord(submission.question, "Portal question body");
+    const event =
+      row.canonical_event === null
+        ? undefined
+        : requiredJsonRecord(
+            decodeCanonicalJsonValue(row.canonical_event),
+            "Portal question event",
+          );
+    const submittedAt =
+      typeof event?.occurredAt === "string"
+        ? event.occurredAt
+        : this.#runTimestamp(repositoryId, runId);
+    const source = {
+      submissionId: row.submission_id,
+      dispatchId: requiredStringField(submission.dispatchId, "question dispatchId"),
+      taskId: requiredStringField(task.taskId, "question taskId"),
+      definitionGeneration: requiredPositiveIntegerField(
+        task.definitionGeneration,
+        "question definitionGeneration",
+      ),
+      contextId: requiredStringField(submission.contextId, "question contextId"),
+      contextDigest: requiredDigestField(submission.contextDigest, "question contextDigest"),
+      contextRevisionDigest: requiredDigestField(
+        task.contextRevisionDigest,
+        "question contextRevisionDigest",
+      ),
+      questionDigest: this.dependencies.sha256.digest(canonicalBytes(question)),
+      submittedAt,
+    };
+    const answer =
+      row.answer_id === null ||
+      row.answer_digest === null ||
+      row.canonical_answer === null ||
+      row.principal_digest === null ||
+      row.answered_at === null
+        ? undefined
+        : {
+            answerId: row.answer_id,
+            answerDigest: row.answer_digest,
+            answeredAt: row.answered_at,
+            answeredBy: row.principal_digest,
+            answer: decodeCanonicalJsonValue(row.canonical_answer),
+          };
+    if (answer !== undefined && row.requirement_digest === null) {
+      throw new Error("Answered portal question is missing its fresh dispatch requirement");
+    }
+    return decodePortalQuestionRecord({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      source,
+      prompt: requiredStringField(question.prompt, "question prompt"),
+      ...(Object.hasOwn(question, "details") ? { details: question.details } : {}),
+      ...(answer === undefined ? {} : { answer }),
+      freshDispatch:
+        row.requirement_digest === null
+          ? { status: "not-required" }
+          : row.satisfied_by_dispatch_id === null
+            ? {
+                requirementId: row.requirement_digest,
+                status: "pending",
+                createdAt: row.created_at ?? submittedAt,
+              }
+            : {
+                requirementId: row.requirement_digest,
+                status: "satisfied",
+                createdAt: row.created_at ?? submittedAt,
+                satisfiedAt: this.#runTimestamp(repositoryId, runId),
+                dispatchId: row.satisfied_by_dispatch_id,
+              },
+    });
+  }
+
+  #artifactMetadata(
+    submission: Readonly<Record<string, JsonValue>>,
+    asset: Readonly<Record<string, JsonValue>>,
+  ): PortalArtifactMetadata {
+    const digestValue = requiredDigestField(asset.contentDigest, "asset contentDigest");
+    const descriptor = this.#assetDescriptor(digestValue);
+    const verified =
+      descriptor !== undefined &&
+      descriptor.byteLength === asset.byteLength &&
+      (descriptor.mediaType ?? asset.mediaType) === asset.mediaType &&
+      this.#verifyAssetDescriptor(descriptor);
+    const task = requiredJsonRecord(submission.task, "Portal asset task");
+    return {
+      artifactId: requiredStringField(asset.assetId, "assetId"),
+      source: "worker",
+      contentDigest: digestValue,
+      byteLength: requiredNonNegativeIntegerField(asset.byteLength, "asset byteLength"),
+      mediaType: requiredStringField(asset.mediaType, "asset mediaType"),
+      sensitivity: asset.sensitivity as PortalArtifactMetadata["sensitivity"],
+      summary: requiredStringField(asset.summary, "asset summary"),
+      availability: verified ? "verified-stored" : "metadata-only",
+      taskId: requiredStringField(task.taskId, "asset taskId"),
+      definitionGeneration: requiredPositiveIntegerField(
+        task.definitionGeneration,
+        "asset definitionGeneration",
+      ),
+    };
+  }
+
+  #assetDescriptor(digestValue: string): AssetDescriptor | undefined {
+    const row = this.#database
+      .prepare<[string], AssetRow>(
+        "SELECT digest, byte_length, media_type, relative_path FROM assets WHERE digest = ?",
+      )
+      .get(digestValue);
+    return row === undefined ? undefined : toAssetDescriptor(row);
+  }
+
+  #verifyAssetDescriptor(descriptor: AssetDescriptor): boolean {
+    const path = resolveAssetPath(this.assetDirectory, descriptor.relativePath);
+    verifyAssetBytes(path, descriptor, this.dependencies);
+    return true;
+  }
+
+  #verifiedArtifactBytes(metadata: PortalArtifactMetadata): Uint8Array {
+    const descriptor = this.#assetDescriptor(metadata.contentDigest);
+    if (
+      descriptor === undefined ||
+      descriptor.byteLength !== metadata.byteLength ||
+      (descriptor.mediaType ?? metadata.mediaType) !== metadata.mediaType
+    ) {
+      throw new Error("Portal artifact bytes do not match exact metadata");
+    }
+    return Uint8Array.from(
+      verifyAssetBytes(
+        resolveAssetPath(this.assetDirectory, descriptor.relativePath),
+        descriptor,
+        this.dependencies,
+      ),
+    );
+  }
+
+  #runTimestamp(repositoryId: string, runId: string): string {
+    return (
+      this.#database
+        .prepare<
+          [string, string],
+          { changed_at: string | null; projection_generated_at: string | null }
+        >(
+          `SELECT c.changed_at, r.projection_generated_at FROM runs r
+           LEFT JOIN run_control_state c ON c.run_key = r.run_key
+           WHERE r.repository_id = ? AND r.run_id = ?`,
+        )
+        .get(repositoryId, runId)?.changed_at ??
+      this.#database
+        .prepare<[string, string], { projection_generated_at: string | null }>(
+          "SELECT projection_generated_at FROM runs WHERE repository_id = ? AND run_id = ?",
+        )
+        .get(repositoryId, runId)?.projection_generated_at ??
+      "1970-01-01T00:00:00.000Z"
+    );
+  }
+
+  #humanNeeds(repositoryId: string, runId: string): readonly PortalHumanNeed[] {
+    const sourceRevision = this.#portalRevision(repositoryId, runId).human_revision;
+    const needs: PortalHumanNeed[] = [];
+    for (const row of this.#database
+      .prepare<
+        [string, string],
+        { submission_id: string; canonical_question: string; created_at: string | null }
+      >(
+        `SELECT q.submission_id, q.canonical_question, f.created_at
+         FROM context_questions q
+         LEFT JOIN context_question_answers a ON a.submission_id = q.submission_id
+         LEFT JOIN context_fresh_dispatch_requirements f ON f.submission_id = q.submission_id
+         WHERE q.repository_id = ? AND q.run_id = ? AND a.submission_id IS NULL
+         ORDER BY q.submission_id`,
+      )
+      .all(repositoryId, runId)) {
+      const submission = requiredJsonRecord(
+        decodeCanonicalJsonValue(row.canonical_question),
+        "Portal question need",
+      );
+      const task = requiredJsonRecord(submission.task, "Portal question need task");
+      const question = requiredJsonRecord(submission.question, "Portal question need body");
+      const questionDigest = this.dependencies.sha256.digest(canonicalBytes(question));
+      needs.push({
+        needId: `need_question:${row.submission_id}`,
+        kind: "question",
+        sourceId: row.submission_id,
+        sourceDigest: questionDigest,
+        sourceRevision,
+        title: requiredStringField(question.prompt, "question prompt"),
+        createdAt: row.created_at ?? this.#runTimestamp(repositoryId, runId),
+        taskId: requiredStringField(task.taskId, "question taskId"),
+        definitionGeneration: requiredPositiveIntegerField(
+          task.definitionGeneration,
+          "question definitionGeneration",
+        ),
+        exactObjectDigest: questionDigest,
+        allowedCommands: ["answer-question"],
+      });
+    }
+    const recordsRow = this.#runtimeRecordRow(repositoryId, runId);
+    if (recordsRow !== undefined) {
+      const records = requiredJsonRecord(
+        decodeCanonicalJsonValue(recordsRow.records_json),
+        "Portal runtime records",
+      );
+      for (const lifecycle of runtimeLifecycleRecords(records)) {
+        const candidate = optionalJsonRecord(lifecycle.candidate);
+        const decision = optionalJsonRecord(lifecycle.authorityDecision);
+        const policy = optionalJsonRecord(lifecycle.approvalPolicy);
+        if (
+          candidate !== undefined &&
+          decision === undefined &&
+          policy?.policy === "approval-required"
+        ) {
+          const candidateDigest = requiredDigestField(
+            candidate.candidateDigest,
+            "candidate digest",
+          );
+          const phase = requiredJsonRecord(candidate.phase, "candidate phase");
+          needs.push({
+            needId: `need_candidate:${candidateDigest}`,
+            kind: "candidate-approval",
+            sourceId: candidateDigest,
+            sourceDigest: candidateDigest,
+            sourceRevision,
+            title: `Review phase ${requiredStringField(phase.phaseId, "candidate phaseId")}`,
+            createdAt: recordsRow.projection_generated_at,
+            expectedGraphRevision: requiredDigestField(
+              candidate.graphRevisionDigest,
+              "candidate graph revision",
+            ),
+            exactObjectDigest: candidateDigest,
+            allowedCommands: ["record-authority-decision"],
+          });
+        }
+      }
+    }
+    for (const amendment of this.#database
+      .prepare<
+        [string],
+        {
+          amendment_id: string;
+          proposal_digest: string;
+          base_graph_revision_digest: string;
+          canonical_proposal: string;
+          decision: string | null;
+          application_digest: string | null;
+          withdrawn: number;
+        }
+      >(
+        `SELECT p.amendment_id, p.proposal_digest, p.base_graph_revision_digest,
+                p.canonical_proposal, d.decision, a.application_digest,
+                CASE WHEN w.amendment_id IS NULL THEN 0 ELSE 1 END AS withdrawn
+         FROM amendment_proposals p
+         LEFT JOIN amendment_decisions d ON d.amendment_id = p.amendment_id
+         LEFT JOIN amendment_applications a ON a.amendment_id = p.amendment_id
+         LEFT JOIN amendment_withdrawals w ON w.amendment_id = p.amendment_id
+         WHERE p.run_key = ? ORDER BY p.amendment_id`,
+      )
+      .all(canonicalStringify([repositoryId, runId]))) {
+      if (amendment.withdrawn === 1 || amendment.decision === "reject") continue;
+      const proposal = requiredJsonRecord(
+        decodeCanonicalJsonValue(amendment.canonical_proposal),
+        "Portal amendment proposal",
+      );
+      const createdAt =
+        timestampField(proposal.occurredAt) ?? this.#runTimestamp(repositoryId, runId);
+      if (amendment.decision === null) {
+        needs.push({
+          needId: `need_amendment:${amendment.amendment_id}`,
+          kind: "amendment-decision",
+          sourceId: amendment.amendment_id,
+          sourceDigest: amendment.proposal_digest,
+          sourceRevision,
+          title: `Review amendment ${amendment.amendment_id}`,
+          createdAt,
+          expectedGraphRevision: amendment.base_graph_revision_digest,
+          exactObjectDigest: amendment.proposal_digest,
+          allowedCommands: ["record-amendment-decision", "withdraw-amendment-proposal"],
+        });
+      } else if (amendment.application_digest === null) {
+        needs.push({
+          needId: `need_amendment-application:${amendment.amendment_id}`,
+          kind: "amendment-application",
+          sourceId: amendment.amendment_id,
+          sourceDigest: amendment.proposal_digest,
+          sourceRevision,
+          title: `Amendment ${amendment.amendment_id} awaits trusted application`,
+          createdAt,
+          expectedGraphRevision: amendment.base_graph_revision_digest,
+          exactObjectDigest: amendment.proposal_digest,
+          allowedCommands: [],
+        });
+      }
+    }
+    for (const escalation of this.#database
+      .prepare<[string], { command_id: string; canonical_escalation: string }>(
+        `SELECT e.command_id, e.canonical_escalation FROM runner_escalations e
+         LEFT JOIN runner_allowance_resolutions r ON r.escalation_command_id = e.command_id
+         WHERE e.run_key = ? AND r.escalation_command_id IS NULL ORDER BY e.command_id`,
+      )
+      .all(canonicalStringify([repositoryId, runId]))) {
+      const body = requiredJsonRecord(
+        decodeCanonicalJsonValue(escalation.canonical_escalation),
+        "Portal escalation",
+      );
+      const escalationDigest = this.dependencies.sha256.digest(canonicalBytes(body));
+      const allowance = this.getAllowanceReview(repositoryId, runId, escalation.command_id);
+      needs.push({
+        needId: `need_escalation:${escalation.command_id}`,
+        kind: "escalation",
+        sourceId: escalation.command_id,
+        sourceDigest: escalationDigest,
+        sourceRevision,
+        title: `Budget allowance requested for ${requiredStringField(body.unit, "escalation unit")}`,
+        createdAt: requiredStringField(body.createdAt, "escalation createdAt"),
+        exactObjectDigest: escalationDigest,
+        allowedCommands:
+          allowance?.escalationDigest === escalationDigest ? ["grant-allowance"] : [],
+      });
+    }
+    for (const integration of this.#database
+      .prepare<[string], { integration_id: string; state: string; fan_in_digest: string }>(
+        `SELECT integration_id, state, fan_in_digest FROM runner_integration_attempts
+         WHERE run_key = ? AND state IN ('conflicted', 'target-moved', 'rework-required')
+         ORDER BY integration_id`,
+      )
+      .all(canonicalStringify([repositoryId, runId]))) {
+      needs.push({
+        needId: `need_integration:${integration.integration_id}`,
+        kind:
+          integration.state === "rework-required" ? "integration-rework" : "integration-conflict",
+        sourceId: integration.integration_id,
+        sourceDigest: integration.fan_in_digest,
+        sourceRevision,
+        title:
+          integration.state === "rework-required"
+            ? `Integration ${integration.integration_id} requires bounded rework`
+            : `Integration ${integration.integration_id} requires conflict review`,
+        createdAt: this.#runTimestamp(repositoryId, runId),
+        exactObjectDigest: integration.fan_in_digest,
+        allowedCommands: [],
+      });
+    }
+    const runControl = this.#database
+      .prepare<[string], { mode: RunControlMode }>(
+        "SELECT mode FROM run_control_state WHERE run_key = ?",
+      )
+      .get(canonicalStringify([repositoryId, runId]));
+    if (runControl?.mode === "ending") {
+      const uncertain =
+        this.#database
+          .prepare<[string], { count: number }>(
+            `SELECT COUNT(*) AS count FROM runner_effect_intents i
+           LEFT JOIN runner_effect_outcomes o ON o.intent_id = i.intent_id
+             AND o.commit_cursor = (
+               SELECT MAX(next.commit_cursor) FROM runner_effect_outcomes next
+               WHERE next.intent_id = i.intent_id
+             )
+           WHERE i.run_key = ? AND (o.status IS NULL OR o.status IN ('active', 'unknown'))`,
+          )
+          .get(canonicalStringify([repositoryId, runId]))?.count ?? 0;
+      if (uncertain > 0) {
+        const digestValue = this.dependencies.sha256.digest(
+          canonicalBytes({ runId, mode: "ending", uncertain }),
+        );
+        needs.push({
+          needId: `need_ending:${runId}`,
+          kind: "ending-uncertain",
+          sourceId: runId,
+          sourceDigest: digestValue,
+          sourceRevision,
+          title: `${uncertain} effect${uncertain === 1 ? "" : "s"} remain uncertain while ending`,
+          createdAt: this.#runTimestamp(repositoryId, runId),
+          exactObjectDigest: digestValue,
+          allowedCommands: [],
+        });
+      }
+    }
+    return Object.freeze(
+      needs.sort((left, right) =>
+        left.needId < right.needId ? -1 : left.needId > right.needId ? 1 : 0,
+      ),
+    );
+  }
+}
+
+function validatePortalLimit(limit: number, maximum: number): void {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > maximum) {
+    throw new TypeError(
+      `Portal page limit must be a positive safe integer no greater than ${maximum}`,
+    );
+  }
+}
+
+function requiredJsonRecord(
+  value: JsonValue | undefined,
+  subject: string,
+): Readonly<Record<string, JsonValue>> {
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${subject} must be a canonical object`);
+  }
+  return value as Readonly<Record<string, JsonValue>>;
+}
+
+function optionalJsonRecord(
+  value: JsonValue | undefined,
+): Readonly<Record<string, JsonValue>> | undefined {
+  return value === undefined ? undefined : requiredJsonRecord(value, "Portal optional record");
+}
+
+function requiredStringField(value: JsonValue | undefined, subject: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${subject} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requiredDigestField(value: JsonValue | undefined, subject: string): string {
+  const digestValue = requiredStringField(value, subject);
+  if (!isSha256Digest(digestValue)) throw new Error(`${subject} must be a SHA-256 digest`);
+  return digestValue;
+}
+
+function requiredNonNegativeIntegerField(value: JsonValue | undefined, subject: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${subject} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
+function requiredPositiveIntegerField(value: JsonValue | undefined, subject: string): number {
+  const numberValue = requiredNonNegativeIntegerField(value, subject);
+  if (numberValue < 1) throw new Error(`${subject} must be positive`);
+  return numberValue;
+}
+
+function timestampField(value: JsonValue | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    validateTimestamp(value, "portal timestamp");
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
+function runtimeLifecycleRecords(
+  records: Readonly<Record<string, JsonValue>>,
+): readonly Readonly<Record<string, JsonValue>>[] {
+  const history = records.phaseLifecycles;
+  if (history === undefined) return [records];
+  if (!Array.isArray(history)) throw new Error("Portal phase lifecycle history must be an array");
+  return history.map((record) => requiredJsonRecord(record, "Portal phase lifecycle"));
+}
+
+function findRuntimeReviewRecord(
+  value: JsonValue,
+  kind: Exclude<PortalRecordKind, "escalation">,
+  expectedDigest: string,
+): JsonValue | undefined {
+  const records = requiredJsonRecord(value, "Portal runtime review records");
+  for (const lifecycle of runtimeLifecycleRecords(records)) {
+    const candidate = optionalJsonRecord(lifecycle.candidate);
+    if (kind === "candidate" && candidate?.candidateDigest === expectedDigest) return candidate;
+    const gate = optionalJsonRecord(lifecycle.gateEvidence);
+    const evaluation = gate === undefined ? undefined : optionalJsonRecord(gate.evaluation);
+    if (kind === "gate" && evaluation?.evaluationDigest === expectedDigest) return gate;
+    const decision = optionalJsonRecord(lifecycle.authorityDecision);
+    if (kind === "decision" && decision?.decisionDigest === expectedDigest) return decision;
+    const closure = optionalJsonRecord(lifecycle.closure);
+    if (kind === "closure" && closure?.closureDigest === expectedDigest) return closure;
+  }
+  return undefined;
+}
+
+function findCandidateGateEvidenceDigest(
+  value: JsonValue,
+  candidateDigest: string,
+): string | undefined {
+  const records = requiredJsonRecord(value, "Portal runtime review records");
+  for (const lifecycle of runtimeLifecycleRecords(records)) {
+    const candidate = optionalJsonRecord(lifecycle.candidate);
+    const gate = optionalJsonRecord(lifecycle.gateEvidence);
+    const evaluation = gate === undefined ? undefined : optionalJsonRecord(gate.evaluation);
+    if (
+      candidate?.candidateDigest === candidateDigest &&
+      typeof evaluation?.evaluationDigest === "string"
+    ) {
+      return evaluation.evaluationDigest;
+    }
+  }
+  return undefined;
+}
+
+function integrationAttemptOrdinal(integrationId: string): number {
+  const match = /(?:attempt|rework)[-_:](\d+)(?:$|[-_:])/u.exec(integrationId);
+  if (match?.[1] === undefined) return 1;
+  const ordinal = Number.parseInt(match[1], 10);
+  return Number.isSafeInteger(ordinal) && ordinal > 0 ? ordinal : 1;
+}
+
+function integrationDiagnosticForState(
+  state: string,
+): { readonly code: string; readonly summary: string } | undefined {
+  switch (state) {
+    case "conflicted":
+      return Object.freeze({
+        code: "integration-conflict",
+        summary:
+          "The integration attempt reported a conflict. Inspect the repository through trusted CLI tooling.",
+      });
+    case "target-moved":
+      return Object.freeze({
+        code: "integration-target-moved",
+        summary:
+          "The integration target changed before publication. A fresh bounded attempt is required.",
+      });
+    case "rework-required":
+      return Object.freeze({
+        code: "integration-rework-required",
+        summary: "Semantic validation requested one bounded successor attempt.",
+      });
+    default:
+      return undefined;
+  }
+}
+
+function validatePortalOffset(offset: number): void {
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new TypeError("Portal page cursor must be a non-negative safe integer");
+  }
+}
+
+function verifyPortalRevisionTables(database: Database.Database): void {
+  const missing = database
+    .prepare<[], { count: number }>(
+      `SELECT COUNT(*) AS count
+       FROM runs r LEFT JOIN portal_run_revisions p
+         ON p.repository_id = r.repository_id AND p.run_id = r.run_id
+       WHERE p.run_id IS NULL`,
+    )
+    .get()?.count;
+  const invalid = database
+    .prepare<[], { count: number }>(
+      `SELECT COUNT(*) AS count FROM portal_run_revisions
+       WHERE portal_revision < workflow_revision
+          OR portal_revision < context_revision
+          OR portal_revision < runner_revision
+          OR portal_revision < workspace_revision
+          OR portal_revision < human_revision`,
+    )
+    .get()?.count;
+  if (missing !== 0 || invalid !== 0) {
+    throw new Error("SQLite portal revision vectors do not match run authority");
+  }
+}
+
+function isHumanAuthorityIntent(intent: CommandEnvelope["intent"]["type"]): boolean {
+  return ["answer-question", "grant-allowance", "pause-run", "resume-run", "end-run"].includes(
+    intent,
+  );
+}
+
+function trustedRefusal(code: string, message: string): TrustedHumanAuthorityDecision {
+  return Object.freeze({ refusal: Object.freeze({ code, message }) });
+}
+
+function buildTrustedHumanAuthorityDecision(
+  database: Database.Database,
+  service: RuntimeCommandService,
+  command: CommandEnvelope,
+  currentTime: string,
+  dependencies: RuntimeDependencies,
+): TrustedHumanAuthorityDecision {
+  const control = readRunControl(database, command.repositoryId, command.runId);
+  if (control === undefined) {
+    return trustedRefusal("run-control-unavailable", "Run control is not initialized");
+  }
+  if (
+    (command.intent.type === "answer-question" || command.intent.type === "grant-allowance") &&
+    (control.mode === "ending" || control.mode === "ended")
+  ) {
+    return trustedRefusal("run-ending", "Run no longer accepts human authority commands");
+  }
+  switch (command.intent.type) {
+    case "answer-question":
+      return buildTrustedQuestionAnswer(database, command, currentTime, dependencies);
+    case "grant-allowance":
+      return buildTrustedAllowanceGrant(
+        database,
+        service,
+        command,
+        control,
+        currentTime,
+        dependencies,
+      );
+    case "pause-run":
+    case "resume-run":
+    case "end-run":
+      return buildTrustedRunControl(command, control, currentTime);
+    default:
+      return trustedRefusal("unsupported-intent", "Intent has no human authority implementation");
+  }
+}
+
+function buildTrustedQuestionAnswer(
+  database: Database.Database,
+  command: CommandEnvelope,
+  currentTime: string,
+  dependencies: RuntimeDependencies,
+): TrustedHumanAuthorityDecision {
+  const payload = decodeAnswerQuestionPayload(command.payload);
+  const existing = database
+    .prepare<[string], { command_id: string }>(
+      "SELECT command_id FROM context_question_answers WHERE submission_id = ?",
+    )
+    .get(payload.submissionId);
+  if (existing !== undefined) {
+    return trustedRefusal("question-already-answered", "Question already has an immutable answer");
+  }
+  const row = database
+    .prepare<
+      [string],
+      {
+        repository_id: string;
+        run_id: string;
+        canonical_question: string;
+      }
+    >(
+      `SELECT repository_id, run_id, canonical_question
+       FROM context_questions WHERE submission_id = ?`,
+    )
+    .get(payload.submissionId);
+  if (
+    row === undefined ||
+    row.repository_id !== command.repositoryId ||
+    row.run_id !== command.runId
+  ) {
+    return trustedRefusal("unknown-question", "Question does not exist in this run");
+  }
+  const question = decodeCanonicalJsonValue(row.canonical_question);
+  if (
+    !isPlainRecord(question) ||
+    !isPlainRecord(question.question) ||
+    !isPlainRecord(question.task) ||
+    typeof question.dispatchId !== "string" ||
+    typeof question.contextId !== "string" ||
+    typeof question.contextDigest !== "string" ||
+    typeof question.task.taskId !== "string" ||
+    typeof question.task.definitionGeneration !== "number" ||
+    typeof question.task.contextRevisionDigest !== "string"
+  ) {
+    throw new Error("Stored question record is malformed");
+  }
+  const source = database
+    .prepare<[string, string], { context_digest: string }>(
+      `SELECT b.context_digest FROM context_dispatches d
+       JOIN context_bases b ON b.context_id = d.context_id
+       WHERE d.dispatch_id = ? AND d.context_id = ?`,
+    )
+    .get(question.dispatchId, question.contextId);
+  if (source === undefined || source.context_digest !== question.contextDigest) {
+    throw new Error("Stored question lacks its exact trusted dispatch context");
+  }
+  const taskId = question.task.taskId;
+  const definitionGeneration = question.task.definitionGeneration;
+  const currentness = database
+    .prepare<[string, string, number], { claims_accepted: number; current_context_digest: string }>(
+      `SELECT claims_accepted, current_context_digest FROM amendment_work_fences
+       WHERE run_key = ? AND task_id = ? AND definition_generation = ?`,
+    )
+    .get(canonicalStringify([command.repositoryId, command.runId]), taskId, definitionGeneration);
+  const questionDigest = dependencies.sha256.digest(canonicalBytes(question.question));
+  if (
+    payload.questionDigest !== questionDigest ||
+    command.exactObjectDigest !== questionDigest ||
+    payload.contextDigest !== source.context_digest ||
+    payload.taskId !== taskId ||
+    payload.definitionGeneration !== definitionGeneration ||
+    command.expectedDefinitionRevision !== question.task.contextRevisionDigest ||
+    currentness?.current_context_digest !== source.context_digest ||
+    currentness.claims_accepted !== 1
+  ) {
+    return trustedRefusal(
+      "stale-question",
+      "Question answer guards do not match current authority",
+    );
+  }
+  const answerDigest = dependencies.sha256.digest(canonicalBytes(payload.answer));
+  const requirementDigest = dependencies.sha256.digest(
+    canonicalBytes({
+      submissionId: payload.submissionId,
+      historicalDispatchId: question.dispatchId,
+      questionDigest,
+      contextDigest: source.context_digest,
+      answerDigest,
+      taskId,
+      definitionGeneration,
+    }),
+  );
+  return Object.freeze({
+    result: Object.freeze({
+      submissionId: payload.submissionId,
+      questionDigest,
+      answerDigest,
+      requirementDigest,
+      historicalDispatchId: question.dispatchId,
+      contextDigest: source.context_digest,
+      taskId,
+      definitionGeneration,
+      answeredAt: currentTime,
+    }),
+  });
+}
+
+function buildTrustedAllowanceGrant(
+  database: Database.Database,
+  service: RuntimeCommandService,
+  command: CommandEnvelope,
+  control: RunControlState,
+  currentTime: string,
+  dependencies: RuntimeDependencies,
+): TrustedHumanAuthorityDecision {
+  const payload = decodeGrantAllowancePayload(command.payload);
+  const runKey = canonicalStringify([command.repositoryId, command.runId]);
+  if (
+    database
+      .prepare<[string], { present: number }>(
+        "SELECT 1 AS present FROM runner_allowance_resolutions WHERE escalation_command_id = ?",
+      )
+      .get(payload.escalationCommandId) !== undefined
+  ) {
+    return trustedRefusal("allowance-already-resolved", "Escalation already has a resolution");
+  }
+  const row = database
+    .prepare<
+      [string, string],
+      { canonical_escalation: string; budget_limit: number; canonical_policy: string }
+    >(
+      `SELECT e.canonical_escalation, b.budget_limit, p.canonical_policy
+       FROM runner_escalations e
+       JOIN runner_budgets b ON b.run_key = e.run_key
+       JOIN runner_allowance_policies p ON p.run_key = e.run_key
+       WHERE e.run_key = ? AND e.command_id = ? AND b.unit = json_extract(e.canonical_escalation, '$.unit')`,
+    )
+    .get(runKey, payload.escalationCommandId);
+  if (row === undefined) {
+    return trustedRefusal("unknown-escalation", "Escalation or allowance policy does not exist");
+  }
+  const escalation = decodeCanonicalJsonValue(row.canonical_escalation);
+  const policy = decodeCanonicalJsonValue(row.canonical_policy);
+  if (!isPlainRecord(escalation) || !isPlainRecord(policy) || !Array.isArray(policy.ceilings)) {
+    throw new Error("Stored escalation allowance authority is malformed");
+  }
+  const escalationDigest = dependencies.sha256.digest(canonicalBytes(escalation));
+  const runtimePolicy = service.queryRunExecution(
+    command.repositoryId,
+    command.runId,
+  )?.allowancePolicy;
+  const currentGraphRevision = service.queryRunScheduling(command.repositoryId, command.runId)
+    ?.graph.revisionDigest;
+  const ceiling = policy.ceilings.find(
+    (value) => isPlainRecord(value) && value.unit === payload.unit,
+  );
+  if (
+    escalation.commandId !== payload.escalationCommandId ||
+    escalation.operationId !== payload.operationId ||
+    escalation.unit !== payload.unit ||
+    payload.escalationDigest !== escalationDigest ||
+    command.exactObjectDigest !== escalationDigest ||
+    runtimePolicy === undefined ||
+    canonicalStringify(runtimePolicy) !== row.canonical_policy ||
+    payload.policyDigest !== runtimePolicy.policyDigest ||
+    command.expectedGraphRevision !== currentGraphRevision ||
+    payload.expectedLimit !== row.budget_limit ||
+    payload.expectedRunModeRevision !== control.revision ||
+    ceiling === undefined ||
+    typeof ceiling.maximum !== "number"
+  ) {
+    return trustedRefusal("stale-allowance", "Allowance guards do not match current authority");
+  }
+  const resultingLimit = row.budget_limit + payload.increaseBy;
+  if (!Number.isSafeInteger(resultingLimit) || resultingLimit > ceiling.maximum) {
+    return trustedRefusal(
+      "allowance-ceiling-exceeded",
+      "Allowance exceeds the trusted policy ceiling",
+    );
+  }
+  return Object.freeze({
+    result: Object.freeze({
+      escalationCommandId: payload.escalationCommandId,
+      escalationDigest,
+      policyDigest: payload.policyDigest,
+      unit: payload.unit,
+      priorLimit: row.budget_limit,
+      increaseBy: payload.increaseBy,
+      resultingLimit,
+      resolvedAt: currentTime,
+    }),
+  });
+}
+
+function buildTrustedRunControl(
+  command: CommandEnvelope,
+  control: RunControlState,
+  currentTime: string,
+): TrustedHumanAuthorityDecision {
+  const payload = decodeRunControlPayload(command.payload);
+  if (payload.expectedRunModeRevision !== control.revision) {
+    return trustedRefusal("stale-run-mode", "Run mode revision is stale");
+  }
+  let resultMode: RunControlMode;
+  if (command.intent.type === "pause-run") {
+    if (control.mode !== "running") {
+      return trustedRefusal("run-not-running", "Only a running run can be paused");
+    }
+    resultMode = "paused";
+  } else if (command.intent.type === "resume-run") {
+    if (control.mode !== "paused") {
+      return trustedRefusal("run-not-paused", "Only a paused run can be resumed");
+    }
+    resultMode = "running";
+  } else {
+    if (!command.principal.roles.includes("release-manager")) {
+      return trustedRefusal("release-manager-required", "Ending a run requires release-manager");
+    }
+    if (control.mode === "ending" || control.mode === "ended") {
+      return trustedRefusal("run-already-ending", "Run is already ending or ended");
+    }
+    resultMode = "ending";
+  }
+  return Object.freeze({
+    result: Object.freeze({
+      priorMode: control.mode,
+      resultMode,
+      priorRevision: control.revision,
+      resultRevision: control.revision + 1,
+      occurredAt: currentTime,
+    }),
+  });
+}
+
+function persistTrustedHumanAuthorityDecision(
+  database: Database.Database,
+  command: CommandEnvelope,
+  currentTime: string,
+  result: JsonValue,
+  dependencies: RuntimeDependencies,
+): void {
+  if (!isPlainRecord(result)) throw new Error("Trusted human authority result is malformed");
+  const runKey = canonicalStringify([command.repositoryId, command.runId]);
+  const principal = canonicalStringify(command.principal);
+  const principalDigest = dependencies.sha256.digest(canonicalBytes(command.principal));
+  if (command.intent.type === "answer-question") {
+    const payload = decodeAnswerQuestionPayload(command.payload);
+    database
+      .prepare(
+        `INSERT INTO context_question_answers(
+           submission_id, run_key, command_id, question_digest, context_digest,
+           task_id, definition_generation, answer_digest, canonical_answer,
+           principal_digest, canonical_principal, answered_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        payload.submissionId,
+        runKey,
+        command.commandId,
+        result.questionDigest,
+        payload.contextDigest,
+        payload.taskId,
+        payload.definitionGeneration,
+        result.answerDigest,
+        canonicalStringify(payload.answer),
+        principalDigest,
+        principal,
+        currentTime,
+      );
+    database
+      .prepare(
+        `INSERT INTO context_fresh_dispatch_requirements(
+           submission_id, run_key, historical_dispatch_id, context_digest, task_id,
+           definition_generation, requirement_digest, created_at, satisfied_by_dispatch_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      )
+      .run(
+        payload.submissionId,
+        runKey,
+        result.historicalDispatchId,
+        payload.contextDigest,
+        payload.taskId,
+        payload.definitionGeneration,
+        result.requirementDigest,
+        currentTime,
+      );
+    return;
+  }
+  if (command.intent.type === "grant-allowance") {
+    const payload = decodeGrantAllowancePayload(command.payload);
+    const update = database
+      .prepare(
+        `UPDATE runner_budgets SET budget_limit = ?
+         WHERE run_key = ? AND unit = ? AND budget_limit = ?`,
+      )
+      .run(result.resultingLimit, runKey, payload.unit, payload.expectedLimit);
+    if (update.changes !== 1) throw new Error("Runner budget changed during allowance grant");
+    database
+      .prepare(
+        `INSERT INTO runner_allowance_resolutions(
+           escalation_command_id, run_key, command_id, escalation_digest, policy_digest,
+           unit, prior_limit, increase_by, resulting_limit, principal_digest,
+           canonical_principal, resolved_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        payload.escalationCommandId,
+        runKey,
+        command.commandId,
+        payload.escalationDigest,
+        payload.policyDigest,
+        payload.unit,
+        payload.expectedLimit,
+        payload.increaseBy,
+        result.resultingLimit,
+        principalDigest,
+        principal,
+        currentTime,
+      );
+    return;
+  }
+  persistRunControlTransition(
+    database,
+    command,
+    result,
+    currentTime,
+    principalDigest,
+    dependencies,
+  );
+}
+
+function initializeRunControl(
+  database: Database.Database,
+  command: CommandEnvelope,
+  currentTime: string,
+): void {
+  database
+    .prepare(
+      `INSERT INTO run_control_state(
+         run_key, repository_id, run_id, mode, revision, changed_at
+       ) VALUES (?, ?, ?, 'running', 0, ?) ON CONFLICT(run_key) DO NOTHING`,
+    )
+    .run(
+      canonicalStringify([command.repositoryId, command.runId]),
+      command.repositoryId,
+      command.runId,
+      currentTime,
+    );
+}
+
+function readRunControl(
+  database: Database.Database,
+  repositoryId: string,
+  runId: string,
+): RunControlState | undefined {
+  const row = database
+    .prepare<[string], { mode: RunControlMode; revision: number; changed_at: string }>(
+      "SELECT mode, revision, changed_at FROM run_control_state WHERE run_key = ?",
+    )
+    .get(canonicalStringify([repositoryId, runId]));
+  return row === undefined
+    ? undefined
+    : Object.freeze({
+        repositoryId,
+        runId,
+        mode: row.mode,
+        revision: row.revision,
+        changedAt: row.changed_at,
+      });
+}
+
+function assertRunAcceptsNewEffects(database: Database.Database, runKey: string): void {
+  const row = database
+    .prepare<[string], { mode: RunControlMode }>(
+      "SELECT mode FROM run_control_state WHERE run_key = ?",
+    )
+    .get(runKey);
+  if (row !== undefined && row.mode !== "running") {
+    throw new TypeError(`Runner does not accept new effects while run is ${row.mode}`);
+  }
+}
+
+function persistRunControlTransition(
+  database: Database.Database,
+  command: CommandEnvelope,
+  result: Record<string, JsonValue>,
+  currentTime: string,
+  principalDigest: string,
+  dependencies: RuntimeDependencies,
+): void {
+  const runKey = canonicalStringify([command.repositoryId, command.runId]);
+  const update = database
+    .prepare(
+      `UPDATE run_control_state SET mode = ?, revision = ?, changed_at = ?
+       WHERE run_key = ? AND mode = ? AND revision = ?`,
+    )
+    .run(
+      result.resultMode,
+      result.resultRevision,
+      currentTime,
+      runKey,
+      result.priorMode,
+      result.priorRevision,
+    );
+  if (update.changes !== 1) throw new Error("Run control changed during command execution");
+  const event = {
+    eventId: command.commandId,
+    commandId: command.commandId,
+    priorMode: result.priorMode,
+    resultMode: result.resultMode,
+    revision: result.resultRevision,
+    principalDigest,
+    occurredAt: currentTime,
+  };
+  database
+    .prepare(
+      `INSERT INTO run_control_events(
+         run_key, revision, event_id, command_id, prior_mode, result_mode,
+         principal_digest, canonical_event, occurred_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      runKey,
+      result.resultRevision,
+      command.commandId,
+      command.commandId,
+      result.priorMode,
+      result.resultMode,
+      principalDigest,
+      canonicalStringify(event),
+      currentTime,
+    );
+  if (command.intent.type === "end-run") {
+    fenceRunForEnding(
+      database,
+      command.repositoryId,
+      command.runId,
+      currentTime,
+      command.commandId,
+      dependencies,
+    );
+    advanceRunControlToEndedIfQuiescent(database, runKey, currentTime, dependencies);
+  }
+}
+
+function fenceRunForEnding(
+  database: Database.Database,
+  repositoryId: string,
+  runId: string,
+  currentTime: string,
+  commandId: string,
+  dependencies: RuntimeDependencies,
+): void {
+  const state = database
+    .prepare<[], { canonical_json: string }>(
+      "SELECT canonical_json FROM context_authority_state WHERE singleton = 1",
+    )
+    .get();
+  if (state === undefined) throw new Error("SQLite context authority singleton is missing");
+  const authority = InMemoryContextAuthority.fromDurableCanonicalJson(
+    state.canonical_json,
+    dependencies.sha256,
+  );
+  overlayContextTaskScopeCurrentness(database, authority);
+  const contextScopes = authority
+    .durableSnapshot()
+    .taskScopes.filter((scope) => scope.runId === runId && scope.claimsAccepted);
+  if (contextScopes.length > 0) {
+    authority.installTaskScopeFences({
+      repositoryId,
+      runId,
+      installedAt: currentTime,
+      fences: contextScopes.map((scope) => ({
+        scope: {
+          runId: scope.runId,
+          taskId: scope.taskId,
+          definitionGeneration: scope.definitionGeneration,
+        },
+        expectedFenceGeneration: scope.fenceGeneration,
+        expectedAcceptedContextDigest: scope.acceptedContextDigest,
+      })),
+    });
+    database
+      .prepare("UPDATE context_authority_state SET canonical_json = ? WHERE singleton = 1")
+      .run(authority.toDurableCanonicalJson());
+    synchronizeContextTaskScopes(
+      database,
+      normalizeContextAuthority(authority, dependencies.sha256).taskScopes,
+    );
+  }
+  const contextScopeKeys = new Set(
+    contextScopes.map((scope) => `${scope.taskId}\0${scope.definitionGeneration}`),
+  );
+  const remaining = readTaskScopeCurrentness(
+    database,
+    canonicalStringify([repositoryId, runId]),
+  ).filter(
+    (scope) =>
+      scope.claimsAccepted &&
+      !contextScopeKeys.has(`${scope.taskId}\0${scope.definitionGeneration}`),
+  );
+  if (remaining.length > 0) {
+    installDurableTaskScopeFences(
+      database,
+      {
+        repositoryId,
+        runId,
+        installedAt: currentTime,
+        fences: remaining.map((scope) => ({
+          scope: {
+            runId: scope.runId,
+            taskId: scope.taskId,
+            definitionGeneration: scope.definitionGeneration,
+          },
+          expectedFenceGeneration: scope.fenceGeneration,
+          expectedAcceptedContextDigest: scope.acceptedContextDigest,
+        })),
+      },
+      dependencies,
+    );
+  }
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO runner_cancellation_requests(
+         intent_id, owner_id, fence, requested_at
+       )
+       SELECT i.intent_id, ?, 1, ? FROM runner_effect_intents i
+       WHERE i.run_key = ? AND NOT EXISTS (
+         SELECT 1 FROM runner_effect_outcomes o
+         WHERE o.intent_id = i.intent_id AND o.status IN ('completed', 'failed', 'cancelled')
+       )`,
+    )
+    .run(`run-control:${commandId}`, currentTime, canonicalStringify([repositoryId, runId]));
+}
+
+function advanceRunControlToEndedIfQuiescent(
+  database: Database.Database,
+  runKey: string,
+  currentTime: string,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): boolean {
+  const state = database
+    .prepare<[string], { revision: number }>(
+      "SELECT revision FROM run_control_state WHERE run_key = ? AND mode = 'ending'",
+    )
+    .get(runKey);
+  if (state === undefined) return false;
+  const pending = database
+    .prepare<[string], { present: number }>(
+      `SELECT 1 AS present FROM runner_effect_intents i
+       WHERE i.run_key = ? AND NOT EXISTS (
+         SELECT 1 FROM runner_effect_outcomes o
+         WHERE o.intent_id = i.intent_id AND o.status IN ('completed', 'failed', 'cancelled')
+       ) LIMIT 1`,
+    )
+    .get(runKey);
+  if (pending !== undefined) return false;
+  const revision = state.revision + 1;
+  const eventId = `run-ended-${dependencies.sha256.digest(canonicalBytes({ runKey, revision }))}`;
+  database
+    .prepare(
+      `UPDATE run_control_state SET mode = 'ended', revision = ?, changed_at = ?
+       WHERE run_key = ? AND mode = 'ending' AND revision = ?`,
+    )
+    .run(revision, currentTime, runKey, state.revision);
+  const event = {
+    eventId,
+    priorMode: "ending",
+    resultMode: "ended",
+    revision,
+    occurredAt: currentTime,
+  };
+  database
+    .prepare(
+      `INSERT INTO run_control_events(
+         run_key, revision, event_id, command_id, prior_mode, result_mode,
+         principal_digest, canonical_event, occurred_at
+       ) VALUES (?, ?, ?, NULL, 'ending', 'ended', ?, ?, ?)`,
+    )
+    .run(
+      runKey,
+      revision,
+      eventId,
+      dependencies.sha256.digest(canonicalBytes(event)),
+      canonicalStringify(event),
+      currentTime,
+    );
+  return true;
+}
+
 export class SqliteRunnerAuthority implements RunnerAuthorityPort {
   readonly databasePath: string;
   readonly dependencies: RuntimeDependencies;
@@ -1047,6 +3412,7 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
     const runKey = runnerRunKey(input.repositoryId, input.runId);
     this.#database.exec("BEGIN IMMEDIATE");
     try {
+      assertRunAcceptsNewEffects(this.#database, runKey);
       this.#database
         .prepare(
           `INSERT INTO runner_runs(
@@ -1084,6 +3450,44 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
     }
   }
 
+  bindAllowancePolicy(
+    repositoryId: string,
+    runId: string,
+    input: RunnerAllowancePolicy,
+  ): RunnerAllowancePolicy {
+    const policy = validateStorageAllowancePolicy(input);
+    const canonical = canonicalStringify(policy);
+    const runKey = runnerRunKey(repositoryId, runId);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#requireRunnerRun(repositoryId, runId);
+      const existing = this.#database
+        .prepare<[string], { policy_digest: string; canonical_policy: string }>(
+          `SELECT policy_digest, canonical_policy FROM runner_allowance_policies
+           WHERE run_key = ?`,
+        )
+        .get(runKey);
+      if (existing === undefined) {
+        this.#database
+          .prepare(
+            `INSERT INTO runner_allowance_policies(run_key, policy_digest, canonical_policy)
+             VALUES (?, ?, ?)`,
+          )
+          .run(runKey, policy.policyDigest, canonical);
+      } else if (
+        existing.policy_digest !== policy.policyDigest ||
+        existing.canonical_policy !== canonical
+      ) {
+        throw new TypeError("Runner allowance policy is already bound to different content");
+      }
+      this.#database.exec("COMMIT");
+      return policy;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   enqueue(command: QueuedEffectCommand): void {
     validateRunnerCommand(command);
     const stored = snapshotRunnerValue(command);
@@ -1091,6 +3495,7 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
     this.#database.exec("BEGIN IMMEDIATE");
     try {
       this.#requireRunnerRun(command.repositoryId, command.runId);
+      assertRunAcceptsNewEffects(this.#database, runKey);
       this.#database
         .prepare(
           `INSERT INTO runner_commands(
@@ -1143,6 +3548,7 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
         this.#database.exec("COMMIT");
         return false;
       }
+      assertRunAcceptsNewEffects(this.#database, runKey);
       this.#database
         .prepare(
           `INSERT INTO runner_commands(
@@ -1249,6 +3655,7 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
     try {
       const run = this.#requireRunnerRun(input.repositoryId, input.runId);
       this.#assertRunnerFence(run.run_key, input.lease, input.currentTime);
+      assertRunAcceptsNewEffects(this.#database, run.run_key);
       for (const scope of scopes.values()) {
         insertInitialTaskScopes(this.#database, input.repositoryId, input.runId, [scope]);
       }
@@ -1423,7 +3830,15 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
           "SELECT canonical_escalation FROM runner_escalations WHERE command_id = ?",
         )
         .get(command.commandId);
-      if (existingEscalation !== undefined) {
+      const escalationResolved =
+        existingEscalation !== undefined &&
+        this.#database
+          .prepare<[string], { present: number }>(
+            `SELECT 1 AS present FROM runner_allowance_resolutions
+             WHERE escalation_command_id = ?`,
+          )
+          .get(command.commandId) !== undefined;
+      if (existingEscalation !== undefined && !escalationResolved) {
         this.#database.exec("COMMIT");
         committed = true;
         return {
@@ -1431,6 +3846,7 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
           escalation: parseRunnerValue(existingEscalation.canonical_escalation),
         };
       }
+      assertRunAcceptsNewEffects(this.#database, run.run_key);
       const currentness = requireTaskScopeCurrentness(
         this.#database,
         run.run_key,
@@ -1772,6 +4188,14 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
           ...(outcome.outputDigest === undefined ? {} : { outputDigest: outcome.outputDigest }),
         },
       );
+      if (isRunnerTerminal(outcome.status)) {
+        advanceRunControlToEndedIfQuiescent(
+          this.#database,
+          run.run_key,
+          outcome.observedAt,
+          this.dependencies,
+        );
+      }
       this.#fault("before-outcome-commit");
       this.#database.exec("COMMIT");
       committed = true;
@@ -3416,12 +5840,37 @@ function validateRunExecutionBinding(input: RunExecutionBinding): RunExecutionBi
   validateRunnerIdentity(input.runId, "runId");
   validateRunnerDigest(input.configurationSnapshotDigest, "configurationSnapshotDigest");
   const execution = validateParallelExecutionPolicy(input.execution);
+  const allowancePolicy = validateStorageAllowancePolicy(input.allowancePolicy);
   return deepFreezeRunnerValue({
     repositoryId: input.repositoryId,
     runId: input.runId,
     configurationSnapshotDigest: input.configurationSnapshotDigest,
     execution,
+    allowancePolicy,
   });
+}
+
+function validateStorageAllowancePolicy(input: RunnerAllowancePolicy): RunnerAllowancePolicy {
+  validateRunnerDigest(input.policyDigest, "allowance policy digest");
+  if (!Array.isArray(input.ceilings))
+    throw new TypeError("Allowance policy ceilings must be an array");
+  const seen = new Set<string>();
+  const ceilings = input.ceilings.map((ceiling) => {
+    validateRunnerUnit(ceiling.unit);
+    validateRunnerAmount(ceiling.maximum, "allowance policy maximum");
+    if (seen.has(ceiling.unit)) throw new TypeError("Allowance policy units must be unique");
+    seen.add(ceiling.unit);
+    return { unit: ceiling.unit, maximum: ceiling.maximum };
+  });
+  if (
+    ceilings.some((ceiling, index) => {
+      const previous = ceilings[index - 1];
+      return previous !== undefined && previous.unit >= ceiling.unit;
+    })
+  ) {
+    throw new TypeError("Allowance policy ceilings must be sorted by unit");
+  }
+  return deepFreezeRunnerValue({ policyDigest: input.policyDigest, ceilings });
 }
 
 function validateParallelExecutionPolicy(input: ParallelExecutionPolicy): ParallelExecutionPolicy {
@@ -5543,6 +7992,8 @@ function verifyDatabase(
   verifyContextTables(database, dependencies);
   verifyAmendmentTables(database, dependencies);
   verifyParallelWorkspaceTables(database, dependencies);
+  verifyHumanAuthorityTables(database, dependencies);
+  verifyPortalRevisionTables(database);
   verifySupervisorTables(database);
   if (!verifyAssets) return;
   for (const descriptor of readAssetDescriptors(database)) {
@@ -5551,6 +8002,200 @@ function verifyDatabase(
       descriptor,
       dependencies,
     );
+  }
+}
+
+function verifyHumanAuthorityTables(
+  database: Database.Database,
+  dependencies: RuntimeDependencies,
+): void {
+  const answers = database
+    .prepare<
+      [],
+      {
+        submission_id: string;
+        run_key: string;
+        question_digest: string;
+        context_digest: string;
+        task_id: string;
+        definition_generation: number;
+        answer_digest: string;
+        canonical_answer: string;
+        principal_digest: string;
+        canonical_principal: string;
+        canonical_question: string | null;
+      }
+    >(
+      `SELECT a.submission_id, a.run_key, a.question_digest, a.context_digest,
+              a.task_id, a.definition_generation, a.answer_digest, a.canonical_answer,
+              a.principal_digest, a.canonical_principal, q.canonical_question
+       FROM context_question_answers a
+       LEFT JOIN context_questions q ON q.submission_id = a.submission_id
+       ORDER BY a.submission_id`,
+    )
+    .all();
+  for (const answer of answers) {
+    const question =
+      answer.canonical_question === null
+        ? undefined
+        : decodeCanonicalJsonValue(answer.canonical_question);
+    if (
+      !isPlainRecord(question) ||
+      !isPlainRecord(question.question) ||
+      !isPlainRecord(question.task) ||
+      question.contextDigest !== answer.context_digest ||
+      question.task.taskId !== answer.task_id ||
+      question.task.definitionGeneration !== answer.definition_generation ||
+      answer.run_key !== canonicalStringify([question.repositoryId, question.runId]) ||
+      dependencies.sha256.digest(canonicalBytes(question.question)) !== answer.question_digest ||
+      dependencies.sha256.digest(
+        canonicalBytes(decodeCanonicalJsonValue(answer.canonical_answer)),
+      ) !== answer.answer_digest ||
+      dependencies.sha256.digest(
+        canonicalBytes(decodeCanonicalJsonValue(answer.canonical_principal)),
+      ) !== answer.principal_digest
+    ) {
+      throw new Error("SQLite question answer authority is not semantically bound");
+    }
+    const requirement = database
+      .prepare<
+        [string],
+        {
+          historical_dispatch_id: string;
+          context_digest: string;
+          task_id: string;
+          definition_generation: number;
+          requirement_digest: string;
+        }
+      >(
+        `SELECT historical_dispatch_id, context_digest, task_id, definition_generation,
+                requirement_digest
+         FROM context_fresh_dispatch_requirements WHERE submission_id = ?`,
+      )
+      .get(answer.submission_id);
+    if (
+      requirement === undefined ||
+      requirement.context_digest !== answer.context_digest ||
+      requirement.task_id !== answer.task_id ||
+      requirement.definition_generation !== answer.definition_generation ||
+      dependencies.sha256.digest(
+        canonicalBytes({
+          submissionId: answer.submission_id,
+          historicalDispatchId: requirement.historical_dispatch_id,
+          questionDigest: answer.question_digest,
+          contextDigest: answer.context_digest,
+          answerDigest: answer.answer_digest,
+          taskId: answer.task_id,
+          definitionGeneration: answer.definition_generation,
+        }),
+      ) !== requirement.requirement_digest
+    ) {
+      throw new Error("SQLite fresh dispatch requirement is not bound to its answer");
+    }
+  }
+
+  const policies = new Map(
+    database
+      .prepare<[], { run_key: string; policy_digest: string; canonical_policy: string }>(
+        `SELECT run_key, policy_digest, canonical_policy
+         FROM runner_allowance_policies ORDER BY run_key`,
+      )
+      .all()
+      .map((row) => {
+        const policy = validateStorageAllowancePolicy(
+          decodeCanonicalJsonValue(row.canonical_policy) as unknown as RunnerAllowancePolicy,
+        );
+        if (
+          policy.policyDigest !== row.policy_digest ||
+          canonicalStringify(policy) !== row.canonical_policy
+        ) {
+          throw new Error("SQLite runner allowance policy columns diverge from canonical policy");
+        }
+        return [row.run_key, policy] as const;
+      }),
+  );
+  for (const resolution of database
+    .prepare<
+      [],
+      {
+        escalation_command_id: string;
+        run_key: string;
+        escalation_digest: string;
+        policy_digest: string;
+        unit: string;
+        prior_limit: number;
+        increase_by: number;
+        resulting_limit: number;
+        canonical_principal: string;
+        principal_digest: string;
+        canonical_escalation: string | null;
+      }
+    >(
+      `SELECT r.escalation_command_id, r.run_key, r.escalation_digest,
+              r.policy_digest, r.unit, r.prior_limit, r.increase_by,
+              r.resulting_limit, r.canonical_principal, r.principal_digest,
+              e.canonical_escalation
+       FROM runner_allowance_resolutions r
+       LEFT JOIN runner_escalations e ON e.command_id = r.escalation_command_id
+       ORDER BY r.escalation_command_id`,
+    )
+    .all()) {
+    const policy = policies.get(resolution.run_key);
+    if (
+      resolution.canonical_escalation === null ||
+      policy === undefined ||
+      policy.policyDigest !== resolution.policy_digest ||
+      dependencies.sha256.digest(
+        canonicalBytes(decodeCanonicalJsonValue(resolution.canonical_escalation)),
+      ) !== resolution.escalation_digest ||
+      dependencies.sha256.digest(
+        canonicalBytes(decodeCanonicalJsonValue(resolution.canonical_principal)),
+      ) !== resolution.principal_digest ||
+      resolution.resulting_limit !== resolution.prior_limit + resolution.increase_by ||
+      !policy.ceilings.some(
+        ({ unit, maximum }) => unit === resolution.unit && resolution.resulting_limit <= maximum,
+      )
+    ) {
+      throw new Error("SQLite allowance resolution is not semantically bound");
+    }
+  }
+
+  for (const state of database
+    .prepare<[], { run_key: string; mode: RunControlMode; revision: number }>(
+      "SELECT run_key, mode, revision FROM run_control_state ORDER BY run_key",
+    )
+    .all()) {
+    const events = database
+      .prepare<
+        [string],
+        {
+          revision: number;
+          prior_mode: RunControlMode;
+          result_mode: RunControlMode;
+          canonical_event: string;
+        }
+      >(
+        `SELECT revision, prior_mode, result_mode, canonical_event
+         FROM run_control_events WHERE run_key = ? ORDER BY revision`,
+      )
+      .all(state.run_key);
+    let mode: RunControlMode = "running";
+    let revision = 0;
+    for (const event of events) {
+      if (
+        event.revision !== revision + 1 ||
+        event.prior_mode !== mode ||
+        canonicalStringify(decodeCanonicalJsonValue(event.canonical_event)) !==
+          event.canonical_event
+      ) {
+        throw new Error("SQLite run-control event history is not contiguous");
+      }
+      mode = event.result_mode;
+      revision = event.revision;
+    }
+    if (state.mode !== mode || state.revision !== revision) {
+      throw new Error("SQLite run-control state diverges from immutable events");
+    }
   }
 }
 

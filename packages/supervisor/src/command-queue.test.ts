@@ -581,6 +581,7 @@ function instantiateCommand(commandId: string) {
       phase: runtimeFixture.phase,
       approvalPolicy: { policy: "approval-required" as const, authority: runtimePrincipal },
       escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+      allowancePolicy: runtimeFixture.allowancePolicy,
     },
   });
 }

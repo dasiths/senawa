@@ -8,6 +8,8 @@ export * from "./http-handler.js";
 export * from "./http-router.js";
 export * from "./http-server.js";
 export * from "./local-security.js";
+export * from "./portal-api.js";
+export * from "./portal-assets.js";
 export * from "./recovery.js";
 export * from "./run-controller.js";
 export * from "./run-event-notifier.js";

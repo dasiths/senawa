@@ -576,6 +576,37 @@ independent re-review, validation, and delivery remain in Phase 10F.
 Provide an operational portal for graph inspection, artifacts, questions,
 approvals, amendments, escalations, receipts, and run control.
 
+Phase 11A is complete. Exact human authority commands, immutable question
+answers, policy-bounded allowance grants, and durable pause, resume, ending,
+and ended modes now precede portal query and UI work.
+
+Phase 11B is complete. Browser-safe bounded portal DTOs, revision-vector query
+authority, authenticated loopback static hosting, exact session descriptors,
+and verified optional manifest composition now precede the protocol-only
+browser application. No frontend package or browser automation was added.
+
+Phase 11C is complete. A frameworkless protocol-only browser package now builds
+verified static assets and implements immutable state, bounded transport,
+cursor-vector resynchronization, exact pending command recovery, hostile-safe
+rendering, review dialogs, and responsive operational views. Real browser
+journeys, screenshots, overlap inspection, and delivery remain Phase 11D.
+
+The Phase 11C allowance review gap is closed before Phase 11D. One exact,
+browser-safe authority projection now binds an unresolved escalation to its
+current budget, allowance policy, graph, and run mode. The portal can construct
+`grant-allowance` only from that complete projection and remains locked when any
+fact is missing, inconsistent, resolved, or stale.
+
+Phase 11D is complete. Deterministic desktop, mobile, visual, reconnect,
+session-expiry, authority-decision, cross-run overlap, same-run event race, and
+run-control journeys now execute against a fresh temporary SQLite authority and
+the production loopback composition. The browser harness composes no worker or
+model adapter and performs no inference. Independent review repairs preserve
+reviewed form values, close authority on run changes, retain pending identities
+for lookup-only rebootstrap, fence run/route assemblies and stream generations,
+clear stale expired projections, scope artifact previews by run, and remove
+closed compact rails from the accessibility tree.
+
 ### Acceptance
 
 * Portal imports protocol only and shares no backend authority.
@@ -591,6 +622,8 @@ approvals, amendments, escalations, receipts, and run control.
 * Playwright desktop and mobile screenshots
 * SSE reconnect and stale-projection behavior
 * Complete approval, question, amendment, and escalation flows
+* Human authority duplicate, stale, unauthorized, crash, race, and reopen tests
+* Run-control revision, cancellation, stale-output, and restart convergence
 
 ### Disproof
 
@@ -647,6 +680,13 @@ limits, and a no-credit end-to-end acceptance journey.
 
 ### Acceptance
 
+* Default `senawa init` durably creates `.senawa/workflow.json` without
+  overwriting an existing directory or file. An explicit path continues to
+  create exactly that file path.
+* The alpha keeps workflow structure, schemas, roles, model policy, sensors,
+  gates, and execution policy in the one canonical `.senawa/workflow.json`
+  document. Configuration splitting and import resolution remain deferred
+  unless Phase 13 research proves a deterministic contract is necessary.
 * Reports reconstruct graph, trajectory, actors, models, assets, context,
   amendments, escalations, gates, approvals, costs, and uncertainty.
 * Backup, restore, export, integrity, repair, diagnostics, and service operations
@@ -658,6 +698,8 @@ limits, and a no-credit end-to-end acceptance journey.
 
 ### Validation
 
+* Default and explicit-path init journeys, including existing destination,
+  partial-write, file-sync, and parent-directory-sync failures
 * Clean-install matrix
 * Deterministic report and export golden tests
 * Backup/restore and corruption journey
@@ -740,6 +782,8 @@ approved consumer documentation and the implementation log decision record.
 ### Validation
 
 * Fresh-install documentation journey in a temporary directory
+* Default init assertions for `.senawa/workflow.json`, including nested sensor
+  and gate configuration and non-overwrite behavior
 * Command and configuration examples checked against built executables and exact
   codecs
 * Documentation links, anchors, frontmatter, and terminology checks
@@ -773,6 +817,12 @@ After Phase 14 is independently approved, committed, and pushed:
 * Fetch and compare the branch with the remote base branch.
 * Generate a complete branch reference and review it in parallel chunks.
 * Run every repository validation check from a fresh install.
+* Run the complete desktop, mobile, visual, reconnect, session, and authority
+  Playwright matrix in deterministic fixture mode. This mode must not compose a
+  worker adapter, invoke a model, require credits, or honor live-worker opt-in.
+* Present the final portal screenshots and offline interaction journey for human
+  review before creating the pull request. Keep any paid live-worker smoke test
+  separate, explicitly opted in, and clearly cost-labelled.
 * Generate a consumer-readable pull request description covering the complete
   redesign, migrations, security model, validation, and known limits.
 * Create one pull request from the implementation branch to the repository's

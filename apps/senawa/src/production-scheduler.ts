@@ -79,7 +79,24 @@ export class ProductionScheduler {
     );
   }
 
+  listFreshDispatchRequirements(repositoryId: string, runId: string) {
+    return this.#options.authority.commandAuthority.listFreshDispatchRequirements(
+      repositoryId,
+      runId,
+    );
+  }
+
   schedule(input: ProductionScheduleInput): ProductionScheduleResult {
+    const runControl = this.#options.authority.commandAuthority.queryRunControl(
+      input.repositoryId,
+      input.runId,
+    );
+    if (runControl !== undefined && runControl.mode !== "running") {
+      return { worked: false, batchSize: 1 };
+    }
+    if (this.listFreshDispatchRequirements(input.repositoryId, input.runId).length > 0) {
+      return { worked: false, batchSize: 1 };
+    }
     const runtime = this.#options.authority.commandAuthority.queryRunScheduling(
       input.repositoryId,
       input.runId,
@@ -100,6 +117,11 @@ export class ProductionScheduler {
       return { worked: false, batchSize: 1 };
     }
     this.#configureRunner(input, dispatches, runtimeBinding.execution.maxWriterConcurrency);
+    this.#options.runnerAuthority.bindAllowancePolicy(
+      input.repositoryId,
+      input.runId,
+      runtimeBinding.allowancePolicy,
+    );
     const binding =
       this.#options.workspaceAuthority.loadRunExecution(input.repositoryId, input.runId) ??
       this.#options.workspaceAuthority.bindRunExecution(runtimeBinding);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { GOLDEN_COMMAND_JSON, GOLDEN_RECEIPT_JSON } from "./fixtures/v1alpha2.js";
 import {
   canonicalBytes,
+  decodeAnswerQuestionPayload,
   decodeApplyApprovedAmendmentPayload,
   decodeAuthenticatedPrincipal,
   decodeCapabilityHandshake,
@@ -11,10 +12,12 @@ import {
   decodeErrorEnvelope,
   decodeEventReplayPage,
   decodeEventStreamFrame,
+  decodeGrantAllowancePayload,
   decodeProjectionEnvelope,
   decodeReceiptPage,
   decodeRecordAmendmentDecisionPayload,
   decodeRecordIntegrationBarrierPayload,
+  decodeRunControlPayload,
   decodeRunIdentity,
   decodeSubmitAmendmentProposalPayload,
   decodeSupervisorAdmissionFacts,
@@ -23,6 +26,7 @@ import {
   decodeSupervisorWake,
   decodeTransportAttribution,
   decodeWithdrawAmendmentProposalPayload,
+  encodeAnswerQuestionPayload,
   encodeApplyApprovedAmendmentPayload,
   encodeAuthenticatedPrincipal,
   encodeCapabilityHandshake,
@@ -32,10 +36,12 @@ import {
   encodeErrorEnvelope,
   encodeEventReplayPage,
   encodeEventStreamFrame,
+  encodeGrantAllowancePayload,
   encodeProjectionEnvelope,
   encodeReceiptPage,
   encodeRecordAmendmentDecisionPayload,
   encodeRecordIntegrationBarrierPayload,
+  encodeRunControlPayload,
   encodeRunIdentity,
   encodeSubmitAmendmentProposalPayload,
   encodeTransportAttribution,
@@ -175,7 +181,11 @@ describe("v1alpha2 command codec", () => {
     "apply-approved-amendment",
     "record-integration-barrier",
     "create-escalation",
+    "answer-question",
     "grant-allowance",
+    "pause-run",
+    "resume-run",
+    "end-run",
   ] as const)("accepts the %s intent discriminator", (type) => {
     expect(decodeCommandEnvelope({ ...command, intent: { type } }).intent).toEqual({ type });
   });
@@ -260,6 +270,55 @@ describe("v1alpha2 command codec", () => {
 
     expectProtocolError("invalid-type", "$.payload", () => decodeCommandEnvelope(adversarial));
     expect(invoked).toBe(false);
+  });
+});
+
+describe("v1alpha2 human authority and run-control payloads", () => {
+  it("round trips an exact question answer without caller-owned authority facts", () => {
+    const payload = {
+      submissionId: "submission_question",
+      questionDigest: "b".repeat(64),
+      contextDigest: "c".repeat(64),
+      taskId: "task_alpha",
+      definitionGeneration: 3,
+      answer: { selected: "production" },
+    };
+    expect(decodeAnswerQuestionPayload(encodeAnswerQuestionPayload(payload))).toEqual(payload);
+    expectProtocolError("unknown-field", "$.dispatchId", () =>
+      decodeAnswerQuestionPayload({ ...payload, dispatchId: "dispatch_override" }),
+    );
+  });
+
+  it("round trips an allowance grant while excluding a caller-supplied ceiling", () => {
+    const payload = {
+      escalationCommandId: "command_escalation",
+      operationId: "operation_alpha",
+      escalationDigest: "d".repeat(64),
+      policyDigest: "e".repeat(64),
+      unit: "tokens",
+      expectedLimit: 1_000,
+      expectedRunModeRevision: 3,
+      increaseBy: 250,
+    };
+    expect(decodeGrantAllowancePayload(encodeGrantAllowancePayload(payload))).toEqual(payload);
+    expectProtocolError("unknown-field", "$.ceiling", () =>
+      decodeGrantAllowancePayload({ ...payload, ceiling: 10_000 }),
+    );
+    expectProtocolError("invalid-value", "$.increaseBy", () =>
+      decodeGrantAllowancePayload({ ...payload, increaseBy: 0 }),
+    );
+  });
+
+  it("requires one non-negative exact run-mode revision", () => {
+    expect(
+      decodeRunControlPayload(encodeRunControlPayload({ expectedRunModeRevision: 7 })),
+    ).toEqual({ expectedRunModeRevision: 7 });
+    expectProtocolError("invalid-value", "$.expectedRunModeRevision", () =>
+      decodeRunControlPayload({ expectedRunModeRevision: -1 }),
+    );
+    expectProtocolError("unknown-field", "$.cancelDaemon", () =>
+      decodeRunControlPayload({ expectedRunModeRevision: 7, cancelDaemon: true }),
+    );
   });
 });
 

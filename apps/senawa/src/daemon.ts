@@ -33,6 +33,7 @@ import type { RunExecutionBinding } from "@senawa/runtime";
 import { createRoleAuthorizationPolicy, type RuntimeDependencies } from "@senawa/runtime";
 import {
   SqliteContextBroker,
+  SqlitePortalQueryAuthority,
   SqliteRunnerAuthority,
   SqliteWorkspaceIntegrationAuthority,
 } from "@senawa/storage-sqlite";
@@ -43,6 +44,7 @@ import {
   ensurePrivateRuntimeDirectory,
   InMemoryRunEventNotifier,
   loadOrCreateLocalCredential,
+  PortalApi,
   PortalSessionSecurity,
   SqliteSupervisorAuthority,
   SseEventSource,
@@ -54,6 +56,7 @@ import {
   startLoopbackSupervisorServer,
   startUnixSupervisorServer,
 } from "@senawa/supervisor";
+import { optionalPortalAssetSource } from "./portal-assets.js";
 import { ProductionScheduler } from "./production-scheduler.js";
 import {
   DurableCompletionEligibility,
@@ -85,6 +88,11 @@ export interface OwnedCopilotSdkPort extends CopilotSdkPort {
 
 export interface SenawaServiceCompositionOptions {
   readonly runtimeDependencies?: RuntimeDependencies;
+  readonly portalSessionClock?: { now(): number };
+  readonly portalSessionLifetimeMs?: number;
+  readonly scheduleBeforeEffects?: ConstructorParameters<
+    typeof SupervisorService
+  >[0]["scheduleBeforeEffects"];
   readonly createCopilotSdk?: (
     options: ProductionCopilotSdkPortOptions,
   ) => Promise<OwnedCopilotSdkPort>;
@@ -140,9 +148,10 @@ export async function startSenawaService(
   let ownedContextBroker: SqliteContextBroker | undefined;
   let ownedWorkspaceAuthority: SqliteWorkspaceIntegrationAuthority | undefined;
   let ownedRunnerAuthority: SqliteRunnerAuthority | undefined;
+  let ownedPortalQuery: SqlitePortalQueryAuthority | undefined;
   let ownedSdkPool: WorkspaceSdkPool | undefined;
   try {
-    const notifier = new InMemoryRunEventNotifier(() => service?.wake());
+    const notifier = new InMemoryRunEventNotifier(() => service?.wake(), true);
     const authority = new SqliteSupervisorAuthority({
       databasePath: paths.databasePath,
       assetDirectory: paths.assetDirectory,
@@ -150,6 +159,12 @@ export async function startSenawaService(
       eventNotifier: notifier,
     });
     ownedAuthority = authority;
+    const portalQuery = new SqlitePortalQueryAuthority({
+      databasePath: paths.databasePath,
+      assetDirectory: paths.assetDirectory,
+      dependencies,
+    });
+    ownedPortalQuery = portalQuery;
     const workspaceAuthority = new SqliteWorkspaceIntegrationAuthority({
       databasePath: paths.databasePath,
       dependencies,
@@ -281,10 +296,14 @@ export async function startSenawaService(
                 : composition.createGitHost(options);
             },
           });
-    const api = new SupervisorApi(authority);
+    const api = new SupervisorApi(authority, "supervisor_local", new PortalApi(portalQuery));
+    const portalAssets = optionalPortalAssetSource(environment);
     const sessions = new PortalSessionSecurity({
-      clock: { now: () => Date.now() },
+      clock: composition.portalSessionClock ?? { now: () => Date.now() },
       random: { bytes: (length) => randomBytes(length) },
+      ...(composition.portalSessionLifetimeMs === undefined
+        ? {}
+        : { sessionLifetimeMs: composition.portalSessionLifetimeMs }),
     });
     const sse = new SseEventSource({
       api,
@@ -343,6 +362,7 @@ export async function startSenawaService(
                   contextFactory: () => ({ ...contextFactory(), transportKind: "http" }),
                   sse,
                   operations,
+                  ...(portalAssets === undefined ? {} : { portalAssets }),
                 }),
             ),
           "loopback",
@@ -374,12 +394,15 @@ export async function startSenawaService(
       failurePolicyForRun: (repositoryId, runId) =>
         workspaceAuthority.loadRunExecution(repositoryId, runId)?.execution.failurePolicy ??
         authority.commandAuthority.queryRunExecution(repositoryId, runId)?.execution.failurePolicy,
-      scheduleBeforeEffects: ({ repositoryId, runId, lease, currentTime }) =>
-        productionScheduler.schedule({ repositoryId, runId, lease, currentTime }),
+      scheduleBeforeEffects:
+        composition.scheduleBeforeEffects ??
+        (({ repositoryId, runId, lease, currentTime }) =>
+          productionScheduler.schedule({ repositoryId, runId, lease, currentTime })),
       listSchedulableRuns: () => productionScheduler.listRuns(),
       deliverCompletionOutboxOnce: () => contextBroker.deliverCompletionOutboxOnce(),
       deliverAmendmentProposalOutboxOnce: () => amendmentBridge.deliverOnce(),
       closeables: [
+        { close: () => portalQuery.close() },
         { close: () => contextBroker.close() },
         { close: () => workspaceAuthority.close() },
         { close: () => runnerAuthority.close() },
@@ -406,6 +429,11 @@ export async function startSenawaService(
       } catch (cleanupError) {
         cleanupErrors.push(cleanupError);
       }
+    }
+    try {
+      ownedPortalQuery?.close();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
     }
     try {
       ownedContextBroker?.close();
@@ -470,7 +498,11 @@ export const runtimeDependencies: RuntimeDependencies = Object.freeze({
     { intent: "apply-approved-amendment", roles: ["trusted-supervisor"] },
     { intent: "record-integration-barrier", roles: ["trusted-supervisor"] },
     { intent: "create-escalation", roles: ["engine", "release-manager"] },
+    { intent: "answer-question", roles: ["operator", "release-manager"] },
     { intent: "grant-allowance", roles: ["release-manager"] },
+    { intent: "pause-run", roles: ["operator", "release-manager"] },
+    { intent: "resume-run", roles: ["operator", "release-manager"] },
+    { intent: "end-run", roles: ["release-manager"] },
   ]),
 });
 

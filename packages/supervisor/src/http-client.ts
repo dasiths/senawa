@@ -6,11 +6,45 @@ import {
   decodeCapabilityHandshake,
   decodeErrorEnvelope,
   decodeEventReplayPage,
+  decodePortalAllowanceReview,
+  decodePortalArtifactContent,
+  decodePortalArtifactPage,
+  decodePortalEventWindow,
+  decodePortalGraphEdgePage,
+  decodePortalGraphNodePage,
+  decodePortalGraphSummary,
+  decodePortalHumanNeedPage,
+  decodePortalImmutableRecord,
+  decodePortalIntegrationPage,
+  decodePortalQuestionPage,
+  decodePortalQuestionRecord,
+  decodePortalReceiptWindow,
+  decodePortalRepositoryPage,
+  decodePortalRunOverview,
+  decodePortalRunPage,
+  decodePortalWorkspacePage,
   decodeProjectionEnvelope,
   decodeReceiptPage,
   decodeSupervisorReceipt,
   type EventReplayPage,
   type JsonValue,
+  type PortalAllowanceReview,
+  type PortalArtifactContent,
+  type PortalArtifactPage,
+  type PortalEventWindow,
+  type PortalGraphEdgePage,
+  type PortalGraphNodePage,
+  type PortalGraphSummary,
+  type PortalHumanNeedPage,
+  type PortalImmutableRecord,
+  type PortalIntegrationPage,
+  type PortalQuestionPage,
+  type PortalQuestionRecord,
+  type PortalReceiptWindow,
+  type PortalRepositoryPage,
+  type PortalRunOverview,
+  type PortalRunPage,
+  type PortalWorkspacePage,
   PROTOCOL_LIMITS,
   type ProjectionEnvelope,
   type ReceiptPage,
@@ -168,6 +202,136 @@ export class HttpSupervisorClient {
     );
   }
 
+  async listPortalRepositories(input: string | unknown = {}): Promise<PortalRepositoryPage> {
+    const request = exactClientObject(input, [], ["after", "limit"]);
+    return decodePortalRepositoryPage(
+      await this.#json("GET", `/api/v1alpha1/repositories${lexicalQuery(request)}`),
+    );
+  }
+
+  async listPortalRuns(input: string | unknown): Promise<PortalRunPage> {
+    const request = exactClientObject(input, ["repositoryId"], ["after", "limit"]);
+    return decodePortalRunPage(
+      await this.#json(
+        "GET",
+        `/api/v1alpha1/repositories/${segment(request.repositoryId)}/runs${lexicalQuery(request)}`,
+      ),
+    );
+  }
+
+  async getPortalRunOverview(input: string | unknown): Promise<PortalRunOverview> {
+    const request = exactClientObject(input, ["repositoryId", "runId"]);
+    return decodePortalRunOverview(await this.#json("GET", `${portalRunPath(request)}/overview`));
+  }
+
+  async getPortalGraph(input: string | unknown): Promise<PortalGraphSummary> {
+    const request = exactClientObject(input, ["repositoryId", "runId"]);
+    return decodePortalGraphSummary(await this.#json("GET", `${portalRunPath(request)}/graph`));
+  }
+
+  async listPortalGraphNodes(input: string | unknown): Promise<PortalGraphNodePage> {
+    return (await this.#portalGraphPage(input, "nodes")) as PortalGraphNodePage;
+  }
+
+  async listPortalGraphEdges(input: string | unknown): Promise<PortalGraphEdgePage> {
+    return (await this.#portalGraphPage(input, "edges")) as PortalGraphEdgePage;
+  }
+
+  async getPortalRecord(input: string | unknown): Promise<PortalImmutableRecord> {
+    const request = exactClientObject(input, ["repositoryId", "runId", "kind", "digest"]);
+    return decodePortalImmutableRecord(
+      await this.#json(
+        "GET",
+        `${portalRunPath(request)}/records/${segment(request.kind)}/${segment(request.digest)}`,
+      ),
+    );
+  }
+
+  async listPortalHumanNeeds(input: string | unknown): Promise<PortalHumanNeedPage> {
+    const request = exactClientObject(input, ["repositoryId", "runId"], ["after", "limit"]);
+    return decodePortalHumanNeedPage(
+      await this.#json("GET", `${portalRunPath(request)}/needs${lexicalQuery(request)}`),
+    );
+  }
+
+  async getPortalAllowanceReview(input: string | unknown): Promise<PortalAllowanceReview> {
+    const request = exactClientObject(input, ["repositoryId", "runId", "escalationCommandId"]);
+    return decodePortalAllowanceReview(
+      await this.#json(
+        "GET",
+        `${portalRunPath(request)}/allowances/${segment(request.escalationCommandId)}`,
+      ),
+    );
+  }
+
+  async listPortalQuestions(input: string | unknown): Promise<PortalQuestionPage> {
+    const request = exactClientObject(input, ["repositoryId", "runId"], ["after", "limit"]);
+    return decodePortalQuestionPage(
+      await this.#json("GET", `${portalRunPath(request)}/questions${lexicalQuery(request)}`),
+    );
+  }
+
+  async getPortalQuestion(input: string | unknown): Promise<PortalQuestionRecord> {
+    const request = exactClientObject(input, ["repositoryId", "runId", "submissionId"]);
+    return decodePortalQuestionRecord(
+      await this.#json(
+        "GET",
+        `${portalRunPath(request)}/questions/${segment(request.submissionId)}`,
+      ),
+    );
+  }
+
+  async listPortalArtifacts(input: string | unknown): Promise<PortalArtifactPage> {
+    const request = exactClientObject(input, ["repositoryId", "runId"], ["after", "limit"]);
+    return decodePortalArtifactPage(
+      await this.#json("GET", `${portalRunPath(request)}/artifacts${lexicalQuery(request)}`),
+    );
+  }
+
+  async getPortalArtifactContent(input: string | unknown): Promise<PortalArtifactContent> {
+    const request = exactClientObject(input, [
+      "repositoryId",
+      "runId",
+      "artifactId",
+      "offset",
+      "length",
+    ]);
+    const query = new URLSearchParams({
+      offset: String(request.offset),
+      length: String(request.length),
+    });
+    return decodePortalArtifactContent(
+      await this.#json(
+        "GET",
+        `${portalRunPath(request)}/artifacts/${segment(request.artifactId)}/content?${query}`,
+      ),
+    );
+  }
+
+  async listPortalWorkspaces(input: string | unknown): Promise<PortalWorkspacePage> {
+    const request = exactClientObject(input, ["repositoryId", "runId"], ["after", "limit"]);
+    return decodePortalWorkspacePage(
+      await this.#json("GET", `${portalRunPath(request)}/workspaces${lexicalQuery(request)}`),
+    );
+  }
+
+  async listPortalIntegrations(input: string | unknown): Promise<PortalIntegrationPage> {
+    const request = exactClientObject(input, ["repositoryId", "runId"], ["after", "limit"]);
+    return decodePortalIntegrationPage(
+      await this.#json("GET", `${portalRunPath(request)}/integrations${lexicalQuery(request)}`),
+    );
+  }
+
+  async listPortalReceipts(input: string | unknown): Promise<PortalReceiptWindow> {
+    return decodePortalReceiptWindow(
+      await this.#json("GET", portalActivityPath(input, "receipts")),
+    );
+  }
+
+  async listPortalEvents(input: string | unknown): Promise<PortalEventWindow> {
+    return decodePortalEventWindow(await this.#json("GET", portalActivityPath(input, "events")));
+  }
+
   async createPortalSession(): Promise<{ readonly expiresAt: string; readonly path: string }> {
     const value = localObject(await this.#json("POST", "/api/v1alpha1/portal-sessions"));
     if (typeof value.expiresAt !== "string" || typeof value.path !== "string") {
@@ -219,9 +383,31 @@ export class HttpSupervisorClient {
       throw new Error("Portal bootstrap cookie is invalid");
     }
     this.#sessionCookie = sessionCookie;
-    const session = localObject(await this.#json("GET", "/api/v1alpha1/session"));
+    const descriptor = localObject(await this.#json("GET", "/api/v1alpha1/session"));
+    if (descriptor.csrfMode !== "available") {
+      throw new Error("Portal session is not available for CSRF issuance");
+    }
+    const session = localObject(await this.#json("POST", "/api/v1alpha1/session"));
     if (typeof session.csrfToken !== "string") throw new Error("Portal CSRF response is invalid");
     this.#csrfToken = session.csrfToken;
+  }
+
+  async #portalGraphPage(
+    input: string | unknown,
+    resource: "nodes" | "edges",
+  ): Promise<PortalGraphNodePage | PortalGraphEdgePage> {
+    const request = exactClientObject(
+      input,
+      ["repositoryId", "runId", "graphRevision"],
+      ["after", "limit"],
+    );
+    const query = new URLSearchParams({ revision: String(request.graphRevision) });
+    if (request.after !== undefined) query.set("after", String(request.after));
+    if (request.limit !== undefined) query.set("limit", String(request.limit));
+    const value = await this.#json("GET", `${portalRunPath(request)}/graph/${resource}?${query}`);
+    return resource === "nodes"
+      ? decodePortalGraphNodePage(value)
+      : decodePortalGraphEdgePage(value);
   }
 
   async raw(
@@ -389,6 +575,27 @@ function pagePath(input: string | unknown, resource: "receipts" | "events"): str
 
 function amendmentPath(repositoryId: unknown, runId: unknown): string {
   return `/api/v1alpha1/repositories/${segment(repositoryId)}/runs/${segment(runId)}/amendments`;
+}
+
+function portalRunPath(request: Record<string, unknown>): string {
+  return `/api/v1alpha1/repositories/${segment(request.repositoryId)}/runs/${segment(request.runId)}`;
+}
+
+function lexicalQuery(request: Record<string, unknown>): string {
+  const query = new URLSearchParams();
+  if (request.after !== undefined) query.set("after", String(request.after));
+  if (request.limit !== undefined) query.set("limit", String(request.limit));
+  return query.size === 0 ? "" : `?${query}`;
+}
+
+function portalActivityPath(input: string | unknown, resource: "receipts" | "events"): string {
+  const request = exactClientObject(input, ["repositoryId", "runId"], ["after", "before", "limit"]);
+  if (request.after !== undefined && request.before !== undefined) throw invalidClientRequest();
+  const query = new URLSearchParams();
+  if (request.after !== undefined) query.set("after", String(request.after));
+  if (request.before !== undefined) query.set("before", String(request.before));
+  if (request.limit !== undefined) query.set("limit", String(request.limit));
+  return `${portalRunPath(request)}/activity/${resource}${query.size === 0 ? "" : `?${query}`}`;
 }
 
 function localObject(input: string | unknown): Record<string, unknown> {
