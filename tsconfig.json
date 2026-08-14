@@ -20,6 +20,9 @@
       "path": "packages/runtime"
     },
     {
+      "path": "packages/reporting"
+    },
+    {
       "path": "packages/storage-sqlite"
     },
     {

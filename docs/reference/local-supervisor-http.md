@@ -106,12 +106,14 @@ Authenticated Unix-socket clients can use these exact routes:
 * `POST /supervisor/v1alpha1/drain`
 * `POST /supervisor/v1alpha1/stop`
 * `POST /supervisor/v1alpha1/recoveries`
+* `POST /supervisor/v1alpha1/backups`
 * `GET /supervisor/v1alpha1/logs?after={cursor}&limit={count}`
 * `POST /api/v1alpha1/portal-sessions`
 
 Loopback requests receive `404` for every `/supervisor/v1alpha1` route. Recovery
 accepts only repository and run identities. The server supplies owner, fence,
-attempt, and current-time facts.
+attempt, and current-time facts. Backup accepts one bounded request identity and
+destination directory, and returns only that identity plus verified status.
 
 Status is local and exact. It reports durable desired mode, live lifecycle,
 health, process and start facts, listeners, database-derived pending counts,
@@ -128,7 +130,12 @@ trust limits.
 
 Supervisor logs are persisted with monotonically increasing cursors and bounded
 pages. ANSI escapes, control characters, bearer values, and sensitive
-structured fields are removed or redacted before commit.
+structured fields are removed or redacted before commit. The log table retains
+the latest 10,000 entries. Receipts, events, assets, configuration snapshots,
+contexts, SDK session references, remote inbox and outbox records, reports, and
+other authority history have no automatic age or count pruning in this alpha.
+They remain immutable while referenced. Backup and export do not delete source
+history, and no retention interval is claimed for operator-created bundles.
 
 ## Service Lifecycle
 
@@ -183,6 +190,11 @@ are converted to deterministic engine-service `submit-completion` commands and
 admitted through the supervisor queue. The context outbox acknowledges delivery
 only after queue acceptance commits.
 
+Each grant permits at most 1,024 operations, 256 MiB total bytes, and 64 KiB per
+read. Asset ingress permits at most 256 MiB per object. SQLite applies the
+configured repository object-count and total-byte quotas in the same write
+transaction before it creates a staging file.
+
 ## Portal Sessions
 
 Authenticated IPC creates a portal bootstrap through
@@ -207,6 +219,8 @@ Every other loopback API request requires a valid session cookie. Mutations also
 require the exact loopback `Origin` and `X-Senawa-CSRF`; reads reject a present
 nonmatching `Origin`. Initial bootstrap consumption does not require `Origin`.
 Session expiry terminates SSE and makes API, shell, and asset requests fail.
+Session lifetime is at most eight hours, and the supervisor admits at most
+1,024 active sessions. Expired sessions are purged before capacity checks.
 
 ## Portal Static Assets
 
@@ -215,6 +229,9 @@ The app may inject a verified `PortalAssetSource` loaded from
 regular, unique, within one canonical root, free of symbolic-link components,
 and exact for SHA-256 digest, byte length, and allowlisted content type. Files
 that are unknown, unmanifested, or requested through traversal are not served.
+The manifest contains at most 64 files, each file is at most 16 MiB, and the
+declared uncompressed aggregate is at most 64 MiB. Aggregate refusal occurs
+before asset bytes are loaded.
 
 Authenticated loopback requests can read only `GET /portal/` and exact
 `GET /portal/assets/{name}` entries. The shell uses `Cache-Control: no-store`.
@@ -240,6 +257,13 @@ content encoding and ambiguous framing, and bound streamed bodies to the
 protocol wire limit plus framing allowance. `GET` requests do not accept a
 body. Internal failures return a generic safe error without reflecting request
 content.
+
+CLI workflow and command inputs are capped at 256 KiB before complete buffering
+or JSON parsing. Executable sensors admit at most 256 arguments and 64 KiB of
+aggregate UTF-8 argument bytes. Their explicit inherited-environment allowlist
+contains at most 128 names and 64 KiB of aggregate UTF-8 names and values. A
+process stream is capped at 64 MiB, configured retries share a 1 GiB aggregate
+output budget, and active process and workspace capacity cannot exceed 32.
 
 ## Server-Sent Events
 
@@ -271,12 +295,25 @@ bounds, records modes, lengths, and SHA-256 digests, and restores only to fresh
 destinations. SQLite restore verification runs against a disposable bundle copy
 so SQLite sidecars cannot mutate the source backup.
 
-A combined backup is an offline operation. The service must remain in
-`drained` state for the full operation, with command admission and listeners
-unable to mutate state. The service operation queue supplies the drained-state
-proof and excludes cycles, recovery, and stop. Backup stops the owned Copilot
-SDK client, verifies the service is still drained, then copies SQLite and SDK
-state. The client is not restarted by the backup operation.
+A combined backup is an authenticated IPC operation while the service is
+drained. The service must remain in `drained` state for the full operation,
+with command admission unable to mutate state. The service operation queue
+supplies the drained-state proof and excludes cycles, recovery, and stop.
+Backup stops the owned Copilot SDK client, verifies the service is still
+drained, then copies and verifies SQLite and SDK state before publishing the
+outer manifest. The SDK client is not restarted by the backup operation.
+
+The request identity is derived from the destination by the CLI. An exact retry
+for an already verified destination returns the prior success, which covers a
+lost HTTP response without taking another snapshot. Existing destinations with
+a different request identity, invalid outer or nested manifests, changed
+bytes, unknown files, symbolic links, hard-linked files, special files, and
+exceeded limits are refused.
+
+Backup verification, restore verification, integrity checks, diagnostics, and
+fresh-root restore are app and storage operations rather than loopback routes.
+Restore requires a stopped service and absent runtime socket. Report exports
+are never accepted as restore sources.
 
 The protocol-only browser application and Playwright journeys remain Phase 11C
 and Phase 11D work. Phase 11B hosts only a future verified manifest and does not

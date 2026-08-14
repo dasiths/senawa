@@ -8,6 +8,7 @@ import {
   detectConfigurationDrift,
   doctorWorkflowAmendment,
   doctorWorkflowConfiguration,
+  renderExampleWorkflowConfiguration,
   type WorkflowAmendmentDocument,
   type WorkflowConfigurationDocument,
 } from "./index.js";
@@ -23,7 +24,7 @@ const deterministicSha256: Sha256 = {
 };
 
 describe("workflow configuration compilation", () => {
-  it("creates a recursively immutable sensor-free example that compiles", () => {
+  it("creates a recursively immutable bounded sensor and gate example that compiles", () => {
     const example = createExampleWorkflowConfiguration();
     const snapshot = compileWorkflowConfiguration(
       example,
@@ -32,12 +33,46 @@ describe("workflow configuration compilation", () => {
     );
 
     expect(example.apiVersion).toBe("senawa.dev/workflow/v1alpha2");
-    expect(example.sensors).toEqual([]);
-    expect(example.gates).toEqual([]);
-    expect(snapshot.sensors).toEqual([]);
+    expect(example.sensors).toEqual([
+      {
+        key: "diff-check",
+        argv: ["git", "diff", "--check"],
+        cwd: ".",
+        timeoutMs: 30_000,
+        maxStdoutBytes: 65_536,
+        maxStderrBytes: 65_536,
+        inheritedEnvironment: ["PATH"],
+        maxAttempts: 3,
+        maxReconciliationAttempts: 2,
+      },
+    ]);
+    expect(example.gates).toEqual([
+      {
+        key: "clean-diff",
+        phase: "work",
+        blocking: [
+          {
+            key: "exit-code-zero",
+            condition: {
+              operator: "equals",
+              accessor: { sensorKey: "diff-check", pointer: "/exitCode" },
+              expected: 0,
+            },
+          },
+        ],
+        advisory: [],
+      },
+    ]);
+    expect(snapshot.sensors.map(({ key }) => key)).toEqual(["diff-check"]);
+    expect(snapshot.gates.map(({ key }) => key)).toEqual(["clean-diff"]);
     expect(Object.isFrozen(example)).toBe(true);
     expect(Object.isFrozen(example.phases)).toBe(true);
+    expect(Object.isFrozen(example.sensors[0]?.argv)).toBe(true);
+    expect(Object.isFrozen(example.gates[0]?.blocking[0]?.condition)).toBe(true);
     expect(Object.isFrozen(example.phases[0]?.work[0]?.completionPolicy)).toBe(true);
+    const rendered = renderExampleWorkflowConfiguration();
+    expect(rendered.endsWith("\n")).toBe(true);
+    expect(JSON.parse(rendered)).toEqual(example);
   });
 
   it.each([
@@ -1660,6 +1695,38 @@ describe("workflow configuration compilation", () => {
         .componentDigests.modelPolicies,
     );
   });
+});
+
+it("enforces aggregate sensor retry output at one GiB and one byte above", () => {
+  const atLimit = JSON.parse(JSON.stringify(createExampleWorkflowConfiguration())) as unknown as {
+    sensors: Array<{
+      maxStdoutBytes: number;
+      maxStderrBytes: number;
+      maxAttempts: number;
+      maxReconciliationAttempts: number;
+    }>;
+  };
+  const atLimitSensor = atLimit.sensors[0];
+  if (atLimitSensor === undefined) throw new Error("Expected sensor fixture");
+  atLimitSensor.maxStdoutBytes = 64 * 1024 * 1024;
+  atLimitSensor.maxStderrBytes = 64 * 1024 * 1024;
+  atLimitSensor.maxAttempts = 4;
+  atLimitSensor.maxReconciliationAttempts = 4;
+  expect(
+    doctorWorkflowConfiguration(atLimit, "fixture://aggregate", deterministicSha256).snapshot,
+  ).toBeDefined();
+
+  atLimitSensor.maxReconciliationAttempts += 1;
+  expect(
+    doctorWorkflowConfiguration(atLimit, "fixture://aggregate", deterministicSha256).diagnostics,
+  ).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        pointer: "/sensors/0",
+        message: expect.stringContaining("aggregate retry output"),
+      }),
+    ]),
+  );
 });
 
 describe("workflow amendment compilation", () => {

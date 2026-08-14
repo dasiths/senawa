@@ -54,8 +54,9 @@ Each phase records:
 | 10. Optional parallel workspaces and integration | Complete | `0e63add` | Pushed |
 | 11. Local portal | Complete | `5fdd242` | Pushed |
 | 12. Remote control-plane protocol | Complete | `48b2ce4` | Pushed |
-| 13. Reporting, packaging, and hardening | Not started | Pending | Pending |
-| 14. Consumer documentation and adoption journeys | Not started | Pending | Pending |
+| 13. Reporting, packaging, and hardening | Complete | Pending | Pending |
+| 14. Standard delivery workflow authoring | Not started | Pending | Pending |
+| 15. Consumer documentation and adoption journeys | Not started | Pending | Pending |
 
 ## Decision D-001: Clean alpha implementation reset
 
@@ -3773,9 +3774,10 @@ session, SSE, and HTTP security validation now passes with 36 tests.
 
 * Date: 2026-08-13
 * Status: Accepted for final delivery planning
-* Phase: Phase 14 and final delivery
-* Decision: Add Phase 14 after reporting, packaging, and hardening. Run a fresh
-  RPI research cycle against the final implementation, then publish
+* Phase: Phase 15 and final delivery
+* Decision: Keep consumer documentation as the last implementation phase after
+  standard delivery workflow authoring. Run a fresh RPI research cycle against
+  the final implementation, then publish
   consumer-facing philosophy, architecture, getting-started, authoring,
   operations, security, troubleshooting, limitation, and example documentation.
   Commit and push that phase before generating and creating one pull request for
@@ -3785,10 +3787,11 @@ session, SSE, and HTTP security validation now passes with 36 tests.
   research and PR chunk artifacts in the active tree.
 * Rationale: Consumer documentation must describe the final behavior rather than
   plans or intermediate architecture. Fresh audience and journey research after
-  Phase 13 prevents stale commands, authority claims, and package boundaries
-  from becoming the adoption surface. One final pull request gives reviewers a
-  coherent redesign history after every phase has its own validated commit.
-* Consequence: Phase 14 is the last implementation phase. Its research artifacts
+  Phase 14 prevents stale commands, authority claims, package boundaries,
+  prompts, mappings, and task-loop contracts from becoming the adoption surface.
+  One final pull request gives reviewers a coherent redesign history after every
+  phase has its own validated commit.
+* Consequence: Phase 15 is the last implementation phase. Its research artifacts
   are temporary, worktree examples use fresh temporary repositories, and its
   acceptance journey is no-credit by default. Final PR generation follows the
   repository PR-reference workflow, full validation, parallel diff review,
@@ -5791,7 +5794,7 @@ No commit or push was performed, as required by this follow-up request.
 * Decision: Keep the Phase 11 Playwright suite on deterministic local authority
   fixtures with no worker adapter or model invocation. Run it where portal
   behavior is introduced, then rerun the complete desktop/mobile matrix after
-  Phase 14 and present its screenshots and offline interaction journey for human
+  Phase 15 and present its screenshots and offline interaction journey for human
   review before creating the final pull request. Live worker smoke testing stays
   separate and requires explicit cost-labelled opt-in.
 * Alternatives: Defer every browser test until all implementation phases; add a
@@ -5935,7 +5938,7 @@ remaining critical, high, or medium findings.
   Phase 13 hardening opportunity. Current overview A/resources/overview B vector
   assembly, direct storage tests, overlap tests, and event-race tests pass.
 * The complete inference-free browser matrix and screenshots must run again for
-  the final human review after Phase 14, as required by Decision D-073.
+  the final human review after Phase 15, as required by Decision D-073.
 
 ## Decision D-075: Keep remote operations local and cryptographic domains shared
 
@@ -6359,6 +6362,1056 @@ review reported no remaining critical, high, or medium findings.
 * Implementation commit: `48b2ce4` (`feat: add remote control plane protocol`)
 * Push: `origin/redesign/workflow-state-machine` advanced from `48b6fe9` to
   `48b2ce4` on 2026-08-14.
+
+## Decision D-076: Keep maintenance refusal-first and bind backup creation to drained IPC
+
+* Date: 2026-08-14
+* Status: Accepted for Phase 13C
+* Phase: 13
+* Decision: Expose deterministic report creation and export verification as
+  app-owned read operations over one SQLite snapshot. Expose combined backup
+  creation through one authenticated IPC route that executes only under the
+  supervisor's drained quiescence proof and shuts down the owned SDK pool.
+  Keep backup verification, integrity, diagnostics, and fresh-root restore in
+  app and storage composition. Limit repair apply to verified combined backup
+  restoration into a fresh state root while the active service is stopped.
+* Alternatives: Open the live database directly from every CLI operation; add
+  restore and repair mutation routes to loopback HTTP; import report exports as
+  authority; recalculate damaged digests, counters, projections, or outcomes;
+  replace the active state root in place.
+* Rationale: Only the running supervisor can prove drain and stop its owned SDK
+  clients. Reporting already provides a consistent read snapshot, while
+  restore safety depends on verified bytes, stopped-service exclusion, and
+  absent destinations rather than live service authority. Refusal avoids
+  turning missing evidence or accounting corruption into invented history.
+* Consequence: `backup create` leaves the service drained with its SDK pool
+  closed. Exact retries derive one request identity from the destination and
+  return an already verified result after a lost response. Export remains
+  explicitly non-restorable. Integrity returns fixed categories and codes, and
+  diagnostics contains only positively projected metadata. Repair cannot
+  delete evidence, rewrite accounting, synthesize outcomes, truncate history,
+  recalculate digests, or restore in place.
+
+## Decision D-077: Add external prompts and schema-selected standard delivery
+
+* Date: 2026-08-14
+* Status: Accepted for Phase 14
+* Phase: 14
+* Decision: Add a standard delivery authoring phase after Phase 13 and move
+  final consumer documentation to Phase 15. Agent roles reference confined
+  external system-prompt files whose exact bytes are content-addressed in the
+  configuration snapshot. Consumer schemas remain arbitrary JSON Schema
+  resources and may be loaded from confined external files under
+  `.senawa/schemas`. Phase dataflow uses dependency-checked JSON Pointer
+  mappings, and external prompts support bounded deterministic
+  `${{ input.* }}` substitution.
+  Task-frontier phases may fan out over a schema-validated array selected from
+  an accepted phase output, derive stable task identities through a declared
+  pointer, map each item into a schema-validated task input, and propose the
+  resulting work through additive amendment authority.
+* Alternatives: Put prompt bodies inline in workflow JSON; impose Senawa-owned
+  domain schemas; add JavaScript, JSONPath, or a general expression language;
+  derive task identity from array order; let a plan file mutate the graph
+  directly; document the historical YAML without implementing its semantics.
+* Rationale: External prompts keep workflow structure reviewable and give
+  consumers direct control over each agent's instructions. JSON Schema and JSON
+  Pointer preserve domain neutrality while supporting mappings such as
+  `phase2.input.abc` from `phase1.output` at `/blah/abc/xyz`. Schema-selected
+  fan-out expresses one implementation loop per planned task without hard-coding
+  a plan shape or bypassing deterministic graph authority.
+* Consequence: Phase 14 requires a breaking alpha configuration contract, fresh
+  research, path-confined prompt loading, historical prompt digests, immutable
+  phase outputs, runtime instance validation, deterministic mapping and
+  substitution, stable per-item fan-out, plan import, iteration, rework,
+  approvals, reporting, portal support, packed-init templates, and a complete
+  no-credit define-to-verify journey. The current v1alpha2 example remains valid
+  only for Phase 13 and will not be expanded with unenforced fields. Phase 15
+  documents the final implemented contract and remains the last phase before the
+  pull request.
+
+## Phase 13C log
+
+### Decisions
+
+* Added `report create`, `export verify`, `backup create`, `backup verify`,
+  `restore verify`, `restore apply`, `integrity check`, `diagnostics create`,
+  `repair plan`, and `repair apply` to the operational CLI and exact help.
+* Report creation reuses the Phase 13B one-transaction SQLite snapshot and
+  deterministic verified directory export. `export restore` always refuses.
+* Combined backup verification now checks an exact bounded outer inventory,
+  independent regular files, manifest ordering and uniqueness, nested SQLite
+  semantic integrity, and SDK session-store integrity. SQLite backup checks use
+  a disposable copy so WAL sidecars cannot mutate the source bundle.
+* The SQLite integrity API opens the database read-only and query-only, runs the
+  existing startup and backup semantic verifier, and maps failures to stable
+  storage, structure, migration, authority, projection, context, amendment,
+  workspace, human, portal, supervisor, remote, and asset categories. It never
+  returns raw rows or exception text.
+* Diagnostics publishes three bounded canonical metadata files and a final
+  exact manifest to a fresh private directory. Service status omits process,
+  listener, lease identity, session identity, paths, messages, and timestamps.
+* Repair planning records one allowed action, verified fresh restore, and a
+  fixed refusal set. Repair apply performs that same stopped-service fresh-root
+  restore and no other maintenance mutation.
+
+### Deviations
+
+* The command is named `report create` rather than the research draft's
+  separate `report show` and `export create`. One operation writes the
+  authoritative deterministic JSON export requested by Phase 13C.
+* Restore uses `restore apply <backup> <fresh-state-root>` instead of a
+  `--state-root` option. This keeps parsing exact and bounded while preserving
+  the same fresh-destination contract.
+* No reindex, WAL checkpoint, compacted copy, projection rebuild, or staging
+  cleanup repair was added. The bounded phase had no reproducible maintenance
+  plan format with stronger preconditions than verified fresh restore.
+* No package release script, release manifest, security adapter,
+  `.senawa/workflow.json`, tracking artifact, commit, or push was changed by
+  Phase 13C.
+
+### Validation
+
+Focused validation passed on 2026-08-14:
+
+* Phase 13C help, reporting/export, diagnostics/repair, real daemon maintenance,
+  state backup, supervisor HTTP, SQLite integrity, and reporting snapshot
+  suites: 8 files and 39 tests
+* Complete affected app, supervisor, and SQLite storage suites: 32 files and
+  357 tests
+* Drained requirement, exact backup replay after a lost response, existing
+  destination refusal, manifest and nested corruption, read-only verification,
+  fresh stopped restore, live restore refusal, export restore refusal,
+  diagnostic secret scan, and unsupported repair refusal
+
+Repository-wide validation passed on 2026-08-14:
+
+* Root build, including TypeScript project references, production portal
+  assets, and execution-host native helpers
+* Clean workspace typecheck
+* Biome check across 239 files
+* Complete offline suite with four workers: 78 files and 1,116 tests passed
+* Opt-in live Copilot SDK probe: one test skipped without explicit settings
+* Architecture boundaries across 375 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+An initial unconstrained complete suite attempt timed out only the built CLI
+journey at its five-second limit. The same test passed in isolation in 3.2
+seconds, and the correctly constrained four-worker complete rerun passed.
+
+### Review
+
+Local phase review verified that supervisor owns only drained maintenance
+coordination, storage owns semantic integrity, and app composition owns bounded
+filesystem publication and fresh restore. Loopback retains no lifecycle or
+maintenance authority. CLI failures use fixed codes and do not expose internal
+paths, stack traces, SQLite rows, SDK content, credentials, or secrets.
+
+### Commit and push
+
+No commit or push was performed, as required by the Phase 13C request.
+
+### Remaining risks
+
+* Local SQLite commitments remain in the same authority and do not provide an
+  external cryptographic witness against a coordinated rewrite of every
+  canonical and normalized representation.
+* Backup creation is a synchronous foreground IPC request. Its deterministic
+  destination request identity covers lost-response replay, but the alpha has
+  no separate progress, cancellation, or durable operation-record API.
+* A stale socket artifact causes restore to fail closed even when no live peer
+  remains. Operators must resolve the existing validated socket lifecycle
+  before restoring.
+* Repair intentionally has no in-place or derived-data maintenance action.
+  Corrupt evidence requires preservation, a verified backup, and restore to a
+  fresh state root.
+
+## Decision D-078: Package one local alpha graph and lazy-load the live SDK
+
+* Date: 2026-08-14
+* Status: Accepted for Phase 13D
+* Phase: 13
+* Decision: Produce one deterministic local `senawa` alpha bundle for Linux x64
+  with glibc 2.34 or newer and Node.js 22.12.0 or newer. Pack each internal
+  production workspace as an exact local tarball from a normalized release
+  staging directory, then install all tarballs through one temporary root
+  manifest. Keep `@github/copilot-sdk` as an exact workspace development
+  dependency for the separate live lane, omit it from staged core dependency
+  metadata, and load it dynamically only when live worker composition is
+  requested from a source or live-enabled installation.
+* Alternatives: Publish unresolved `workspace:*` dependencies; require a local
+  registry; bundle all workspace source into one file; keep the SDK and Koffi in
+  the core dependency graph; create another public package without registry or
+  license policy.
+* Rationale: Exact local tarballs exercise Node package resolution without
+  inventing public versions or registry policy. Normalized staging makes the
+  package bytes independent of package-manager dependency traversal order.
+  Lazy optional loading keeps init, doctor, maintenance, supervisor, and portal
+  operation no-credit and prevents SDK or Koffi installation and loading.
+* Consequence: `senawa` is the only public executable. The app package retains
+  its internal service module for detached and foreground ownership. The live
+  worker remains a separate cost-labelled lane. The local core alpha bundle
+  does not declare or fetch the SDK; a live-enabled installation must make the
+  exact SDK available separately.
+
+## Decision D-079: Ship verified portal assets and fixed Ajv
+
+* Date: 2026-08-14
+* Status: Accepted for Phase 13D
+* Phase: 13
+* Decision: Stage the production portal output under the app's built `dist`
+  directory and discover its manifest relative to the installed CLI module.
+  Preserve the explicit manifest environment override for development and
+  tests. Upgrade Ajv from 8.17.1 to 8.18.0.
+* Alternatives: Require a workspace-relative portal path; require the manifest
+  environment variable in installed operation; copy unverified static files;
+  waive the Ajv advisory based on the current `$data` configuration.
+* Rationale: Relative package discovery removes workspace assumptions while the
+  existing manifest verifier preserves exact digest, size, type, path, and
+  symlink checks. Ajv 8.18.0 is the published fixed release for
+  `GHSA-2g4f-4pwh-qvx6`, and the complete configuration suite remains compatible.
+* Consequence: Installed portal hosting works without a workspace path. The
+  package audit no longer reports the Ajv advisory; no exposure exception is
+  required.
+
+## Phase 13D log
+
+### Decisions
+
+* D-078 establishes the deterministic local tarball graph and lazy optional live
+  worker dependency boundary.
+* D-079 establishes installed portal discovery and resolves the Ajv advisory by
+  upgrade.
+* Package manifests allow only built runtime output and SQLite migrations.
+  Tarball inspection rejects source, tests, fixtures, maps, TypeScript build
+  metadata, tracking data, credentials, keys, caches, symlinks, and special
+  files.
+* The release staging manifest removes development scripts and dependencies,
+  sorts structured metadata, and rewrites every internal production dependency
+  to exact `0.1.0-alpha.0`.
+
+### Deviations
+
+* The local alpha lane uses exact tarballs and a temporary root install manifest
+  instead of a local registry. No publication, license, provenance, signing, or
+  registry policy was invented.
+* The Copilot production adapter remains in `@senawa/execution-host` behind a
+  dynamic import instead of creating another publishable package. Its exact SDK
+  dependency remains development-only for the source live lane and is omitted
+  from staged core metadata so npm performs no SDK registry request.
+
+### Validation
+
+Focused validation passed on 2026-08-14:
+
+* Two consecutive alpha builds produced byte-identical bundle manifests and
+  package digests.
+* A clean operating-system-temporary install ran default and explicit init and
+  doctor, refused overwrite, rendered help and version, started and stopped the
+  foreground service, consumed a portal session, and served packaged portal
+  assets.
+* Installed resolution used no workspace links or embedded workspace paths.
+  The install contained no Copilot SDK or Koffi and showed no CMake, node-gyp,
+  or source-build fallback.
+* Tarball inspection verified exact internal versions, one public bin and its
+  shebang, native helper executable modes, SQLite migrations, package platform
+  metadata, and portal manifest digests.
+* Ajv 8.18.0 passed all 102 configuration and hostile-schema tests.
+
+Repository-wide validation passed on 2026-08-14:
+
+* Root build, including TypeScript project references, production portal asset
+  staging, and execution-host native helpers
+* Clean workspace typecheck
+* Biome check across 243 files
+* Complete no-credit suite with four workers: 78 files and 1,134 tests passed;
+  the explicitly opt-in live worker test remained skipped
+* Architecture boundaries across 375 source files
+* Documentation links across 19 Markdown files
+* Production audit: zero advisories across 56 dependencies
+* `git diff --check`
+
+Final exact tarball inventory:
+
+| Package | Tarball | Bytes | Files | SHA-256 |
+|---------|---------|------:|------:|---------|
+| `@senawa/protocol` | `senawa-protocol-0.1.0-alpha.0.tgz` | 31,962 | 21 | `61d84cb634b65cf826e1faaf9e2fc3045aa8c43dc135c8b4adafaa926e1ec06e` |
+| `@senawa/kernel` | `senawa-kernel-0.1.0-alpha.0.tgz` | 50,353 | 29 | `3976ea56e3f73ea430940e482204d03c3fbe2be010a52e00b764ab586e6f50d3` |
+| `@senawa/runtime` | `senawa-runtime-0.1.0-alpha.0.tgz` | 52,229 | 23 | `0d0b387fab1a137e54664d48d1ae21f72088c1a93a36e08e7c77590f714aa3c4` |
+| `@senawa/configuration` | `senawa-configuration-0.1.0-alpha.0.tgz` | 20,909 | 15 | `77538d76f78c5e98b15c9819962f9447831b042fa05a5dd2c11416c4919f64d6` |
+| `@senawa/execution-host` | `senawa-execution-host-0.1.0-alpha.0.tgz` | 45,859 | 31 | `b948716ad847ed723ff15097b68409f106b05d8d9f07ab82b0da2ec80ecd3bb6` |
+| `@senawa/storage-sqlite` | `senawa-storage-sqlite-0.1.0-alpha.0.tgz` | 101,613 | 14 | `40adf76584ced5be1ae9aa6575ad8d359445fe36e819be1cfb2dd916a605ff4a` |
+| `@senawa/reporting` | `senawa-reporting-0.1.0-alpha.0.tgz` | 6,266 | 3 | `d6e0b5ad354db8d5a62c6ab7833b8e6af4fa1d082511b60f8e6ac421709d9663` |
+| `@senawa/supervisor` | `senawa-supervisor-0.1.0-alpha.0.tgz` | 57,353 | 43 | `028a64d0b27def0fa5fea3f23a5c725ce6f8d6ccfb7e1413cfa126f1def9e9d7` |
+| `senawa` | `senawa-0.1.0-alpha.0.tgz` | 62,883 | 31 | `b8a421107e164076938e8bf5971ab74414257a6df30138d5ef8d3c4f1a2da4f4` |
+
+### Remaining risks
+
+* Platform support is limited to Linux x64 with glibc 2.34 or newer. macOS,
+  Windows, Linux musl, Arm, and older glibc remain unsupported and untested.
+* The local alpha bundle is not a registry publication artifact. License,
+  notice, provenance, signature, SBOM, and registry policy remain product and
+  release decisions outside this phase.
+* Native helper builds still require a C17 compiler in the source workspace.
+  Installed operation uses packaged helpers and requires no compiler.
+
+## Decision D-080: Enforce ceilings at concrete trust boundaries
+
+* Date: 2026-08-14
+* Status: Accepted for Phase 13E
+* Phase: 13
+* Decision: Keep browser-safe grant and wire ceilings in protocol contracts and
+  enforce filesystem, process, storage, network, session, and retention limits
+  in their concrete adapters. Limit CLI config and command input to 256 KiB
+  before complete buffering or JSON parsing. Cap worker grants at 1,024
+  operations, 256 MiB total bytes, and 64 KiB chunks. Cap artifact objects at
+  256 MiB and apply configurable repository object and total-byte quotas inside
+  the SQLite write transaction before staging. Cap active processes and
+  workspaces at 32, portal sessions at 1,024 and eight hours, and verified
+  portal static assets at 64 MiB aggregate.
+* Alternatives: Rely on downstream protocol parsing; keep only per-operation
+  limits; stage before checking repository quotas; accept compressed or
+  redirected remote responses; claim hostname syntax validation as SSRF
+  protection; add age-based pruning without provenance-preserving semantics.
+* Rationale: Admission limits must run before expensive allocation or durable
+  visibility. Aggregate limits prevent individually valid attempts from
+  multiplying into unbounded work. Network and retention documentation must
+  describe only properties enforced by the alpha.
+* Consequence: Remote responses use identity encoding, reject redirects and
+  declared-length drift, and have bounded deadlines. HTTPS hostname validation
+  is not DNS-rebinding or SSRF resistance; operators must enforce destination
+  and address policy through trusted egress controls. Durable logs retain the
+  latest 10,000 rows. Other authority history has no automatic age or count
+  pruning and remains immutable while referenced.
+
+## Phase 13E log
+
+### Decisions
+
+* Added limit and limit-plus-one enforcement for CLI files and streams, worker
+  grants, process argument and environment counts and UTF-8 bytes, aggregate
+  sensor retry output, active processes, workspaces, portal static bytes,
+  portal lifetime, and active session cardinality.
+* Added transactional artifact quotas with a 256 MiB object ceiling, 10,000
+  default objects, and 1 GiB default repository bytes. New-object quota refusal
+  occurs before `.staging` creation or file writes.
+* Tightened combined backup paths to 1,024 UTF-8 bytes and 256 segments, 10,000
+  files, and 1 GiB expanded bytes. Backup, diagnostic, and report verification
+  reject noncanonical roots, symlinks, hardlinks, special files, elevated mode
+  bits, unsafe segments, backslashes, and duplicate NFC-normalized paths.
+* Added one positive-projection secret scanner for deterministic reports and
+  exports, diagnostics, generated workflow examples, installed portal package
+  inventory, staged package manifests, and the final alpha bundle manifest.
+  Canonical authority records are neither rewritten nor filtered.
+* Hardened remote endpoints and responses for strict HTTPS or explicit
+  loopback HTTP, no user information, query, fragment, backslash, redirect, or
+  non-identity encoding, exact declared lengths, 256 KiB streamed bodies, and
+  10-second default and 300-second maximum deadlines.
+
+### Deviations
+
+* Backup, diagnostics, and report exports are verified directory bundles. No
+  archive extraction API exists, so Phase 13E hardened the owning directory
+  walkers and manifests instead of adding an unused tar or ZIP extractor.
+* No DNS address pinning, proxy suppression, private-address denial, or
+  rebinding defense was added. Public documentation requires an operator egress
+  firewall or trusted proxy and makes no SSRF-resistance claim.
+* The common secret scanner covers metadata projections, staged package
+  manifests, and the final alpha inventory. Binary helpers and executable
+  JavaScript are not decoded as metadata; exact release paths, digests, modes,
+  platform checks, forbidden secret-bearing extensions, and source review own
+  those files.
+* No worktree or Git operation ran. Every new filesystem fixture used an
+  operating-system temporary directory and never `/workspaces/senawa`.
+
+### Validation
+
+Focused validation passed on 2026-08-14:
+
+* Protocol grant, configuration and schema, process, workspace, portal session,
+  CLI, static portal, remote composition, reporting, diagnostics, export,
+  backup, and SQLite quota suites
+* Limit and limit-plus-one command/config reads, grant operation/byte/chunk
+  budgets, UTF-8 argv and environment bytes, 32 and 33 active processes, 1 GiB
+  retry output, 1,024 and 1,025 sessions, and 64 MiB portal static aggregates
+* Digest and crash-safe asset installation regressions plus object-count and
+  total-byte quota refusal with empty staging
+* Absolute, dot-dot, backslash, normalized duplicate, path depth and byte,
+  entry count, expanded-byte, symlink, hardlink, FIFO, mode, alias, and manifest
+  drift bundle cases
+* Remote user information, query, fragment, insecure transport, backslash,
+  redirect, content encoding, declared-length mismatch, oversize, drip timeout,
+  and cancellation cases
+* Existing process invalid UTF-8, split UTF-8, simultaneous output, timeout,
+  cancellation, descendant escape, and repeated process-tree cleanup cases
+
+Repository-wide validation passed on 2026-08-14:
+
+* Full TypeScript project-reference typecheck
+* Root build, including portal assets and native execution-host helpers
+* Complete offline suite: 78 files and 1,132 tests passed; the opt-in live worker
+  test skipped without explicit settings. Later focused CLI and operational
+  input suites passed after parent-symlink and stream limit additions.
+* Architecture boundaries across 375 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+Full Biome validation was attempted after Phase 13E files passed targeted
+Biome checks. Eight formatting findings remain only in concurrently edited
+Phase 13D files: `apps/senawa/tsconfig.json`, the lazy SDK production adapter,
+and four packaging scripts. Phase 13E did not modify those packaging-owned
+files.
+
+### Review
+
+Local review verified that limits execute before full input buffering, process
+spawn, session admission, portal asset loading, or artifact staging where the
+adapter controls that boundary. Secret scanning applies only to positive
+projections. Durable authority history retains its canonical provenance.
+
+### Commit and push
+
+No commit or push was performed, as required by the Phase 13E request.
+
+### Remaining risks
+
+* Remote hostname policy depends on operator-controlled egress. The alpha does
+  not resist DNS rebinding, mixed DNS answers, proxy redirection, or private and
+  metadata destinations selected through DNS.
+* Descriptor-relative parent-swap resistance and mount-boundary confinement are
+  not implemented. Stable symlinks and noncanonical aliases fail closed, but a
+  hostile same-user rename race remains an alpha limit.
+* Directory bundle validation does not imply general tar or ZIP bomb safety.
+  Any future archive extractor requires its own link, device, duplicate,
+  declared-size, expanded-byte, and compression-ratio enforcement.
+* Assets default to 10,000 objects and 1 GiB total, but no provenance-preserving
+  prune or tombstone command exists. Other immutable history also has no
+  automatic pruning contract.
+* Package tarball inventory scanning remains owned by Phase 13D packaging
+  scripts and was not changed in this phase.
+
+## Decision D-081: Compose no-credit acceptance over one isolated temporary authority
+
+* Date: 2026-08-14
+* Status: Accepted for Phase 13F
+* Phase: 13
+* Decision: Use one app-level acceptance test that shares one operating-system
+  temporary Git repository, SQLite authority, asset store, and run identity
+  across verified local subjourneys. Compose the production scheduler, Git
+  workspace and integration adapters, supervisor authority and service,
+  authenticated IPC and loopback portal APIs, remote connector and reference
+  control plane, reporting export, diagnostics, backup, and fresh restore.
+  Replace only the worker effect with deterministic root-scoped file writers.
+* Alternatives: Run the existing independent test files without shared state;
+  construct a fake in-memory authority; use the live Copilot SDK; operate on the
+  mounted checkout; create one unbounded monolithic service process.
+* Rationale: One shared durable authority proves that receipts and artifacts
+  cross production package boundaries without requiring model inference or AI
+  credits. A deterministic worker is the only replaced effect boundary. A new
+  temporary Git repository gives real worktree and fan-in behavior without any
+  risk to the mounted checkout.
+* Consequence: Phase 13F fails unless the temporary repository real path is
+  outside `/workspaces/senawa`, the mounted checkout worktree porcelain remains
+  byte-identical and names only `/workspaces/senawa`, every temporary worktree
+  is removed, all live Copilot environment settings are absent, no SDK adapter
+  or model call occurs, and reports contain no AI-credit or Copilot model record.
+
+## Phase 13F log
+
+### Decisions
+
+* Added one top-level app acceptance journey with a 90-second test bound,
+  10-second Git command bounds, two-second portal HTTP bounds, bounded service
+  recovery, bounded remote convergence, and failure-safe temporary worktree
+  cleanup.
+* Initialized and doctored a temporary workflow, then configured explicit
+  `execution.workspaceMode: worktree`, two writers, writer concurrency two, and
+  one serialized integration reference. The checked-in
+  `.senawa/workflow.json` and Phase 14 authoring contract were not changed.
+* Used two deterministic root-scoped workers to write disjoint files, submit
+  installed evidence assets and completions, and pass one deterministic fan-in
+  gate. The test asserts two removed workspaces, a recorded integration barrier,
+  the integrated file contents, and accepted task assessments.
+* Created a generic `work-attempt` budget exhaustion, projected the exact human
+  allowance review, granted a bounded two-unit allowance from its current
+  guards, and terminally cancelled the no-op budget probe after resolution.
+* Simulated a lost amendment approval acknowledgement after commit, reopened the
+  authority, replayed the exact approval, queued the quiescent application, and
+  started a bounded service that recovered the applied additive phase before
+  gate evaluation, human phase approval, and closure.
+* Delivered a signed remote pause command through central acceptance,
+  deterministic partition and reconnect, local reauthorization, runner claim,
+  local outcome, classified report delivery, signature verification, and exact
+  central acknowledgement. Synchronization converged with no pending reports.
+* Observed the shared run through one-time authenticated IPC bootstrap and the
+  production loopback portal API. Portal DTOs proved the amended graph, paused
+  run, evidence assets, removed workspaces, integration, resolved human needs,
+  allowance, human approval, closure, and remote command receipts.
+* Exported the same report twice with byte-identical `report.json`, verified all
+  manifests, then verified integrity, secret-safe diagnostics, refusal-first
+  repair policy, combined drained backup, and fresh restore. The restored
+  authority retained the closure receipt and reproduced the exact report digest.
+
+### Repairs proven necessary
+
+* SQLite startup verification now parses canonical integration barrier JSON
+  before kernel validation. The prior verifier passed the serialized string to
+  the object validator and rejected a valid published barrier after reopen.
+* Worktree completion eligibility now remains valid after normal post-barrier
+  workspace removal. Historical deferred false records remain valid, while any
+  stored true record must still be justified by the exact terminal writer,
+  result, integration, and barrier authority.
+* Reporting snapshots now reconstruct worker-submitted asset metadata with
+  submission and dispatch provenance plus verified stored-byte availability.
+  The previous assets section covered only input context bindings.
+* Normalized SQLite snapshot integrity uses the kernel canonical serializer for
+  internal structural equality. Protocol wire limits still govern external
+  input, but no longer reject a valid authority whose internal `records_json`
+  exceeds 64 KiB during backup verification.
+
+### Deviations
+
+* One top-level acceptance test orchestrates bounded subjourneys instead of one
+  continuously running process. Every subjourney shares the same temporary Git
+  repository, database, assets, repository identity, and run identity.
+* Portal observation uses the allowed production portal API path rather than a
+  browser or held-open SSE connection. Existing portal transport and SSE suites
+  remain responsible for stream framing and expiry behavior.
+* The remote control plane is the restart-ephemeral reference simulator and
+  in-process transport. This is the Phase 12 production protocol reference, not
+  a hosted-service claim.
+* No packaging contract, package script, tracked workflow example, Phase 14
+  authoring surface, tracking artifact, commit, or push changed in Phase 13F.
+
+### Validation
+
+Passed on 2026-08-14:
+
+* Final focused Phase 13F acceptance: 1 file and 1 test in 14.96 seconds
+* Affected app, SQLite, supervisor, portal, remote, reporting, workspace, and
+  maintenance suites: 14 files and 180 tests in 36.34 seconds
+* Focused acceptance and supervisor command-queue rerun after minimizing the
+  repair set: 2 files and 23 tests in 17.19 seconds
+* Full TypeScript project-reference typecheck
+* Full Biome check across 244 files
+* Root build, including portal assets and native execution-host helpers
+* Complete offline suite with four workers: 79 files and 1,135 tests passed in
+  53.84 seconds; the explicit live Copilot test was the only skipped file and
+  test
+* Architecture boundaries across 377 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+* Mounted checkout worktree proof before, during, and after acceptance: the
+  porcelain remained byte-identical and contained only `/workspaces/senawa`
+
+The acceptance environment had no `SENAWA_COPILOT_LIVE`, model, AI-credit,
+timeout, or cost-and-data acknowledgement setting. The test constructed zero SDK
+adapters, made zero model calls, spent zero AI credits, and verified that the
+deterministic report contains neither AI-credit nor `github-copilot` records.
+
+### Review
+
+Local review confirmed that all Git add, remove, lock, prune, commit, update-ref,
+and integration operations are rooted in the newly initialized temporary
+repository. The mounted checkout is queried only with `git worktree list
+--porcelain`. The acceptance uses production authorities and adapters at every
+other boundary and cleans listeners, connectors, authorities, worktrees, and the
+temporary root on success or failure.
+
+### Commit and push
+
+No commit or push was performed, as required by the Phase 13F request. No
+tracking artifact was added.
+
+### Remaining risks
+
+* The no-credit journey deliberately does not validate live Copilot SDK or model
+  behavior. That remains the separate explicit opt-in cost-labelled lane.
+* Portal observation validates authenticated production DTOs and session
+  bootstrap, while browser rendering and SSE streaming remain covered by their
+  existing deterministic suites.
+* The reference control plane remains a protocol simulator, not a production
+  hosted multi-tenant service.
+
+## Decision D-082: Keep release inspection independent of optional live dependencies
+
+* Date: 2026-08-14
+* Status: Accepted for Phase 13 review repair
+* Phase: 13
+* Decision: Keep the core execution-host declaration graph independent of
+  `@github/copilot-sdk`. Define local structural runtime interfaces and load the
+  exact optional SDK version `1.0.9` only through the production adapter's
+  dynamic import. Inspect every eligible packaged UTF-8 metadata and text asset
+  with one release scanner. Scan generated JavaScript against high-confidence
+  credential forms and the release process's credential-value corpus, while
+  treating native helpers as digest and inventory objects.
+* Alternatives: Publish SDK types from execution-host; install the SDK for every
+  core consumer; decode native binaries as text; reject every security-related
+  identifier in generated JavaScript.
+* Rationale: Optional live behavior must not make clean core TypeScript consumers
+  install or resolve the SDK. Credential-value scanning catches embedded release
+  secrets without misclassifying ordinary security API names and policy keys.
+* Consequence: The packed clean-install journey includes a strict TypeScript
+  consumer with no SDK installed. Package manifests, declarations, JSON, SQL,
+  portal HTML and CSS, and generated JavaScript receive shared release scanning.
+
+## Phase 13 review repair log
+
+### Decisions
+
+* The no-credit acceptance derives the real checkout root from `import.meta.url`
+  through `fileURLToPath` and `realpath`. It records arbitrary Git worktree
+  porcelain without requiring an attached branch or a single worktree, compares
+  the exact baseline after cleanup, and confines every fixture Git mutation to
+  one fresh operating-system temporary root outside the checkout.
+* Workspace host capacity counts active worker dispatches rather than distinct
+  workspace roots. A held first repository-mode dispatch therefore occupies the
+  sole writer slot and rejects a concurrent same-root dispatch. The explicit
+  worktree ceiling remains 32.
+* Packaging and live-worker scripts derive roots with `fileURLToPath` and apply
+  finite absolute subprocess deadlines. The live test reserves 15 seconds above
+  the model timeout for awaited cancellation, disconnect, pending submissions,
+  client stop, and temporary cleanup. Its wrapper reserves another 10 seconds
+  and exposes a no-credit timeout-validation mode.
+* Refused fresh restore and repair destinations are removed at the operational
+  CLI boundary unless an error explicitly identifies the exact destination as
+  already published. Existing destinations and post-publication durability
+  evidence remain untouched.
+* Remote report projection derives run ownership from accepted-command `runId`,
+  exact per-run event advances, run-tagged events and projections, and receipt
+  chains whose command belongs to the selected run. A multi-run report retains
+  safe report identity and delivery facts while exposing only the selected
+  run's cursor advance and metadata records.
+* Secret-safe asset reporting retains identity, digest, sensitivity, media
+  type, size, provenance, and verified availability. Worker-controlled summary
+  text is not projected, including ordinary prose that does not match secret
+  scanners.
+* SDK backup and restore, combined backup, diagnostics, and report export use
+  injected publication ports. They sync regular files, write and sync manifests
+  last, sync completed directories, rename atomically, sync destination parents,
+  reopen, and verify. Post-rename parent-sync or reopen failure reports a
+  published destination and never removes it.
+* SDK fresh destinations walk each existing component from the absolute
+  filesystem root with `lstat` and canonical `realpath` containment. Creation
+  rechecks the resulting parent identity before pathname-based publication.
+  Node does not expose portable descriptor-relative directory publication, so a
+  hostile ancestor swap between the final check and `mkdir` or `rename` remains
+  outside the alpha contract.
+
+### Review findings resolved
+
+* High: Removed the hard-coded `/workspaces/senawa` acceptance assumption and
+  attached-branch assertion. Added detached and multi-worktree porcelain
+  coverage and executed the suite through an alternate checkout path containing
+  a space without creating a real-checkout worktree.
+* Medium: Removed every emitted declaration reference to
+  `@github/copilot-sdk`; a clean installed TypeScript consumer typechecks without
+  the SDK. Consumer documentation names exact optional version `1.0.9`.
+* Medium: Added finite package, install, CLI, service, live-test, and subprocess
+  deadlines. Live timeout overflow fails before any paid lane can start.
+* Medium: Expanded package inspection to all eligible UTF-8 assets and generated
+  JavaScript literals. Dynamically constructed hostile JSON and JavaScript
+  credential fixtures are rejected without being shipped.
+* Medium: Replaced distinct-root writer accounting with dispatch accounting and
+  added a concurrent held-first same-root regression.
+* High: Scoped remote inbox, report, receipt-chain, event, projection, and
+  synchronization metadata to the requested run. Added two runs under one
+  binding and one multi-run report regression.
+* High: Removed worker-controlled asset summary text from secret-safe snapshots
+  and exports. Added an unpatterned restricted-summary regression.
+* High: Added power-loss durability and injected failures for file sync,
+  manifest sync, directory sync, rename, parent sync, reopen, and verified
+  reopen across SDK backup/restore and app directory publication. Published
+  destinations survive post-rename failures.
+* Medium: Canonicalized backup destinations once before deriving request
+  identity and sending the request, counted empty directories against backup
+  entry ceilings, bounded portal manifest reads before allocation with growth
+  detection, and projected complete allowance resolution authority linkage.
+* Medium: SDK backup and restore now reject symbolic links in every existing
+  fresh-destination ancestor, verify canonical root containment, and compare the
+  parent device and inode immediately before publication. Immediate, deeper,
+  and pre-publication substitution regressions leave outside targets untouched.
+* Medium: SDK verification now bounds manifest bytes before allocation, decodes
+  strict UTF-8, validates declared counts and lengths before file reads, streams
+  files within per-file and aggregate remaining budgets, detects growth and
+  truncation, and stops actual inventory traversal at the shared entry ceiling.
+* Low: Report export rejects a symlinked destination parent before staging or
+  destination mutation. Diagnostics uses the same durable publication path.
+
+### Validation
+
+Passed on 2026-08-14:
+
+* Focused repository writer regression and complete workspace-effect-host suite:
+  6 tests
+* Execution-host SDK, worker, workspace, and timeout suites: 34 tests passed;
+  the explicit paid live test remained skipped
+* No-credit acceptance: detached and multi-worktree baseline regression plus the
+  complete journey passed in 15.50 seconds through an alternate checkout path
+* Reporting snapshot and no-credit affected group: 6 tests
+* Complete packaging journey: two deterministic package builds, expanded payload
+  scan, hostile fixtures, clean install, SDK/Koffi absence, clean TypeScript
+  consumer, installed service lifecycle, and packaged portal verification
+* Static live timeout derivation produced model, test, and subprocess bounds
+  without a model call; overflow refusal also ran before the paid lane
+* Root build passed after preserving concurrent reporting and durability edits
+* Operational maintenance focused suite: 4 tests, including refused fresh-root
+  cleanup and published-destination preservation
+* Reporting snapshot: 5 tests, including unpatterned restricted asset text,
+  complete allowance linkage, and two-run multi-report isolation
+* SDK session store: 16 tests covering backup, restore, empty-directory entry
+  ceilings, all pre-publication fault points, and post-publication preservation
+* Report export, diagnostics, combined backup, portal manifest, and operational
+  maintenance: 28 tests covering atomic publication, symlink-parent refusal,
+  parent-sync and reopen preservation, bounded manifest growth, and canonical
+  backup request paths
+* SDK session store final medium repairs: 25 tests covering ancestor links,
+  parent substitution, bounded and strict UTF-8 manifests, hostile declared and
+  actual lengths, growth, truncation, and bounded empty-directory traversal
+* SDK, combined state backup, maintenance, and operational maintenance affected
+  group: 4 files and 37 tests passed
+
+Final two-medium-finding validation passed on 2026-08-14:
+
+* Full TypeScript project-reference typecheck
+* Biome check across 248 files with no fixes required
+* Root build, including production portal assets and native execution-host
+  helpers
+* Architecture boundaries across 383 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+Final repair validation passed on 2026-08-14:
+
+* Complete offline suite with four workers: 81 files and 1,166 tests passed;
+  the explicit paid live worker test was the only skipped test
+* Complete affected app, SQLite storage, and execution-host suites with four
+  workers: 30 files and 349 tests passed; the opt-in live worker test remained
+  skipped
+* Full TypeScript project-reference typecheck
+* Biome check across 248 files with no fixes required
+* Root build, including production portal assets and native execution-host
+  helpers
+* Architecture boundaries across 383 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+### Deviations
+
+* No Git worktree was added for alternate-path validation. The complete test ran
+  through a temporary symlink path containing a space, while detached porcelain
+  behavior is covered by a generic parser regression. This avoids mutating the
+  real checkout's worktree registry.
+* Concurrent reporting and durability edits exposed two prepared-statement type
+  tuple mismatches, untyped publication callbacks, and fresh-root cleanup at the
+  operational boundary. These were repaired without reverting or redesigning
+  the concurrent work.
+
+### Commit and push
+
+No commit or push was performed, as required by the review-repair request.
+
+### Remaining risks
+
+* The live SDK and model lane remains unexecuted because it is explicitly paid.
+  Static timeout, cancellation ordering, optional import, and deterministic fake
+  adapter suites cover the no-credit boundary.
+* Credential scanning cannot prove that an unknown secret absent from generic
+  high-confidence forms and the release environment corpus is harmless. Native
+  helpers remain digest and inventory objects rather than decoded text.
+* Alternate-path execution used a symlink rather than a second Git checkout.
+  The test's realpath derivation and generic detached porcelain parser cover the
+  reviewed assumptions without operating on the real checkout registry.
+* SDK fresh-destination publication still uses pathname-based Node APIs. The
+  implementation checks every existing ancestor and rechecks parent identity,
+  but cannot close a hostile swap between that final check and the create or
+  rename syscall without descriptor-relative publication support.
+
+## Phase 13 final backup hardening log
+
+### Decisions
+
+* SDK backup verification pins the canonical ancestor chain, backup root, and
+  exact entry inventory by device and inode. Manifest and payload bytes are
+  read only through bounded `O_NOFOLLOW` descriptors with opening and final
+  identity, length, link-count, type, and mode checks.
+* SDK restore no longer verifies and then reopens source payload paths. It
+  copies descriptor-verified bytes directly into a fresh private staging tree,
+  applies declared directory modes in a separate deepest-first final pass, and
+  rechecks the source ancestor chain and exact inventory before publication.
+* Combined backup verification bounds and parses the canonical outer manifest
+  before snapshot allocation. It streams every outer file through a no-follow
+  descriptor into a fresh private snapshot, caps entries, directories, each
+  file, and aggregate bytes, then runs SQLite and SDK verification against that
+  snapshot. Combined restore consumes only the verified snapshot.
+* Regular files and directories reject set-user-ID, set-group-ID, and sticky
+  bits. Duplicate SDK paths, including conflicting parent declarations, fail
+  before restore. Restore-created parents remain mode `0700` until all files
+  have been copied and verified.
+
+### Review findings resolved
+
+* High: Removed the SDK restore verify-then-reopen race. Source parent or file
+  substitution after staging verification fails the final identity and
+  inventory recheck, removes staging, and leaves the destination absent.
+* Medium: SDK verification rejects symbolic links and noncanonical aliases in
+  every backup-root ancestor and rechecks parent and root identity before
+  returning.
+* Medium: Combined outer manifests and files use bounded descriptor reads before
+  content allocation, reject growth, truncation, replacement, hardlinks,
+  symbolic links, special files, special mode bits, and bound all traversed
+  entries and directories.
+* Medium: Mode comparison covers all permission and special bits. Directory
+  restoration is independent of manifest order, and conflicting duplicate
+  directory declarations fail.
+
+### Validation
+
+Passed on 2026-08-14:
+
+* SDK session-store suite: 30 tests, including deep ancestor links, source
+  parent and file substitution, bounded growth and truncation, special mode
+  bits, directory ordering, duplicate conflicts, and untouched targets
+* Combined state backup, maintenance, operational maintenance, and no-credit
+  acceptance with the SDK suite: 5 files and 44 tests
+* Full TypeScript project-reference typecheck
+* Full Biome check across 248 files with no fixes required
+* Root build, including production portal assets and native execution-host
+  helpers
+* Architecture boundaries across 383 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+### Deviations
+
+* Node.js does not expose portable descriptor-relative directory traversal or
+  publication APIs equivalent to `openat`, `fstatat`, and `renameat`. The
+  implementation therefore copies verified regular-file descriptors into a
+  fresh private tree and consumes only that tree during restore.
+* The outer combined manifest records files rather than directories. Directory
+  traversal is independently bounded and identity-checked; nested SQLite and
+  SDK formats remain responsible for their structural directory contracts.
+
+### Commit and push
+
+No commit or push was performed, as required by the final backup-repair request.
+The Phase 14 plan was not changed.
+
+### Remaining risks
+
+* No high- or medium-severity backup finding remains from this review.
+* Directory enumeration still uses pathname-based `readdir` between pinned
+  no-follow directory checks and the final complete identity recheck. A source
+  that changes during that interval fails closed, and restore never consumes
+  the source again after the recheck.
+* Destination publication still has the previously recorded Node pathname gap
+  between the final parent identity check and `rename`. Closing it requires a
+  native descriptor-relative publication helper or a platform API not exposed
+  by Node.js.
+* A standalone verification result is point-in-time. Callers that consume
+  backup bytes must use the restore path, which owns the private verified
+  snapshot, rather than treating a prior manifest result as a durable lock.
+
+## Phase 13 final medium repair log
+
+### Decisions
+
+* Combined backup tree enumeration opens each directory and collects names one
+  at a time. Collection stops when one entry exceeds the remaining total-entry
+  budget, and only a bounded name set is sorted. Traversal counts total entries,
+  directories, and files independently.
+* Restore rollback records the device, inode, and file type of every database,
+  asset, SDK, state-root, and explicit staging entry created or published by the
+  operation. Cleanup first uses `lstat` and removes only the exact recorded
+  identity. A missing entry, symbolic link, type change, or replacement identity
+  is left untouched.
+* SQLite restore verifies the original backup digest before changing the private
+  copy to rollback-journal mode for structural verification. It publishes from
+  a second fsynced staging inode that SQLite has never opened, so the returned
+  authority creates WAL state only under the final database name. Both staging
+  files and the asset staging directory use exact identity cleanup.
+* The operational CLI delegates failed state-root cleanup to the restore owner.
+  It no longer performs a second pathname-only recursive removal.
+
+### Review findings resolved
+
+* Medium: Replaced unbounded `readdirSync(...).sort()` allocation with bounded
+  incremental directory collection. A single directory containing 10,001
+  entries refuses at the total-entry ceiling before sorting an unbounded array.
+* Medium: Freshness now uses `lstat`, so dangling symbolic links at database,
+  asset, SDK, and state-root destinations are refused and preserved.
+* Medium: Database, asset, and SDK publication rollback removes only identities
+  created by the operation. Concurrent file or directory replacements before a
+  downstream failure remain untouched.
+* Medium: SDK and SQLite staging rollback uses the same identity discipline.
+  Tests cover exact owned partial removal, staging replacement, and a rename
+  adapter that throws after moving the SDK staging inode.
+
+### Validation
+
+Passed on 2026-08-14:
+
+* Combined state backup, maintenance, operational maintenance, SDK session
+  store, and SQLite storage suites: 5 files and 168 tests
+* Combined state backup and maintenance-focused group: 3 files and 20 tests
+* Full TypeScript project-reference typecheck
+* Full Biome check across 248 files with no fixes required
+* Root build, including production portal assets and native execution-host
+  helpers
+* Architecture boundaries across 383 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+### Deviations
+
+* The combined outer format has one total-entry ceiling and separate directory
+  and file counters rather than adding manifest fields. This preserves the
+  existing backup format while enforcing allocation bounds during traversal.
+* SQLite restore changes only the private verified copy from WAL to
+  rollback-journal mode before publication. The authoritative backup bytes are
+  digest-checked first, and the converted copy passes complete structural and
+  relational verification before publication.
+
+### Commit and push
+
+No commit or push was performed, as required by this repair request. The Phase
+14 plan was not changed.
+
+### Remaining risks
+
+* No high- or medium-severity finding remains from these two repairs.
+* Directory traversal and destination publication retain the previously
+  recorded Node pathname gaps. Final source identity rechecks and exact
+  destination identity cleanup fail closed around those gaps, but Node does not
+  expose portable descriptor-relative `readdir`, `mkdir`, `link`, or `rename`
+  operations.
+* A process termination between filesystem creation and in-memory identity
+  capture can leave an orphan for external recovery. In-process rollback never
+  removes an entry whose creation identity was not captured.
+
+## Phase 13 final SDK enumeration repair log
+
+### Decisions
+
+* SDK backup creation and verification now open each directory and collect names
+  one at a time. Collection stops after one name exceeds the remaining total
+  entry budget, and sorting occurs only after the bounded collection succeeds.
+* Directories and files share the same total-entry ceiling. Each directory is
+  counted before its children are collected or traversed, so nested empty
+  directories cannot bypass `maxFiles` during creation or the corresponding
+  inventory limit during verification.
+* Manifest ordering, permission modes, byte lengths, and digests remain exact.
+  Restore continues to copy and hash payloads through pinned no-follow file
+  descriptors and rechecks the complete source identity inventory before
+  publication.
+
+### Review finding resolved
+
+* Medium: Removed the remaining SDK `readdirSync(...).sort()` allocations from
+  both creation and verification. A directory wider than 10,000 entries now
+  fails after collecting at most the remaining budget plus one name and before
+  sorting or recursing into the overflow set.
+
+### Validation
+
+Passed on 2026-08-14:
+
+* SDK session-store suite: 36 tests, including separate 10,001-entry creation
+  and standalone verification refusals, exact nested empty-directory inventory,
+  modes and digests, and descriptor-pinned restore substitution coverage
+* SDK session store, combined state backup, maintenance, operational
+  maintenance, and no-credit acceptance: 5 files and 58 tests
+* Full TypeScript project-reference typecheck
+* Full Biome check across 248 files with no fixes required
+* Root build, including production portal assets and native execution-host
+  helpers
+* Architecture boundaries across 383 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+### Deviations
+
+* No persisted backup format or public limit name changed. The historical
+  `maxFiles` option continues to bound total manifest entries, including
+  directories, to preserve the existing API while enforcing the reviewed
+  allocation ceiling.
+
+### Commit and push
+
+No commit or push was performed, as required by this repair request. The Phase
+14 plan was not changed.
+
+### Remaining risks
+
+* No high- or medium-severity finding remains from the SDK enumeration review.
+* Directory opening and child metadata lookup retain the recorded Node pathname
+  gap because Node does not expose portable descriptor-relative `readdir` or
+  `fstatat`. Exact entry and ancestor identity checks plus the final inventory
+  recheck fail closed if the source changes, and restore consumes only bytes
+  read through pinned no-follow file descriptors.
+* Destination publication retains the recorded pathname gap between final
+  parent identity validation and rename. Closing it requires a native
+  descriptor-relative publication helper or a platform API not exposed by
+  Node.js.
+
+## Phase 13 final closure
+
+### Validation
+
+Definitive validation passed on 2026-08-14:
+
+* Root build, TypeScript project-reference typecheck, and Biome check across 248
+  files
+* Complete offline suite: 80 files and 1,200 tests passed
+* Live Copilot SDK probe: one test skipped without explicit cost and data opt-in
+* Deterministic alpha packaging, double-pack manifest equality, temporary clean
+  install, installed init and doctor, packaged service and portal, native helper
+  modes, migration inventory, and clean TypeScript consumer without the SDK
+* Complete no-credit acceptance from generic and detached checkout baselines in
+  an OS-temporary Git repository, with completion, approval, amendment,
+  worktree fan-in, escalation, crash recovery, portal, remote simulation,
+  reporting, diagnostics, backup, integrity, and fresh restore
+* Complete deterministic browser regression: 15 Chromium tests with one worker,
+  zero retries, and no model inference
+* Architecture boundaries across 383 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+* Single mounted-checkout worktree proof: only `/workspaces/senawa`
+* Default and explicit `senawa doctor` validation of the tracked
+  `.senawa/workflow.json` example
+
+### Review
+
+Independent operations and release reviews drove repairs for run-scoped remote
+reporting, worker-controlled asset summaries, allowance provenance, durable
+directory publication, bounded backup reads and enumeration, source pinning,
+identity-owned rollback, canonical backup paths, portal manifest bounds,
+symlink-parent refusal, checkout portability, SDK-free declarations, finite
+release timeouts, package credential scanning, writer capacity, and live-probe
+cancellation. Each finding received focused executable coverage. Final narrow
+review reported no remaining critical, high, or medium findings.
+
+### Remaining risks
+
+* The alpha supports Linux x64 with glibc 2.34+ and Node 22.12+. macOS, Windows,
+  musl, Arm, and older glibc remain unsupported.
+* Local bundle production is validated but is not npm publication. License,
+  registry access, provenance, signing, and SBOM policy remain owner decisions.
+* Node pathname APIs leave a narrow race between final destination-parent
+  identity validation and publication rename. Source changes fail closed and
+  rollback removes only identities owned by the operation; eliminating the
+  final destination race requires a native descriptor-relative helper.
+* The paid Copilot lane remains intentionally unexecuted by default and requires
+  exact SDK 1.0.9, model, timeout, positive credit ceiling, and explicit cost and
+  data acknowledgement.
+* The tracked v1alpha2 example is the truthful Phase 13 workflow. Phase 14 will
+  replace it only after external prompts, external schemas, mappings, template
+  substitution, schema-selected fan-out, plan import, iteration, and approvals
+  are implemented end to end.
+
+### Commit and push
+
+Implementation commit and push are pending this closeout update.
 
 ## Entry template
 

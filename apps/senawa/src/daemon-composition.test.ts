@@ -280,6 +280,10 @@ describe("daemon worker composition", () => {
   it("keeps daemon IPC and portal queries available when the static manifest is missing", async () => {
     const { environment } = sandbox("senawa-daemon-missing-portal-", false);
     environment.SENAWA_PORTAL_PORT = "0";
+    environment.SENAWA_PORTAL_MANIFEST = join(
+      environment.XDG_STATE_HOME as string,
+      "missing-portal-manifest.json",
+    );
     const started = await startSenawaService(environment);
     try {
       const status = await started.service.status();

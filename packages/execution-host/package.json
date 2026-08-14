@@ -2,6 +2,18 @@
   "name": "@senawa/execution-host",
   "version": "0.1.0-alpha.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "glibc"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -10,7 +22,10 @@
   },
   "files": [
     "dist",
-    "!dist/**/*.test.*"
+    "!dist/**/*.test.*",
+    "!dist/**/fixtures/**",
+    "!dist/**/*fixture*",
+    "!dist/**/*.map"
   ],
   "publishConfig": {
     "executableFiles": [
@@ -24,9 +39,19 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@github/copilot-sdk": "1.0.9",
     "@senawa/kernel": "workspace:*",
     "@senawa/protocol": "workspace:*",
     "@senawa/runtime": "workspace:*"
+  },
+  "peerDependencies": {
+    "@github/copilot-sdk": "1.0.9"
+  },
+  "peerDependenciesMeta": {
+    "@github/copilot-sdk": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@github/copilot-sdk": "1.0.9"
   }
 }

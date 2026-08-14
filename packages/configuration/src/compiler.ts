@@ -51,6 +51,7 @@ import { analyzeSchemaDefinition } from "./schema.js";
 const MAX_SENSOR_TIMEOUT_MILLISECONDS = 2_147_483_647;
 const MAX_SENSOR_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_SENSOR_ATTEMPTS = 10_000;
+const MAX_SENSOR_AGGREGATE_OUTPUT_BYTES = 1024 * 1024 * 1024;
 
 type CanonicalObject = CanonicalValue & Readonly<Record<string, CanonicalValue>>;
 
@@ -1143,6 +1144,17 @@ function parseSensors(
       maxAttempts === undefined ||
       maxReconciliationAttempts === undefined
     ) {
+      return undefined;
+    }
+    const attemptCount = maxAttempts + maxReconciliationAttempts;
+    const bytesPerAttempt = maxStdoutBytes + maxStderrBytes;
+    if (bytesPerAttempt > Math.floor(MAX_SENSOR_AGGREGATE_OUTPUT_BYTES / attemptCount)) {
+      addDiagnostic(
+        collector,
+        "invalid-field",
+        pointer,
+        `Sensor aggregate retry output must not exceed ${MAX_SENSOR_AGGREGATE_OUTPUT_BYTES} bytes`,
+      );
       return undefined;
     }
     return {

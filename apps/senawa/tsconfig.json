@@ -19,6 +19,9 @@
       "path": "../../packages/protocol"
     },
     {
+      "path": "../../packages/reporting"
+    },
+    {
       "path": "../../packages/runtime"
     },
     {

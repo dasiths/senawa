@@ -1,10 +1,26 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+} from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { canonicalStringify } from "@senawa/protocol";
+import { assertSecretSafePositiveProjection } from "@senawa/reporting";
 import type { PortalAsset, PortalAssetSource } from "@senawa/supervisor";
 
 const MANIFEST_VERSION = "senawa.dev/portal-assets/v1alpha1";
+const PACKAGED_MANIFEST_PATH = fileURLToPath(
+  new URL("../dist/portal/manifest.json", import.meta.url),
+);
+export const MAX_PORTAL_STATIC_BYTES = 64 * 1024 * 1024;
+export const MAX_PORTAL_MANIFEST_BYTES = 1024 * 1024;
 const CONTENT_TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
   [".html", "text/html; charset=utf-8"],
@@ -27,11 +43,19 @@ interface PortalManifest {
   readonly assets: readonly PortalManifestEntry[];
 }
 
-export function loadPortalAssetSource(manifestPath: string): PortalAssetSource {
+export interface PortalManifestReadHooks {
+  readonly afterInitialStat?: (path: string) => void;
+}
+
+export function loadPortalAssetSource(
+  manifestPath: string,
+  readHooks: PortalManifestReadHooks = {},
+): PortalAssetSource {
   const absoluteManifest = requireRegularUnsymlinkedPath(resolve(manifestPath));
   const root = dirname(absoluteManifest);
   if (realpathSync(root) !== root) throw new Error("Portal asset root must be canonical");
-  const manifestText = readFileSync(absoluteManifest, "utf8");
+  const manifestText = readBoundedManifest(absoluteManifest, readHooks);
+  assertSecretSafePositiveProjection(manifestText, "Portal package inventory");
   let parsed: unknown;
   try {
     parsed = JSON.parse(manifestText);
@@ -89,8 +113,11 @@ export function loadPortalAssetSource(manifestPath: string): PortalAssetSource {
 export function optionalPortalAssetSource(
   environment: NodeJS.ProcessEnv,
 ): PortalAssetSource | undefined {
-  const manifestPath = environment.SENAWA_PORTAL_MANIFEST;
-  if (manifestPath === undefined || manifestPath.length === 0) return undefined;
+  const configuredPath = environment.SENAWA_PORTAL_MANIFEST;
+  const manifestPath =
+    configuredPath === undefined || configuredPath.length === 0
+      ? PACKAGED_MANIFEST_PATH
+      : configuredPath;
   try {
     return loadPortalAssetSource(manifestPath);
   } catch {
@@ -138,6 +165,10 @@ function decodeManifest(value: unknown): PortalManifest {
       contentType: entry.contentType,
     });
   });
+  const totalBytes = assets.reduce((total, entry) => total + entry.byteLength, 0);
+  if (totalBytes > MAX_PORTAL_STATIC_BYTES) {
+    throw new Error("Portal asset manifest aggregate byte length is invalid");
+  }
   return Object.freeze({ apiVersion: MANIFEST_VERSION, shell, assets: Object.freeze(assets) });
 }
 
@@ -194,6 +225,38 @@ function requireRegularUnsymlinkedPath(path: string): string {
   }
   if (realpathSync(path) !== path) throw new Error("Portal asset manifest path must be canonical");
   return path;
+}
+
+function readBoundedManifest(path: string, hooks: PortalManifestReadHooks): string {
+  const descriptor = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const initial = fstatSync(descriptor);
+    if (!initial.isFile() || initial.nlink !== 1 || initial.size > MAX_PORTAL_MANIFEST_BYTES) {
+      throw new Error("Portal asset manifest exceeds its byte limit");
+    }
+    hooks.afterInitialStat?.(path);
+    const bytes = Buffer.allocUnsafe(MAX_PORTAL_MANIFEST_BYTES + 1);
+    let total = 0;
+    while (total <= MAX_PORTAL_MANIFEST_BYTES) {
+      const count = readSync(descriptor, bytes, total, bytes.byteLength - total, null);
+      if (count === 0) {
+        const final = fstatSync(descriptor);
+        if (!final.isFile() || final.nlink !== 1 || final.size !== total) {
+          throw new Error("Portal asset manifest changed while it was read");
+        }
+        return new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, total));
+      }
+      total += count;
+    }
+    throw new Error("Portal asset manifest exceeds its byte limit");
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error("Portal asset manifest must contain valid UTF-8", { cause: error });
+    }
+    throw error;
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function requireNoSymlinkPath(root: string, path: string): void {

@@ -1,12 +1,5 @@
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative } from "node:path";
-import {
-  CopilotClient,
-  type CopilotSession,
-  defineTool,
-  type ResumeSessionConfig,
-  type SessionConfig,
-} from "@github/copilot-sdk";
 import type {
   CopilotSdkPort,
   CopilotSdkResumeSessionConfig,
@@ -14,12 +7,69 @@ import type {
   CopilotSdkSessionPort,
 } from "./copilot-sdk-port.js";
 
+interface RuntimeCopilotSession {
+  readonly sessionId: string;
+  sendAndWait(message: { readonly prompt: string }, timeoutMs: number): Promise<unknown>;
+  abort(): Promise<void>;
+  disconnect(): Promise<void>;
+}
+
+interface RuntimeCopilotClient {
+  createSession(config: RuntimeSessionConfig): Promise<RuntimeCopilotSession>;
+  resumeSession(
+    sessionId: string,
+    config: RuntimeResumeSessionConfig,
+  ): Promise<RuntimeCopilotSession>;
+  getSessionMetadata(sessionId: string): Promise<unknown | undefined>;
+  stop(): Promise<Error[]>;
+}
+
+interface RuntimeToolInvocation {
+  readonly sessionId: string;
+  readonly toolCallId: string;
+  readonly toolName: string;
+}
+
+interface RuntimePermissionRequest {
+  readonly kind: string;
+}
+
+interface RuntimePreToolUseInput {
+  readonly sessionId: string;
+  readonly toolName: string;
+  readonly toolArgs: unknown;
+}
+
+type RuntimeDefineTool = (
+  name: string,
+  options: {
+    readonly description: string;
+    readonly parameters: Readonly<Record<string, unknown>>;
+    readonly skipPermission: true;
+    readonly defer: "never";
+    readonly handler: (args: unknown, invocation: RuntimeToolInvocation) => Promise<unknown>;
+  },
+) => unknown;
+
+interface RuntimeSessionConfig extends Readonly<Record<string, unknown>> {
+  readonly tools: readonly unknown[];
+}
+
+interface RuntimeResumeSessionConfig extends RuntimeSessionConfig {
+  readonly continuePendingWork: false;
+}
+
+interface RuntimeCopilotSdkModule {
+  readonly CopilotClient: new (options: Readonly<Record<string, unknown>>) => RuntimeCopilotClient;
+  readonly defineTool: RuntimeDefineTool;
+}
+
 export interface ProductionCopilotSdkPortOptions {
   readonly repositoryDirectory: string;
   readonly workingDirectory: string;
   readonly baseDirectory: string;
   readonly allowRepositoryWorkingDirectory?: boolean;
-  readonly sharedClient?: CopilotClient;
+  readonly sharedClient?: RuntimeCopilotClient;
   readonly sharedClientConfiguredForEmptyMode?: true;
 }
 
@@ -27,22 +77,28 @@ export class ProductionCopilotSdkPort implements CopilotSdkPort {
   readonly baseDirectory: string;
   readonly workingDirectory: string;
   readonly clientOwnership: "port-created" | "shared";
-  readonly #client: CopilotClient;
+  readonly #client: RuntimeCopilotClient;
+  readonly #defineTool: RuntimeDefineTool;
   readonly #activeSessions = new Map<string, ProductionCopilotSdkSession>();
 
   private constructor(
-    client: CopilotClient,
+    client: RuntimeCopilotClient,
+    defineTool: RuntimeDefineTool,
     ownership: ProductionCopilotSdkPort["clientOwnership"],
     baseDirectory: string,
     workingDirectory: string,
   ) {
     this.#client = client;
+    this.#defineTool = defineTool;
     this.clientOwnership = ownership;
     this.baseDirectory = baseDirectory;
     this.workingDirectory = workingDirectory;
   }
 
   static async create(options: ProductionCopilotSdkPortOptions): Promise<ProductionCopilotSdkPort> {
+    const { CopilotClient: CopilotClientConstructor, defineTool } = (await import(
+      "@github/copilot-sdk"
+    )) as unknown as RuntimeCopilotSdkModule;
     const [repositoryDirectory, workingDirectory, baseDirectory] = await Promise.all([
       realpath(options.repositoryDirectory),
       realpath(options.workingDirectory),
@@ -61,7 +117,7 @@ export class ProductionCopilotSdkPort implements CopilotSdkPort {
     }
     const client =
       options.sharedClient ??
-      new CopilotClient({
+      new CopilotClientConstructor({
         mode: "empty",
         workingDirectory,
         baseDirectory,
@@ -71,6 +127,7 @@ export class ProductionCopilotSdkPort implements CopilotSdkPort {
       });
     return new ProductionCopilotSdkPort(
       client,
+      defineTool,
       options.sharedClient === undefined ? "port-created" : "shared",
       baseDirectory,
       workingDirectory,
@@ -82,10 +139,13 @@ export class ProductionCopilotSdkPort implements CopilotSdkPort {
     config: CopilotSdkResumeSessionConfig,
   ): Promise<CopilotSdkSessionPort | undefined> {
     try {
-      const session = await this.#client.resumeSession(sessionId, resumeConfig(config));
+      const session = await this.#client.resumeSession(
+        sessionId,
+        resumeConfig(config, this.#defineTool),
+      );
       return this.#track(session);
     } catch (error) {
-      let metadata: Awaited<ReturnType<CopilotClient["getSessionMetadata"]>>;
+      let metadata: unknown | undefined;
       try {
         metadata = await this.#client.getSessionMetadata(sessionId);
       } catch {
@@ -97,7 +157,7 @@ export class ProductionCopilotSdkPort implements CopilotSdkPort {
   }
 
   async createSession(config: CopilotSdkSessionConfig): Promise<CopilotSdkSessionPort> {
-    const session = await this.#client.createSession(createConfig(config));
+    const session = await this.#client.createSession(createConfig(config, this.#defineTool));
     return this.#track(session);
   }
 
@@ -119,7 +179,7 @@ export class ProductionCopilotSdkPort implements CopilotSdkPort {
     return this.#client.stop();
   }
 
-  #track(session: CopilotSession): ProductionCopilotSdkSession {
+  #track(session: RuntimeCopilotSession): ProductionCopilotSdkSession {
     const tracked = new ProductionCopilotSdkSession(session, () => {
       if (this.#activeSessions.get(session.sessionId) === tracked) {
         this.#activeSessions.delete(session.sessionId);
@@ -132,7 +192,7 @@ export class ProductionCopilotSdkPort implements CopilotSdkPort {
 
 class ProductionCopilotSdkSession implements CopilotSdkSessionPort {
   constructor(
-    readonly session: CopilotSession,
+    readonly session: RuntimeCopilotSession,
     readonly onDisconnect: () => void,
   ) {}
 
@@ -157,24 +217,36 @@ class ProductionCopilotSdkSession implements CopilotSdkSessionPort {
   }
 }
 
-function createConfig(config: CopilotSdkSessionConfig): SessionConfig {
+function createConfig(
+  config: CopilotSdkSessionConfig,
+  defineTool: RuntimeDefineTool,
+): RuntimeSessionConfig {
   return {
-    ...commonConfig(config),
+    ...commonConfig(config, defineTool),
     ...(config.sessionId === undefined ? {} : { sessionId: config.sessionId }),
   };
 }
 
-function resumeConfig(config: CopilotSdkResumeSessionConfig): ResumeSessionConfig {
-  return { ...commonConfig(config), continuePendingWork: false };
+function resumeConfig(
+  config: CopilotSdkResumeSessionConfig,
+  defineTool: RuntimeDefineTool,
+): RuntimeResumeSessionConfig {
+  return { ...commonConfig(config, defineTool), continuePendingWork: false };
 }
 
-function commonConfig(config: CopilotSdkSessionConfig): SessionConfig {
+function commonConfig(
+  config: CopilotSdkSessionConfig,
+  defineTool: RuntimeDefineTool | undefined,
+): RuntimeSessionConfig {
   return {
     clientName: "senawa",
     model: config.model,
     sessionLimits: config.sessionLimits,
-    tools: config.tools.map((tool) =>
-      defineTool(tool.name, {
+    tools: config.tools.map((tool) => {
+      if (defineTool === undefined) {
+        throw new TypeError("Copilot SDK tools require the loaded production adapter");
+      }
+      return defineTool(tool.name, {
         description: tool.description,
         parameters: tool.parameters,
         skipPermission: true,
@@ -185,8 +257,8 @@ function commonConfig(config: CopilotSdkSessionConfig): SessionConfig {
             toolCallId: invocation.toolCallId,
             toolName: invocation.toolName,
           }),
-      }),
-    ),
+      });
+    }),
     availableTools: [...config.availableTools],
     excludedTools: [...config.excludedTools],
     workingDirectory: config.workingDirectory,
@@ -216,9 +288,10 @@ function commonConfig(config: CopilotSdkSessionConfig): SessionConfig {
     enableMcpApps: false,
     enableExperimentalMode: false,
     enableSessionTelemetry: false,
-    onPermissionRequest: (request) => config.onPermissionRequest({ kind: request.kind }),
+    onPermissionRequest: (request: RuntimePermissionRequest) =>
+      config.onPermissionRequest({ kind: request.kind }),
     hooks: {
-      onPreToolUse: async (input) => {
+      onPreToolUse: async (input: RuntimePreToolUseInput) => {
         const result = await config.onPreToolUse({
           sessionId: input.sessionId,
           toolName: input.toolName,

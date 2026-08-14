@@ -95,7 +95,8 @@ export type SupervisorHttpRoute =
         | "supervisor-status"
         | "supervisor-drain"
         | "supervisor-stop"
-        | "supervisor-recovery";
+        | "supervisor-recovery"
+        | "supervisor-backup";
     }
   | { readonly kind: "supervisor-logs"; readonly afterCursor?: number; readonly limit?: number };
 
@@ -127,7 +128,8 @@ export function matchSupervisorHttpRoute(method: string, target: string): Superv
     route.kind === "portal-session-bootstrap" ||
     route.kind === "supervisor-drain" ||
     route.kind === "supervisor-stop" ||
-    route.kind === "supervisor-recovery"
+    route.kind === "supervisor-recovery" ||
+    route.kind === "supervisor-backup"
       ? "POST"
       : "GET";
   if (method !== expectedMethod) {
@@ -197,6 +199,10 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
   if (samePath(segments, ["supervisor", "v1alpha1", "recoveries"])) {
     requireQuery(query, []);
     return { kind: "supervisor-recovery" };
+  }
+  if (samePath(segments, ["supervisor", "v1alpha1", "backups"])) {
+    requireQuery(query, []);
+    return { kind: "supervisor-backup" };
   }
   if (samePath(segments, ["supervisor", "v1alpha1", "logs"])) {
     requireQuery(query, ["after", "limit"]);

@@ -7,7 +7,11 @@ import {
   ensurePrivateRuntimeDirectory,
   loadOrCreateLocalCredential,
 } from "./local-security.js";
-import { PortalSessionSecurity } from "./session-security.js";
+import {
+  MAX_ACTIVE_PORTAL_SESSIONS,
+  MAX_PORTAL_SESSION_LIFETIME_MS,
+  PortalSessionSecurity,
+} from "./session-security.js";
 
 const roots: string[] = [];
 
@@ -74,6 +78,43 @@ describe("portal session security", () => {
     now = bootstrap.expiresAt;
     expect(sessions.consumeBootstrap(bootstrap.token)).toBeUndefined();
   });
+
+  it("enforces the eight-hour session lifetime ceiling", () => {
+    expect(
+      () =>
+        new PortalSessionSecurity({
+          clock: { now: () => 0 },
+          random: sequentialRandom(),
+          sessionLifetimeMs: MAX_PORTAL_SESSION_LIFETIME_MS,
+        }),
+    ).not.toThrow();
+    expect(
+      () =>
+        new PortalSessionSecurity({
+          clock: { now: () => 0 },
+          random: sequentialRandom(),
+          sessionLifetimeMs: MAX_PORTAL_SESSION_LIFETIME_MS + 1,
+        }),
+    ).toThrow("Portal session lifetime must be between");
+  });
+
+  it("refuses session creation above the active-session cap", () => {
+    let now = 10_000;
+    const sessions = new PortalSessionSecurity({
+      clock: { now: () => now },
+      random: cardinalityRandom(),
+      sessionLifetimeMs: 1_000,
+    });
+    for (let index = 0; index < MAX_ACTIVE_PORTAL_SESSIONS; index += 1) {
+      const bootstrap = sessions.createBootstrap();
+      expect(sessions.consumeBootstrap(bootstrap.token)).toBeDefined();
+    }
+    const refused = sessions.createBootstrap();
+    expect(sessions.consumeBootstrap(refused.token)).toBeUndefined();
+
+    now += 1_000;
+    expect(sessions.consumeBootstrap(refused.token)).toBeDefined();
+  });
 });
 
 function temporaryRoot(): string {
@@ -88,6 +129,18 @@ function sequentialRandom(): { bytes(length: number): Uint8Array } {
     bytes(length) {
       seed += 1;
       return Uint8Array.from({ length }, (_, index) => (seed + index) % 256);
+    },
+  };
+}
+
+function cardinalityRandom(): { bytes(length: number): Uint8Array } {
+  let counter = 0;
+  return {
+    bytes(length) {
+      counter += 1;
+      const bytes = new Uint8Array(length);
+      new DataView(bytes.buffer).setUint32(0, counter);
+      return bytes;
     },
   };
 }

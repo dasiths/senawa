@@ -6,11 +6,14 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -75,6 +78,7 @@ import {
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ASSET_SECURITY_LIMITS,
   CURRENT_SCHEMA_VERSION,
   LeaseUnavailableError,
   restoreSqliteAuthority,
@@ -2422,15 +2426,21 @@ describe("SQLite authority durability", () => {
     const second = new SqliteAuthority(sandbox.options);
     const writer = new Worker(
       `const { parentPort, workerData } = require("node:worker_threads");
-       const Database = require("better-sqlite3");
-       const database = new Database(workerData);
+       const Database = require(workerData.databaseModulePath);
+       const database = new Database(workerData.databasePath);
        database.exec("BEGIN IMMEDIATE");
        parentPort.postMessage("locked");
        setTimeout(() => {
          database.exec("COMMIT");
          database.close();
        }, 100);`,
-      { eval: true, workerData: sandbox.options.databasePath },
+      {
+        eval: true,
+        workerData: {
+          databasePath: sandbox.options.databasePath,
+          databaseModulePath: createRequire(import.meta.url).resolve("better-sqlite3"),
+        },
+      },
     );
     try {
       const staleRevision = second.revision();
@@ -2982,6 +2992,34 @@ describe("SQLite authority durability", () => {
     }
   });
 
+  it("refuses asset object, count, and total-byte quotas before staging", () => {
+    const oversizedSandbox = createSandbox();
+    const oversized = new SqliteAuthority(oversizedSandbox.options);
+    const oversizedBytes = Object.create(Uint8Array.prototype) as Uint8Array;
+    Object.defineProperty(oversizedBytes, "byteLength", {
+      value: ASSET_SECURITY_LIMITS.maxObjectBytes + 1,
+    });
+    expect(() => oversized.putAsset(oversizedBytes)).toThrow("256 MiB");
+    expect(existsSync(join(oversizedSandbox.options.assetDirectory, ".staging"))).toBe(false);
+    oversized.close();
+    oversizedSandbox.dispose();
+
+    for (const quota of [
+      { maxObjects: 1, maxTotalBytes: 10 },
+      { maxObjects: 2, maxTotalBytes: 3 },
+    ]) {
+      const sandbox = createSandbox();
+      const authority = new SqliteAuthority({ ...sandbox.options, assetQuota: quota });
+      authority.putAsset(Uint8Array.of(1, 2, 3));
+      const staging = join(sandbox.options.assetDirectory, ".staging");
+      expect(readdirSync(staging)).toEqual([]);
+      expect(() => authority.putAsset(Uint8Array.of(4))).toThrow("quota is exhausted");
+      expect(readdirSync(staging)).toEqual([]);
+      authority.close();
+      sandbox.dispose();
+    }
+  });
+
   it("refuses reads and startup when committed asset bytes are missing", () => {
     const sandbox = createSandbox();
     const authority = new SqliteAuthority(sandbox.options);
@@ -3231,6 +3269,98 @@ describe("SQLite authority durability", () => {
       }),
     ).toThrow(/must not already exist/);
     expect(readFileSync(join(assetDirectory, "sentinel"), "utf8")).toBe("keep assets");
+    sandbox.dispose();
+  });
+
+  it.each(["after-restore-asset-partial-create", "after-restore-database-partial-create"] as const)(
+    "removes exact owned restore partials after %s failure",
+    async (failurePoint) => {
+      const sandbox = createSandbox();
+      const authority = new SqliteAuthority(sandbox.options);
+      const backupPath = join(sandbox.root, `backup-${failurePoint}`);
+      await authority.backup(backupPath);
+      authority.close();
+      const databasePath = join(sandbox.root, `restored-${failurePoint}.db`);
+      const assetDirectory = join(sandbox.root, `assets-${failurePoint}`);
+
+      expect(() =>
+        restoreSqliteAuthority({
+          ...sandbox.options,
+          databasePath,
+          assetDirectory,
+          backupPath,
+          faultInjector(point) {
+            if (point === failurePoint) throw new Error(`injected ${failurePoint}`);
+          },
+        }),
+      ).toThrow(failurePoint);
+      expect(readdirSync(sandbox.root).some((name) => name.includes(".restore.partial-"))).toBe(
+        false,
+      );
+      sandbox.dispose();
+    },
+  );
+
+  it.each([
+    ["asset partial", "after-restore-asset-partial-create"],
+    ["database partial", "after-restore-database-partial-create"],
+    ["asset destination", "after-restore-assets-publish"],
+    ["database destination", "after-restore-database-publish"],
+  ] as const)("leaves a concurrent %s replacement untouched", async (target, failurePoint) => {
+    const sandbox = createSandbox();
+    const authority = new SqliteAuthority(sandbox.options);
+    const backupPath = join(sandbox.root, `backup-${failurePoint}`);
+    await authority.backup(backupPath);
+    authority.close();
+    const databasePath = join(sandbox.root, `restored-${failurePoint}.db`);
+    const assetDirectory = join(sandbox.root, `assets-${failurePoint}`);
+    let replacementPath: string | undefined;
+
+    expect(() =>
+      restoreSqliteAuthority({
+        ...sandbox.options,
+        databasePath,
+        assetDirectory,
+        backupPath,
+        faultInjector(point) {
+          if (point !== failurePoint) return;
+          const path = target.startsWith("asset")
+            ? target === "asset destination"
+              ? assetDirectory
+              : join(
+                  sandbox.root,
+                  readdirSync(sandbox.root).find((name) =>
+                    name.startsWith(
+                      `${target === "asset partial" ? `assets-${failurePoint}` : ""}.restore.partial-`,
+                    ),
+                  ) ?? "<missing>",
+                )
+            : target === "database destination"
+              ? databasePath
+              : join(
+                  sandbox.root,
+                  readdirSync(sandbox.root).find((name) =>
+                    name.startsWith(`restored-${failurePoint}.db.restore.partial-`),
+                  ) ?? "<missing>",
+                );
+          renameSync(path, `${path}.displaced`);
+          if (target.includes("asset")) {
+            mkdirSync(path, { mode: 0o700 });
+            writeFileSync(join(path, "sentinel"), "replacement", { mode: 0o600 });
+          } else {
+            writeFileSync(path, "replacement", { mode: 0o600 });
+          }
+          replacementPath = path;
+          throw new Error(`injected ${failurePoint}`);
+        },
+      }),
+    ).toThrow(failurePoint);
+    expect(replacementPath).toBeDefined();
+    expect(
+      target.includes("asset")
+        ? readFileSync(join(replacementPath ?? "", "sentinel"), "utf8")
+        : readFileSync(replacementPath ?? "", "utf8"),
+    ).toBe("replacement");
     sandbox.dispose();
   });
 

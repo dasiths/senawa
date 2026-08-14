@@ -6,6 +6,8 @@ import type {
   EffectObservation,
 } from "@senawa/runtime";
 
+export const MAX_ACTIVE_WORKSPACES = 32;
+
 export interface WorkspaceEffectHostPolicy {
   readonly workspaceMode: "repository" | "worktree";
   readonly hostWriterCapacity: number;
@@ -34,15 +36,18 @@ export class WorkspaceEffectHost implements AsyncEffectHost {
     | undefined;
   readonly #createGitHost: (() => AsyncEffectHost) | undefined;
   readonly #workerHosts = new Map<string, Promise<AsyncEffectHost>>();
-  readonly #activeWorkspaceRoots = new Set<string>();
+  #activeWriterDispatches = 0;
   #gitHost: AsyncEffectHost | undefined;
 
   constructor(options: WorkspaceEffectHostOptions) {
     if (
       !Number.isSafeInteger(options.policy.hostWriterCapacity) ||
-      options.policy.hostWriterCapacity < 1
+      options.policy.hostWriterCapacity < 1 ||
+      options.policy.hostWriterCapacity > MAX_ACTIVE_WORKSPACES
     ) {
-      throw new TypeError("Workspace effect host capacity must be a positive safe integer");
+      throw new TypeError(
+        `Workspace effect host capacity must be between 1 and ${MAX_ACTIVE_WORKSPACES}`,
+      );
     }
     if (options.policy.workspaceMode === "repository" && options.policy.hostWriterCapacity !== 1) {
       throw new TypeError("Repository workspace mode requires host writer capacity one");
@@ -63,7 +68,7 @@ export class WorkspaceEffectHost implements AsyncEffectHost {
   dispatch(intent: EffectIntent, context: AsyncEffectHostContext): Promise<EffectObservation> {
     if (intent.command.kind === "worker") {
       const binding = this.#workerBinding(intent);
-      return this.#withWorkspaceCapacity(binding.root, () =>
+      return this.#withWorkspaceCapacity(() =>
         this.#workerHost(binding.root).then((host) => host.dispatch(binding.intent, context)),
       );
     }
@@ -124,18 +129,15 @@ export class WorkspaceEffectHost implements AsyncEffectHost {
     return this.#gitHost;
   }
 
-  async #withWorkspaceCapacity<T>(root: string, operation: () => Promise<T>): Promise<T> {
-    if (
-      !this.#activeWorkspaceRoots.has(root) &&
-      this.#activeWorkspaceRoots.size >= this.policy.hostWriterCapacity
-    ) {
+  async #withWorkspaceCapacity<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.#activeWriterDispatches >= this.policy.hostWriterCapacity) {
       throw new WorkspaceHostCapacityError(this.policy.hostWriterCapacity);
     }
-    this.#activeWorkspaceRoots.add(root);
+    this.#activeWriterDispatches += 1;
     try {
       return await operation();
     } finally {
-      this.#activeWorkspaceRoots.delete(root);
+      this.#activeWriterDispatches -= 1;
     }
   }
 }

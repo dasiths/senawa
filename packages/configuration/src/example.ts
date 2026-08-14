@@ -38,8 +38,36 @@ export function createExampleWorkflowConfiguration(): WorkflowConfigurationDocum
         ],
       },
     ],
-    sensors: [],
-    gates: [],
+    sensors: [
+      {
+        key: "diff-check",
+        argv: ["git", "diff", "--check"],
+        cwd: ".",
+        timeoutMs: 30_000,
+        maxStdoutBytes: 65_536,
+        maxStderrBytes: 65_536,
+        inheritedEnvironment: ["PATH"],
+        maxAttempts: 3,
+        maxReconciliationAttempts: 2,
+      },
+    ],
+    gates: [
+      {
+        key: "clean-diff",
+        phase: "work",
+        blocking: [
+          {
+            key: "exit-code-zero",
+            condition: {
+              operator: "equals",
+              accessor: { sensorKey: "diff-check", pointer: "/exitCode" },
+              expected: 0,
+            },
+          },
+        ],
+        advisory: [],
+      },
+    ],
     phases: [
       {
         key: "work",

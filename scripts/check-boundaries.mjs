@@ -21,6 +21,19 @@ if (
   );
 }
 
+const reportingManifest = JSON.parse(await readFile("packages/reporting/package.json", "utf8"));
+const reportingDependencies = Object.keys(reportingManifest.dependencies ?? {});
+const allowedReportingDependencies = new Set([
+  "@senawa/kernel",
+  "@senawa/protocol",
+  "@senawa/runtime",
+]);
+if (reportingDependencies.some((dependency) => !allowedReportingDependencies.has(dependency))) {
+  violations.push(
+    "packages/reporting/package.json: reporting may depend only on kernel, protocol, and runtime packages",
+  );
+}
+
 const configurationManifest = JSON.parse(
   await readFile("packages/configuration/package.json", "utf8"),
 );
@@ -113,6 +126,8 @@ function checkSource(file, content) {
   const isKernel = file.startsWith("packages/kernel/");
   const isProtocol = file.startsWith("packages/protocol/");
   const isRuntime = file.startsWith("packages/runtime/");
+  const isReporting = file.startsWith("packages/reporting/");
+  const isReportingProduction = isReporting && !file.endsWith(".test.ts");
   const isConfiguration = file.startsWith("packages/configuration/");
   const isExecutionHost = file.startsWith("packages/execution-host/");
   const isPortal = file.startsWith("packages/portal/src/") && !file.endsWith(".test.ts");
@@ -129,14 +144,19 @@ function checkSource(file, content) {
   if (isPackage && !file.endsWith(".test.ts") && content.includes("@senawa/testing")) {
     findings.push(`${file}: production packages cannot import testing`);
   }
-  if ((isKernel || isProtocol || isRuntime || isConfiguration) && hasNodeRuntimeImport(content)) {
+  if (
+    (isKernel || isProtocol || isRuntime || isReportingProduction || isConfiguration) &&
+    hasNodeRuntimeImport(content)
+  ) {
     const packageName = isKernel
       ? "kernel"
       : isProtocol
         ? "protocol"
         : isRuntime
           ? "runtime"
-          : "configuration";
+          : isReporting
+            ? "reporting"
+            : "configuration";
     findings.push(`${file}: ${packageName} cannot import Node modules`);
   }
   if (isPortal && hasNodeRuntimeImport(content)) {
@@ -161,6 +181,12 @@ function checkSource(file, content) {
   }
   if (isRuntime && /@senawa\/(?!kernel(?:["'/]|$)|protocol(?:["'/]|$))[a-z0-9-]+/u.test(content)) {
     findings.push(`${file}: runtime may import only protocol and kernel packages`);
+  }
+  if (
+    isReportingProduction &&
+    /@senawa\/(?!kernel(?:["'/]|$)|protocol(?:["'/]|$)|runtime(?:["'/]|$))[a-z0-9-]+/u.test(content)
+  ) {
+    findings.push(`${file}: reporting may import only kernel, protocol, and runtime packages`);
   }
   if (isConfiguration && /@senawa\/(?!kernel(?:["'/]|$))[a-z0-9-]+/u.test(content)) {
     findings.push(`${file}: configuration may import only the kernel package`);
@@ -271,6 +297,7 @@ function verifyRules() {
     ["packages/portal/src/bad.ts", 'import "node:crypto";', "cannot import Node modules"],
     ["packages/portal/src/bad.ts", 'import "@senawa/kernel";', "may import only protocol"],
     ["packages/runtime/src/bad.ts", 'import "node:fs";', "cannot import Node modules"],
+    ["packages/reporting/src/bad.ts", 'import "node:fs";', "cannot import Node modules"],
     ["packages/configuration/src/bad.ts", 'import "node:fs";', "cannot import Node modules"],
     ["packages/kernel/src/bad.ts", 'import os from "os";', "cannot import Node modules"],
     [
@@ -336,6 +363,11 @@ function verifyRules() {
       "packages/runtime/src/bad.ts",
       'import "@senawa/storage-sqlite";',
       "may import only protocol and kernel",
+    ],
+    [
+      "packages/reporting/src/bad.ts",
+      'import "@senawa/storage-sqlite";',
+      "may import only kernel, protocol, and runtime packages",
     ],
     [
       "packages/configuration/src/bad.ts",

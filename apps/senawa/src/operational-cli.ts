@@ -1,32 +1,56 @@
 import { spawn } from "node:child_process";
-import { fchmodSync, mkdirSync, openSync, readFileSync } from "node:fs";
-import { canonicalBytes, canonicalStringify, PROTOCOL_VERSION } from "@senawa/protocol";
+import {
+  closeSync,
+  existsSync,
+  fchmodSync,
+  constants as fsConstants,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+} from "node:fs";
+import { resolve } from "node:path";
+import {
+  canonicalBytes,
+  canonicalStringify,
+  PROTOCOL_LIMITS,
+  PROTOCOL_VERSION,
+} from "@senawa/protocol";
+import type { RuntimeDependencies } from "@senawa/runtime";
+import { checkSqliteAuthorityIntegrity } from "@senawa/storage-sqlite";
 import {
   HttpSupervisorClient,
   readPrivateCredential,
   recoverRunOnce,
   SqliteSupervisorAuthority,
+  type SupervisorServiceStatus,
 } from "@senawa/supervisor";
-import type { CliResult } from "./cli.js";
+import { type CliResult, SENAWA_VERSION } from "./cli.js";
 import {
   resolveSenawaServicePaths,
   runSenawaServiceForeground,
   runtimeDependencies,
 } from "./daemon.js";
+import { createDiagnosticsDirectory, createRepairPlan } from "./maintenance.js";
+import { exportSqliteReportingDirectory, verifyReportingDirectory } from "./report-export.js";
+import { restoreSupervisorStateRoot, verifySupervisorStateBackup } from "./state-backup.js";
+
+const MAX_OPERATIONAL_ARGUMENT_LENGTH = 4_096;
 
 export async function runOperationalCli(
   arguments_: readonly string[],
   environment: NodeJS.ProcessEnv = process.env,
+  dependencies: RuntimeDependencies = runtimeDependencies,
 ): Promise<CliResult | undefined> {
   const [group, action, ...rest] = arguments_;
   if (
     group === "doctor" ||
     group === "init" ||
     group === undefined ||
-    group === "--help" ||
-    group === "-h" ||
-    group === "--version" ||
-    group === "-v"
+    arguments_.includes("--help") ||
+    arguments_.includes("-h") ||
+    arguments_.includes("--version") ||
+    arguments_.includes("-v")
   ) {
     return undefined;
   }
@@ -34,6 +58,122 @@ export async function runOperationalCli(
   if (group === "service" && action === "run" && rest.length === 0) {
     await runSenawaServiceForeground(environment);
     return success("Supervisor stopped");
+  }
+  if (group === "report" && action === "create" && rest.length === 3) {
+    const repositoryId = boundedArgument(rest[0]);
+    const runId = boundedArgument(rest[1]);
+    const destinationDirectory = boundedArgument(rest[2]);
+    const manifest = exportSqliteReportingDirectory({
+      databasePath: paths.databasePath,
+      dependencies,
+      repositoryId,
+      runId,
+      destinationDirectory,
+    });
+    return success(canonicalStringify(manifest));
+  }
+  if (group === "export" && action === "verify" && rest.length === 1) {
+    const directory = boundedArgument(rest[0]);
+    return success(canonicalStringify(verifyReportingDirectory(directory, dependencies.sha256)));
+  }
+  if (group === "export" && action === "restore") {
+    return invalid("Report exports are non-restorable; restore requires a verified backup");
+  }
+  if (group === "backup" && action === "create" && rest.length === 1) {
+    const request = createBackupRequest(boundedArgument(rest[0]), dependencies);
+    try {
+      return success(canonicalStringify(await clientFor(paths).backupState(request)));
+    } catch {
+      return invalid(canonicalStringify({ status: "failed", code: "backup-refused" }));
+    }
+  }
+  if ((group === "backup" || group === "restore") && action === "verify" && rest.length === 1) {
+    const directory = boundedArgument(rest[0]);
+    try {
+      const manifest = verifySupervisorStateBackup(directory, dependencies);
+      return success(
+        canonicalStringify({
+          format: manifest.format,
+          version: manifest.version,
+          requestId: manifest.requestId,
+          status: "verified",
+        }),
+      );
+    } catch {
+      return invalid(canonicalStringify({ status: "failed", code: "backup-integrity-failed" }));
+    }
+  }
+  if (group === "restore" && action === "apply" && rest.length === 2) {
+    const backupDirectory = boundedArgument(rest[0]);
+    const destinationStateRoot = boundedArgument(rest[1]);
+    return applyFreshRestore(
+      paths,
+      backupDirectory,
+      destinationStateRoot,
+      dependencies,
+      "restore-refused",
+    );
+  }
+  if (group === "integrity" && action === "check" && rest.length === 0) {
+    const report = checkSqliteAuthorityIntegrity({
+      databasePath: paths.databasePath,
+      assetDirectory: paths.assetDirectory,
+      dependencies,
+    });
+    return { output: canonicalStringify(report), exitCode: report.status === "passed" ? 0 : 1 };
+  }
+  if (group === "diagnostics" && action === "create" && rest.length === 1) {
+    const destinationDirectory = boundedArgument(rest[0]);
+    const integrity = checkSqliteAuthorityIntegrity({
+      databasePath: paths.databasePath,
+      assetDirectory: paths.assetDirectory,
+      dependencies,
+    });
+    let serviceStatus: SupervisorServiceStatus | undefined;
+    if (existsSync(paths.socketPath)) {
+      try {
+        serviceStatus = await clientFor(paths).status();
+      } catch {
+        serviceStatus = undefined;
+      }
+    }
+    try {
+      const manifest = createDiagnosticsDirectory({
+        destinationDirectory,
+        productVersion: SENAWA_VERSION,
+        integrity,
+        ...(serviceStatus === undefined ? {} : { serviceStatus }),
+      });
+      return success(
+        canonicalStringify({
+          format: manifest.format,
+          version: manifest.version,
+          classification: manifest.classification,
+          status: "created",
+        }),
+      );
+    } catch {
+      return invalid(canonicalStringify({ status: "failed", code: "diagnostics-refused" }));
+    }
+  }
+  if (group === "repair" && action === "plan" && rest.length === 0) {
+    const integrity = checkSqliteAuthorityIntegrity({
+      databasePath: paths.databasePath,
+      assetDirectory: paths.assetDirectory,
+      dependencies,
+    });
+    return success(canonicalStringify(createRepairPlan(integrity, dependencies.sha256)));
+  }
+  if (group === "repair" && action === "apply" && rest.length === 2) {
+    const backupDirectory = boundedArgument(rest[0]);
+    const destinationStateRoot = boundedArgument(rest[1]);
+    return applyFreshRestore(
+      paths,
+      backupDirectory,
+      destinationStateRoot,
+      dependencies,
+      "repair-refused",
+    );
   }
   if (group === "service" && action === "start") return startService(paths, environment);
   const client = clientFor(paths);
@@ -79,7 +219,7 @@ export async function runOperationalCli(
     return success(canonicalStringify(await client.recover({ repositoryId, runId })));
   }
   if (group === "command" && action === "submit" && rest.length === 1) {
-    const content = rest[0] === "-" ? await readStdin() : readFileSync(rest[0] as string, "utf8");
+    const content = rest[0] === "-" ? await readStdin() : readBoundedCommandFile(rest[0] as string);
     return success(canonicalStringify(await client.submitCommand(content)));
   }
   if (group === "receipt" && action === "get" && rest.length === 1) {
@@ -189,6 +329,19 @@ export async function runOperationalCli(
   return invalid("Unknown operational command");
 }
 
+export function createBackupRequest(
+  destinationArgument: string,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): { readonly requestId: string; readonly destinationDirectory: string } {
+  const destinationDirectory = resolve(destinationArgument);
+  return Object.freeze({
+    requestId: `backup_${dependencies.sha256
+      .digest(new TextEncoder().encode(destinationDirectory))
+      .slice(0, 40)}`,
+    destinationDirectory,
+  });
+}
+
 function clientFor(paths: ReturnType<typeof resolveSenawaServicePaths>): HttpSupervisorClient {
   const credential = readPrivateCredential(paths.credentialPath);
   return new HttpSupervisorClient({ socketPath: paths.socketPath, credential: credential.token });
@@ -240,6 +393,36 @@ function integer(value: string, label: string): number {
   return Number(value);
 }
 
+function boundedArgument(value: string | undefined): string {
+  if (value === undefined || value.length === 0 || value.length > MAX_OPERATIONAL_ARGUMENT_LENGTH) {
+    throw new TypeError("Operational command argument is outside its size limit");
+  }
+  return value;
+}
+
+function applyFreshRestore(
+  paths: ReturnType<typeof resolveSenawaServicePaths>,
+  backupDirectory: string,
+  destinationStateRoot: string,
+  dependencies: RuntimeDependencies,
+  failureCode: "restore-refused" | "repair-refused",
+): CliResult {
+  if (existsSync(paths.socketPath)) {
+    return invalid(canonicalStringify({ status: "failed", code: failureCode }));
+  }
+  try {
+    const restored = restoreSupervisorStateRoot({
+      backupDirectory,
+      destinationStateRoot,
+      dependencies,
+    });
+    restored.close();
+    return success(canonicalStringify({ status: "restored" }));
+  } catch {
+    return invalid(canonicalStringify({ status: "failed", code: failureCode }));
+  }
+}
+
 function exactRecord(value: unknown, label: string): Readonly<Record<string, unknown>> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError(`${label} must be an object`);
@@ -255,9 +438,41 @@ function exactDigest(value: unknown, label: string): string {
 }
 
 async function readStdin(): Promise<string> {
+  return readBoundedCommandStream(process.stdin);
+}
+
+export async function readBoundedCommandStream(
+  stream: AsyncIterable<string | Uint8Array>,
+): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks).toString("utf8");
+  let total = 0;
+  for await (const chunk of stream) {
+    const bytes = Buffer.from(chunk);
+    total += bytes.byteLength;
+    if (total > PROTOCOL_LIMITS.maxWireBytes) throw new TypeError("Command input exceeds 256 KiB");
+    chunks.push(bytes);
+  }
+  return Buffer.concat(chunks, total).toString("utf8");
+}
+
+export function readBoundedCommandFile(path: string): string {
+  const descriptor = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile() || metadata.size > PROTOCOL_LIMITS.maxWireBytes) {
+      throw new TypeError("Command input exceeds 256 KiB");
+    }
+    const buffer = Buffer.allocUnsafe(PROTOCOL_LIMITS.maxWireBytes + 1);
+    let total = 0;
+    while (total <= PROTOCOL_LIMITS.maxWireBytes) {
+      const bytesRead = readSync(descriptor, buffer, total, buffer.byteLength - total, null);
+      if (bytesRead === 0) return buffer.subarray(0, total).toString("utf8");
+      total += bytesRead;
+    }
+    throw new TypeError("Command input exceeds 256 KiB");
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function success(output: string): CliResult {

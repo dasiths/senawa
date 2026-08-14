@@ -16,6 +16,7 @@ import {
   type ExecutableSensorCommand,
   type ExecutableSensorMeasurementRequest,
   measureExecutableSensor,
+  PROCESS_SECURITY_LIMITS,
 } from "./process-sensor.js";
 
 const helper = new URL("./test-fixtures/process-helper.mjs", import.meta.url).pathname;
@@ -141,6 +142,70 @@ describe("measureExecutableSensor", () => {
     });
   });
 
+  it("enforces argv and allowlisted environment count and UTF-8 byte ceilings", async () => {
+    const root = await temporaryRoot();
+    const atArgumentCount = command("argv", ...Array.from({ length: 253 }, () => ""));
+    expect(atArgumentCount.argv).toHaveLength(PROCESS_SECURITY_LIMITS.maxArguments);
+    await expect(measureExecutableSensor(request(root, atArgumentCount))).resolves.toMatchObject({
+      type: "measurement",
+    });
+    await expect(
+      measureExecutableSensor(
+        request(root, command("argv", ...Array.from({ length: 254 }, () => ""))),
+      ),
+    ).resolves.toMatchObject({ type: "failure", failure: { code: "invalid-request" } });
+
+    const baseBytes = command("argv").argv.reduce(
+      (total, argument) => total + Buffer.byteLength(argument),
+      0,
+    );
+    const byteLimit = "x".repeat(PROCESS_SECURITY_LIMITS.maxArgumentBytes - baseBytes);
+    await expect(
+      measureExecutableSensor(request(root, command("argv", byteLimit))),
+    ).resolves.toMatchObject({ type: "measurement" });
+    await expect(
+      measureExecutableSensor(request(root, command("argv", `${byteLimit}€`))),
+    ).resolves.toMatchObject({ type: "failure", failure: { code: "invalid-request" } });
+
+    const names = Array.from(
+      { length: PROCESS_SECURITY_LIMITS.maxEnvironmentEntries },
+      (_, index) => `V${index}`,
+    );
+    const ambient = Object.fromEntries(names.map((name) => [name, ""]));
+    await expect(
+      measureExecutableSensor({
+        ...request(root, command("env")),
+        command: { ...command("env"), inheritedEnvironment: names },
+        ambientEnvironment: ambient,
+      }),
+    ).resolves.toMatchObject({ type: "measurement" });
+    await expect(
+      measureExecutableSensor({
+        ...request(root, command("env")),
+        command: { ...command("env"), inheritedEnvironment: [...names, "OVER"] },
+        ambientEnvironment: { ...ambient, OVER: "" },
+      }),
+    ).resolves.toMatchObject({ type: "failure", failure: { code: "invalid-request" } });
+
+    const environmentValue = "€".repeat(
+      Math.floor((PROCESS_SECURITY_LIMITS.maxEnvironmentBytes - 1) / 3),
+    );
+    await expect(
+      measureExecutableSensor({
+        ...request(root, command("env")),
+        command: { ...command("env"), inheritedEnvironment: ["V"] },
+        ambientEnvironment: { V: environmentValue },
+      }),
+    ).resolves.toMatchObject({ type: "measurement" });
+    await expect(
+      measureExecutableSensor({
+        ...request(root, command("env")),
+        command: { ...command("env"), inheritedEnvironment: ["V"] },
+        ambientEnvironment: { V: `${environmentValue}€` },
+      }),
+    ).resolves.toMatchObject({ type: "failure", failure: { code: "invalid-request" } });
+  });
+
   it("returns nonzero exits and signals as measurements", async () => {
     const root = await temporaryRoot();
     const nonzero = await measureExecutableSensor(request(root, command("nonzero", "23")));
@@ -248,6 +313,45 @@ describe("measureExecutableSensor", () => {
       measurement: { cancelled: true, timedOut: false, cleanup: "not-needed" },
     });
     expect(rootOpened).toBe(false);
+  });
+
+  it("refuses the thirty-third active process before setup", async () => {
+    const root = await temporaryRoot();
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = 0;
+    let allEntered: (() => void) | undefined;
+    const enteredLimit = new Promise<void>((resolve) => {
+      allEntered = resolve;
+    });
+    const dependencies = {
+      supervisorPath: supervisor,
+      async realpath(path: string) {
+        entered += 1;
+        if (entered === PROCESS_SECURITY_LIMITS.maxActiveProcesses) allEntered?.();
+        await gate;
+        return path;
+      },
+      openRoot(path: string) {
+        return open(path, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+      },
+    };
+    const active = Array.from({ length: PROCESS_SECURITY_LIMITS.maxActiveProcesses }, () =>
+      measureExecutableSensor(request(root, command("argv")), dependencies),
+    );
+    await enteredLimit;
+    await expect(
+      measureExecutableSensor(request(root, command("argv")), dependencies),
+    ).resolves.toMatchObject({
+      type: "failure",
+      failure: { code: "invalid-request", message: expect.stringContaining("capacity") },
+    });
+    release?.();
+    await expect(Promise.all(active)).resolves.toHaveLength(
+      PROCESS_SECURITY_LIMITS.maxActiveProcesses,
+    );
   });
 
   it("queues cancellation in the post-spawn handoff until the supervisor is ready", async () => {

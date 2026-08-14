@@ -686,6 +686,14 @@ central acceptance and delivery never imply local execution.
 Ship a coherent npm alpha with deterministic reports, operations, security
 limits, and a no-credit end-to-end acceptance journey.
 
+Phase 13 is complete. The Linux x64 glibc alpha now packages and installs from
+deterministic local tarballs, includes portal assets, migrations, and native
+helpers, and keeps the optional paid worker outside the core install graph.
+Default init creates and durably syncs `.senawa/workflow.json`. Deterministic
+secret-safe reports and non-restorable exports, bounded maintenance operations,
+security ceilings, hostile fixtures, and one complete no-credit acceptance
+journey are implemented and independently reviewed.
+
 ### Acceptance
 
 * Default `senawa init` durably creates `.senawa/workflow.json` without
@@ -728,7 +736,192 @@ limits, and a no-credit end-to-end acceptance journey.
 
 `feat: complete senawa alpha`
 
-## Phase 14: Consumer documentation and adoption journeys
+## Phase 14: Standard delivery workflow authoring
+
+### Goal
+
+Make the default workflow a complete define, research, plan, implement, and
+verify delivery method. Add external agent prompts, arbitrary consumer schemas,
+typed phase dataflow, schema-selected task fan-out, plan import, bounded
+iteration and rework, and human exit approvals without treating prompts, model
+output, or files as workflow authority.
+
+### Required research
+
+Run a fresh RPI research cycle after Phase 13. The research must:
+
+* Compare the historical `standard-delivery.yaml` semantics with the final
+  kernel, configuration, context broker, amendment, scheduler, portal,
+  reporting, packaging, and security boundaries.
+* Define a breaking alpha configuration contract for external prompt resources,
+  arbitrary JSON Schemas, phase executors, typed data mappings, output
+  artifacts, iteration, plan import, and per-item task-frontier loops.
+* Threat-model prompt and template injection, path escape, resource replacement,
+  schema substitution, stale phase output, unstable task identity, duplicate
+  fan-out, plan-import races, resumed-session drift, and unbounded loops.
+* Select deterministic migration diagnostics. Do not add legacy runtime
+  compatibility or silently reinterpret v1alpha2 documents.
+
+Research artifacts remain temporary. Record accepted choices and rejected
+alternatives in the implementation log.
+
+### External prompts
+
+* Consumers define each agent role's system prompt through a project-relative
+  external UTF-8 file, such as `.senawa/prompts/researcher.md`. Prompt bodies do
+  not live inline in the workflow JSON.
+* Prompt resource paths are relative to the configuration root, normalized,
+  bounded, regular-file-only, symlink-refusing, and confined beneath `.senawa`.
+  Absolute paths, parent traversal, alternate separators, special files, and
+  replacement races fail closed.
+* Configuration compilation reads prompt resources through an injected port,
+  stores their exact content digests and byte lengths in the immutable snapshot,
+  and reports drift when bytes change. Runtime replay never resolves current
+  path contents for a historical dispatch.
+* Agent roles reference one prompt resource and one model policy by exact key.
+  Prompt bytes and digests flow through immutable contexts, dispatches, resumed
+  sessions, and local audit records.
+* Default reports, exports, diagnostics, portal DTOs, and remote synchronization
+  expose prompt identity and digest only. They do not expose prompt bodies.
+
+### Schemas and dataflow
+
+* Schemas remain arbitrary consumer-owned JSON Schema 2020-12 resources. Senawa
+  validates schema safety, references, bounds, and instances, but does not impose
+  domain-specific definition, research, plan, task, or verification shapes.
+* Schema declarations may reference project-relative external JSON files beneath
+  `.senawa/schemas` instead of embedding schema bodies in workflow JSON. Schema
+  resources use the same confined, regular-file-only, symlink-refusing,
+  content-addressed loading boundary as prompt resources. Historical snapshots
+  retain exact schema bytes and never resolve the current file for replay.
+* Workflow input, each named phase output, and each generated task input declare
+  schema references independently. Senawa binds the schema key and digest into
+  the configuration snapshot and validates values at every publication boundary.
+* Phase outputs are content-addressed immutable JSON artifacts. Publication
+  binds phase generation, attempt, output name, schema digest, content digest,
+  producing dispatch, context, graph revision, and configuration snapshot.
+* A phase input map uses exact source references and JSON Pointers. A mapping
+  may read workflow input, a dependency phase's accepted output, the current
+  fan-out item, or allowlisted implementation evidence. It writes one declared
+  input key or JSON Pointer in the destination object.
+* A mapping equivalent to
+  `phase2.input.abc = phase1.output.blah.abc.xyz` is represented as a source
+  phase/output plus source pointer `/blah/abc/xyz` and destination pointer
+  `/abc`. No JavaScript, JSONPath, shell, property evaluation, or arbitrary
+  expression language is executed.
+* Mappings are dependency-checked, cycle-free, bounded, collision-free, and
+  evaluated over immutable source digests. Missing pointers, changed source
+  generations, type conflicts, duplicate destinations, and schema-invalid
+  assembled inputs fail closed.
+
+### Prompt templates
+
+* External prompt files may contain deterministic substitutions such as
+  `${{ input.abc }}`. The template language supports only declared input paths
+  and an explicit small namespace. It has no function calls, conditionals,
+  loops, environment access, file reads, network access, or authority APIs.
+* Scalar values render as bounded text. Structured values render as canonical
+  JSON inside an explicit untrusted-data delimiter. Missing tokens, undeclared
+  paths, invalid UTF-8, output overflow, and recursive substitutions fail closed.
+* The rendered prompt separates Senawa's trusted authority boundary, the
+  consumer's configured system prompt, and quoted untrusted mapped data. Prompt
+  text cannot approve, close, grant allowance, import plans, dispatch effects,
+  or mutate graph authority.
+
+### Schema-selected task loops
+
+* A task-frontier phase may declare a finite `forEach` fan-out over one accepted
+  phase output or mapped phase input. The source names the phase and output, a
+  bounded JSON Pointer selects the collection, and a declared collection schema
+  must validate the selected value as an array.
+* Each selected item is validated against a declared item schema. A required
+  stable identity pointer selects an opaque item identity. Duplicate, missing,
+  non-string, oversized, or changed identities fail closed.
+* A task template declares the generated task key namespace, role, prompt,
+  model policy, budgets, completion policy, repository-change policy,
+  dependencies, and input mappings from the current item and immutable phase
+  data. Generated input must validate against its task input schema.
+* Fan-out order is deterministic by stable item identity, not source array
+  order. The selected collection, item schema, identity pointer, template,
+  source output digest, and generated task set digest are immutable authority.
+* Re-evaluating the same fan-out is idempotent. Added items propose new task
+  generations through additive amendment authority. Removed or changed items do
+  not silently delete or rewrite accepted work; they produce an explicit stale,
+  supersession, or amendment review requirement.
+* The loop declares hard bounds for selected items, active concurrency, total
+  generated tasks, per-task dispatch failures, rework attempts, phase
+  iterations, and exhaustion behavior. Exceeding any bound escalates or refuses
+  according to the declared policy.
+* Every generated task follows normal claim, workspace, completion, evidence,
+  gate, integration, report, and replay authority. A loop selector cannot grant
+  execution or graph authority by itself.
+
+### Standard delivery behavior
+
+* `define`, `research`, `plan`, and `verify` use schema-bound agent phase
+  executors with external role prompts, named typed inputs and outputs, finite
+  iterations, exact exit gates, and human approval.
+* `plan` uses an explicit `import-plan` action. The approved plan output is
+  schema-validated and translated into bounded additive task proposals. Import
+  never mutates graph authority directly.
+* `implement` uses a task-frontier executor with `forEach` over the approved plan
+  task collection. Each task receives schema-mapped plan data, bounded rework,
+  resumable session policy, finite dispatch failures, repository-change policy,
+  and exhaustion escalation.
+* `verify` maps definition, research, plan, and allowlisted implementation
+  evidence into its typed input and produces a schema-bound verification output.
+  Workflow completion requires the exact accepted verification gate and human
+  decision.
+
+### Acceptance
+
+* All external prompt, schema, phase output, mapping, template, fan-out, import,
+  iteration, rework, approval, and completion contracts above are enforced end
+  to end and represented in deterministic reports.
+* Default `senawa init` creates `.senawa/workflow.json`, external prompt files,
+  and external schema files required by the standard authoring layout.
+  Initialization remains exclusive, durable, non-overwriting, and fully
+  validated by default `senawa doctor`.
+* The repository's seeded `.senawa` example uses the same template and includes
+  define, research, plan, implement, and verify with a schema-selected
+  implementation loop.
+* Consumer schemas remain domain-neutral. Senawa examples may provide opinionated
+  schemas, but runtime behavior depends only on declared schema and mapping
+  contracts.
+
+### Validation
+
+* Prompt path confinement, replacement race, size, UTF-8, drift, historical
+  digest, secret-exclusion, and injection-separation tests
+* JSON Pointer mapping, dependency cycle, missing source, destination collision,
+  schema mismatch, stale output, and deterministic substitution tests
+* Fan-out collection and item schema, stable identity, duplicate identity,
+  source reorder, add/change/remove, bounds, concurrency, crash, replay, and
+  amendment review tests
+* Plan import duplicate, stale graph, stale approval, crash, authority widening,
+  and concurrent import tests
+* Complete no-credit define-to-verify journey with fixture agents, human
+  approvals, imported plan tasks, per-task implementation loop, rework,
+  implementation evidence, verification, and closure
+* Default and packed-install init/doctor tests for workflow, prompts, and schemas
+* Desktop and mobile portal journeys for outputs, approvals, iterations,
+  generated tasks, rework, and verification
+
+### Disproof
+
+* Consumers must edit Senawa source to define prompts, schemas, mappings, or a
+  per-task implementation loop.
+* Prompt text, template expansion, a plan item, or an output file directly grants
+  workflow authority.
+* Fan-out task identity depends on source array order or current file contents.
+* Plan import bypasses additive amendment or stale checks.
+* Init generates files that doctor accepts but runtime cannot enforce.
+
+### Commit
+
+`feat: add standard delivery workflow authoring`
+
+## Phase 15: Consumer documentation and adoption journeys
 
 ### Goal
 
@@ -739,7 +932,7 @@ history or source code.
 
 ### Required research
 
-Run a fresh RPI research cycle after Phase 13. The research must:
+Run a fresh RPI research cycle after Phase 14. The research must:
 
 * Identify the primary consumer audiences and their first successful journeys.
 * Review the final CLI, configuration schema, examples, package exports,
@@ -765,9 +958,12 @@ approved consumer documentation and the implementation log decision record.
 * A getting-started journey covers installation, `senawa init`, configuration,
   `senawa doctor`, service startup, command submission, status, events, and
   shutdown using only implemented commands.
-* Workflow authoring documentation covers phases, work, criteria, completion,
-  schemas, roles, model routes, budgets, sensors, gates, projected work, and the
-  default `execution.workspaceMode: repository` behavior.
+* Workflow authoring documentation covers workflow input, external prompt files,
+  arbitrary schemas, phase executors, mapped inputs, output artifacts, template
+  substitution, schema-selected task loops, plan import, iteration, rework,
+  approvals, completion, roles, model routes, budgets, sensors, gates,
+  projected work, and the default `execution.workspaceMode: repository`
+  behavior.
 * Optional worktree documentation states that `worktree` mode requires explicit
   configuration. Its examples and tests use a fresh temporary Git repository,
   never the mounted Senawa checkout.
@@ -820,7 +1016,7 @@ approved consumer documentation and the implementation log decision record.
 
 ## Final pull request
 
-After Phase 14 is independently approved, committed, and pushed:
+After Phase 15 is independently approved, committed, and pushed:
 
 * Fetch and compare the branch with the remote base branch.
 * Generate a complete branch reference and review it in parallel chunks.
@@ -850,7 +1046,7 @@ The autonomous implementation is complete only when:
   checks pass from a fresh install.
 * The no-credit end-to-end workflow passes after process restarts.
 * The current branch contains no Beads or legacy compatibility implementation.
-* Phase 14 consumer documentation passes its fresh research, journey,
+* Phase 15 consumer documentation passes its fresh research, journey,
   independent review, and link validation gates.
 * The complete implementation branch is pushed and has one final pull request.
 * The final implementation review states which planned contracts were accepted,

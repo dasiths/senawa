@@ -215,6 +215,37 @@ describe("worker context grant and asset codecs", () => {
     );
     expect(invoked).toBe(false);
   });
+
+  it("enforces worker grant operation, byte, and chunk ceilings at limit plus one", () => {
+    expect(
+      decodeContextGrantEnvelope({
+        ...grant,
+        maxOperations: WORKER_PROTOCOL_LIMITS.maxGrantOperations,
+        maxBytes: WORKER_PROTOCOL_LIMITS.maxGrantBytes,
+        maxChunkBytes: WORKER_PROTOCOL_LIMITS.maxAssetReadBytes,
+      }),
+    ).toMatchObject({
+      maxOperations: WORKER_PROTOCOL_LIMITS.maxGrantOperations,
+      maxBytes: WORKER_PROTOCOL_LIMITS.maxGrantBytes,
+      maxChunkBytes: WORKER_PROTOCOL_LIMITS.maxAssetReadBytes,
+    });
+    expectProtocolError("oversized", "$.maxOperations", () =>
+      decodeContextGrantEnvelope({
+        ...grant,
+        maxOperations: WORKER_PROTOCOL_LIMITS.maxGrantOperations + 1,
+      }),
+    );
+    expectProtocolError("oversized", "$.maxBytes", () =>
+      decodeContextGrantEnvelope({ ...grant, maxBytes: WORKER_PROTOCOL_LIMITS.maxGrantBytes + 1 }),
+    );
+    expectProtocolError("invalid-value", "$.maxChunkBytes", () =>
+      decodeContextGrantEnvelope({
+        ...grant,
+        maxBytes: WORKER_PROTOCOL_LIMITS.maxGrantBytes,
+        maxChunkBytes: WORKER_PROTOCOL_LIMITS.maxAssetReadBytes + 1,
+      }),
+    );
+  });
 });
 
 describe("worker submission codec", () => {

@@ -44,6 +44,9 @@ importers:
       '@senawa/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@senawa/reporting':
+        specifier: workspace:*
+        version: link:../../packages/reporting
       '@senawa/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
@@ -67,17 +70,14 @@ importers:
         specifier: workspace:*
         version: link:../kernel
       ajv:
-        specifier: 8.17.1
-        version: 8.17.1
+        specifier: 8.18.0
+        version: 8.18.0
       json-schema-traverse:
         specifier: 1.0.0
         version: 1.0.0
 
   packages/execution-host:
     dependencies:
-      '@github/copilot-sdk':
-        specifier: 1.0.9
-        version: 1.0.9
       '@senawa/kernel':
         specifier: workspace:*
         version: link:../kernel
@@ -87,6 +87,10 @@ importers:
       '@senawa/runtime':
         specifier: workspace:*
         version: link:../runtime
+    devDependencies:
+      '@github/copilot-sdk':
+        specifier: 1.0.9
+        version: 1.0.9
 
   packages/kernel: {}
 
@@ -101,6 +105,18 @@ importers:
         version: 8.2.1(@types/node@22.17.2)(esbuild@0.28.1)(yaml@2.8.1)
 
   packages/protocol: {}
+
+  packages/reporting:
+    dependencies:
+      '@senawa/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+      '@senawa/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@senawa/runtime':
+        specifier: workspace:*
+        version: link:../runtime
 
   packages/runtime:
     dependencies:
@@ -806,8 +822,8 @@ packages:
   '@vitest/utils@3.2.4':
     resolution: {integrity: sha1-wIE7xC2ZUn+4xbE4x6iFFrykb+o=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@vitest/utils/-/utils-3.2.4.tgz}
 
-  ajv@8.17.1:
-    resolution: {integrity: sha1-N9mlx3ava8ktf0+VEOukwKYNEaY=, tarball: https://ms-feed-17.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/ajv/-/ajv-8.17.1.tgz}
+  ajv@8.18.0:
+    resolution: {integrity: sha1-iGQYa2c40APrOpMxcrs4M+EM77w=, tarball: https://ms-feed-17.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/ajv/-/ajv-8.18.0.tgz}
 
   assertion-error@2.0.1:
     resolution: {integrity: sha1-9kGhlrM1aQsQcL8AtudZP+wZC/c=, tarball: https://ms-feed-12.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/assertion-error/-/assertion-error-2.0.1.tgz}
@@ -892,7 +908,7 @@ packages:
     engines: {node: '>=12.0.0'}
 
   fast-deep-equal@3.1.3:
-    resolution: {integrity: sha1-On1WtVnWy8PrUSMlJE5hmmXGxSU=, tarball: https://ms-feed-2.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz}
+    resolution: {integrity: sha1-On1WtVnWy8PrUSMlJE5hmmXGxSU=, tarball: https://ms-feed-12.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz}
 
   fast-uri@3.1.5:
     resolution: {integrity: sha1-YQ83QZoDAnBDDOzWjXTj1NlnJdA=, tarball: https://ms-feed-12.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/fast-uri/-/fast-uri-3.1.5.tgz}
@@ -1106,7 +1122,7 @@ packages:
     engines: {node: '>= 6'}
 
   require-from-string@2.0.2:
-    resolution: {integrity: sha1-iaf92TgmEmcxjq/hT5wy5ZjDaQk=, tarball: https://ms-feed-17.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/require-from-string/-/require-from-string-2.0.2.tgz}
+    resolution: {integrity: sha1-iaf92TgmEmcxjq/hT5wy5ZjDaQk=, tarball: https://ms-feed-12.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/require-from-string/-/require-from-string-2.0.2.tgz}
     engines: {node: '>=0.10.0'}
 
   rolldown@1.2.3:
@@ -1729,7 +1745,7 @@ snapshots:
       loupe: 3.2.1
       tinyrainbow: 2.0.0
 
-  ajv@8.17.1:
+  ajv@8.18.0:
     dependencies:
       fast-deep-equal: 3.1.3
       fast-uri: 3.1.5

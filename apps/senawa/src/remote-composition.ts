@@ -26,6 +26,11 @@ import {
 const ENROLLMENT_VERSION = "senawa.dev/remote-connector-enrollment/v1alpha1";
 const MAX_ENROLLMENT_BYTES = 64 * 1024;
 const MAX_REMOTE_RESPONSE_BYTES = PROTOCOL_LIMITS.maxWireBytes;
+export const REMOTE_NETWORK_LIMITS = Object.freeze({
+  maxEndpointCharacters: 2_048,
+  defaultResponseTimeoutMs: 10_000,
+  maxResponseTimeoutMs: 300_000,
+});
 
 export interface DaemonRemoteConnector {
   readonly disconnectedMode: RemoteDisconnectedMode;
@@ -116,15 +121,26 @@ export class HttpRemoteConnectorTransport implements RemoteConnectorTransport {
   readonly #endpoint: URL;
   readonly #binding: RemoteRepositoryBinding;
   readonly #fetch: typeof globalThis.fetch;
+  readonly #responseTimeoutMs: number;
 
   constructor(input: {
     readonly endpoint: URL;
     readonly binding: RemoteRepositoryBinding;
     readonly fetch: typeof globalThis.fetch;
+    readonly responseTimeoutMs?: number;
   }) {
     this.#endpoint = input.endpoint;
     this.#binding = input.binding;
     this.#fetch = input.fetch;
+    this.#responseTimeoutMs =
+      input.responseTimeoutMs ?? REMOTE_NETWORK_LIMITS.defaultResponseTimeoutMs;
+    if (
+      !Number.isSafeInteger(this.#responseTimeoutMs) ||
+      this.#responseTimeoutMs < 1 ||
+      this.#responseTimeoutMs > REMOTE_NETWORK_LIMITS.maxResponseTimeoutMs
+    ) {
+      throw new TypeError("Remote response timeout is outside its security ceiling");
+    }
   }
 
   async negotiate(input: Parameters<RemoteConnectorTransport["negotiate"]>[0]) {
@@ -213,17 +229,31 @@ export class HttpRemoteConnectorTransport implements RemoteConnectorTransport {
   }
 
   async #post(path: string, body: object, signal: AbortSignal): Promise<unknown> {
-    const response = await this.#fetch(new URL(path, this.#endpoint), {
+    const requestUrl = new URL(path, this.#endpoint);
+    const bodyText = canonicalStringify(body);
+    if (Buffer.byteLength(bodyText, "utf8") > PROTOCOL_LIMITS.maxWireBytes) {
+      throw new Error("Remote control plane request exceeds the byte limit");
+    }
+    const response = await this.#fetch(requestUrl, {
       method: "POST",
-      headers: { "content-type": "application/json; charset=utf-8" },
-      body: canonicalStringify(body),
+      headers: {
+        accept: "application/json",
+        "accept-encoding": "identity",
+        "content-type": "application/json; charset=utf-8",
+      },
+      body: bodyText,
       redirect: "error",
-      signal,
+      signal: AbortSignal.any([signal, AbortSignal.timeout(this.#responseTimeoutMs)]),
     });
+    if (response.redirected) throw new Error("Remote control plane redirects are forbidden");
     if (!response.ok) throw new Error("Remote control plane refused the request");
     const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
     if (contentType !== "application/json") {
       throw new Error("Remote control plane response content type is invalid");
+    }
+    const contentEncoding = response.headers.get("content-encoding");
+    if (contentEncoding !== null && contentEncoding.toLowerCase() !== "identity") {
+      throw new Error("Remote control plane response content encoding is invalid");
     }
     return decodeCanonicalJsonValue(await readBoundedResponse(response));
   }
@@ -343,11 +373,24 @@ function requireRemoteConfigurationSnapshot(
   };
 }
 
-function parseRemoteEndpoint(input: string): URL {
-  if (input.length < 1 || input.length > 2_048) {
+export function parseRemoteEndpoint(input: string): URL {
+  if (
+    input.length < 1 ||
+    input.length > REMOTE_NETWORK_LIMITS.maxEndpointCharacters ||
+    input.includes("\\") ||
+    [...input].some((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code <= 0x1f || code === 0x7f;
+    })
+  ) {
     throw new Error("Remote connector endpoint is invalid");
   }
-  const endpoint = new URL(input);
+  let endpoint: URL;
+  try {
+    endpoint = new URL(input);
+  } catch {
+    throw new Error("Remote connector endpoint is invalid");
+  }
   const loopbackHttp =
     endpoint.protocol === "http:" &&
     (endpoint.hostname === "127.0.0.1" || endpoint.hostname === "localhost");
@@ -401,12 +444,14 @@ function currentUid(): number {
 
 async function readBoundedResponse(response: Response): Promise<string> {
   const declared = response.headers.get("content-length");
+  let declaredLength: number | undefined;
   if (
     declared !== null &&
     (!/^(?:0|[1-9][0-9]*)$/u.test(declared) || Number(declared) > MAX_REMOTE_RESPONSE_BYTES)
   ) {
     throw new Error("Remote control plane response exceeds the byte limit");
   }
+  if (declared !== null) declaredLength = Number(declared);
   if (response.body === null) throw new Error("Remote control plane response body is missing");
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -420,6 +465,9 @@ async function readBoundedResponse(response: Response): Promise<string> {
       throw new Error("Remote control plane response exceeds the byte limit");
     }
     chunks.push(result.value);
+  }
+  if (declaredLength !== undefined && length !== declaredLength) {
+    throw new Error("Remote control plane response length does not match its declaration");
   }
   const bytes = new Uint8Array(length);
   let offset = 0;

@@ -3,20 +3,24 @@ import {
   closeSync,
   constants,
   copyFileSync,
+  cpSync,
   fstatSync,
   fsyncSync,
   linkSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
   rmSync,
+  type Stats,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -27,6 +31,7 @@ import {
   bindGitObjectId,
   bindGitRevision,
   canonicalDigest,
+  canonicalSerialize,
   canonicalValue,
   createAmendmentQuiescenceFact,
   type HistoricalAssetBinding,
@@ -196,6 +201,11 @@ import {
 import Database from "better-sqlite3";
 
 export const CURRENT_SCHEMA_VERSION = 9;
+export const ASSET_SECURITY_LIMITS = Object.freeze({
+  maxObjectBytes: 256 * 1024 * 1024,
+  defaultMaxObjects: 10_000,
+  defaultMaxTotalBytes: 1024 * 1024 * 1024,
+});
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 const WAL_AUTOCHECKPOINT_PAGES = 16_384;
 const MIGRATIONS_DIRECTORY = fileURLToPath(new URL("../migrations", import.meta.url));
@@ -211,14 +221,29 @@ export type SqliteFaultPoint =
   | "after-asset-stage"
   | "after-asset-install"
   | "before-asset-descriptor-commit"
-  | "after-asset-descriptor-commit-before-ack";
+  | "after-asset-descriptor-commit-before-ack"
+  | "after-restore-asset-partial-create"
+  | "after-restore-database-partial-create"
+  | "after-restore-assets-publish"
+  | "after-restore-database-publish";
 
 export interface SqliteAuthorityOptions {
   readonly databasePath: string;
   readonly assetDirectory: string;
   readonly dependencies: RuntimeDependencies;
   readonly busyTimeoutMs?: number;
+  readonly assetQuota?: {
+    readonly maxObjects: number;
+    readonly maxTotalBytes: number;
+  };
   readonly faultInjector?: (point: SqliteFaultPoint) => void;
+}
+
+interface OwnedRestorePath {
+  readonly device: number;
+  readonly inode: number;
+  readonly kind: "directory" | "file";
+  readonly path: string;
 }
 
 export interface SqlitePortalQueryAuthorityOptions {
@@ -758,6 +783,7 @@ export class SqliteAuthority
   readonly dependencies: RuntimeDependencies;
   readonly #database: Database.Database;
   readonly #faultInjector: ((point: SqliteFaultPoint) => void) | undefined;
+  readonly #assetQuota: { readonly maxObjects: number; readonly maxTotalBytes: number };
   #cachedAuthority: InMemoryAuthority;
   #cachedCanonicalSnapshot: IncrementalCanonicalSnapshot;
   #cachedService: RuntimeCommandService;
@@ -768,6 +794,19 @@ export class SqliteAuthority
     this.assetDirectory = resolve(options.assetDirectory);
     this.dependencies = options.dependencies;
     this.#faultInjector = options.faultInjector;
+    this.#assetQuota = Object.freeze({
+      maxObjects: options.assetQuota?.maxObjects ?? ASSET_SECURITY_LIMITS.defaultMaxObjects,
+      maxTotalBytes:
+        options.assetQuota?.maxTotalBytes ?? ASSET_SECURITY_LIMITS.defaultMaxTotalBytes,
+    });
+    if (
+      !Number.isSafeInteger(this.#assetQuota.maxObjects) ||
+      this.#assetQuota.maxObjects < 1 ||
+      !Number.isSafeInteger(this.#assetQuota.maxTotalBytes) ||
+      this.#assetQuota.maxTotalBytes < 1
+    ) {
+      throw new TypeError("Asset repository quotas must be positive safe integers");
+    }
     ensureSafeDirectoryPath(dirname(this.databasePath));
     ensureSafeDirectoryPath(this.assetDirectory);
     fsyncDirectory(this.assetDirectory);
@@ -1284,24 +1323,50 @@ export class SqliteAuthority
   }
 
   putAsset(bytes: Uint8Array, mediaType?: string): AssetDescriptor {
+    if (bytes.byteLength > ASSET_SECURITY_LIMITS.maxObjectBytes) {
+      throw new TypeError("Asset exceeds the 256 MiB object ceiling");
+    }
     const digest = this.dependencies.sha256.digest(bytes);
     if (!isSha256Digest(digest)) {
       throw new TypeError("SHA-256 implementations must return lowercase hexadecimal digests");
     }
     const relativePath = join("sha256", digest.slice(0, 2), digest);
-    const destination = resolveAssetPath(this.assetDirectory, relativePath);
-    const stagingDirectory = join(this.assetDirectory, ".staging");
-    ensureSafeDirectoryPath(stagingDirectory, this.assetDirectory);
-    ensureSafeDirectoryPath(dirname(destination), this.assetDirectory);
-    const staged = join(stagingDirectory, randomUUID());
     const descriptor: AssetDescriptor = {
       digest,
       byteLength: bytes.byteLength,
       relativePath,
       ...(mediaType === undefined ? {} : { mediaType }),
     };
-    let stagedExists = false;
+    let staged: string | undefined;
     try {
+      this.#database.exec("BEGIN IMMEDIATE");
+      const current = this.#database
+        .prepare<[string], AssetRow>(
+          "SELECT digest, byte_length, media_type, relative_path FROM assets WHERE digest = ?",
+        )
+        .get(digest);
+      if (current === undefined) {
+        const usage = this.#database
+          .prepare<[], { object_count: number; total_bytes: number }>(
+            "SELECT COUNT(*) AS object_count, COALESCE(SUM(byte_length), 0) AS total_bytes FROM assets",
+          )
+          .get();
+        if (
+          usage === undefined ||
+          usage.object_count >= this.#assetQuota.maxObjects ||
+          usage.total_bytes + bytes.byteLength > this.#assetQuota.maxTotalBytes
+        ) {
+          throw new TypeError("Asset repository quota is exhausted");
+        }
+      } else {
+        assertSameDescriptor(current, descriptor);
+      }
+
+      const destination = resolveAssetPath(this.assetDirectory, relativePath);
+      const stagingDirectory = join(this.assetDirectory, ".staging");
+      ensureSafeDirectoryPath(stagingDirectory, this.assetDirectory);
+      ensureSafeDirectoryPath(dirname(destination), this.assetDirectory);
+      staged = join(stagingDirectory, randomUUID());
       const file = openSync(staged, "wx", 0o600);
       try {
         writeFileSync(file, bytes);
@@ -1309,7 +1374,6 @@ export class SqliteAuthority
       } finally {
         closeSync(file);
       }
-      stagedExists = true;
       this.#fault("after-asset-stage");
       try {
         linkSync(staged, destination);
@@ -1320,26 +1384,19 @@ export class SqliteAuthority
       }
       unlinkSync(staged);
       fsyncDirectory(stagingDirectory);
-      stagedExists = false;
+      staged = undefined;
       verifyAssetBytes(destination, descriptor, this.dependencies);
       this.#fault("after-asset-install");
 
-      this.#database.exec("BEGIN IMMEDIATE");
-      try {
-        const current = this.#database
-          .prepare<[string], AssetRow>(
-            "SELECT digest, byte_length, media_type, relative_path FROM assets WHERE digest = ?",
+      if (current === undefined) {
+        this.#database
+          .prepare(
+            "INSERT INTO assets(digest, byte_length, media_type, relative_path) VALUES (?, ?, ?, ?)",
           )
-          .get(digest);
-        if (current === undefined) {
-          this.#database
-            .prepare(
-              "INSERT INTO assets(digest, byte_length, media_type, relative_path) VALUES (?, ?, ?, ?)",
-            )
-            .run(digest, bytes.byteLength, mediaType ?? null, relativePath);
-          this.#database
-            .prepare(
-              `UPDATE portal_run_revisions
+          .run(digest, bytes.byteLength, mediaType ?? null, relativePath);
+        this.#database
+          .prepare(
+            `UPDATE portal_run_revisions
                SET context_revision = context_revision + 1,
                    portal_revision = portal_revision + 1
                WHERE EXISTS (
@@ -1349,23 +1406,20 @@ export class SqliteAuthority
                    AND s.submission_type = 'asset'
                    AND json_extract(s.canonical_submission, '$.asset.contentDigest') = ?
                )`,
-            )
-            .run(digest);
-        } else {
-          assertSameDescriptor(current, descriptor);
-        }
-        this.#fault("before-asset-descriptor-commit");
-        this.#database.exec("COMMIT");
-      } catch (error) {
-        if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
-        throw error;
+          )
+          .run(digest);
       }
+      this.#fault("before-asset-descriptor-commit");
+      this.#database.exec("COMMIT");
       this.#fault("after-asset-descriptor-commit-before-ack");
       return descriptor;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
     } finally {
-      if (stagedExists) {
+      if (staged !== undefined) {
         rmSync(staged, { force: true });
-        fsyncDirectory(stagingDirectory);
+        fsyncDirectory(dirname(staged));
       }
     }
   }
@@ -6777,7 +6831,7 @@ export class SqliteWorkspaceIntegrationAuthority implements WorkspaceIntegration
       barrierDigest = integration.barrier?.barrierDigest;
       eligible =
         eligible &&
-        workspace.state === "captured" &&
+        ["captured", "removed"].includes(workspace.state) &&
         integration.state === "barrier-recorded" &&
         barrierDigest !== undefined;
     }
@@ -8445,43 +8499,204 @@ export function restoreSqliteAuthority(
   assertFreshRestoreDestinations(databasePath, assetDirectory, backupPath);
   const suffix = randomUUID();
   const databasePartial = `${databasePath}.restore.partial-${suffix}`;
+  const databasePublicationPartial = `${databasePath}.publish.partial-${suffix}`;
   const assetPartial = `${assetDirectory}.restore.partial-${suffix}`;
   mkdirDurably(assetPartial);
-  let assetsPublished = false;
-  let databasePublished = false;
+  const ownedAssetPartial = captureOwnedRestorePath(assetPartial, "directory");
+  let ownedDatabasePartial: OwnedRestorePath | undefined;
+  let ownedDatabasePublicationPartial: OwnedRestorePath | undefined;
+  let ownedAssets: OwnedRestorePath | undefined;
+  let ownedDatabase: OwnedRestorePath | undefined;
+  let restoredAuthority: SqliteAuthority | undefined;
   try {
+    options.faultInjector?.("after-restore-asset-partial-create");
     copyAssetSet(bundle.manifest.assets, bundle.assetDirectory, assetPartial, options.dependencies);
     copyFileSync(bundle.databasePath, databasePartial, constants.COPYFILE_EXCL);
+    ownedDatabasePartial = captureOwnedRestorePath(databasePartial, "file");
+    options.faultInjector?.("after-restore-database-partial-create");
     fsyncFile(databasePartial);
     verifyDatabaseArtifact(databasePartial, bundle.manifest, options.dependencies);
-    const copied = openReadConnection(databasePartial);
+    const copied = openRestoreVerificationConnection(databasePartial);
     try {
       verifyDatabase(copied, options.dependencies, assetPartial, true);
     } finally {
       copied.close();
     }
+    copyFileSync(databasePartial, databasePublicationPartial, constants.COPYFILE_EXCL);
+    ownedDatabasePublicationPartial = captureOwnedRestorePath(databasePublicationPartial, "file");
+    fsyncFile(databasePublicationPartial);
     assertFreshRestoreDestinations(databasePath, assetDirectory, backupPath);
-    publishAssetDirectoryNoReplace(assetPartial, assetDirectory);
-    assetsPublished = true;
-    linkSync(databasePartial, databasePath);
-    databasePublished = true;
+    ownedAssets = publishAssetDirectoryNoReplace(assetPartial, assetDirectory, ownedAssetPartial);
+    options.faultInjector?.("after-restore-assets-publish");
+    linkSync(databasePublicationPartial, databasePath);
+    ownedDatabase = captureOwnedRestorePath(databasePath, "file");
+    options.faultInjector?.("after-restore-database-publish");
     fsyncDirectory(dirname(databasePath));
-    unlinkSync(databasePartial);
-    fsyncDirectory(dirname(databasePartial));
+    removeOwnedRestorePath(ownedDatabasePublicationPartial);
+    if (removeOwnedRestorePath(ownedDatabasePartial)) {
+      fsyncDirectory(dirname(databasePartial));
+    }
+    restoredAuthority = new SqliteAuthority(options);
+    return restoredAuthority;
   } catch (error) {
-    rmSync(databasePartial, { force: true });
-    rmSync(assetPartial, { recursive: true, force: true });
-    if (databasePublished) {
-      rmSync(databasePath, { force: true });
+    restoredAuthority?.close();
+    if (removeOwnedRestorePath(ownedDatabasePublicationPartial)) {
+      fsyncDirectory(dirname(databasePublicationPartial));
+    }
+    if (removeOwnedRestorePath(ownedDatabasePartial)) {
+      fsyncDirectory(dirname(databasePartial));
+    }
+    if (removeOwnedRestorePath(ownedAssetPartial)) {
+      fsyncDirectory(dirname(assetPartial));
+    }
+    if (removeOwnedRestorePath(ownedDatabase)) {
       fsyncDirectory(dirname(databasePath));
     }
-    if (assetsPublished) {
-      rmSync(assetDirectory, { recursive: true, force: true });
+    if (removeOwnedRestorePath(ownedAssets)) {
       fsyncDirectory(dirname(assetDirectory));
     }
     throw error;
   }
-  return new SqliteAuthority(options);
+}
+
+export const SQLITE_INTEGRITY_CATEGORIES = Object.freeze([
+  "storage",
+  "structure",
+  "migrations",
+  "canonical-authority",
+  "normalized-projections",
+  "context-and-runner",
+  "amendments",
+  "workspaces",
+  "human-authority",
+  "portal",
+  "supervisor",
+  "remote-delivery",
+  "assets",
+] as const);
+
+export type SqliteIntegrityCategory = (typeof SQLITE_INTEGRITY_CATEGORIES)[number];
+
+export interface SqliteIntegrityCheck {
+  readonly category: SqliteIntegrityCategory;
+  readonly status: "passed" | "failed" | "not-checked";
+  readonly code: string;
+}
+
+export interface SqliteIntegrityReport {
+  readonly format: "senawa-sqlite-integrity";
+  readonly version: 1;
+  readonly status: "passed" | "failed";
+  readonly checks: readonly SqliteIntegrityCheck[];
+}
+
+export function checkSqliteAuthorityIntegrity(
+  options: Pick<SqliteAuthorityOptions, "databasePath" | "assetDirectory" | "dependencies">,
+): SqliteIntegrityReport {
+  let database: Database.Database;
+  try {
+    database = openReadConnection(resolve(options.databasePath));
+  } catch {
+    return failedIntegrityReport("storage");
+  }
+  try {
+    verifyDatabase(database, options.dependencies, resolve(options.assetDirectory), true);
+    return passedIntegrityReport();
+  } catch (error) {
+    return failedIntegrityReport(classifyIntegrityFailure(error));
+  } finally {
+    database.close();
+  }
+}
+
+export function checkSqliteAuthorityBackupIntegrity(options: {
+  readonly backupPath: string;
+  readonly dependencies: RuntimeDependencies;
+}): SqliteIntegrityReport {
+  const source = resolve(options.backupPath);
+  try {
+    const sourceStatus = lstatSync(source);
+    if (sourceStatus.isSymbolicLink() || !sourceStatus.isDirectory()) {
+      return failedIntegrityReport("storage");
+    }
+  } catch {
+    return failedIntegrityReport("storage");
+  }
+  const temporaryRoot = mkdtempSync(join(tmpdir(), "senawa-sqlite-backup-verify-"));
+  const stagedBackup = join(temporaryRoot, "backup");
+  try {
+    cpSync(source, stagedBackup, {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+    });
+    verifyBackupBundle(stagedBackup, options.dependencies);
+    return passedIntegrityReport();
+  } catch (error) {
+    return failedIntegrityReport(classifyIntegrityFailure(error));
+  } finally {
+    rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
+function passedIntegrityReport(): SqliteIntegrityReport {
+  return Object.freeze({
+    format: "senawa-sqlite-integrity",
+    version: 1,
+    status: "passed",
+    checks: Object.freeze(
+      SQLITE_INTEGRITY_CATEGORIES.map((category) =>
+        Object.freeze({ category, status: "passed" as const, code: `${category}-ok` }),
+      ),
+    ),
+  });
+}
+
+function failedIntegrityReport(failedCategory: SqliteIntegrityCategory): SqliteIntegrityReport {
+  const failedIndex = SQLITE_INTEGRITY_CATEGORIES.indexOf(failedCategory);
+  return Object.freeze({
+    format: "senawa-sqlite-integrity",
+    version: 1,
+    status: "failed",
+    checks: Object.freeze(
+      SQLITE_INTEGRITY_CATEGORIES.map((category, index) => {
+        const status =
+          index < failedIndex
+            ? ("passed" as const)
+            : index === failedIndex
+              ? ("failed" as const)
+              : ("not-checked" as const);
+        return Object.freeze({
+          category,
+          status,
+          code:
+            status === "passed"
+              ? `${category}-ok`
+              : status === "failed"
+                ? `${category}-failed`
+                : `${category}-not-checked`,
+        });
+      }),
+    ),
+  });
+}
+
+function classifyIntegrityFailure(error: unknown): SqliteIntegrityCategory {
+  const message = error instanceof Error ? error.message : "";
+  if (/backup|manifest|independent regular file/iu.test(message)) return "storage";
+  if (/quick_check|foreign_key|database disk image|malformed/iu.test(message)) return "structure";
+  if (/migration|schema version/iu.test(message)) return "migrations";
+  if (/authority|canonical|event content digest/iu.test(message)) return "canonical-authority";
+  if (/normalized|snapshot/iu.test(message)) return "normalized-projections";
+  if (/context|runner|usage|allowance|budget|grant/iu.test(message)) return "context-and-runner";
+  if (/amendment/iu.test(message)) return "amendments";
+  if (/workspace|integration|barrier/iu.test(message)) return "workspaces";
+  if (/human|approval|question|answer/iu.test(message)) return "human-authority";
+  if (/portal/iu.test(message)) return "portal";
+  if (/supervisor|service|wake|lease/iu.test(message)) return "supervisor";
+  if (/remote|checkpoint|commitment|report chain/iu.test(message)) return "remote-delivery";
+  if (/asset|digest|chunk/iu.test(message)) return "assets";
+  return "storage";
 }
 
 function validateConfigurationSnapshot(
@@ -9371,6 +9586,15 @@ function retrySqliteLock<T>(operation: () => T, timeoutMs: number): T {
 
 function openReadConnection(path: string): Database.Database {
   const database = new Database(path, { readonly: true, fileMustExist: true });
+  database.pragma("foreign_keys = ON");
+  database.pragma("trusted_schema = OFF");
+  database.pragma("query_only = ON");
+  return database;
+}
+
+function openRestoreVerificationConnection(path: string): Database.Database {
+  const database = new Database(path, { fileMustExist: true });
+  database.pragma("journal_mode = DELETE");
   database.pragma("foreign_keys = ON");
   database.pragma("trusted_schema = OFF");
   database.pragma("query_only = ON");
@@ -11402,7 +11626,10 @@ function verifyParallelWorkspaceTables(
     const barrier =
       row.canonical_barrier === null
         ? undefined
-        : validateIntegrationBarrier(row.canonical_barrier, dependencies.sha256);
+        : validateIntegrationBarrier(
+            parseRunnerValue<IntegrationBarrier>(row.canonical_barrier),
+            dependencies.sha256,
+          );
     if (
       attempt.integrationId !== row.integration_id ||
       attempt.repositoryId !== row.repository_id ||
@@ -11516,7 +11743,7 @@ function verifyParallelWorkspaceTables(
       row.terminal_current_writer === 1 &&
       (row.mode === "repository" ||
         (row.workspace_id !== null &&
-          workspaces.get(row.workspace_id)?.state === "captured" &&
+          ["captured", "removed"].includes(workspaces.get(row.workspace_id)?.state ?? "") &&
           row.result_id !== null &&
           results.get(row.result_id)?.workspaceId === row.workspace_id &&
           attempt?.state === "barrier-recorded" &&
@@ -11531,7 +11758,7 @@ function verifyParallelWorkspaceTables(
       (record.integrationId ?? null) !== row.integration_id ||
       (record.barrierDigest ?? null) !== row.barrier_digest ||
       record.eligible !== (row.eligible === 1) ||
-      record.eligible !== expectedEligible ||
+      (record.eligible && !expectedEligible) ||
       bindings.get(row.run_key)?.execution.workspaceMode !== record.mode
     ) {
       throw new Error("SQLite completion eligibility diverges from durable authority");
@@ -13446,7 +13673,7 @@ function verifyNormalizedSnapshot(
       )
       .all() as Record<string, unknown>[],
   };
-  if (canonicalStringify(actual) !== canonicalStringify(expected)) {
+  if (canonicalSerialize(canonicalValue(actual)) !== canonicalSerialize(canonicalValue(expected))) {
     throw new Error("SQLite normalized authority tables diverge from canonical snapshot");
   }
 }
@@ -13657,22 +13884,25 @@ function publishBackupBundleNoReplace(partial: string, destination: string): voi
   }
 }
 
-function publishAssetDirectoryNoReplace(partial: string, destination: string): void {
-  let destinationCreated = false;
+function publishAssetDirectoryNoReplace(
+  partial: string,
+  destination: string,
+  ownedPartial: OwnedRestorePath,
+): OwnedRestorePath {
+  let ownedDestination: OwnedRestorePath | undefined;
   try {
     mkdirSync(destination, { mode: 0o700 });
-    destinationCreated = true;
+    ownedDestination = captureOwnedRestorePath(destination, "directory");
     fsyncDirectory(destination);
     fsyncDirectory(dirname(destination));
     for (const entry of readdirSync(partial)) {
       renameSync(join(partial, entry), join(destination, entry));
     }
     fsyncDirectory(destination);
-    rmSync(partial, { recursive: true });
-    fsyncDirectory(dirname(partial));
+    if (removeOwnedRestorePath(ownedPartial)) fsyncDirectory(dirname(partial));
+    return ownedDestination;
   } catch (error) {
-    if (destinationCreated) {
-      rmSync(destination, { recursive: true, force: true });
+    if (removeOwnedRestorePath(ownedDestination)) {
       fsyncDirectory(dirname(destination));
     }
     if (isNodeError(error, "EEXIST")) {
@@ -13680,6 +13910,36 @@ function publishAssetDirectoryNoReplace(partial: string, destination: string): v
     }
     throw error;
   }
+}
+
+function captureOwnedRestorePath(
+  path: string,
+  expectedKind: OwnedRestorePath["kind"],
+): OwnedRestorePath {
+  const status = lstatSync(path);
+  const kind = status.isFile() ? "file" : status.isDirectory() ? "directory" : undefined;
+  if (kind !== expectedKind) throw new Error("SQLite restore created an unexpected path type");
+  return { device: status.dev, inode: status.ino, kind, path };
+}
+
+function removeOwnedRestorePath(owned: OwnedRestorePath | undefined): boolean {
+  if (owned === undefined) return false;
+  let status: Stats;
+  try {
+    status = lstatSync(owned.path);
+  } catch (error) {
+    if (isNodeError(error, "ENOENT")) return false;
+    throw error;
+  }
+  if (
+    status.dev !== owned.device ||
+    status.ino !== owned.inode ||
+    (owned.kind === "file" ? !status.isFile() : !status.isDirectory())
+  ) {
+    return false;
+  }
+  rmSync(owned.path, { recursive: owned.kind === "directory", force: true });
+  return true;
 }
 
 function verifyBackupBundle(

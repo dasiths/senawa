@@ -1,10 +1,22 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { canonicalStringify } from "@senawa/protocol";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadPortalAssetSource, optionalPortalAssetSource } from "./portal-assets.js";
+import {
+  loadPortalAssetSource,
+  MAX_PORTAL_MANIFEST_BYTES,
+  MAX_PORTAL_STATIC_BYTES,
+  optionalPortalAssetSource,
+} from "./portal-assets.js";
 
 const roots = new Set<string>();
 
@@ -25,6 +37,7 @@ describe("portal asset manifest", () => {
     for (const asset of manifest.assets) {
       if (asset.name !== manifest.shell) expect(source.asset(asset.name)).toBeDefined();
     }
+    expect(optionalPortalAssetSource({})?.shell()?.name).toBe(manifest.shell);
   });
 
   it("loads only exact verified manifest assets into memory", () => {
@@ -86,6 +99,44 @@ describe("portal asset manifest", () => {
     expect(
       optionalPortalAssetSource({ SENAWA_PORTAL_MANIFEST: join(root, "missing.json") }),
     ).toBeUndefined();
+  });
+
+  it("rejects a declared static aggregate above 64 MiB before reading assets", () => {
+    const root = sandbox();
+    const shell = Buffer.from("<!doctype html>");
+    writeFileSync(join(root, "index.html"), shell);
+    const oversized = Array.from({ length: 5 }, (_, index) => ({
+      ...entry(
+        index === 0 ? "index.html" : `asset-${index}.js`,
+        index === 0 ? "index.html" : `asset-${index}.js`,
+        shell,
+        index === 0 ? "text/html; charset=utf-8" : "text/javascript; charset=utf-8",
+      ),
+      byteLength: index === 4 ? 1 : MAX_PORTAL_STATIC_BYTES / 4,
+    }));
+    expect(() => loadPortalAssetSource(writeManifest(root, oversized))).toThrow(
+      "aggregate byte length",
+    );
+  });
+
+  it("bounds the manifest before allocation and detects growth while reading", () => {
+    const root = sandbox();
+    const oversized = join(root, "oversized.json");
+    writeFileSync(oversized, "x".repeat(MAX_PORTAL_MANIFEST_BYTES + 1));
+    expect(() => loadPortalAssetSource(oversized)).toThrow("byte limit");
+
+    const shell = Buffer.from("<!doctype html>");
+    writeFileSync(join(root, "index.html"), shell);
+    const growing = writeManifest(root, [
+      entry("index.html", "index.html", shell, "text/html; charset=utf-8"),
+    ]);
+    expect(() =>
+      loadPortalAssetSource(growing, {
+        afterInitialStat(path) {
+          appendFileSync(path, "x".repeat(MAX_PORTAL_MANIFEST_BYTES));
+        },
+      }),
+    ).toThrow("byte limit");
   });
 });
 

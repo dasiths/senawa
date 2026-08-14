@@ -83,7 +83,17 @@ report, and its Ed25519 signature. Responses contain one strict signed
 acknowledgement whose binding, repository, report identity, sequence, digest,
 and pinned key must match the claimed durable report. Response bodies are
 bounded by the protocol wire limit, must be UTF-8 JSON, and must use
-`application/json`.
+`application/json` with identity content encoding. The adapter refuses
+redirects, declared and streamed bodies above 256 KiB, declared-length
+mismatches, and responses that exceed the configured deadline. The default
+deadline is 10 seconds and the hard maximum is 300 seconds.
+
+Endpoint syntax validation does not provide SSRF or DNS-rebinding resistance.
+Senawa does not resolve and pin destination addresses, disable host proxy
+configuration, or reject private, link-local, metadata, and mixed DNS answers
+for HTTPS hostnames. Operators must enforce the enrolled destination through an
+egress firewall or trusted proxy and apply equivalent DNS and address policy
+there. Do not expose the connector to attacker-selected endpoint values.
 
 A compatible service is responsible for implementing these routes, transport
 authentication, availability, retention, and production key enrollment. Senawa

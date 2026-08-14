@@ -6,7 +6,7 @@ import type {
   EffectObservation,
 } from "@senawa/runtime";
 import { describe, expect, it } from "vitest";
-import { WorkspaceEffectHost } from "./workspace-effect-host.js";
+import { MAX_ACTIVE_WORKSPACES, WorkspaceEffectHost } from "./workspace-effect-host.js";
 
 const context: AsyncEffectHostContext = {
   lease: { owner: "owner_test", fence: 1, expiresAt: "2026-08-13T12:01:00.000Z" },
@@ -14,6 +14,29 @@ const context: AsyncEffectHostContext = {
 };
 
 describe("WorkspaceEffectHost", () => {
+  it("enforces the hard active-workspace policy ceiling", () => {
+    expect(
+      () =>
+        new WorkspaceEffectHost({
+          policy: { workspaceMode: "worktree", hostWriterCapacity: MAX_ACTIVE_WORKSPACES },
+          repositoryRoot: "/tmp/repository",
+          resolveWorkspaceRoot: () => "/tmp/workspace",
+          createWorkerHost: () => new RecordingHost(),
+          createGitHost: () => new RecordingHost(),
+        }),
+    ).not.toThrow();
+    expect(
+      () =>
+        new WorkspaceEffectHost({
+          policy: { workspaceMode: "worktree", hostWriterCapacity: MAX_ACTIVE_WORKSPACES + 1 },
+          repositoryRoot: "/tmp/repository",
+          resolveWorkspaceRoot: () => "/tmp/workspace",
+          createWorkerHost: () => new RecordingHost(),
+          createGitHost: () => new RecordingHost(),
+        }),
+    ).toThrow("between 1 and 32");
+  });
+
   it("dispatches repository workers at the registered root without constructing Git", async () => {
     const roots: string[] = [];
     const host = new WorkspaceEffectHost({
@@ -34,6 +57,44 @@ describe("WorkspaceEffectHost", () => {
       status: "completed",
     });
     expect(roots).toEqual(["/tmp/registered-repository"]);
+  });
+
+  it("counts concurrent repository dispatches even when they share one root", async () => {
+    let release: (() => void) | undefined;
+    let started: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const active = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const host = new WorkspaceEffectHost({
+      policy: { workspaceMode: "repository", hostWriterCapacity: 1 },
+      repositoryRoot: "/tmp/registered-repository",
+      createWorkerHost: () => ({
+        async dispatch() {
+          started?.();
+          await gate;
+          return { status: "completed", observedAt: "2026-08-13T12:00:00.000Z" };
+        },
+        async inspect() {
+          return { status: "active", observedAt: "2026-08-13T12:00:00.000Z" };
+        },
+        async cancel() {
+          return { status: "cancelled", observedAt: "2026-08-13T12:00:00.000Z" };
+        },
+      }),
+    });
+    const first = effect("worker", { dispatchId: "dispatch_one" });
+    const second = effect("worker", { dispatchId: "dispatch_two" });
+    const pending = host.dispatch(first, context);
+    await active;
+
+    await expect(host.dispatch(second, context)).rejects.toThrow(
+      "Workspace effect host capacity 1 is occupied",
+    );
+    release?.();
+    await expect(pending).resolves.toMatchObject({ status: "completed" });
   });
 
   it("binds worktree workers to isolated durable roots and unwraps worker input", async () => {

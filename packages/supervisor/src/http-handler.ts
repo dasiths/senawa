@@ -58,6 +58,10 @@ export interface SupervisorOperations {
   drain(): Promise<void>;
   stop(): Promise<void>;
   recover(repositoryId: string, runId: string): Promise<{ readonly worked: boolean }>;
+  backup(
+    requestId: string,
+    destinationDirectory: string,
+  ): Promise<{ readonly requestId: string; readonly verified: true }>;
   logs(afterCursor?: number, limit?: number): Promise<SupervisorLogPage>;
 }
 
@@ -137,6 +141,15 @@ export class SupervisorHttpHandler {
             response,
             202,
             await this.#requiredOperations().recover(recovery.repositoryId, recovery.runId),
+          );
+        }
+        case "supervisor-backup": {
+          requireIpc(this.#transport);
+          const backup = backupRequest(await readJsonBody(request, this.#requestTimeoutMs));
+          return sendJson(
+            response,
+            200,
+            await this.#requiredOperations().backup(backup.requestId, backup.destinationDirectory),
           );
         }
         case "supervisor-logs":
@@ -736,6 +749,31 @@ function recoveryRequest(input: string): { readonly repositoryId: string; readon
     throw invalidRecovery();
   }
   return { repositoryId: object.repositoryId, runId: object.runId };
+}
+
+function backupRequest(input: string): {
+  readonly requestId: string;
+  readonly destinationDirectory: string;
+} {
+  const value = decodeCanonicalJsonValue(input);
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw httpError("invalid-request", 400, "Backup request validation failed");
+  }
+  const request = value as Readonly<Record<string, JsonValue>>;
+  if (
+    Object.keys(request).sort().join(",") !== "destinationDirectory,requestId" ||
+    typeof request.requestId !== "string" ||
+    !/^[a-zA-Z0-9._-]{1,128}$/u.test(request.requestId) ||
+    typeof request.destinationDirectory !== "string" ||
+    request.destinationDirectory.length === 0 ||
+    request.destinationDirectory.length > 4_096
+  ) {
+    throw httpError("invalid-request", 400, "Backup request validation failed");
+  }
+  return {
+    requestId: request.requestId,
+    destinationDirectory: request.destinationDirectory,
+  };
 }
 
 function localProposalSource(proposal: JsonValue): JsonValue {

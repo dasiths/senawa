@@ -9,6 +9,14 @@ import { fileURLToPath } from "node:url";
 const MAX_TIMER_MILLISECONDS = 2_147_483_647;
 const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_STATUS_BYTES = 4_096;
+export const PROCESS_SECURITY_LIMITS = Object.freeze({
+  maxArguments: 256,
+  maxArgumentBytes: 64 * 1024,
+  maxEnvironmentEntries: 128,
+  maxEnvironmentBytes: 64 * 1024,
+  maxActiveProcesses: 32,
+});
+let activeProcesses = 0;
 const supervisorPath = fileURLToPath(new URL("../dist/senawa-process-supervisor", import.meta.url));
 
 export interface ExecutableSensorHostDependencies {
@@ -83,6 +91,21 @@ export type ExecutableSensorOutcome =
 export async function measureExecutableSensor(
   request: ExecutableSensorMeasurementRequest,
   dependencies: ExecutableSensorHostDependencies = defaultHostDependencies,
+): Promise<ExecutableSensorOutcome> {
+  if (activeProcesses >= PROCESS_SECURITY_LIMITS.maxActiveProcesses) {
+    return failure("invalid-request", "Executable sensor active process capacity is occupied");
+  }
+  activeProcesses += 1;
+  try {
+    return await measureExecutableSensorWithinCapacity(request, dependencies);
+  } finally {
+    activeProcesses -= 1;
+  }
+}
+
+async function measureExecutableSensorWithinCapacity(
+  request: ExecutableSensorMeasurementRequest,
+  dependencies: ExecutableSensorHostDependencies,
 ): Promise<ExecutableSensorOutcome> {
   if (process.platform !== "linux" || process.arch !== "x64" || !hasGlibc()) {
     return failure(
@@ -279,6 +302,15 @@ function validateRequest(request: ExecutableSensorMeasurementRequest): string | 
   if (command.argv.some((argument) => typeof argument !== "string" || argument.includes("\0"))) {
     return "Executable sensor argv must contain NUL-free strings";
   }
+  if (command.argv.length > PROCESS_SECURITY_LIMITS.maxArguments) {
+    return `Executable sensor argv must contain at most ${PROCESS_SECURITY_LIMITS.maxArguments} arguments`;
+  }
+  if (
+    command.argv.reduce((total, argument) => total + Buffer.byteLength(argument, "utf8"), 0) >
+    PROCESS_SECURITY_LIMITS.maxArgumentBytes
+  ) {
+    return `Executable sensor argv must not exceed ${PROCESS_SECURITY_LIMITS.maxArgumentBytes} UTF-8 bytes`;
+  }
   if (!boundedInteger(command.timeoutMs, MAX_TIMER_MILLISECONDS)) {
     return `Executable sensor timeoutMs must be between 1 and ${MAX_TIMER_MILLISECONDS}`;
   }
@@ -295,6 +327,10 @@ function validateRequest(request: ExecutableSensorMeasurementRequest): string | 
     return "Executable sensor cwd must be a non-empty relative path";
   }
   const seen = new Set<string>();
+  if (command.inheritedEnvironment.length > PROCESS_SECURITY_LIMITS.maxEnvironmentEntries) {
+    return `Inherited environment must contain at most ${PROCESS_SECURITY_LIMITS.maxEnvironmentEntries} names`;
+  }
+  let environmentBytes = 0;
   for (const name of command.inheritedEnvironment) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) || seen.has(name)) {
       return "Inherited environment names must be unique portable identifiers";
@@ -306,6 +342,11 @@ function validateRequest(request: ExecutableSensorMeasurementRequest): string | 
     if (value !== undefined && (typeof value !== "string" || value.includes("\0"))) {
       return "Inherited environment values must not contain NUL";
     }
+    environmentBytes += Buffer.byteLength(name, "utf8");
+    if (value !== undefined) environmentBytes += Buffer.byteLength(value, "utf8");
+  }
+  if (environmentBytes > PROCESS_SECURITY_LIMITS.maxEnvironmentBytes) {
+    return `Inherited environment must not exceed ${PROCESS_SECURITY_LIMITS.maxEnvironmentBytes} UTF-8 bytes`;
   }
   return undefined;
 }

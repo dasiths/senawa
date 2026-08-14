@@ -3,6 +3,8 @@ import type { SupervisorClock, SupervisorRandom } from "./contracts.js";
 
 const TOKEN_BYTES = 32;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+export const MAX_PORTAL_SESSION_LIFETIME_MS = 8 * 60 * 60 * 1_000;
+export const MAX_ACTIVE_PORTAL_SESSIONS = 1_024;
 
 interface BootstrapRecord {
   readonly expiresAt: number;
@@ -48,12 +50,15 @@ export class PortalSessionSecurity {
     this.#clock = options.clock;
     this.#random = options.random;
     this.#bootstrapLifetimeMs = options.bootstrapLifetimeMs ?? 60_000;
-    this.#sessionLifetimeMs = options.sessionLifetimeMs ?? 8 * 60 * 60 * 1_000;
+    this.#sessionLifetimeMs = options.sessionLifetimeMs ?? MAX_PORTAL_SESSION_LIFETIME_MS;
     if (this.#bootstrapLifetimeMs <= 0 || this.#bootstrapLifetimeMs > 60_000) {
       throw new TypeError("Portal bootstrap lifetime must be between 1 and 60000 milliseconds");
     }
-    if (this.#sessionLifetimeMs <= 0)
-      throw new TypeError("Portal session lifetime must be positive");
+    if (this.#sessionLifetimeMs <= 0 || this.#sessionLifetimeMs > MAX_PORTAL_SESSION_LIFETIME_MS) {
+      throw new TypeError(
+        `Portal session lifetime must be between 1 and ${MAX_PORTAL_SESSION_LIFETIME_MS} milliseconds`,
+      );
+    }
   }
 
   createBootstrap(): PortalBootstrapCapability {
@@ -71,6 +76,7 @@ export class PortalSessionSecurity {
     const record = this.#bootstraps.get(key);
     if (record === undefined || record.used || record.expiresAt <= this.#clock.now())
       return undefined;
+    if (this.#sessions.size >= MAX_ACTIVE_PORTAL_SESSIONS) return undefined;
     record.used = true;
     const sessionToken = this.#token();
     const expiresAt = this.#clock.now() + this.#sessionLifetimeMs;

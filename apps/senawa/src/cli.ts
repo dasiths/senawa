@@ -2,16 +2,23 @@ import {
   doctorWorkflowConfiguration,
   renderExampleWorkflowConfiguration,
 } from "@senawa/configuration";
+import { PROTOCOL_LIMITS } from "@senawa/protocol";
+import { assertSecretSafePositiveProjection } from "@senawa/reporting";
 
 export const SENAWA_VERSION = "0.1.0-alpha.0";
+export const DEFAULT_WORKFLOW_PATH = ".senawa/workflow.json";
+export const MAX_CLI_INPUT_BYTES = PROTOCOL_LIMITS.maxWireBytes;
+
+const DEFAULT_CONFIGURATION_DIRECTORY = ".senawa";
+const PROJECT_ROOT = ".";
 
 const HELP = `Senawa ${SENAWA_VERSION}
 
 Usage: senawa <command> [arguments]
 
 Commands:
-  doctor [path]                         Validate workflow configuration
-  init [path]                           Create example workflow configuration
+  doctor [path]                         Validate workflow configuration (default: .senawa/workflow.json)
+  init [path]                           Create example workflow configuration (default: .senawa/workflow.json)
   service start|run|status|drain|stop   Manage the local supervisor
   service logs [after]                  Read bounded supervisor logs
   service recover <repository> <run>    Recover a run under the service fence
@@ -23,6 +30,15 @@ Commands:
   amendment list|get|source|status      Review additive amendment proposals
   amendment withdraw|approve|reject     Submit an exact human amendment command
   amendment recover <repository> <run>  Trigger fenced amendment recovery
+  report create <repository> <run> <dir> Create a deterministic report export
+  export verify <dir>                   Verify a non-restorable report export
+  backup create|verify <dir>            Create or verify combined state backup
+  restore verify <dir>                  Verify a combined state backup
+  restore apply <backup> <fresh-root>   Restore only to a fresh state root
+  integrity check                       Verify storage without exposing rows
+  diagnostics create <fresh-dir>        Create a secret-safe diagnostic bundle
+  repair plan                           Plan refusal-first maintenance
+  repair apply <backup> <fresh-root>    Apply verified fresh restore only
   portal                                Create a one-time portal URL
 
 Options:
@@ -38,8 +54,10 @@ export interface CliWritableFile {
 
 export interface CliDependencies {
   readonly sha256: { digest(bytes: Uint8Array): string };
-  readText(path: string): Promise<string>;
+  readText(path: string, maxBytes: number): Promise<string>;
   createExclusive(path: string): Promise<CliWritableFile>;
+  ensureDirectory(path: string): Promise<"created" | "existing">;
+  syncDirectory(path: string): Promise<void>;
 }
 
 export interface CliResult {
@@ -73,22 +91,33 @@ export async function runCli(
   ) {
     return renderCli(arguments_);
   }
-  const [command, path = "senawa.json", ...extra] = arguments_;
+  const [command, suppliedPath, ...extra] = arguments_;
   if (extra.length > 0) {
     return { output: `${command ?? "Command"} accepts at most one path\n\n${HELP}`, exitCode: 1 };
   }
-  if (command === "doctor") return doctor(path, dependencies);
-  if (command === "init") return initialize(path, dependencies);
+  const path = suppliedPath ?? DEFAULT_WORKFLOW_PATH;
+  const isDefaultPath = suppliedPath === undefined;
+  if (command === "doctor") return doctor(path, dependencies, isDefaultPath);
+  if (command === "init") return initialize(path, dependencies, isDefaultPath);
   return renderCli(arguments_);
 }
 
-async function doctor(path: string, dependencies: CliDependencies): Promise<CliResult> {
+async function doctor(
+  path: string,
+  dependencies: CliDependencies,
+  isDefaultPath: boolean,
+): Promise<CliResult> {
   let content: string;
   try {
-    content = await dependencies.readText(path);
+    content = await dependencies.readText(path, MAX_CLI_INPUT_BYTES);
   } catch (error) {
+    const code = safeFilesystemCode(error);
+    const migrationHint =
+      isDefaultPath && code === "ENOENT"
+        ? "\nRun senawa init to create it. Earlier alpha files at senawa.json must be moved to .senawa/workflow.json or passed explicitly."
+        : "";
     return {
-      output: `${path}: unable to read workflow configuration (${safeFilesystemCode(error)})`,
+      output: `${path}: unable to read workflow configuration (${code})${migrationHint}`,
       exitCode: 1,
     };
   }
@@ -110,7 +139,24 @@ async function doctor(path: string, dependencies: CliDependencies): Promise<CliR
   };
 }
 
-async function initialize(path: string, dependencies: CliDependencies): Promise<CliResult> {
+async function initialize(
+  path: string,
+  dependencies: CliDependencies,
+  isDefaultPath: boolean,
+): Promise<CliResult> {
+  let createdConfigurationDirectory = false;
+  if (isDefaultPath) {
+    try {
+      createdConfigurationDirectory =
+        (await dependencies.ensureDirectory(DEFAULT_CONFIGURATION_DIRECTORY)) === "created";
+    } catch (error) {
+      return {
+        output: `${path}: unable to prepare configuration directory (${safeFilesystemCode(error)})`,
+        exitCode: 1,
+      };
+    }
+  }
+
   let file: CliWritableFile;
   try {
     file = await dependencies.createExclusive(path);
@@ -120,17 +166,20 @@ async function initialize(path: string, dependencies: CliDependencies): Promise<
       output:
         code === "EEXIST"
           ? `${path}: already exists`
-          : `${path}: unable to create workflow configuration (${code})`,
+          : `${path}: unable to create workflow configuration (${code})${createdConfigurationDirectory ? "; a partial directory may remain" : ""}`,
       exitCode: 1,
     };
   }
   let closed = false;
   try {
-    await file.write(renderExampleWorkflowConfiguration());
+    const content = renderExampleWorkflowConfiguration();
+    assertSecretSafePositiveProjection(content, "Generated workflow example");
+    await file.write(content);
     await file.sync();
     await file.close();
     closed = true;
     await file.syncParentDirectory();
+    if (isDefaultPath) await dependencies.syncDirectory(PROJECT_ROOT);
   } catch (error) {
     if (!closed) {
       try {
@@ -154,6 +203,7 @@ function safeFilesystemCode(error: unknown): string {
   return [
     "EACCES",
     "EEXIST",
+    "EFBIG",
     "EISDIR",
     "ELOOP",
     "EMFILE",

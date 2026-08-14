@@ -363,6 +363,23 @@ export class HttpSupervisorClient {
     return Object.freeze({ worked: value.worked });
   }
 
+  async backupState(
+    input: string | unknown,
+  ): Promise<{ readonly requestId: string; readonly verified: true }> {
+    const request = exactClientObject(input, ["requestId", "destinationDirectory"]);
+    const value = localObject(
+      await this.#requestJson("POST", "/supervisor/v1alpha1/backups", request),
+    );
+    if (
+      typeof value.requestId !== "string" ||
+      value.verified !== true ||
+      Object.keys(value).sort().join(",") !== "requestId,verified"
+    ) {
+      throw new Error("Supervisor backup response is invalid");
+    }
+    return Object.freeze({ requestId: value.requestId, verified: true });
+  }
+
   async logs(afterCursor?: number, limit?: number): Promise<SupervisorLogPage> {
     const query = new URLSearchParams();
     if (afterCursor !== undefined) query.set("after", String(afterCursor));

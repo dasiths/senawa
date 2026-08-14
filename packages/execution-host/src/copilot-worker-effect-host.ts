@@ -1,5 +1,5 @@
 import { validateWorkerModelRouteSelection, type WorkerModelRouteSelection } from "@senawa/kernel";
-import { canonicalBytes, type JsonValue } from "@senawa/protocol";
+import { canonicalBytes, type JsonValue, WORKER_PROTOCOL_LIMITS } from "@senawa/protocol";
 import {
   type AsyncEffectHost,
   type AsyncEffectHostContext,
@@ -228,6 +228,15 @@ export function decodeCopilotWorkerEffectInput(
     maxBytes: positiveInteger(value.grantPolicy.maxBytes, "maxBytes"),
     maxChunkBytes: positiveInteger(value.grantPolicy.maxChunkBytes, "maxChunkBytes"),
   };
+  if (grantPolicy.maxOperations > WORKER_PROTOCOL_LIMITS.maxGrantOperations) {
+    throw new TypeError("Copilot worker grant operation budget exceeds protocol limits");
+  }
+  if (grantPolicy.maxBytes > WORKER_PROTOCOL_LIMITS.maxGrantBytes) {
+    throw new TypeError("Copilot worker grant byte budget exceeds protocol limits");
+  }
+  if (grantPolicy.maxChunkBytes > WORKER_PROTOCOL_LIMITS.maxAssetReadBytes) {
+    throw new TypeError("Copilot worker grant chunk budget exceeds protocol limits");
+  }
   if (grantPolicy.expiresAfterMs <= timeoutMs) {
     throw new TypeError("Copilot worker grants must outlive the operation timeout");
   }

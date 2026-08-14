@@ -63,6 +63,7 @@ import {
   type DaemonRemoteConnector,
   type DaemonRemoteConnectorFactoryInput,
 } from "./remote-composition.js";
+import { backupSupervisorState } from "./state-backup.js";
 import {
   DurableCompletionEligibility,
   DynamicWorkspaceEffectHost,
@@ -345,6 +346,17 @@ export async function startSenawaService(
       stop: () => required(service).stop(),
       recover: (repositoryId: string, runId: string) =>
         required(service).recover(repositoryId, runId),
+      backup: async (requestId: string, destinationDirectory: string) => {
+        const manifest = await backupSupervisorState({
+          service: required(service),
+          stopSdkClient: () => (sdkPool === undefined ? Promise.resolve() : sdkPool.close()),
+          sdkDirectory: paths.sdkDirectory,
+          destinationDirectory,
+          dependencies,
+          requestId,
+        });
+        return Object.freeze({ requestId: manifest.requestId, verified: true as const });
+      },
       logs: (afterCursor?: number, limit?: number) => required(service).logs(afterCursor, limit),
     };
     const listeners: SupervisorListener[] = [
@@ -691,12 +703,14 @@ interface WorkspaceSdkPoolOptions {
 class WorkspaceSdkPool {
   readonly #options: WorkspaceSdkPoolOptions;
   readonly #sdks = new Map<string, Promise<OwnedCopilotSdkPort>>();
+  #closed = false;
 
   constructor(options: WorkspaceSdkPoolOptions) {
     this.#options = options;
   }
 
   sdkFor(workingDirectory: string): Promise<OwnedCopilotSdkPort> {
+    if (this.#closed) throw new Error("Copilot SDK pool is closed");
     const existing = this.#sdks.get(workingDirectory);
     if (existing !== undefined) return existing;
     const baseDirectory = join(
@@ -738,6 +752,8 @@ class WorkspaceSdkPool {
   }
 
   async close(): Promise<void> {
+    if (this.#closed) return;
+    this.#closed = true;
     const errors: unknown[] = [];
     for (const sdk of await Promise.all(this.#sdks.values())) {
       try {

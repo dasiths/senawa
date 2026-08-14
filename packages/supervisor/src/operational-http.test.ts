@@ -38,6 +38,7 @@ describe("supervisor operational HTTP", () => {
     const drain = vi.fn(async () => undefined);
     const stop = vi.fn(async () => undefined);
     const recover = vi.fn(async () => ({ worked: true }));
+    const backup = vi.fn(async (requestId: string) => ({ requestId, verified: true as const }));
     const operations: SupervisorOperations = {
       status: async () => ({
         lifecycle: "running",
@@ -66,6 +67,7 @@ describe("supervisor operational HTTP", () => {
       drain,
       stop,
       recover,
+      backup,
       logs: async () => ({ afterCursor: 0, latestCursor: 0, hasMore: false, items: [] }),
     };
     const api = {
@@ -102,10 +104,14 @@ describe("supervisor operational HTTP", () => {
       },
     );
     await expect(client.logs()).resolves.toMatchObject({ items: [], latestCursor: 0 });
+    await expect(
+      client.backupState({ requestId: "backup-request", destinationDirectory: "/backup" }),
+    ).resolves.toEqual({ requestId: "backup-request", verified: true });
     await client.stop();
     await new Promise((resolve) => setImmediate(resolve));
     expect(drain).toHaveBeenCalledOnce();
     expect(recover).toHaveBeenCalledWith("repository_a", "run_a");
+    expect(backup).toHaveBeenCalledWith("backup-request", "/backup");
     expect(stop).toHaveBeenCalledOnce();
 
     const sessions = new PortalSessionSecurity({
@@ -189,6 +195,7 @@ describe("supervisor operational HTTP", () => {
         drain: () => service.drain(),
         stop: () => service.stop(),
         recover: (repositoryId, runId) => service.recover(repositoryId, runId),
+        backup: async (requestId) => ({ requestId, verified: true }),
         logs: (afterCursor, limit) => service.logs(afterCursor, limit),
       },
       contextFactory: () => {

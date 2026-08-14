@@ -32,6 +32,8 @@ export const WORKER_PROTOCOL_LIMITS = Object.freeze({
   maxGrantTokenLength: 512,
   maxPointerLength: 2_048,
   maxAssetReadBytes: 65_536,
+  maxGrantOperations: 1_024,
+  maxGrantBytes: 256 * 1024 * 1024,
   maxSubmissionSummaryLength: 8_192,
   maxQuestionLength: 16_384,
   maxCompletionItems: 256,
@@ -143,8 +145,12 @@ function contextGrantEnvelopeFields(object: Readonly<Record<string, unknown>>) {
   enumValue(object.sensitivityCeiling, "$.sensitivityCeiling", SENSITIVITIES);
   timestamp(object.issuedAt, "$.issuedAt");
   timestamp(object.expiresAt, "$.expiresAt");
-  positiveInteger(object.maxOperations, "$.maxOperations");
-  positiveInteger(object.maxBytes, "$.maxBytes");
+  boundedPositiveInteger(
+    object.maxOperations,
+    "$.maxOperations",
+    WORKER_PROTOCOL_LIMITS.maxGrantOperations,
+  );
+  boundedPositiveInteger(object.maxBytes, "$.maxBytes", WORKER_PROTOCOL_LIMITS.maxGrantBytes);
   positiveInteger(object.maxChunkBytes, "$.maxChunkBytes");
   if (
     (object.maxChunkBytes as number) > WORKER_PROTOCOL_LIMITS.maxAssetReadBytes ||
@@ -709,6 +715,11 @@ function boundedReadLength(value: unknown, path: string): void {
 function positiveInteger(value: unknown, path: string): void {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1)
     fail("invalid-value", path, "must be a positive safe integer");
+}
+
+function boundedPositiveInteger(value: unknown, path: string, maximum: number): void {
+  positiveInteger(value, path);
+  if ((value as number) > maximum) fail("oversized", path, `must not exceed ${maximum}`);
 }
 
 function nonNegativeInteger(value: unknown, path: string): void {

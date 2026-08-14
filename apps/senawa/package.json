@@ -1,12 +1,28 @@
 {
   "name": "senawa",
   "version": "0.1.0-alpha.0",
-  "private": true,
   "type": "module",
-  "bin": {
-    "senawa": "./dist/main.js",
-    "senawa-service": "./dist/main-service.js"
+  "engines": {
+    "node": ">=22.12.0"
   },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "bin": {
+    "senawa": "./dist/main.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/**/fixtures/**",
+    "!dist/**/*.map"
+  ],
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false"
@@ -16,6 +32,7 @@
     "@senawa/execution-host": "workspace:*",
     "@senawa/kernel": "workspace:*",
     "@senawa/protocol": "workspace:*",
+    "@senawa/reporting": "workspace:*",
     "@senawa/runtime": "workspace:*",
     "@senawa/storage-sqlite": "workspace:*",
     "@senawa/supervisor": "workspace:*"
