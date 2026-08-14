@@ -5922,7 +5922,9 @@ remaining critical, high, or medium findings.
 
 ### Commit and push
 
-Implementation commit and push are pending this log update.
+* Implementation commit: `5fdd242` (`feat: add local workflow portal`)
+* Push: `origin/redesign/workflow-state-machine` advanced from `7414342` to
+  `5fdd242` on 2026-08-14.
 
 ### Remaining risks
 
