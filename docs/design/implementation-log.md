@@ -51,7 +51,7 @@ Each phase records:
 | 7. Context broker and serial workers | Complete | `4009bd8` | Pushed |
 | 8. Local supervisor, HTTP, SSE, and CLI | Complete | `e580bad` | Pushed |
 | 9. Additive amendments | Complete | `9aa37af` | Pushed |
-| 10. Optional parallel workspaces and integration | In progress (10A through 10D complete) | Pending | Pending |
+| 10. Optional parallel workspaces and integration | Complete | `0e63add` | Pushed |
 | 11. Local portal | Not started | Pending | Pending |
 | 12. Remote control-plane protocol | Not started | Pending | Pending |
 | 13. Reporting, packaging, and hardening | Not started | Pending | Pending |
@@ -5332,7 +5332,8 @@ No live SDK invocation or worktree mutation in `/workspaces/senawa` was used.
 
 ### Commit and push
 
-Pending final Phase 10 delivery.
+Phase 10 was committed as `0e63add` (`feat: add isolated parallel execution`)
+and pushed to `origin/redesign/workflow-state-machine` on 2026-08-14.
 
 ## Entry template
 
