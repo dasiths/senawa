@@ -33,7 +33,7 @@ import {
 import type { AmendmentReviewRecord } from "./contracts.js";
 import { type PortalApi, PortalApiError } from "./portal-api.js";
 
-export type SupervisorIngressTransportKind = "cli" | "http";
+export type SupervisorIngressTransportKind = "cli" | "http" | "remote";
 
 export interface SupervisorAdmissionAllocator {
   allocationsFor(submission: CommandSubmission): readonly SupervisorAllocationFact[];
@@ -153,8 +153,12 @@ export class SupervisorApi implements SupervisorApiClient {
     try {
       const submission = decodeCommandSubmission(input);
       const principal = decodeAuthenticatedPrincipal(context.principal);
-      if (context.transportKind !== "cli" && context.transportKind !== "http") {
-        throw invalidRequest("Transport kind must be cli or http");
+      if (
+        context.transportKind !== "cli" &&
+        context.transportKind !== "http" &&
+        context.transportKind !== "remote"
+      ) {
+        throw invalidRequest("Transport kind must be cli, http, or remote");
       }
       const requestId = validateOpaqueIdentity(context.requestId);
       const envelope = decodeCommandEnvelope({

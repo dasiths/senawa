@@ -59,6 +59,11 @@ import {
 import { optionalPortalAssetSource } from "./portal-assets.js";
 import { ProductionScheduler } from "./production-scheduler.js";
 import {
+  createOptionalDaemonRemoteConnector,
+  type DaemonRemoteConnector,
+  type DaemonRemoteConnectorFactoryInput,
+} from "./remote-composition.js";
+import {
   DurableCompletionEligibility,
   DynamicWorkspaceEffectHost,
 } from "./workspace-composition.js";
@@ -105,6 +110,9 @@ export interface SenawaServiceCompositionOptions {
   readonly createGitHost?: (
     options: ConstructorParameters<typeof DurableWorkspaceEffectHost>[0],
   ) => Promise<DurableWorkspaceEffectHost>;
+  readonly createRemoteConnector?: (
+    input: DaemonRemoteConnectorFactoryInput,
+  ) => Promise<DaemonRemoteConnector | undefined>;
 }
 
 export function resolveSenawaServicePaths(
@@ -150,6 +158,7 @@ export async function startSenawaService(
   let ownedRunnerAuthority: SqliteRunnerAuthority | undefined;
   let ownedPortalQuery: SqlitePortalQueryAuthority | undefined;
   let ownedSdkPool: WorkspaceSdkPool | undefined;
+  let ownedRemoteConnector: DaemonRemoteConnector | undefined;
   try {
     const notifier = new InMemoryRunEventNotifier(() => service?.wake(), true);
     const authority = new SqliteSupervisorAuthority({
@@ -297,6 +306,16 @@ export async function startSenawaService(
             },
           });
     const api = new SupervisorApi(authority, "supervisor_local", new PortalApi(portalQuery));
+    const remoteConnector = await (
+      composition.createRemoteConnector ?? createOptionalDaemonRemoteConnector
+    )({
+      environment,
+      databasePath: paths.databasePath,
+      dependencies,
+      supervisorApi: api,
+      admissionAllocator: { allocationsFor: deterministicAllocations },
+    });
+    ownedRemoteConnector = remoteConnector;
     const portalAssets = optionalPortalAssetSource(environment);
     const sessions = new PortalSessionSecurity({
       clock: composition.portalSessionClock ?? { now: () => Date.now() },
@@ -396,11 +415,20 @@ export async function startSenawaService(
         authority.commandAuthority.queryRunExecution(repositoryId, runId)?.execution.failurePolicy,
       scheduleBeforeEffects:
         composition.scheduleBeforeEffects ??
-        (({ repositoryId, runId, lease, currentTime }) =>
-          productionScheduler.schedule({ repositoryId, runId, lease, currentTime })),
+        (({ repositoryId, runId, lease, currentTime }) => {
+          if (
+            remoteConnector?.disconnectedMode === "pause-new-local-work" &&
+            remoteConnector.status().partitioned
+          ) {
+            return { worked: false, batchSize: 1 };
+          }
+          return productionScheduler.schedule({ repositoryId, runId, lease, currentTime });
+        }),
       listSchedulableRuns: () => productionScheduler.listRuns(),
       deliverCompletionOutboxOnce: () => contextBroker.deliverCompletionOutboxOnce(),
       deliverAmendmentProposalOutboxOnce: () => amendmentBridge.deliverOnce(),
+      ...(remoteConnector === undefined ? {} : { remoteConnectorStatuses: [remoteConnector] }),
+      ...(remoteConnector === undefined ? {} : { drainables: [remoteConnector] }),
       closeables: [
         { close: () => portalQuery.close() },
         { close: () => contextBroker.close() },
@@ -413,12 +441,27 @@ export async function startSenawaService(
                 close: () => sdkPool.close(),
               },
             ]),
+        ...(remoteConnector === undefined ? [] : [remoteConnector]),
       ],
       onTransition: (state) => {
         if (state === "stopped") resolveStopped?.();
       },
     });
+    await remoteConnector?.establishContact();
     await service.start();
+    try {
+      remoteConnector?.start();
+    } catch (error) {
+      try {
+        await service.stop();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Remote connector startup failed and supervisor cleanup was incomplete",
+        );
+      }
+      throw error;
+    }
     return Object.freeze({ service, paths, waitForStop });
   } catch (error) {
     if (service !== undefined) throw error;
@@ -426,6 +469,13 @@ export async function startSenawaService(
     if (ownedSdkPool !== undefined) {
       try {
         await ownedSdkPool.close();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (ownedRemoteConnector !== undefined) {
+      try {
+        await ownedRemoteConnector.close();
       } catch (cleanupError) {
         cleanupErrors.push(cleanupError);
       }

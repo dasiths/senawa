@@ -643,6 +643,14 @@ Implement the outbound repository connector, reference control-plane server,
 authenticated protocol, delivery chain, partition semantics, and conformance
 simulator without claiming a production hosted service.
 
+Phase 12 is complete. The alpha now includes strict behavior-free remote wire
+contracts, canonical repository remote policy, transactional SQLite inbox,
+outbox, per-run event checkpoints and independent history commitments, an
+Ed25519-authenticated supervisor connector, an optional fail-closed daemon
+composition, and a restart-ephemeral protocol-only reference control plane with
+deterministic partition simulation. Every command remains locally reauthorized;
+central acceptance and delivery never imply local execution.
+
 ### Acceptance
 
 * Principal identity derives from the accepting server, never client actor data.

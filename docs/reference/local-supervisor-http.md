@@ -118,6 +118,14 @@ health, process and start facts, listeners, database-derived pending counts,
 sanitized lease facts, and SDK session-store health. Missing expected
 nonterminal SDK session metadata degrades health and blocks runner redispatch.
 
+When the optional outbound connector is enabled, status also reports sanitized
+connector and binding identities, lifecycle, partition health, contact times,
+pending counts, cursor lag, explicit `never-synchronized`, `current`, or `stale`
+state, and staleness milliseconds. It never reports the remote endpoint,
+enrollment path, public or private key material, or report content. See the
+[remote control-plane reference](remote-control-plane.md) for configuration and
+trust limits.
+
 Supervisor logs are persisted with monotonically increasing cursors and bounded
 pages. ANSI escapes, control characters, bearer values, and sensitive
 structured fields are removed or redacted before commit.
@@ -146,6 +154,11 @@ read only decides whether an apply attempt is useful. The apply command carries
 only exact proposal, decision, and reviewed graph digests; SQLite rechecks live
 claims and nonterminal effects and constructs trusted quiescence inside the
 same `BEGIN IMMEDIATE` transaction that commits the reviewed graph.
+
+An enabled connector starts after the supervisor reaches `running`. It polls
+independently of run scheduling. Service drain first drains the connector, and
+service stop closes it and its SQLite connection even after connector drain
+errors or later listener failures.
 
 Run leases last 30 seconds. While an asynchronous worker host is pending, the
 controller renews the lease every 10 seconds or sooner when expiry is nearer.

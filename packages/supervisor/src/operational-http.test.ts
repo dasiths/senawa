@@ -61,6 +61,7 @@ describe("supervisor operational HTTP", () => {
           expectedSessionCount: 0,
           missingSessionIds: [],
         },
+        remoteConnectors: [],
       }),
       drain,
       stop,

@@ -21,6 +21,7 @@
     "@senawa/supervisor": "workspace:*"
   },
   "devDependencies": {
+    "@senawa/control-plane": "workspace:*",
     "@senawa/testing": "workspace:*"
   }
 }

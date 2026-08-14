@@ -52,8 +52,8 @@ Each phase records:
 | 8. Local supervisor, HTTP, SSE, and CLI | Complete | `e580bad` | Pushed |
 | 9. Additive amendments | Complete | `9aa37af` | Pushed |
 | 10. Optional parallel workspaces and integration | Complete | `0e63add` | Pushed |
-| 11. Local portal | In progress, 11A through 11C complete | Pending | Pending |
-| 12. Remote control-plane protocol | Not started | Pending | Pending |
+| 11. Local portal | Complete | `5fdd242` | Pushed |
+| 12. Remote control-plane protocol | Complete | Pending | Pending |
 | 13. Reporting, packaging, and hardening | Not started | Pending | Pending |
 | 14. Consumer documentation and adoption journeys | Not started | Pending | Pending |
 
@@ -5936,6 +5936,427 @@ remaining critical, high, or medium findings.
   assembly, direct storage tests, overlap tests, and event-race tests pass.
 * The complete inference-free browser matrix and screenshots must run again for
   the final human review after Phase 14, as required by Decision D-073.
+
+## Decision D-075: Keep remote operations local and cryptographic domains shared
+
+* Date: 2026-08-14
+* Status: Accepted for Phase 12F
+* Phase: 12
+* Decision: Store the command-envelope, classified-report, acknowledgement,
+  and receipt-entry domain strings once in the behavior-free protocol package.
+  Keep Ed25519 and SHA-256 behavior in the supervisor and reference app. Accept
+  central commands with a separate server-authenticated principal context, not
+  actor data from the signed client request. Enable the production connector
+  only when daemon-local endpoint and enrollment key-file inputs are both
+  present. Resolve its role, disconnected, lease, and disclosure policy from an
+  already persisted canonical configuration snapshot whose remote component
+  digest matches the repository binding.
+* Alternatives: Duplicate domain strings across concrete components; implement
+  crypto in protocol; accept client principal fields; put endpoint or key paths
+  in workflow configuration; ship a hosted reference HTTP service.
+* Rationale: One data-only domain source prevents incompatible signatures
+  without giving protocol behavior. Separate server context prevents client
+  identity selection. Snapshot-derived policy binds connector authority to the
+  reviewed workflow while the endpoint and key material remain local
+  operational state.
+* Consequence: The enrollment file must be a bounded regular `0600` file owned
+  by the daemon user and must reference a present snapshot. Status, logs,
+  backups intended for remote transfer, and reports contain no endpoint, key
+  path, or private key. The reference control plane remains restart-ephemeral
+  and makes no production hosting claim.
+
+## Phase 12F log
+
+### Scope
+
+* Added a structural in-process adapter from the deterministic reference
+  authority and fault simulator to the real supervisor connector.
+* Proved server-derived principal attribution, exact signed command persistence,
+  local role intersection and reauthorization, runner claim and outcome,
+  classified signed reporting, exact central acknowledgement, and all five
+  receipt stages.
+* Proved deterministic duplicate, reorder, drop, partition, reconnect, expiry,
+  revocation, stale approval, stale amendment, and no-local-authority-gain
+  behavior with OS-temporary SQLite state and no Git operations.
+* Added optional daemon HTTP client composition, strict local enrollment
+  parsing, snapshot-derived remote policy, independent connector startup,
+  sanitized status, explicit current or stale synchronization state, service
+  drain integration, and reverse-order close ownership.
+
+### Deviations and integration repairs
+
+No remote protocol DTO or migration changed. Focused interoperability exposed
+three existing cross-slice defects and one configuration persistence defect:
+
+* The connector and reference authority used incompatible signature domains.
+  Shared behavior-free constants now cover the three signed artifacts.
+* Connector receipt entries omitted the reference authority's digest domain.
+  Both now use one shared receipt-entry domain.
+* Deterministic reference conformance could not share the injected SHA-256 port.
+  The reference authority now accepts an optional hash port and defaults to
+  concrete Node SHA-256.
+* SQLite snapshot validation rejected the optional Phase 12B remote component.
+  It now validates the exact optional policy and remote component digest without
+  changing migration state.
+
+### Focused validation
+
+Passed on 2026-08-14:
+
+* Signature interoperability probe after first reproducing the domain failure
+* Reference authority and deterministic simulator suites
+* Supervisor connector and service lifecycle suites
+* Daemon enrollment, composition, and failure cleanup suites
+* Four complete in-process remote system conformance journeys
+* Focused package builds and application typecheck
+
+Definitive repository validation passed on 2026-08-14:
+
+* Root build, including TypeScript project references, production portal assets,
+  and execution-host native helpers
+* Clean workspace typecheck
+* All Senawa app, control-plane app, and supervisor suites: 26 files and 192
+  tests
+* Complete offline suite: 72 files passed, one live SDK file skipped without
+  explicit opt-in, and 1,051 tests passed
+* Supervisor lifecycle suite: 8 tests, including close after drain failure
+* Biome check across 227 files
+* Architecture boundaries across 357 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+### Commit and push
+
+No commit or push was performed, as requested for Phase 12F.
+
+### Remaining risks
+
+* Production endpoint authentication and confidentiality depend on a compatible
+  HTTPS service outside this repository. Loopback HTTP is accepted only for
+  local adapters and tests.
+* Key enrollment, rotation, recovery, central persistence, retention, and
+  multi-principal production authentication remain deferred.
+* Phase 12G independent review, complete repository validation, and delivery
+  remain pending.
+
+## Phase 12G independent review repair log
+
+### Review repairs
+
+* Delivery batches now bind each envelope to the exact server-created
+  `connector-delivered` receipt entry. The connector validates and persists that
+  entry without using its local clock.
+* SQLite now atomically commits local terminal evidence, the exact classified
+  report, the report checkpoint, and synchronization state. Faults before and
+  after commit converge after reopen.
+* Ready inbox replay now queries complete local supervisor history after
+  idempotent submission. Recovery persists local acceptance and terminal state
+  when the supervisor was already queued or terminal.
+* Daemon startup negotiates and probes the connector before service recovery.
+  `pause-new-local-work` therefore starts fail-closed when contact is
+  unavailable, while `continue-authorized-local` preserves its explicit local
+  authorization policy.
+* Production transport now performs hello negotiation before polling, binds the
+  hello peer to the enrolled connector, persists the selected session, version,
+  and capabilities, and carries the session on polls and reports.
+* Disabled synchronization emits no receipt, event, or projection metadata and
+  uses a zero synchronization vector. Enabled event reporting pages from the
+  durable checkpoint for each run and emits continuation reports until every
+  relevant run is synchronized.
+* Signature codecs and crypto boundaries reject noncanonical base64url text.
+  Connector and reference authority key construction rejects non-Ed25519 keys.
+* In-process delivery honors `afterSequence` and removes old duplicate frames
+  without starving newer commands. Acknowledgement semantics bind every durable
+  report identity field.
+
+### Executable regressions
+
+Focused regressions cover independent server and connector clocks with delivery
+latency, exact receipt persistence, atomic before-commit and after-commit faults,
+queued and terminal acceptance replay, startup preflight across both disconnected
+policies and restart, hello refusal and session persistence, no-metadata policy,
+multi-page event synchronization, replay starvation, acknowledgement mismatch,
+report deadline and cancellation, enrollment path and key hardening, and backup
+and restore with ready and local-accepted inbox rows.
+
+### Final high finding repairs
+
+* Receipt-chain order now depends only on fixed `stageSequence` and exact
+  `previousEntryDigest` linkage. Protocol decoding, SQLite acknowledgement
+  persistence, and integrity replay no longer compare timestamps owned by the
+  control plane and connector. Same-host acceptance, expiry, observation, and
+  claim constraints remain intact.
+* Signed report acknowledgements remain exact durable server evidence and are
+  accepted when `acknowledgedAt` is ahead of or behind local observation time.
+  Full connector journeys cover both directions through local acceptance,
+  runner claim and outcome, report signing, atomic persistence,
+  acknowledgement, reopen, and current synchronization.
+* Migration 009 now stores per-binding, per-run event checkpoints and exact
+  report-to-run cursor advances. Report enqueue validates metadata against the
+  retained local event frames and advances one run atomically. Contiguous report
+  acknowledgement replays the associated run advances without timestamp
+  ordering.
+* Continuation scheduling uses each run's durable cursor and oldest enqueued
+  report sequence. A two-run regression gives run A a higher cursor than run B,
+  uses multiple bounded pages with overlapping cursor values, and proves exact
+  eventual delivery without cursor-ahead requests, skips, duplicates, or
+  starvation.
+* Startup, backup, and restore integrity reconstruct per-run checkpoints from
+  canonical reports and exact event frames. Missing, orphaned, noncontiguous,
+  or corrupted checkpoint advances fail verification.
+
+### Validation
+
+Passed on 2026-08-14:
+
+* Review-focused regression set: 8 files and 71 tests
+* Affected protocol, storage, supervisor, control-plane, and daemon suites: 33
+  files and 402 tests
+* Complete offline suite: 72 files passed, one live SDK file skipped without
+  explicit opt-in, and 1,065 tests passed
+* Root build and TypeScript project-reference typecheck
+* Biome check across 227 files
+* Architecture boundaries across 357 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+Final high-finding validation passed on 2026-08-14:
+
+* Focused protocol codec, SQLite remote delivery, and supervisor connector
+  suites: 3 files and 37 tests
+* Affected protocol, storage, supervisor, control-plane, composition,
+  interoperability, and system suites: 8 files and 62 tests
+* Full TypeScript project-reference typecheck
+* Biome check across 227 files
+* Architecture boundaries across 357 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+### Final medium integrity finding repairs
+
+* Migration 009 binds each report advance to the exact report and binding with
+  a composite foreign key. It also binds the advance to the exact binding,
+  repository, and run checkpoint. Each durable report records its expected
+  advance count so sparse empty-event advancement remains distinguishable from
+  an ordinary no-event report.
+* Report enqueue atomically accepts an exact advance set. Event-bearing reports
+  require one advance for every represented run, duplicate or unrelated runs
+  are rejected, and sparse reports retain their one-run empty-event semantics.
+* Semantic verification derives required report and run pairs from canonical
+  reports, compares the stored advance count, verifies report identity and
+  binding ownership, replays exact local event frames through each cursor, and
+  reconstructs the per-run checkpoint aggregate.
+* Corruption regressions delete both checkpoint and advance rows, remove one
+  run from a multi-run report, forge report, binding, and run associations,
+  alter a cursor, delete sparse empty-event evidence, and exercise genuine
+  backup and restore. Ordinary no-event reports continue to reopen normally.
+
+### Final medium integrity review
+
+The review found and repaired two related gaps: report replay trusted the set of
+advance rows that remained, and an empty sparse advance had no durable marker
+after complete evidence deletion. The report-derived expected set and durable
+advance count close both gaps. No residual high or medium integrity finding
+remains in this evidence path. The existing integrity model still does not
+claim protection against a coordinated rewrite of every canonical and
+checksummed representation.
+
+Final medium-finding validation passed on 2026-08-14:
+
+* Focused SQLite remote delivery suite: 1 file and 14 tests
+* Affected protocol, storage, supervisor, control-plane, composition,
+  interoperability, and system suites: 8 files and 70 tests
+* Full TypeScript project-reference typecheck
+* Root build, Biome check, architecture boundaries, documentation links, and
+  `git diff --check`
+
+### Remaining high and medium integrity repairs
+
+* Migration 009 now creates an independent `remote_history_commitments` row for
+  every registered binding. It retains canonical binding identity, contiguous
+  inbound sequence and digest, outbound report sequence and digest,
+  acknowledged sequence, digest, and cursor, plus a canonical digest-protected
+  summary of every per-run event checkpoint.
+* The commitment has no foreign key or delete cascade from peer state. Peer
+  deletion therefore leaves evidence that semantic verification can compare
+  against missing normalized history.
+* Peer registration, contiguous inbox advancement, report enqueue, and report
+  acknowledgement update the commitment in the same immediate transaction as
+  their normalized rows. Each mutation first requires the prior commitment to
+  equal the current normalized endpoints, and committed highs cannot move
+  backwards. Exact report and acknowledgement replay leave the commitment
+  unchanged.
+* Startup, backup, and restore verification require a one-to-one relationship
+  between peers and commitments. They reconstruct every chain high,
+  acknowledged cursor, and per-run summary from canonical reports, inbox rows,
+  advances, checkpoints, and synchronization vectors, then require exact
+  equality with the independent commitment.
+* Per-run remote checkpoints now have a composite foreign key to authoritative
+  local `runs(repository_id, run_id)`. Live enqueue and semantic replay also
+  require the exact local repository and run, and each advance remains bound to
+  a report with the same binding and repository.
+* Corruption journeys cover peer deletion with all cascades, report-chain and
+  checkpoint deletion with zeroed derived vectors, commitment deletion alone,
+  a missing report below retained high-water state, and sparse checkpoint plus
+  advance reassignment to a missing run, another authoritative run, or a
+  cross-binding report. Every case fails startup, live backup, and
+  manifest-valid restore.
+* A genuine no-remote database remains valid through startup, backup, and
+  restore. Genuine event evidence also survives backup and restore.
+
+Final integrity follow-up validation passed on 2026-08-14:
+
+* Focused SQLite remote delivery suite: 1 file and 22 tests
+* Affected protocol, storage, supervisor, control-plane, composition,
+  interoperability, and system suites: 8 files and 78 tests
+* Complete offline suite: 72 files passed, one live SDK file skipped without
+  explicit opt-in, and 1,084 tests passed
+* Storage package and full TypeScript project-reference typecheck
+* Root build, including portal assets and native execution-host helpers
+* Biome check across 227 files
+* Architecture boundaries across 357 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+### Residual integrity limitation
+
+No high or medium finding remains in the requested deletion, reset, or sparse
+reassignment threat model. The commitment is an independent logical
+representation in the same SQLite authority, not a cryptographic witness on
+separate media. A coordinated rewrite of canonical rows, normalized history,
+derived vectors, migration-valid commitment content, and all associated
+digests remains outside the integrity claim.
+
+### Final medium replay finding repairs
+
+* Atomic local-result and report persistence now treats an already completed
+  inbox row as an exact replay candidate. It compares the terminal entry bytes
+  and digest, canonical report bytes and digest, the complete per-run advance
+  set, and the report-chain suffix covered by the independent history
+  commitment. Exact replay returns `false`; any valid but different retry
+  raises `RemoteDeliveryConflictError` without mutation.
+* Report enqueue duplicate handling now compares the supplied per-run advances
+  with the durable report advances before returning `false`. The comparison
+  retains sparse empty-event run identity and every repository, run, start,
+  through, and latest cursor value. Missing, changed, nonexistent,
+  cross-binding, wrong-run, and wrong-cursor replays conflict.
+* Before-commit fault recovery reopens at `local-accepted`, commits once on exact
+  retry, and returns `true`. Post-commit acknowledgement loss reopens at
+  `local-result` and returns `false` on exact retry. Both paths then reject
+  changed terminal entries, reports, and advance inputs while leaving the
+  history commitment unchanged.
+
+Final medium replay validation passed on 2026-08-14:
+
+* Focused SQLite remote delivery suite: 1 file and 23 tests
+* Affected protocol, storage, supervisor, control-plane, composition,
+  interoperability, and system suites: 8 files and 79 tests
+* Full TypeScript project-reference typecheck
+* Root build, including portal assets and native execution-host helpers
+* Biome check across 227 files
+* Architecture boundaries across 357 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+No residual high or medium replay finding remains. The existing coordinated
+same-database rewrite limitation still applies; replay comparison does not turn
+the logical history commitment into an external cryptographic witness.
+
+### Final terminal report identity binding repairs
+
+* Migration 009 now stores `local_result_report_id` on every terminal inbox
+  row. The state constraint keeps it null before `local-result` and requires it
+  for `local-result`. A deferred composite foreign key binds the identifier and
+  binding to `remote_report_outbox(report_id, binding_id)` at transaction
+  commit, so a bound report cannot be missing, cross-binding, or deleted while
+  its terminal result remains.
+* Atomic local-result persistence writes the report identifier with the
+  terminal bytes, digest, and timestamp in the same immediate transaction that
+  inserts the report, advances report state, and refreshes the independent
+  history commitment. The standalone local-result operation now refuses to
+  create terminal evidence without its report.
+* Exact terminal replay first requires the submitted report identifier to equal
+  the inbox-bound identifier, then retains the existing canonical report bytes,
+  digest, run advances, report-chain suffix, and commitment checks. A different
+  valid report from the same binding conflicts without mutation.
+* Live persistence and semantic startup, backup, and restore verification
+  require the bound report to contain the matching command receipt chain and
+  exact canonical terminal entry. Terminal reports retain this required chain
+  even when optional synchronization metadata is disabled.
+* Regressions cover two-command same-binding report substitution, structurally
+  valid inbox report reassignment, post-commit fault recovery with exact replay,
+  and healthy backup and restore of both bound identifiers followed by exact
+  replay.
+
+Final terminal report identity validation passed on 2026-08-14:
+
+* Focused SQLite remote delivery suite: 1 file and 26 tests
+* Focused storage and supervisor remote suites: 2 files and 43 tests
+* Affected protocol, storage, supervisor, control-plane, composition,
+  interoperability, and system suites: 8 files and 82 tests
+* Full TypeScript project-reference typecheck
+* Root build, including portal assets and native execution-host helpers
+* Biome check across 227 files
+* Architecture boundaries across 357 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+No residual high or medium finding remains in terminal report identity,
+same-binding substitution, or the requested corruption and recovery paths. The
+existing integrity limitation remains: a coordinated rewrite of the inbox,
+outbox, canonical reports, chain digests, checkpoints, and logical history
+commitment inside the same SQLite authority is not prevented by an external
+cryptographic witness.
+
+### Commit and push
+
+No commit or push was performed for the final repairs, as requested. No review
+tracking artifact was added.
+
+## Phase 12 final closure
+
+### Validation
+
+Definitive validation passed on 2026-08-14:
+
+* Root build, including TypeScript project references, production portal assets,
+  and execution-host native helpers
+* Clean workspace typecheck
+* Biome check across 227 files
+* Complete offline suite: 72 files and 1,088 tests passed
+* Live Copilot SDK probe: one test skipped without explicit opt-in settings
+* Complete deterministic browser regression: 15 Chromium tests passed with one
+  worker, zero retries, and no model inference
+* Architecture boundaries across 357 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+* Single worktree proof: only `/workspaces/senawa`
+
+### Review
+
+Independent trust-boundary and durability reviews drove repairs for cross-host
+clock assumptions, server-owned delivery evidence, signature canonicalization,
+negotiation, role intersection, startup partition policy, both acceptance and
+report crash windows, per-run event cursors, exact report advances, history
+deletion commitments, sparse run ownership, and terminal result/report replay
+identity. Each finding received a focused executable regression. Final narrow
+review reported no remaining critical, high, or medium findings.
+
+### Remaining risks
+
+* The reference control plane is restart-ephemeral and is not a production
+  hosted service. Production enrollment, key rotation and recovery, central
+  retention, OIDC, and hosted operations remain explicitly deferred.
+* HTTPS endpoint confidentiality and authentication require a compatible
+  external service; loopback HTTP remains local-test-only.
+* The SQLite history commitment detects ordinary deletion, reset, and
+  cross-representation corruption. It is not an external cryptographic witness
+  against a coordinated rewrite of every canonical, normalized, commitment, and
+  digest representation in the same database.
+
+### Commit and push
+
+Implementation commit and push are pending this closeout update.
 
 ## Entry template
 

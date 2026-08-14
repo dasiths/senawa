@@ -40,6 +40,7 @@ import {
   type ConfigurationRegistryEntry,
   type ConfigurationSnapshot,
   type ExecutionPolicy,
+  type RemotePolicy,
   WORKFLOW_AMENDMENT_API_VERSION,
   WORKFLOW_CONFIGURATION_API_VERSION,
   type WorkflowAmendmentCompilationInput,
@@ -55,6 +56,7 @@ type CanonicalObject = CanonicalValue & Readonly<Record<string, CanonicalValue>>
 
 interface ParsedWorkflow {
   readonly execution: ExecutionPolicy;
+  readonly remote?: ParsedRemotePolicy;
   readonly workflow: ParsedWorkflowDeclaration;
   readonly schemas: readonly ParsedSchema[];
   readonly roles: readonly ParsedRole[];
@@ -183,6 +185,17 @@ interface ParsedEvidencePolicy {
   readonly waiverAuthority?: CanonicalValue;
 }
 
+interface ParsedRemotePolicy {
+  readonly disconnectedMode: RemotePolicy["disconnectedMode"];
+  readonly roleMappings: readonly ParsedRemoteRoleMapping[];
+  readonly maximumRemoteAuthorizationLeaseSeconds: number;
+  readonly synchronization: RemotePolicy["synchronization"];
+}
+
+type ParsedRemoteRoleMapping = RemotePolicy["roleMappings"][number] & {
+  readonly pointer: string;
+};
+
 interface DiagnosticCollector {
   readonly locator: string;
   readonly diagnostics: ConfigurationDiagnostic[];
@@ -190,6 +203,7 @@ interface DiagnosticCollector {
 
 interface LoweredConfiguration {
   readonly execution: ExecutionPolicy;
+  readonly remote?: RemotePolicy;
   readonly input: NormalizedWorkflowInput;
   readonly sourceById: ReadonlyMap<string, { readonly pointer: string }>;
 }
@@ -224,7 +238,7 @@ const ROOT_FIELDS = [
   "phases",
   "projectedWork",
 ];
-const OPTIONAL_ROOT_FIELDS = ["execution"];
+const OPTIONAL_ROOT_FIELDS = ["execution", "remote"];
 const MAX_LIST_ITEMS = 256;
 const AMENDMENT_ROOT_FIELDS = [
   "apiVersion",
@@ -289,7 +303,13 @@ function diagnoseLoweredConfiguration(
   if (diagnosis.graph === undefined || collector.diagnostics.length > 0) {
     return undefined;
   }
-  return createConfigurationSnapshot(diagnosis.graph, registries, lowered.execution, sha256);
+  return createConfigurationSnapshot(
+    diagnosis.graph,
+    registries,
+    lowered.execution,
+    lowered.remote,
+    sha256,
+  );
 }
 
 export function compileWorkflowConfiguration(
@@ -370,6 +390,7 @@ export function doctorWorkflowAmendment(
     parsed,
     baseInput,
     baseSnapshot.execution,
+    baseSnapshot.remote,
     registries.gateKeysByPhase,
     collector,
     sha256,
@@ -521,6 +542,7 @@ function parseDocument(
     addDiagnostic(collector, "invalid-kind", "/kind", "kind must be Workflow");
   }
   const execution = parseExecution(document.execution, collector);
+  const remote = parseRemotePolicy(document.remote, collector);
   const workflow = parseWorkflow(document.workflow, collector);
   const schemas = parseSchemas(document.schemas, collector);
   const roles = parseRoles(document.roles, collector);
@@ -531,6 +553,7 @@ function parseDocument(
   const projectedWork = parseProjectedWork(document.projectedWork, collector);
   if (
     execution === undefined ||
+    remote === null ||
     workflow === undefined ||
     schemas === undefined ||
     roles === undefined ||
@@ -544,6 +567,7 @@ function parseDocument(
   }
   return {
     execution,
+    ...(remote === undefined ? {} : { remote }),
     workflow,
     schemas,
     roles,
@@ -655,6 +679,239 @@ function parseExecution(
   return Object.freeze(
     workspaceMode === "worktree" ? { ...common, integrationRef } : common,
   ) as ExecutionPolicy;
+}
+
+function parseRemotePolicy(
+  value: CanonicalValue | undefined,
+  collector: DiagnosticCollector,
+): ParsedRemotePolicy | null | undefined {
+  if (value === undefined) return undefined;
+  const object = exactObject(
+    value,
+    "/remote",
+    ["roleMappings", "maximumRemoteAuthorizationLeaseSeconds", "synchronization"],
+    ["disconnectedMode"],
+    collector,
+  );
+  if (object === undefined) return null;
+
+  const disconnectedMode = object.disconnectedMode ?? "continue-authorized-local";
+  if (
+    disconnectedMode !== "continue-authorized-local" &&
+    disconnectedMode !== "pause-new-local-work"
+  ) {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      "/remote/disconnectedMode",
+      "disconnectedMode must be continue-authorized-local or pause-new-local-work",
+    );
+  }
+  const roleMappings = Object.hasOwn(object, "roleMappings")
+    ? parseRemoteRoleMappings(object.roleMappings, collector)
+    : undefined;
+  const maximumRemoteAuthorizationLeaseSeconds = Object.hasOwn(
+    object,
+    "maximumRemoteAuthorizationLeaseSeconds",
+  )
+    ? parsePositiveInteger(
+        object.maximumRemoteAuthorizationLeaseSeconds,
+        "/remote/maximumRemoteAuthorizationLeaseSeconds",
+        collector,
+      )
+    : undefined;
+  const synchronization = Object.hasOwn(object, "synchronization")
+    ? parseRemoteSynchronization(object.synchronization, collector)
+    : undefined;
+  if (
+    (disconnectedMode !== "continue-authorized-local" &&
+      disconnectedMode !== "pause-new-local-work") ||
+    roleMappings === undefined ||
+    maximumRemoteAuthorizationLeaseSeconds === undefined ||
+    synchronization === undefined
+  ) {
+    return null;
+  }
+  return {
+    disconnectedMode: disconnectedMode as RemotePolicy["disconnectedMode"],
+    roleMappings,
+    maximumRemoteAuthorizationLeaseSeconds,
+    synchronization,
+  };
+}
+
+function parseRemoteRoleMappings(
+  value: CanonicalValue | undefined,
+  collector: DiagnosticCollector,
+): readonly ParsedRemoteRoleMapping[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_LIST_ITEMS) {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      "/remote/roleMappings",
+      `roleMappings must be an array with at most ${MAX_LIST_ITEMS} items`,
+    );
+    return undefined;
+  }
+  const mappings: ParsedRemoteRoleMapping[] = [];
+  const inputPointers = new Map<string, string>();
+  value.forEach((item, index) => {
+    const pointer = `/remote/roleMappings/${index}`;
+    const object = exactObject(
+      item,
+      pointer,
+      ["issuer", "tenant", "upstreamRole", "localRoles"],
+      [],
+      collector,
+    );
+    if (object === undefined) return;
+    if (
+      !Object.hasOwn(object, "issuer") ||
+      !Object.hasOwn(object, "tenant") ||
+      !Object.hasOwn(object, "upstreamRole") ||
+      !Object.hasOwn(object, "localRoles")
+    ) {
+      return;
+    }
+    const issuer = parseBoundedString(object.issuer, `${pointer}/issuer`, collector);
+    const tenant = parseBoundedString(object.tenant, `${pointer}/tenant`, collector);
+    const upstreamRole = parseBoundedString(
+      object.upstreamRole,
+      `${pointer}/upstreamRole`,
+      collector,
+    );
+    const localRoles = parseRemoteLocalRoles(object.localRoles, `${pointer}/localRoles`, collector);
+    if (
+      issuer === undefined ||
+      tenant === undefined ||
+      upstreamRole === undefined ||
+      localRoles === undefined
+    ) {
+      return;
+    }
+    const inputKey = canonicalSerialize(canonicalValue([issuer, tenant, upstreamRole]));
+    const priorPointer = inputPointers.get(inputKey);
+    if (priorPointer !== undefined) {
+      addDiagnostic(
+        collector,
+        "duplicate-key",
+        `${pointer}/upstreamRole`,
+        `Remote role mapping input is already declared at ${priorPointer}`,
+      );
+      return;
+    }
+    inputPointers.set(inputKey, `${pointer}/upstreamRole`);
+    mappings.push({ pointer, issuer, tenant, upstreamRole, localRoles });
+  });
+  return Object.freeze(mappings.sort(compareRemoteRoleMappings));
+}
+
+function parseRemoteLocalRoles(
+  value: CanonicalValue | undefined,
+  pointer: string,
+  collector: DiagnosticCollector,
+): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_LIST_ITEMS) {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      pointer,
+      `localRoles must contain between 1 and ${MAX_LIST_ITEMS} role references`,
+    );
+    return undefined;
+  }
+  const roles: string[] = [];
+  const seen = new Set<string>();
+  value.forEach((item, index) => {
+    const role = parseReference(item, `${pointer}/${index}`, collector);
+    if (role === undefined) return;
+    if (seen.has(role)) {
+      addDiagnostic(
+        collector,
+        "duplicate-key",
+        `${pointer}/${index}`,
+        `localRoles duplicates ${role}`,
+      );
+    } else {
+      roles.push(role);
+      seen.add(role);
+    }
+  });
+  return Object.freeze(roles);
+}
+
+function parseRemoteSynchronization(
+  value: CanonicalValue | undefined,
+  collector: DiagnosticCollector,
+): RemotePolicy["synchronization"] | undefined {
+  const pointer = "/remote/synchronization";
+  const fields = [
+    "classificationCeiling",
+    "receiptChain",
+    "events",
+    "projections",
+    "synchronizationState",
+  ];
+  const object = exactObject(value, pointer, fields, [], collector);
+  if (object === undefined) return undefined;
+  if (fields.some((field) => !Object.hasOwn(object, field))) return undefined;
+  const classificationCeiling = object.classificationCeiling;
+  if (classificationCeiling !== "public" && classificationCeiling !== "internal") {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      `${pointer}/classificationCeiling`,
+      "classificationCeiling must be public or internal",
+    );
+  }
+  const toggles = ["receiptChain", "events", "projections", "synchronizationState"] as const;
+  for (const toggle of toggles) {
+    if (typeof object[toggle] !== "boolean") {
+      addDiagnostic(
+        collector,
+        "invalid-field",
+        `${pointer}/${toggle}`,
+        `${toggle} must be a boolean`,
+      );
+    }
+  }
+  const requiresSynchronizationState = toggles
+    .filter((toggle) => toggle !== "synchronizationState")
+    .some((toggle) => object[toggle] === true);
+  if (requiresSynchronizationState && object.synchronizationState !== true) {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      `${pointer}/synchronizationState`,
+      "synchronizationState must be enabled when another synchronization stream is enabled",
+    );
+  }
+  if (
+    (classificationCeiling !== "public" && classificationCeiling !== "internal") ||
+    toggles.some((toggle) => typeof object[toggle] !== "boolean") ||
+    (requiresSynchronizationState && object.synchronizationState !== true)
+  ) {
+    return undefined;
+  }
+  return {
+    classificationCeiling:
+      classificationCeiling as RemotePolicy["synchronization"]["classificationCeiling"],
+    receiptChain: object.receiptChain as boolean,
+    events: object.events as boolean,
+    projections: object.projections as boolean,
+    synchronizationState: object.synchronizationState as boolean,
+  };
+}
+
+function compareRemoteRoleMappings(
+  left: RemotePolicy["roleMappings"][number],
+  right: RemotePolicy["roleMappings"][number],
+): number {
+  return (
+    compareText(left.issuer, right.issuer) ||
+    compareText(left.tenant, right.tenant) ||
+    compareText(left.upstreamRole, right.upstreamRole)
+  );
 }
 
 function isFullLocalBranchRef(value: string): boolean {
@@ -1227,6 +1484,20 @@ function validateRegistries(
     }
   }
 
+  const roleKeys = new Set(parsed.roles.map(({ key }) => key));
+  for (const mapping of parsed.remote?.roleMappings ?? []) {
+    mapping.localRoles.forEach((role, index) => {
+      if (!roleKeys.has(role)) {
+        addDiagnostic(
+          collector,
+          "unknown-reference",
+          `${mapping.pointer}/localRoles/${index}`,
+          `Local role ${role} is not declared`,
+        );
+      }
+    });
+  }
+
   const policyKeys = new Set(parsed.modelPolicies.map(({ key }) => key));
   for (const role of parsed.roles) {
     if (role.kind === "agent" && role.modelPolicy === undefined) {
@@ -1474,6 +1745,7 @@ function validateConfigurationSnapshot(value: unknown, sha256: Sha256): Configur
   const expectedKeys = [
     "apiVersion",
     "execution",
+    ...(Object.hasOwn(snapshot, "remote") ? ["remote"] : []),
     "graph",
     "schemas",
     "roles",
@@ -1497,6 +1769,9 @@ function validateConfigurationSnapshot(value: unknown, sha256: Sha256): Configur
   }
   const graph = validateWorkflowGraph(snapshot.graph, sha256);
   const execution = validateSnapshotExecution(snapshot.execution);
+  const remote = Object.hasOwn(snapshot, "remote")
+    ? validateSnapshotRemotePolicy(snapshot.remote)
+    : undefined;
   const registries: ValidatedRegistries = {
     schemas: validateSnapshotRegistry(snapshot.schemas, "schemas", sha256),
     roles: validateSnapshotRegistry(snapshot.roles, "roles", sha256),
@@ -1506,7 +1781,13 @@ function validateConfigurationSnapshot(value: unknown, sha256: Sha256): Configur
     projections: validateSnapshotRegistry(snapshot.projections, "projections", sha256),
     gateKeysByPhase: new Map(),
   };
-  const expected = createConfigurationSnapshot(graph, registries, execution, sha256);
+  const roleKeys = new Set(registries.roles.map(({ key }) => String(key)));
+  for (const mapping of remote?.roleMappings ?? []) {
+    if (mapping.localRoles.some((role) => !roleKeys.has(role))) {
+      throw new TypeError("Base configuration snapshot remote policy references an unknown role");
+    }
+  }
+  const expected = createConfigurationSnapshot(graph, registries, execution, remote, sha256);
   if (canonicalSerialize(snapshot) !== canonicalSerialize(canonicalValue(expected))) {
     throw new TypeError("Base configuration snapshot does not match its exact canonical digests");
   }
@@ -1520,6 +1801,15 @@ function validateSnapshotExecution(value: unknown): ExecutionPolicy {
     throw new TypeError("Base configuration snapshot execution policy is invalid");
   }
   return execution;
+}
+
+function validateSnapshotRemotePolicy(value: unknown): RemotePolicy {
+  const collector: DiagnosticCollector = { locator: "snapshot://remote", diagnostics: [] };
+  const remote = parseRemotePolicy(canonicalValue(value), collector);
+  if (remote === undefined || remote === null || collector.diagnostics.length > 0) {
+    throw new TypeError("Base configuration snapshot remote policy is invalid");
+  }
+  return normalizeRemotePolicy(remote);
 }
 
 function validateSnapshotRegistry(
@@ -1561,6 +1851,7 @@ function lowerAmendment(
   parsed: ParsedAmendment,
   baseInput: NormalizedWorkflowInput,
   execution: ExecutionPolicy,
+  remote: RemotePolicy | undefined,
   gateKeysByPhase: ReadonlyMap<string, readonly string[]>,
   collector: DiagnosticCollector,
   sha256: Sha256,
@@ -1607,6 +1898,7 @@ function lowerAmendment(
     operations,
     candidate: {
       execution,
+      ...(remote === undefined ? {} : { remote }),
       input: {
         workflow: baseInput.workflow,
         phases: [...baseInput.phases, ...phases],
@@ -1668,6 +1960,7 @@ function lowerConfiguration(
   const criteria = loweredWork.flatMap((item) => item.criteria);
   return {
     execution: parsed.execution,
+    ...(parsed.remote === undefined ? {} : { remote: normalizeRemotePolicy(parsed.remote) }),
     input: {
       workflow: {
         id: workflowIdentity,
@@ -1682,6 +1975,20 @@ function lowerConfiguration(
     },
     sourceById,
   };
+}
+
+function normalizeRemotePolicy(policy: ParsedRemotePolicy): RemotePolicy {
+  return canonicalValue({
+    disconnectedMode: policy.disconnectedMode,
+    roleMappings: policy.roleMappings.map(({ issuer, tenant, upstreamRole, localRoles }) => ({
+      issuer,
+      tenant,
+      upstreamRole,
+      localRoles: [...localRoles].sort(compareText),
+    })),
+    maximumRemoteAuthorizationLeaseSeconds: policy.maximumRemoteAuthorizationLeaseSeconds,
+    synchronization: policy.synchronization,
+  }) as unknown as RemotePolicy;
 }
 
 function lowerPhaseDeclaration(
@@ -1802,6 +2109,7 @@ function createConfigurationSnapshot(
   graph: ReturnType<typeof compileWorkflowGraph>,
   registries: ValidatedRegistries,
   execution: ExecutionPolicy,
+  remote: RemotePolicy | undefined,
   sha256: Sha256,
 ): ConfigurationSnapshot {
   const contentRegistries = {
@@ -1814,6 +2122,7 @@ function createConfigurationSnapshot(
   };
   const componentDigests = {
     execution: canonicalDigest(canonicalValue(execution), sha256),
+    ...(remote === undefined ? {} : { remote: canonicalDigest(canonicalValue(remote), sha256) }),
     graph: canonicalDigest(canonicalValue(graph), sha256),
     schemas: canonicalDigest(canonicalValue(contentRegistries.schemas), sha256),
     roles: canonicalDigest(canonicalValue(contentRegistries.roles), sha256),
@@ -1825,6 +2134,7 @@ function createConfigurationSnapshot(
   const content = {
     apiVersion: CONFIGURATION_SNAPSHOT_API_VERSION,
     execution,
+    ...(remote === undefined ? {} : { remote }),
     graph,
     ...contentRegistries,
     componentDigests,

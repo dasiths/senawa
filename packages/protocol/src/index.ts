@@ -2,5 +2,8 @@ export * from "./codec.js";
 export * from "./contracts.js";
 export * from "./portal-codec.js";
 export * from "./portal-contracts.js";
+export * from "./remote-codec.js";
+export * from "./remote-contracts.js";
+export * from "./remote-signature-domains.js";
 export * from "./worker-codec.js";
 export * from "./worker-contracts.js";

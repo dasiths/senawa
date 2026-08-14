@@ -21,6 +21,14 @@ status response. Runtime files use `$XDG_RUNTIME_DIR/senawa`; durable state uses
 `$XDG_STATE_HOME/senawa`. Platform-safe user defaults apply when either variable
 is absent.
 
+The outbound remote connector is disabled unless the daemon inherits both
+`SENAWA_REMOTE_ENDPOINT` and `SENAWA_REMOTE_KEY_FILE`. The latter names a
+bounded, current-user-owned `0600` enrollment file. Connector policy comes from
+the locally persisted canonical configuration snapshot named by that file.
+Neither value appears in `service status` or `service logs`. The [remote
+control-plane reference](remote-control-plane.md) defines the exact enrollment,
+endpoint, status, and hosted-service limits.
+
 Manage the running service through authenticated Unix-socket HTTP:
 
 ```bash

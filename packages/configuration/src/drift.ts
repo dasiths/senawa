@@ -8,6 +8,7 @@ import type {
 
 const CATEGORIES: readonly ConfigurationComponentCategory[] = Object.freeze([
   "execution",
+  "remote",
   "graph",
   "schemas",
   "roles",
@@ -27,9 +28,11 @@ export function detectConfigurationDrift(
   const changedKeys = changedCategories.flatMap((category) =>
     category === "execution"
       ? ["/execution"]
-      : category === "graph"
-        ? changedGraphKeys(accepted, current)
-        : changedRegistryKeys(accepted[category], current[category]),
+      : category === "remote"
+        ? ["/remote"]
+        : category === "graph"
+          ? changedGraphKeys(accepted, current)
+          : changedRegistryKeys(accepted[category], current[category]),
   );
   return Object.freeze({
     hasDrift: accepted.snapshotDigest !== current.snapshotDigest,

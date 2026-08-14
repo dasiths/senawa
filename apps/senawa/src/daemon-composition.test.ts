@@ -12,6 +12,7 @@ import { SqliteContextBroker, SqliteRunnerAuthority } from "@senawa/storage-sqli
 import {
   acquireUnixSocketLock,
   HttpSupervisorClient,
+  type RemoteConnectorStatus,
   readPrivateCredential,
   releaseUnixSocketLock,
   SqliteSupervisorAuthority,
@@ -40,6 +41,78 @@ afterEach(() => {
 });
 
 describe("daemon worker composition", () => {
+  it("keeps the remote connector disabled by default", async () => {
+    const { environment } = sandbox("senawa-daemon-remote-disabled-", false);
+    const started = await startSenawaService(environment);
+    expect((await started.service.status()).remoteConnectors).toEqual([]);
+    await started.service.stop();
+  });
+
+  it("starts, reports, and closes an injected remote connector", async () => {
+    const { environment } = sandbox("senawa-daemon-remote-injected-", false);
+    const remote = new FakeRemoteConnector();
+    const started = await startSenawaService(environment, {
+      createRemoteConnector: async () => remote,
+    });
+    expect(remote.establishCalls).toBe(1);
+    expect(remote.startCalls).toBe(1);
+    expect((await started.service.status()).remoteConnectors).toEqual([remote.status()]);
+    await started.service.stop();
+    expect(remote.drainCalls).toBe(1);
+    expect(remote.closeCalls).toBe(1);
+  });
+
+  it.each([
+    { mode: "pause-new-local-work" as const, expectedPartitioned: true },
+    { mode: "continue-authorized-local" as const, expectedPartitioned: true },
+  ])("preflights before cold-start and restart scheduling in $mode", async (testCase) => {
+    const fixture = sandbox(`senawa-daemon-preflight-${testCase.mode}-`, false);
+    const connectors: FakeRemoteConnector[] = [];
+    const start = () =>
+      startSenawaService(fixture.environment, {
+        createRemoteConnector: async () => {
+          const connector = new FakeRemoteConnector(undefined, testCase.mode, false);
+          connectors.push(connector);
+          return connector;
+        },
+      });
+    let started = await start();
+    expect(connectors[0]?.calls).toEqual(["establish", "start"]);
+    expect((await started.service.status()).remoteConnectors[0]).toMatchObject({
+      partitioned: testCase.expectedPartitioned,
+    });
+    await started.service.stop();
+    started = await start();
+    expect(connectors[1]?.calls).toEqual(["establish", "start"]);
+    await started.service.stop();
+  });
+
+  it("closes an injected connector on listener and connector startup failures", async () => {
+    const listenerFailure = sandbox("senawa-daemon-remote-listener-failure-", false);
+    listenerFailure.environment.SENAWA_PORTAL_PORT = "0";
+    const listenerRemote = new FakeRemoteConnector();
+    await expect(
+      startSenawaService(listenerFailure.environment, {
+        createRemoteConnector: async () => listenerRemote,
+        startLoopbackServer: async () => {
+          throw new Error("loopback startup failed");
+        },
+      }),
+    ).rejects.toThrow("loopback startup failed");
+    expect(listenerRemote.startCalls).toBe(0);
+    expect(listenerRemote.closeCalls).toBe(1);
+
+    const connectorFailure = sandbox("senawa-daemon-remote-start-failure-", false);
+    const startRemote = new FakeRemoteConnector(new Error("remote startup failed"));
+    await expect(
+      startSenawaService(connectorFailure.environment, {
+        createRemoteConnector: async () => startRemote,
+      }),
+    ).rejects.toThrow("remote startup failed");
+    expect(startRemote.startCalls).toBe(1);
+    expect(startRemote.closeCalls).toBe(1);
+  });
+
   it("reserves amendment application for the trusted supervisor", () => {
     const releaseManager = decodeAuthenticatedPrincipal({
       issuer: "senawa.local",
@@ -452,4 +525,66 @@ class FakeSession implements CopilotSdkSessionPort {
   async abort(): Promise<void> {}
 
   async disconnect(): Promise<void> {}
+}
+
+class FakeRemoteConnector {
+  readonly calls: string[] = [];
+  startCalls = 0;
+  establishCalls = 0;
+  drainCalls = 0;
+  closeCalls = 0;
+
+  constructor(
+    readonly startError?: Error,
+    readonly disconnectedMode:
+      | "continue-authorized-local"
+      | "pause-new-local-work" = "continue-authorized-local",
+    readonly establishResult = true,
+  ) {}
+
+  async establishContact(): Promise<boolean> {
+    this.establishCalls += 1;
+    this.calls.push("establish");
+    return this.establishResult;
+  }
+
+  start(): void {
+    this.startCalls += 1;
+    this.calls.push("start");
+    if (this.startError !== undefined) throw this.startError;
+  }
+
+  async drain(): Promise<void> {
+    this.drainCalls += 1;
+  }
+
+  async close(): Promise<void> {
+    this.closeCalls += 1;
+  }
+
+  status(): RemoteConnectorStatus {
+    return {
+      connectorId: "connector-fixture",
+      bindingId: "binding-fixture",
+      repositoryId: "repository-fixture",
+      lifecycle: this.startCalls === 0 ? "stopped" : "running",
+      health: "healthy",
+      partitioned: this.establishCalls > 0 && !this.establishResult,
+      lastAttemptAt: null,
+      lastSuccessfulContactAt: null,
+      lastErrorCode: null,
+      synchronization: {
+        state: "never-synchronized",
+        stalenessMs: null,
+        inboundSequence: 0,
+        waitingCommands: 0,
+        readyCommands: 0,
+        acceptedCommands: 0,
+        pendingReports: 0,
+        claimedReports: 0,
+        localToEnqueued: 0,
+        enqueuedToAcknowledged: 0,
+      },
+    };
+  }
 }

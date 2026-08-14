@@ -35,6 +35,69 @@ afterEach(() => {
 });
 
 describe("SupervisorService lifecycle", () => {
+  it("exposes sanitized remote partition lag and degrades aggregate health", async () => {
+    const root = mkdtempSync(join(tmpdir(), "senawa-remote-status-"));
+    roots.add(root);
+    const authority = new SqliteSupervisorAuthority({
+      databasePath: join(root, "authority.db"),
+      assetDirectory: join(root, "assets"),
+      dependencies,
+    });
+    const service = new SupervisorService({
+      authority,
+      clock: { now: () => Date.parse(runtimeFixture.currentTime) },
+      ownerId: "owner_remote-status",
+      sessionStoreHealth: {
+        async health() {
+          return { status: "healthy", expectedSessionCount: 0, missingSessionIds: [] };
+        },
+      },
+      remoteConnectorStatuses: [
+        {
+          status: () => ({
+            connectorId: "connector_remote-status",
+            bindingId: "binding_remote-status",
+            repositoryId: runtimeFixture.repositoryId,
+            lifecycle: "running",
+            health: "degraded",
+            partitioned: true,
+            lastAttemptAt: runtimeFixture.currentTime,
+            lastSuccessfulContactAt: null,
+            lastErrorCode: "transport-unavailable",
+            synchronization: {
+              inboundSequence: 3,
+              state: "stale",
+              stalenessMs: 0,
+              waitingCommands: 1,
+              readyCommands: 0,
+              acceptedCommands: 1,
+              pendingReports: 2,
+              claimedReports: 1,
+              localToEnqueued: 4,
+              enqueuedToAcknowledged: 2,
+            },
+          }),
+        },
+      ],
+    });
+    await service.start();
+    const status = await service.status();
+    expect(status).toMatchObject({
+      health: "degraded",
+      remoteConnectors: [
+        {
+          connectorId: "connector_remote-status",
+          partitioned: true,
+          lastErrorCode: "transport-unavailable",
+          synchronization: { localToEnqueued: 4, enqueuedToAcknowledged: 2 },
+        },
+      ],
+    });
+    expect(JSON.stringify(status)).not.toMatch(/endpoint|credential|privateKey|token/iu);
+    await service.drain();
+    await service.stop();
+  });
+
   it("closes started listeners and owned resources when a later listener fails", async () => {
     const root = mkdtempSync(join(tmpdir(), "senawa-start-cleanup-"));
     roots.add(root);
@@ -120,6 +183,43 @@ describe("SupervisorService lifecycle", () => {
 
     await expect(service.stop()).rejects.toThrow("listener close failed");
     expect(events).toEqual(["listener.close", "closeable.close"]);
+    expect(service.state).toBe("stopped");
+    expect(() => authority.mode()).toThrow();
+  });
+
+  it("closes owned resources after a drainable fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "senawa-drain-cleanup-"));
+    roots.add(root);
+    const authority = new SqliteSupervisorAuthority({
+      databasePath: join(root, "authority.db"),
+      assetDirectory: join(root, "assets"),
+      dependencies,
+    });
+    const events: string[] = [];
+    const service = new SupervisorService({
+      authority,
+      clock: { now: () => Date.parse(runtimeFixture.currentTime) },
+      ownerId: "owner_drain-cleanup",
+      drainables: [
+        {
+          async drain() {
+            events.push("drainable.drain");
+            throw new Error("connector drain failed");
+          },
+        },
+      ],
+      closeables: [
+        {
+          close: () => {
+            events.push("closeable.close");
+          },
+        },
+      ],
+    });
+    await service.start();
+
+    await expect(service.stop()).rejects.toThrow("Supervisor drain completed with resource errors");
+    expect(events).toEqual(["drainable.drain", "closeable.close"]);
     expect(service.state).toBe("stopped");
     expect(() => authority.mode()).toThrow();
   });

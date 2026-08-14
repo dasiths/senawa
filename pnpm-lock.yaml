@@ -24,6 +24,12 @@ importers:
         specifier: 3.2.4
         version: 3.2.4(@types/node@22.17.2)(lightningcss@1.33.0)(yaml@2.8.1)
 
+  apps/control-plane:
+    dependencies:
+      '@senawa/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+
   apps/senawa:
     dependencies:
       '@senawa/configuration':
@@ -48,6 +54,9 @@ importers:
         specifier: workspace:*
         version: link:../../packages/supervisor
     devDependencies:
+      '@senawa/control-plane':
+        specifier: workspace:*
+        version: link:../control-plane
       '@senawa/testing':
         specifier: workspace:*
         version: link:../../packages/testing

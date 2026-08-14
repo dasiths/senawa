@@ -20,6 +20,11 @@ security boundary. The daemon owns durable command recovery, bounded wake
 processing, service lifecycle, persisted logs, SDK session-store health, and
 state backup composition.
 
+The optional outbound connector is disabled by default and preserves local
+supervisor authority when enabled. See the [remote control-plane
+reference](docs/reference/remote-control-plane.md) for local enrollment,
+classified synchronization, partition behavior, and reference-server limits.
+
 ## Development
 
 ```bash

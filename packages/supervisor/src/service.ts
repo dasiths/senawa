@@ -8,6 +8,7 @@ import {
 import {
   type CopilotSessionStoreHealthPort,
   decodeSupervisorServiceStatus,
+  type RemoteConnectorStatusPort,
   type SupervisorClock,
   type SupervisorListenerStatus,
   type SupervisorLogPage,
@@ -51,10 +52,16 @@ export interface SupervisorServiceOptions {
     readonly runId: string;
   }[];
   readonly closeables?: readonly SupervisorCloseable[];
+  readonly drainables?: readonly SupervisorDrainable[];
+  readonly remoteConnectorStatuses?: readonly RemoteConnectorStatusPort[];
 }
 
 export interface SupervisorCloseable {
   close(): Promise<void> | void;
+}
+
+export interface SupervisorDrainable {
+  drain(): Promise<void>;
 }
 
 export interface SupervisorListener {
@@ -81,6 +88,8 @@ export class SupervisorService {
   readonly #sessionStoreHealth: CopilotSessionStoreHealthPort | undefined;
   readonly #configuredListeners: readonly SupervisorListener[];
   readonly #closeables: readonly SupervisorCloseable[];
+  readonly #drainables: readonly SupervisorDrainable[];
+  readonly #remoteConnectorStatuses: readonly RemoteConnectorStatusPort[];
   readonly #effectHostConfigured: boolean;
   readonly #controller: SupervisorRunController;
   readonly #runnerAuthority: SqliteRunnerAuthority | undefined;
@@ -111,6 +120,8 @@ export class SupervisorService {
     this.#sessionStoreHealth = options.sessionStoreHealth;
     this.#configuredListeners = options.listeners ?? [];
     this.#closeables = options.closeables ?? [];
+    this.#drainables = options.drainables ?? [];
+    this.#remoteConnectorStatuses = options.remoteConnectorStatuses ?? [];
     this.#effectHostConfigured =
       options.effectHost !== undefined || options.asyncEffectHost !== undefined;
     this.#listSchedulableRuns = options.listSchedulableRuns;
@@ -230,12 +241,21 @@ export class SupervisorService {
     this.authority.setMode("draining", this.#now());
     this.#transition("draining");
     this.#log("info", "service.draining", "Supervisor service is draining", {});
+    const drainResults = await Promise.allSettled(
+      this.#drainables.map((drainable) => drainable.drain()),
+    );
     await this.#cycle;
     await this.#pump;
     await this.#operation;
     this.authority.setMode("drained", this.#now());
     this.#transition("drained");
     this.#log("info", "service.drained", "Supervisor service drained", {});
+    const drainErrors = drainResults.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (drainErrors.length > 0) {
+      throw new AggregateError(drainErrors, "Supervisor drain completed with resource errors");
+    }
   }
 
   stop(): Promise<void> {
@@ -264,11 +284,29 @@ export class SupervisorService {
   }
 
   async #drainAndStop(): Promise<void> {
-    if (this.#state === "running") await this.drain();
+    let drainError: unknown;
+    if (this.#state === "running") {
+      try {
+        await this.drain();
+      } catch (error) {
+        drainError = error;
+      }
+    }
     if (this.#state !== "drained") {
       throw new Error("Supervisor service can only stop after draining");
     }
-    return this.#enqueueOperation(() => this.#stopDrained());
+    try {
+      await this.#enqueueOperation(() => this.#stopDrained());
+    } catch (stopError) {
+      if (drainError !== undefined) {
+        throw new AggregateError(
+          [drainError, stopError],
+          "Supervisor drain and stop completed with resource errors",
+        );
+      }
+      throw stopError;
+    }
+    if (drainError !== undefined) throw drainError;
   }
 
   async #stopDrained(): Promise<void> {
@@ -304,16 +342,22 @@ export class SupervisorService {
               message: "SDK session store health adapter is not configured",
             }
           : await this.#sessionStoreHealth.health(snapshot.startedSessionIds);
+      const remoteConnectors = this.#remoteConnectorStatuses.map((connector) => connector.status());
       return decodeSupervisorServiceStatus({
         lifecycle: this.#state,
         mode: this.authority.mode(),
-        health: sdkSessionStore.status === "healthy" ? "healthy" : "degraded",
+        health:
+          sdkSessionStore.status === "healthy" &&
+          remoteConnectors.every((connector) => connector.health === "healthy")
+            ? "healthy"
+            : "degraded",
         processId: this.processId,
         startedAt: this.#startedAt,
         listeners: this.#listeners,
         pending: snapshot.pending,
         leases: snapshot.leases,
         sdkSessionStore,
+        remoteConnectors,
       });
     });
   }

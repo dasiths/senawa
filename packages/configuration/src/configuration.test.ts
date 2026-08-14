@@ -144,6 +144,379 @@ describe("workflow configuration compilation", () => {
     expect(diagnosis.diagnostics).toContainEqual(expect.objectContaining({ pointer }));
   });
 
+  it("preserves local-only snapshot shape when remote policy is absent", () => {
+    const snapshot = compileWorkflowConfiguration(
+      softwareFixture(),
+      "fixture://local-only",
+      deterministicSha256,
+    );
+
+    expect(snapshot).not.toHaveProperty("remote");
+    expect(snapshot.componentDigests).not.toHaveProperty("remote");
+  });
+
+  it("normalizes the disconnected default and binds the exact remote policy snapshot", () => {
+    const defaultDocument = softwareFixture();
+    defaultDocument.remote = remotePolicyFixture();
+    const explicitDocument = softwareFixture();
+    explicitDocument.remote = {
+      ...remotePolicyFixture(),
+      disconnectedMode: "continue-authorized-local",
+    };
+
+    const defaultSnapshot = compileWorkflowConfiguration(
+      defaultDocument,
+      "fixture://remote-default",
+      deterministicSha256,
+    );
+    const explicitSnapshot = compileWorkflowConfiguration(
+      explicitDocument,
+      "fixture://remote-default",
+      deterministicSha256,
+    );
+
+    expect(defaultSnapshot).toEqual(explicitSnapshot);
+    expect(defaultSnapshot.remote).toEqual({
+      disconnectedMode: "continue-authorized-local",
+      roleMappings: [
+        {
+          issuer: "https://identity.example.test",
+          tenant: "tenant-a",
+          upstreamRole: "operator",
+          localRoles: ["builder"],
+        },
+      ],
+      maximumRemoteAuthorizationLeaseSeconds: 900,
+      synchronization: {
+        classificationCeiling: "public",
+        receiptChain: false,
+        events: false,
+        projections: false,
+        synchronizationState: false,
+      },
+    });
+    expect(defaultSnapshot.componentDigests.remote).toBe(
+      "3244e2a93244e2a93244e2a93244e2a93244e2a93244e2a93244e2a93244e2a9",
+    );
+    expect(defaultSnapshot.snapshotDigest).toBe(
+      "eff6a5f3eff6a5f3eff6a5f3eff6a5f3eff6a5f3eff6a5f3eff6a5f3eff6a5f3",
+    );
+  });
+
+  it("accepts explicit pause mode and public/internal metadata synchronization only", () => {
+    const document = softwareFixture();
+    document.remote = {
+      ...remotePolicyFixture(),
+      disconnectedMode: "pause-new-local-work",
+      synchronization: {
+        classificationCeiling: "internal",
+        receiptChain: true,
+        events: true,
+        projections: true,
+        synchronizationState: true,
+      },
+    };
+
+    const snapshot = compileWorkflowConfiguration(
+      document,
+      "fixture://remote-pause",
+      deterministicSha256,
+    );
+
+    expect(snapshot.remote?.disconnectedMode).toBe("pause-new-local-work");
+    expect(snapshot.remote?.synchronization).toEqual(document.remote.synchronization);
+  });
+
+  it.each([
+    "endpoint",
+    "tenantCredentials",
+    "privateKeyPath",
+    "retryTiming",
+    "localConnectorLeaseSeconds",
+  ])("rejects operational remote field %s from canonical configuration", (field) => {
+    const document = softwareFixture();
+    document.remote = remotePolicyFixture();
+    (document.remote as unknown as Record<string, unknown>)[field] = "forbidden";
+
+    const diagnosis = doctorWorkflowConfiguration(
+      document,
+      "fixture://remote-operational-field",
+      deterministicSha256,
+    );
+
+    expect(diagnosis.diagnostics).toEqual([
+      {
+        code: "unknown-field",
+        locator: "fixture://remote-operational-field",
+        pointer: `/remote/${field}`,
+        message: `Unknown field ${field}`,
+      },
+    ]);
+  });
+
+  it.each([
+    ["roleMappings", "/remote/roleMappings"],
+    ["maximumRemoteAuthorizationLeaseSeconds", "/remote/maximumRemoteAuthorizationLeaseSeconds"],
+    ["synchronization", "/remote/synchronization"],
+  ])("reports one exact missing remote field for %s", (field, pointer) => {
+    const document = softwareFixture();
+    const remote = remotePolicyFixture() as unknown as Record<string, unknown>;
+    delete remote[field];
+    document.remote = remote as unknown as NonNullable<WorkflowConfigurationDocument["remote"]>;
+
+    const diagnosis = doctorWorkflowConfiguration(
+      document,
+      "fixture://remote-missing",
+      deterministicSha256,
+    );
+
+    expect(diagnosis.diagnostics).toEqual([
+      {
+        code: "missing-field",
+        locator: "fixture://remote-missing",
+        pointer,
+        message: `Missing required field ${field}`,
+      },
+    ]);
+  });
+
+  it.each([
+    "classificationCeiling",
+    "receiptChain",
+    "events",
+    "projections",
+    "synchronizationState",
+  ])("reports one exact missing synchronization field for %s", (field) => {
+    const document = softwareFixture();
+    const remote = remotePolicyFixture();
+    const synchronization = {
+      ...remote.synchronization,
+    } as unknown as Record<string, unknown>;
+    delete synchronization[field];
+    document.remote = {
+      ...remote,
+      synchronization,
+    } as unknown as NonNullable<WorkflowConfigurationDocument["remote"]>;
+
+    const diagnosis = doctorWorkflowConfiguration(
+      document,
+      "fixture://remote-sync-missing",
+      deterministicSha256,
+    );
+
+    expect(diagnosis.diagnostics).toEqual([
+      {
+        code: "missing-field",
+        locator: "fixture://remote-sync-missing",
+        pointer: `/remote/synchronization/${field}`,
+        message: `Missing required field ${field}`,
+      },
+    ]);
+  });
+
+  it("aggregates malformed remote policy values in source order", () => {
+    const document = softwareFixture();
+    document.remote = {
+      ...remotePolicyFixture(),
+      disconnectedMode: "hold" as "continue-authorized-local",
+      maximumRemoteAuthorizationLeaseSeconds: 0,
+      synchronization: {
+        classificationCeiling: "confidential" as "public",
+        receiptChain: "yes" as unknown as boolean,
+        events: false,
+        projections: false,
+        synchronizationState: false,
+      },
+    };
+
+    const diagnosis = doctorWorkflowConfiguration(
+      document,
+      "fixture://remote-malformed",
+      deterministicSha256,
+    );
+
+    expect(diagnosis.diagnostics.map(({ code, pointer }) => ({ code, pointer }))).toEqual([
+      { code: "invalid-field", pointer: "/remote/disconnectedMode" },
+      { code: "invalid-field", pointer: "/remote/maximumRemoteAuthorizationLeaseSeconds" },
+      { code: "invalid-field", pointer: "/remote/synchronization/classificationCeiling" },
+      { code: "invalid-field", pointer: "/remote/synchronization/receiptChain" },
+    ]);
+  });
+
+  it("rejects confidential and restricted synchronization ceilings", () => {
+    for (const classificationCeiling of ["confidential", "restricted"]) {
+      const document = softwareFixture();
+      document.remote = {
+        ...remotePolicyFixture(),
+        synchronization: {
+          ...remotePolicyFixture().synchronization,
+          classificationCeiling: classificationCeiling as "public",
+        },
+      };
+
+      expect(
+        doctorWorkflowConfiguration(
+          document,
+          `fixture://remote-${classificationCeiling}`,
+          deterministicSha256,
+        ).diagnostics,
+      ).toEqual([
+        expect.objectContaining({
+          code: "invalid-field",
+          pointer: "/remote/synchronization/classificationCeiling",
+        }),
+      ]);
+    }
+  });
+
+  it("requires synchronization state for every enabled metadata stream", () => {
+    const document = softwareFixture();
+    document.remote = {
+      ...remotePolicyFixture(),
+      synchronization: {
+        ...remotePolicyFixture().synchronization,
+        events: true,
+      },
+    };
+
+    expect(
+      doctorWorkflowConfiguration(document, "fixture://remote-staleness", deterministicSha256)
+        .diagnostics,
+    ).toEqual([
+      expect.objectContaining({
+        code: "invalid-field",
+        pointer: "/remote/synchronization/synchronizationState",
+      }),
+    ]);
+  });
+
+  it("reports duplicate mapping inputs and duplicate local role outputs exactly", () => {
+    const document = softwareFixture();
+    const mapping = remotePolicyFixture().roleMappings[0];
+    if (mapping === undefined) throw new Error("Expected remote role mapping fixture");
+    document.remote = {
+      ...remotePolicyFixture(),
+      roleMappings: [
+        { ...mapping, localRoles: ["builder", "builder"] },
+        { ...mapping, localRoles: ["builder"] },
+      ],
+    };
+
+    const diagnosis = doctorWorkflowConfiguration(
+      document,
+      "fixture://remote-duplicates",
+      deterministicSha256,
+    );
+
+    expect(diagnosis.diagnostics.map(({ code, pointer }) => ({ code, pointer }))).toEqual([
+      { code: "duplicate-key", pointer: "/remote/roleMappings/0/localRoles/1" },
+      { code: "duplicate-key", pointer: "/remote/roleMappings/1/upstreamRole" },
+    ]);
+  });
+
+  it("resolves every mapped local role at its source address", () => {
+    const document = softwareFixture();
+    const mapping = remotePolicyFixture().roleMappings[0];
+    if (mapping === undefined) throw new Error("Expected remote role mapping fixture");
+    document.remote = {
+      ...remotePolicyFixture(),
+      roleMappings: [{ ...mapping, localRoles: ["missing-role"] }],
+    };
+
+    expect(
+      doctorWorkflowConfiguration(document, "fixture://remote-role-reference", deterministicSha256)
+        .diagnostics,
+    ).toEqual([
+      expect.objectContaining({
+        code: "unknown-reference",
+        pointer: "/remote/roleMappings/0/localRoles/0",
+      }),
+    ]);
+  });
+
+  it("normalizes remote mapping and local-role declaration ordering exactly", () => {
+    const first = softwareFixture();
+    first.roles = [
+      ...first.roles,
+      { key: "reviewer", kind: "authority", capabilities: ["review"] },
+    ];
+    first.remote = {
+      ...remotePolicyFixture(),
+      roleMappings: [
+        {
+          issuer: "https://identity.example.test",
+          tenant: "tenant-a",
+          upstreamRole: "reviewer",
+          localRoles: ["reviewer", "builder"],
+        },
+        ...remotePolicyFixture().roleMappings,
+      ],
+    };
+    const second = softwareFixture();
+    second.roles = [...first.roles].reverse();
+    second.remote = {
+      ...first.remote,
+      roleMappings: [...first.remote.roleMappings]
+        .reverse()
+        .map((mapping) => ({ ...mapping, localRoles: [...mapping.localRoles].reverse() })),
+    };
+
+    const firstSnapshot = compileWorkflowConfiguration(
+      first,
+      "fixture://remote-order",
+      deterministicSha256,
+    );
+    const secondSnapshot = compileWorkflowConfiguration(
+      second,
+      "fixture://remote-order",
+      deterministicSha256,
+    );
+
+    expect(secondSnapshot).toEqual(firstSnapshot);
+    expect(secondSnapshot.remote?.roleMappings[1]?.localRoles).toEqual(["builder", "reviewer"]);
+  });
+
+  it("binds every remote authority and disclosure policy field into snapshot digests", () => {
+    const baselineDocument = softwareFixture();
+    baselineDocument.remote = remotePolicyFixture();
+    const baseline = compileWorkflowConfiguration(
+      baselineDocument,
+      "fixture://remote-digest",
+      deterministicSha256,
+    );
+    const variants = [
+      { ...remotePolicyFixture(), disconnectedMode: "pause-new-local-work" as const },
+      { ...remotePolicyFixture(), maximumRemoteAuthorizationLeaseSeconds: 901 },
+      {
+        ...remotePolicyFixture(),
+        synchronization: {
+          ...remotePolicyFixture().synchronization,
+          classificationCeiling: "internal" as const,
+        },
+      },
+      {
+        ...remotePolicyFixture(),
+        synchronization: {
+          ...remotePolicyFixture().synchronization,
+          receiptChain: true,
+          synchronizationState: true,
+        },
+      },
+    ];
+
+    for (const remote of variants) {
+      const document = softwareFixture();
+      document.remote = remote;
+      const snapshot = compileWorkflowConfiguration(
+        document,
+        "fixture://remote-digest",
+        deterministicSha256,
+      );
+      expect(snapshot.componentDigests.remote).not.toBe(baseline.componentDigests.remote);
+      expect(snapshot.snapshotDigest).not.toBe(baseline.snapshotDigest);
+    }
+  });
+
   it("derives branded identities from raw qualified consumer paths", () => {
     const snapshot = compileWorkflowConfiguration(
       softwareFixture(),
@@ -1290,6 +1663,42 @@ describe("workflow configuration compilation", () => {
 });
 
 describe("workflow amendment compilation", () => {
+  it("retains accepted remote policy and rejects a forged remote snapshot", () => {
+    const locator = "fixture://remote-amendment";
+    const base = softwareFixture();
+    base.remote = remotePolicyFixture();
+    const baseSnapshot = compileWorkflowConfiguration(base, locator, deterministicSha256);
+    const document = amendmentDocument(baseSnapshot.snapshotDigest, [
+      {
+        kind: "add-task",
+        phase: "release",
+        work: task("verify-remote", ["release/publish"], "verified", null),
+      },
+    ]);
+    const compiled = compileWorkflowAmendment(
+      { document, locator, baseSnapshot, phaseCandidateHistory: [] },
+      deterministicSha256,
+    );
+    const forged = JSON.parse(JSON.stringify(baseSnapshot)) as typeof baseSnapshot;
+    const forgedRemote = forged.remote as unknown as {
+      maximumRemoteAuthorizationLeaseSeconds: number;
+    };
+    forgedRemote.maximumRemoteAuthorizationLeaseSeconds += 1;
+
+    const diagnosis = doctorWorkflowAmendment(
+      { document, locator, baseSnapshot: forged, phaseCandidateHistory: [] },
+      deterministicSha256,
+    );
+
+    expect(compiled.resultSnapshot.remote).toEqual(baseSnapshot.remote);
+    expect(compiled.resultSnapshot.componentDigests.remote).toBe(
+      baseSnapshot.componentDigests.remote,
+    );
+    expect(diagnosis.diagnostics).toEqual([
+      expect.objectContaining({ code: "invalid-document", pointer: "/baseSnapshotDigest" }),
+    ]);
+  });
+
   it("produces the same snapshot as equivalent complete initial input", () => {
     const locator = "fixture://amendment-equivalence";
     const base = softwareFixture();
@@ -1463,6 +1872,27 @@ describe("workflow amendment compilation", () => {
 });
 
 describe("configuration drift", () => {
+  it("reports remote policy drift at the normalized policy address", () => {
+    const accepted = compileWorkflowConfiguration(
+      softwareFixture(),
+      "fixture://remote-drift",
+      deterministicSha256,
+    );
+    const changedDocument = softwareFixture();
+    changedDocument.remote = remotePolicyFixture();
+    const current = compileWorkflowConfiguration(
+      changedDocument,
+      "fixture://remote-drift",
+      deterministicSha256,
+    );
+
+    expect(detectConfigurationDrift(accepted, current)).toMatchObject({
+      hasDrift: true,
+      changedCategories: ["remote"],
+      changedKeys: ["/remote"],
+    });
+  });
+
   it("reports execution policy drift at the normalized policy address", () => {
     const accepted = compileWorkflowConfiguration(
       softwareFixture(),
@@ -1597,6 +2027,27 @@ function amendmentDocument(
     baseSnapshotDigest,
     baseContextDigest: sha256Digest("c".repeat(64)),
     operations,
+  };
+}
+
+function remotePolicyFixture(): NonNullable<WorkflowConfigurationDocument["remote"]> {
+  return {
+    roleMappings: [
+      {
+        issuer: "https://identity.example.test",
+        tenant: "tenant-a",
+        upstreamRole: "operator",
+        localRoles: ["builder"],
+      },
+    ],
+    maximumRemoteAuthorizationLeaseSeconds: 900,
+    synchronization: {
+      classificationCeiling: "public",
+      receiptChain: false,
+      events: false,
+      projections: false,
+      synchronizationState: false,
+    },
   };
 }
 

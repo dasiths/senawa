@@ -68,6 +68,12 @@ import {
   decodePortalRunPage,
   decodePortalWorkspacePage,
   decodeReceiptPage,
+  decodeRemoteClassifiedReport,
+  decodeRemoteCommandEnvelope,
+  decodeRemoteReceiptChainEntry,
+  decodeRemoteReportAcknowledgement,
+  decodeRemoteRepositoryBinding,
+  decodeRemoteSynchronizationVector,
   decodeRunControlPayload,
   decodeSupervisorAdmissionFacts,
   decodeSupervisorReceipt,
@@ -101,7 +107,16 @@ import {
   PROTOCOL_LIMITS,
   PROTOCOL_VERSION,
   type ProjectionEnvelope,
+  REMOTE_CAPABILITIES,
+  REMOTE_PROTOCOL_VERSION,
   type ReceiptPage,
+  type RemoteClassifiedReport,
+  type RemoteCommandEnvelope,
+  type RemoteEventMetadata,
+  type RemoteReceiptChainEntry,
+  type RemoteReportAcknowledgement,
+  type RemoteRepositoryBinding,
+  type RemoteSynchronizationVector,
   validateOpaqueIdentity,
 } from "@senawa/protocol";
 import {
@@ -180,7 +195,7 @@ import {
 } from "@senawa/runtime";
 import Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 const WAL_AUTOCHECKPOINT_PAGES = 16_384;
 const MIGRATIONS_DIRECTORY = fileURLToPath(new URL("../migrations", import.meta.url));
@@ -331,6 +346,104 @@ export interface SqliteWorkspaceIntegrationAuthorityOptions {
   readonly faultInjector?: (point: SqliteWorkspaceAuthorityFaultPoint) => void;
 }
 
+export type SqliteRemoteAuthorityFaultPoint =
+  | "after-remote-inbox-commit-before-return"
+  | "after-remote-local-acceptance-commit-before-return"
+  | "after-remote-local-result-commit-before-return"
+  | "before-remote-local-result-report-commit"
+  | "after-remote-local-result-report-commit-before-return"
+  | "after-remote-report-enqueue-commit-before-return"
+  | "after-remote-report-claim-commit-before-return"
+  | "after-remote-report-ack-commit-before-return";
+
+export interface SqliteRemoteAuthorityOptions {
+  readonly databasePath: string;
+  readonly dependencies: RuntimeDependencies;
+  readonly busyTimeoutMs?: number;
+  readonly faultInjector?: (point: SqliteRemoteAuthorityFaultPoint) => void;
+}
+
+export type RemoteInboxProcessingState =
+  | "waiting"
+  | "ready"
+  | "conflict"
+  | "expired"
+  | "revoked"
+  | "local-accepted"
+  | "local-result";
+
+export interface RemoteInboxRecord {
+  readonly bindingId: string;
+  readonly sequence: number;
+  readonly envelopeDigest: string;
+  readonly canonicalEnvelope: string;
+  readonly envelope: RemoteCommandEnvelope;
+  readonly deliveryEntry: RemoteReceiptChainEntry;
+  readonly receivedAt: string;
+  readonly processingState: RemoteInboxProcessingState;
+  readonly localAcceptance?: RemoteReceiptChainEntry;
+  readonly localResult?: RemoteReceiptChainEntry;
+}
+
+export interface RemoteInboxAdmission {
+  readonly type: "inserted" | "duplicate";
+  readonly record: RemoteInboxRecord;
+}
+
+export interface RemoteReportClaim {
+  readonly reportId: string;
+  readonly bindingId: string;
+  readonly reportSequence: number;
+  readonly reportDigest: string;
+  readonly ownerId: string;
+  readonly fence: number;
+  readonly expiresAt: string;
+}
+
+export interface ClaimedRemoteReport {
+  readonly claim: RemoteReportClaim;
+  readonly canonicalReport: string;
+  readonly report: RemoteClassifiedReport;
+}
+
+export interface RemoteDeliveryPendingCounts {
+  readonly waitingCommands: number;
+  readonly readyCommands: number;
+  readonly acceptedCommands: number;
+  readonly pendingReports: number;
+  readonly claimedReports: number;
+}
+
+export interface RemoteStreamCheckpoint {
+  readonly bindingId: string;
+  readonly streamKind: "inbound-command" | "outbound-report" | "outbound-acknowledgement";
+  readonly contiguousSequence: number;
+  readonly lastDigest: string | null;
+  readonly updatedAt: string;
+}
+
+export interface RemoteRunEventCheckpoint {
+  readonly bindingId: string;
+  readonly repositoryId: string;
+  readonly runId: string;
+  readonly localLatestCursor: number;
+  readonly durablyEnqueuedCursor: number;
+  readonly centrallyAcknowledgedCursor: number;
+  readonly lastEnqueuedReportSequence: number;
+  readonly lastAcknowledgedReportSequence: number;
+}
+
+export interface RemoteRunEventAdvance {
+  readonly repositoryId: string;
+  readonly runId: string;
+  readonly fromCursor: number;
+  readonly throughCursor: number;
+  readonly localLatestCursor: number;
+}
+
+export const DEFAULT_REMOTE_SEQUENCE_WINDOW = 64;
+export const MAX_REMOTE_SEQUENCE_WINDOW = 1_024;
+
 export interface WorkerAmendmentOutboxClaim {
   readonly submissionId: string;
   readonly sourceDigest: string;
@@ -413,6 +526,113 @@ interface LeaseRow {
   readonly owner_id: string;
   readonly fence: number;
   readonly expires_at: string;
+}
+
+interface RemotePeerRow {
+  readonly binding_id: string;
+  readonly repository_id: string;
+  readonly binding_digest: string;
+  readonly canonical_binding: string;
+  readonly current_revocation_epoch: number;
+  readonly session_id: string | null;
+  readonly selected_protocol_version: string | null;
+  readonly canonical_capabilities: string | null;
+  readonly last_observed_at: string;
+}
+
+interface RemoteCheckpointRow {
+  readonly binding_id: string;
+  readonly stream_kind: RemoteStreamCheckpoint["streamKind"];
+  readonly contiguous_sequence: number;
+  readonly last_digest: string | null;
+  readonly updated_at: string;
+}
+
+interface RemoteHistoryCommitmentRow {
+  readonly binding_id: string;
+  readonly repository_id: string;
+  readonly binding_digest: string;
+  readonly canonical_binding: string;
+  readonly inbound_sequence: number;
+  readonly inbound_digest: string | null;
+  readonly outbound_report_sequence: number;
+  readonly outbound_report_digest: string | null;
+  readonly acknowledged_report_sequence: number;
+  readonly acknowledged_report_digest: string | null;
+  readonly acknowledged_cursor: number;
+  readonly canonical_run_event_commitments: string;
+  readonly run_event_commitments_digest: string;
+}
+
+interface RemoteSynchronizationRow {
+  readonly binding_id: string;
+  readonly repository_id: string;
+  readonly local_latest_cursor: number;
+  readonly durably_enqueued_cursor: number;
+  readonly centrally_acknowledged_cursor: number;
+  readonly local_observed_at: string;
+  readonly last_enqueued_at: string | null;
+  readonly last_acknowledged_at: string | null;
+}
+
+interface RemoteRunEventCheckpointRow {
+  readonly binding_id: string;
+  readonly repository_id: string;
+  readonly run_id: string;
+  readonly local_latest_cursor: number;
+  readonly durably_enqueued_cursor: number;
+  readonly centrally_acknowledged_cursor: number;
+  readonly last_enqueued_report_sequence: number;
+  readonly last_acknowledged_report_sequence: number;
+}
+
+interface RemoteReportRunEventAdvanceRow {
+  readonly report_id: string;
+  readonly binding_id: string;
+  readonly repository_id: string;
+  readonly run_id: string;
+  readonly from_cursor: number;
+  readonly through_cursor: number;
+  readonly local_latest_cursor: number;
+  readonly report_sequence: number;
+  readonly canonical_report: string;
+  readonly report_binding_id: string;
+  readonly report_repository_id: string;
+}
+
+interface RemoteReportReplayRow {
+  readonly report_id: string;
+  readonly binding_id: string;
+  readonly report_sequence: number;
+  readonly previous_report_digest: string | null;
+  readonly report_digest: string;
+  readonly event_advance_count: number;
+  readonly canonical_report: string;
+}
+
+interface RemoteInboxRow {
+  readonly binding_id: string;
+  readonly sequence: number;
+  readonly repository_id: string;
+  readonly acceptance_id: string;
+  readonly command_id: string;
+  readonly revocation_epoch: number;
+  readonly previous_envelope_digest: string | null;
+  readonly envelope_digest: string;
+  readonly canonical_envelope: string;
+  readonly delivery_entry_digest: string;
+  readonly canonical_delivery_entry: string;
+  readonly expires_at: string;
+  readonly received_at: string;
+  readonly processing_state: RemoteInboxProcessingState;
+  readonly local_command_id: string | null;
+  readonly local_acceptance_digest: string | null;
+  readonly canonical_local_acceptance: string | null;
+  readonly local_accepted_at: string | null;
+  readonly local_result_digest: string | null;
+  readonly canonical_local_result: string | null;
+  readonly local_result_at: string | null;
+  readonly local_result_report_id: string | null;
 }
 
 interface SnapshotCommand {
@@ -504,6 +724,29 @@ export class StaleLeaseFenceError extends Error {
   constructor(resourceKey: string, fence: number) {
     super(`Lease ${resourceKey} no longer accepts fence ${fence}`);
     this.name = "StaleLeaseFenceError";
+  }
+}
+
+export class RemoteDeliveryConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RemoteDeliveryConflictError";
+  }
+}
+
+export class RemoteSequenceWindowError extends Error {
+  constructor(sequence: number, checkpoint: number, window: number) {
+    super(
+      `Remote command sequence ${sequence} exceeds checkpoint ${checkpoint} plus window ${window}`,
+    );
+    this.name = "RemoteSequenceWindowError";
+  }
+}
+
+export class StaleRemoteReportClaimError extends Error {
+  constructor(reportId: string, fence: number) {
+    super(`Remote report ${reportId} no longer accepts claim fence ${fence}`);
+    this.name = "StaleRemoteReportClaimError";
   }
 }
 
@@ -1201,6 +1444,1145 @@ export class SqliteAuthority
   }
 
   #fault(point: SqliteFaultPoint): void {
+    this.#faultInjector?.(point);
+  }
+}
+
+export class SqliteRemoteAuthority {
+  readonly databasePath: string;
+  readonly dependencies: RuntimeDependencies;
+  readonly #database: Database.Database;
+  readonly #faultInjector: ((point: SqliteRemoteAuthorityFaultPoint) => void) | undefined;
+
+  constructor(options: SqliteRemoteAuthorityOptions) {
+    this.databasePath = resolve(options.databasePath);
+    this.dependencies = options.dependencies;
+    this.#faultInjector = options.faultInjector;
+    ensureSafeDirectoryPath(dirname(this.databasePath));
+    this.#database = new Database(this.databasePath, {
+      timeout: options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS,
+    });
+    try {
+      configureWriteConnection(this.#database, options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS);
+      applyMigrations(this.#database, this.dependencies);
+      verifyRemoteDeliveryTables(this.#database, this.dependencies);
+    } catch (error) {
+      this.#database.close();
+      throw error;
+    }
+  }
+
+  close(): void {
+    if (this.#database.open) this.#database.close();
+  }
+
+  registerPeer(
+    input: string | RemoteRepositoryBinding,
+    observedAt: string,
+    sessionId?: string,
+  ): RemoteRepositoryBinding {
+    const binding = decodeRemoteRepositoryBinding(input);
+    const canonicalBinding = canonicalStringify(binding);
+    const bindingDigest = digestCanonicalText(canonicalBinding, this.dependencies);
+    validateTimestamp(observedAt, "observedAt");
+    if (sessionId !== undefined) validateStorageIdentifier(sessionId, "sessionId");
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.#database
+        .prepare<
+          [string],
+          {
+            repository_id: string;
+            binding_digest: string;
+            canonical_binding: string;
+            last_observed_at: string;
+          }
+        >(
+          `SELECT repository_id, binding_digest, canonical_binding, last_observed_at
+           FROM remote_peer_state WHERE binding_id = ?`,
+        )
+        .get(binding.bindingId);
+      if (current === undefined) {
+        this.#database
+          .prepare(
+            `INSERT INTO remote_peer_state(
+               binding_id, repository_id, binding_digest, canonical_binding,
+               current_revocation_epoch, session_id, selected_protocol_version,
+               canonical_capabilities, last_observed_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            binding.bindingId,
+            binding.repositoryId,
+            bindingDigest,
+            canonicalBinding,
+            binding.revocationEpoch,
+            sessionId ?? null,
+            sessionId === undefined ? null : REMOTE_PROTOCOL_VERSION,
+            sessionId === undefined ? null : canonicalStringify(REMOTE_CAPABILITIES),
+            observedAt,
+          );
+        for (const streamKind of [
+          "inbound-command",
+          "outbound-report",
+          "outbound-acknowledgement",
+        ] as const) {
+          this.#database
+            .prepare(
+              `INSERT INTO remote_stream_checkpoints(
+                 binding_id, stream_kind, contiguous_sequence, last_digest, updated_at
+               ) VALUES (?, ?, 0, NULL, ?)`,
+            )
+            .run(binding.bindingId, streamKind, observedAt);
+        }
+        this.#database
+          .prepare(
+            `INSERT INTO remote_synchronization_vectors(
+               binding_id, repository_id, local_latest_cursor, durably_enqueued_cursor,
+               centrally_acknowledged_cursor, local_observed_at,
+               last_enqueued_at, last_acknowledged_at
+             ) VALUES (?, ?, 0, 0, 0, ?, NULL, NULL)`,
+          )
+          .run(binding.bindingId, binding.repositoryId, observedAt);
+        const emptyRunEventCommitments = canonicalStringify([]);
+        this.#database
+          .prepare(
+            `INSERT INTO remote_history_commitments(
+               binding_id, repository_id, binding_digest, canonical_binding,
+               inbound_sequence, inbound_digest,
+               outbound_report_sequence, outbound_report_digest,
+               acknowledged_report_sequence, acknowledged_report_digest,
+               acknowledged_cursor, canonical_run_event_commitments,
+               run_event_commitments_digest
+             ) VALUES (?, ?, ?, ?, 0, NULL, 0, NULL, 0, NULL, 0, ?, ?)`,
+          )
+          .run(
+            binding.bindingId,
+            binding.repositoryId,
+            bindingDigest,
+            canonicalBinding,
+            emptyRunEventCommitments,
+            digestCanonicalText(emptyRunEventCommitments, this.dependencies),
+          );
+      } else {
+        assertRemoteHistoryCommitmentCurrent(this.#database, binding.bindingId, this.dependencies);
+        if (
+          current.repository_id !== binding.repositoryId ||
+          current.binding_digest !== bindingDigest ||
+          current.canonical_binding !== canonicalBinding
+        ) {
+          throw new RemoteDeliveryConflictError(
+            `Remote binding ${binding.bindingId} is already bound to different content`,
+          );
+        }
+        if (Date.parse(observedAt) < Date.parse(current.last_observed_at)) {
+          throw new TypeError("Remote peer observation time cannot move backwards");
+        }
+        if (sessionId === undefined) {
+          this.#database
+            .prepare(`UPDATE remote_peer_state SET last_observed_at = ? WHERE binding_id = ?`)
+            .run(observedAt, binding.bindingId);
+        } else {
+          this.#database
+            .prepare(
+              `UPDATE remote_peer_state
+               SET session_id = ?, selected_protocol_version = ?,
+                   canonical_capabilities = ?, last_observed_at = ?
+               WHERE binding_id = ?`,
+            )
+            .run(
+              sessionId,
+              REMOTE_PROTOCOL_VERSION,
+              canonicalStringify(REMOTE_CAPABILITIES),
+              observedAt,
+              binding.bindingId,
+            );
+        }
+      }
+      this.#database.exec("COMMIT");
+      return binding;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordNegotiatedSession(
+    bindingId: string,
+    sessionId: string,
+    selectedVersion: string,
+    capabilities: readonly string[],
+    observedAt: string,
+  ): void {
+    validateStorageIdentifier(bindingId, "bindingId");
+    validateStorageIdentifier(sessionId, "sessionId");
+    validateTimestamp(observedAt, "observedAt");
+    const canonicalCapabilities = canonicalStringify([...capabilities]);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const peer = requireRemotePeer(this.#database, bindingId);
+      if (Date.parse(observedAt) < Date.parse(peer.last_observed_at)) {
+        throw new TypeError("Remote peer observation time cannot move backwards");
+      }
+      this.#database
+        .prepare(
+          `UPDATE remote_peer_state
+           SET session_id = ?, selected_protocol_version = ?,
+               canonical_capabilities = ?, last_observed_at = ?
+           WHERE binding_id = ?`,
+        )
+        .run(sessionId, selectedVersion, canonicalCapabilities, observedAt, bindingId);
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  advanceRevocationEpoch(bindingId: string, revocationEpoch: number, observedAt: string): boolean {
+    validateStorageIdentifier(bindingId, "bindingId");
+    validateNonNegativeSafeInteger(revocationEpoch, "revocationEpoch");
+    validateTimestamp(observedAt, "observedAt");
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const peer = requireRemotePeer(this.#database, bindingId);
+      if (revocationEpoch < peer.current_revocation_epoch) {
+        throw new TypeError("Remote revocation epoch cannot move backwards");
+      }
+      if (Date.parse(observedAt) < Date.parse(peer.last_observed_at)) {
+        throw new TypeError("Remote peer observation time cannot move backwards");
+      }
+      const changed = revocationEpoch > peer.current_revocation_epoch;
+      this.#database
+        .prepare(
+          `UPDATE remote_peer_state
+           SET current_revocation_epoch = ?, last_observed_at = ?
+           WHERE binding_id = ?`,
+        )
+        .run(revocationEpoch, observedAt, bindingId);
+      if (changed) {
+        this.#database
+          .prepare(
+            `UPDATE remote_command_inbox SET processing_state = 'revoked'
+             WHERE binding_id = ? AND revocation_epoch < ?
+               AND processing_state IN ('waiting', 'ready')`,
+          )
+          .run(bindingId, revocationEpoch);
+      }
+      this.#database.exec("COMMIT");
+      return changed;
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  admitCommandEnvelope(
+    input: string | RemoteCommandEnvelope,
+    deliveryEntryInput: string | RemoteReceiptChainEntry,
+    receivedAt: string,
+    sequenceWindow = DEFAULT_REMOTE_SEQUENCE_WINDOW,
+  ): RemoteInboxAdmission {
+    const envelope = decodeRemoteCommandEnvelope(input);
+    const canonicalEnvelope = canonicalStringify(envelope);
+    const envelopeDigest = digestCanonicalText(canonicalEnvelope, this.dependencies);
+    const deliveryEntry = decodeRemoteReceiptChainEntry(deliveryEntryInput);
+    const canonicalDeliveryEntry = canonicalStringify(deliveryEntry);
+    validateTimestamp(receivedAt, "receivedAt");
+    validateRemoteSequenceWindow(sequenceWindow);
+    assertRemoteCommandDigestBindings(envelope, this.dependencies);
+    assertNoForbiddenRemoteCommandData(envelope.acceptedCommand.command.payload);
+    const bindingId = envelope.acceptedCommand.binding.bindingId;
+    this.#database.exec("BEGIN IMMEDIATE");
+    let committed = false;
+    try {
+      const peer = requireRemotePeer(this.#database, bindingId);
+      assertRemoteHistoryCommitmentCurrent(this.#database, bindingId, this.dependencies);
+      assertRemoteBindingRow(peer, envelope.acceptedCommand.binding, this.dependencies);
+      const checkpoint = requireRemoteCheckpoint(this.#database, bindingId, "inbound-command");
+      const existing = readRemoteInboxRow(this.#database, bindingId, envelope.sequence);
+      if (existing !== undefined) {
+        if (
+          existing.envelope_digest !== envelopeDigest ||
+          existing.canonical_envelope !== canonicalEnvelope ||
+          existing.delivery_entry_digest !== deliveryEntry.entryDigest ||
+          existing.canonical_delivery_entry !== canonicalDeliveryEntry
+        ) {
+          throw new RemoteDeliveryConflictError(
+            `Remote command sequence ${envelope.sequence} conflicts with durable content`,
+          );
+        }
+        this.#database.exec("COMMIT");
+        committed = true;
+        return { type: "duplicate", record: toRemoteInboxRecord(existing) };
+      }
+      if (envelope.sequence <= checkpoint.contiguous_sequence) {
+        throw new RemoteDeliveryConflictError(
+          `Remote command sequence ${envelope.sequence} is missing below its checkpoint`,
+        );
+      }
+      if (envelope.sequence > checkpoint.contiguous_sequence + sequenceWindow) {
+        throw new RemoteSequenceWindowError(
+          envelope.sequence,
+          checkpoint.contiguous_sequence,
+          sequenceWindow,
+        );
+      }
+      assertRemoteInboxIdentityAvailable(this.#database, envelope, envelopeDigest);
+      const predecessorDigest =
+        envelope.sequence === checkpoint.contiguous_sequence + 1
+          ? checkpoint.last_digest
+          : readRemoteInboxRow(this.#database, bindingId, envelope.sequence - 1)?.envelope_digest;
+      if (
+        predecessorDigest !== undefined &&
+        envelope.previousEnvelopeDigest !== predecessorDigest
+      ) {
+        throw new RemoteDeliveryConflictError(
+          `Remote command sequence ${envelope.sequence} conflicts with its predecessor digest`,
+        );
+      }
+      const processingState: RemoteInboxProcessingState =
+        envelope.acceptedCommand.binding.revocationEpoch < peer.current_revocation_epoch
+          ? "revoked"
+          : Date.parse(envelope.acceptedCommand.expiresAt) <= Date.parse(receivedAt)
+            ? "expired"
+            : "waiting";
+      this.#database
+        .prepare(
+          `INSERT INTO remote_command_inbox(
+             binding_id, sequence, repository_id, acceptance_id, command_id,
+             revocation_epoch, previous_envelope_digest, envelope_digest,
+             canonical_envelope, delivery_entry_digest, canonical_delivery_entry,
+             expires_at, received_at, processing_state
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          bindingId,
+          envelope.sequence,
+          envelope.acceptedCommand.binding.repositoryId,
+          envelope.acceptedCommand.acceptanceId,
+          envelope.acceptedCommand.command.commandId,
+          envelope.acceptedCommand.binding.revocationEpoch,
+          envelope.previousEnvelopeDigest,
+          envelopeDigest,
+          canonicalEnvelope,
+          deliveryEntry.entryDigest,
+          canonicalDeliveryEntry,
+          envelope.acceptedCommand.expiresAt,
+          receivedAt,
+          processingState,
+        );
+      reconcileRemoteInbox(this.#database, bindingId, receivedAt);
+      refreshRemoteHistoryCommitment(this.#database, bindingId, this.dependencies);
+      const inserted = readRemoteInboxRow(this.#database, bindingId, envelope.sequence);
+      if (inserted === undefined) throw new Error("Remote inbox insert was not retained");
+      this.#database.exec("COMMIT");
+      committed = true;
+      this.#fault("after-remote-inbox-commit-before-return");
+      return { type: "inserted", record: toRemoteInboxRecord(inserted) };
+    } catch (error) {
+      if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  listReadyCommands(
+    bindingId: string,
+    currentTime: string,
+    limit = PROTOCOL_LIMITS.maxPageItems,
+  ): readonly RemoteInboxRecord[] {
+    validateStorageIdentifier(bindingId, "bindingId");
+    validateTimestamp(currentTime, "currentTime");
+    validateBoundedPageRequest(0, limit);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const peer = requireRemotePeer(this.#database, bindingId);
+      this.#database
+        .prepare(
+          `UPDATE remote_command_inbox SET processing_state = 'expired'
+           WHERE binding_id = ? AND expires_at <= ?
+             AND processing_state IN ('waiting', 'ready')`,
+        )
+        .run(bindingId, currentTime);
+      this.#database
+        .prepare(
+          `UPDATE remote_command_inbox SET processing_state = 'revoked'
+           WHERE binding_id = ? AND revocation_epoch < ?
+             AND processing_state IN ('waiting', 'ready')`,
+        )
+        .run(bindingId, peer.current_revocation_epoch);
+      const rows = this.#database
+        .prepare<[string, number], RemoteInboxRow>(
+          `SELECT * FROM remote_command_inbox
+           WHERE binding_id = ? AND processing_state = 'ready'
+           ORDER BY sequence LIMIT ?`,
+        )
+        .all(bindingId, limit);
+      this.#database.exec("COMMIT");
+      return Object.freeze(rows.map(toRemoteInboxRecord));
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  listPendingLocalResults(
+    bindingId: string,
+    limit = PROTOCOL_LIMITS.maxPageItems,
+  ): readonly RemoteInboxRecord[] {
+    validateStorageIdentifier(bindingId, "bindingId");
+    validateBoundedPageRequest(0, limit);
+    requireRemotePeer(this.#database, bindingId);
+    return Object.freeze(
+      this.#database
+        .prepare<[string, number], RemoteInboxRow>(
+          `SELECT * FROM remote_command_inbox
+           WHERE binding_id = ? AND processing_state = 'local-accepted'
+           ORDER BY sequence LIMIT ?`,
+        )
+        .all(bindingId, limit)
+        .map(toRemoteInboxRecord),
+    );
+  }
+
+  listCompletedLocalResults(
+    bindingId: string,
+    limit: number = PROTOCOL_LIMITS.maxPageItems,
+  ): readonly RemoteInboxRecord[] {
+    validateStorageIdentifier(bindingId, "bindingId");
+    validateBoundedPageRequest(0, limit);
+    requireRemotePeer(this.#database, bindingId);
+    return Object.freeze(
+      this.#database
+        .prepare<[string, number], RemoteInboxRow>(
+          `SELECT * FROM remote_command_inbox
+           WHERE binding_id = ? AND processing_state = 'local-result'
+           ORDER BY sequence LIMIT ?`,
+        )
+        .all(bindingId, limit)
+        .map(toRemoteInboxRecord),
+    );
+  }
+
+  recordLocalAcceptance(
+    bindingId: string,
+    sequence: number,
+    entryInput: string | RemoteReceiptChainEntry,
+  ): boolean {
+    const entry = decodeRemoteReceiptChainEntry(entryInput);
+    if (entry.stage !== "local-accepted" || entry.evidence.type !== "local-receipt") {
+      throw new TypeError("Remote local acceptance must be a local-accepted receipt entry");
+    }
+    return this.#recordRemoteLocalEntry(bindingId, sequence, entry, "acceptance");
+  }
+
+  recordLocalResult(
+    _bindingId: string,
+    _sequence: number,
+    entryInput: string | RemoteReceiptChainEntry,
+  ): boolean {
+    const entry = decodeRemoteReceiptChainEntry(entryInput);
+    if (entry.stage !== "local-outcome" || entry.evidence.type !== "local-outcome") {
+      throw new TypeError("Remote local result must be a local-outcome receipt entry");
+    }
+    throw new TypeError("Remote local result must be recorded atomically with its report");
+  }
+
+  recordLocalResultAndEnqueueReport(
+    bindingId: string,
+    sequence: number,
+    entryInput: string | RemoteReceiptChainEntry,
+    reportInput: string | RemoteClassifiedReport,
+    eventAdvanceInput?: RemoteRunEventAdvance | readonly RemoteRunEventAdvance[],
+  ): boolean {
+    const entry = decodeRemoteReceiptChainEntry(entryInput);
+    if (entry.stage !== "local-outcome" || entry.evidence.type !== "local-outcome") {
+      throw new TypeError("Remote local result must be a local-outcome receipt entry");
+    }
+    const report = decodeRemoteClassifiedReport(reportInput);
+    validateStorageIdentifier(bindingId, "bindingId");
+    validatePositiveSafeInteger(sequence, "sequence");
+    const canonicalEntry = canonicalStringify(entry);
+    const entryDigest = digestCanonicalText(canonicalEntry, this.dependencies);
+    const localCommandId = remoteLocalCommandId(entry);
+    const canonicalReport = canonicalStringify(report);
+    const reportDigest = digestCanonicalText(canonicalReport, this.dependencies);
+    const eventAdvances = normalizeRemoteRunEventAdvances(eventAdvanceInput);
+    this.#database.exec("BEGIN IMMEDIATE");
+    let committed = false;
+    try {
+      const row = readRemoteInboxRow(this.#database, bindingId, sequence);
+      if (row === undefined) throw new TypeError("Remote inbox command does not exist");
+      const envelope = decodeRemoteCommandEnvelope(row.canonical_envelope);
+      if (
+        entry.bindingId !== bindingId ||
+        entry.commandId !== envelope.acceptedCommand.command.commandId ||
+        localCommandId !== envelope.acceptedCommand.command.commandId
+      ) {
+        if (row.processing_state === "local-result") {
+          throw new RemoteDeliveryConflictError(
+            "Remote local result retry does not match its durable inbox command",
+          );
+        }
+        throw new TypeError("Remote local receipt entry does not match its inbox command");
+      }
+      const peer = requireRemotePeer(this.#database, bindingId);
+      assertRemoteHistoryCommitmentCurrent(this.#database, bindingId, this.dependencies);
+      if (report.binding.bindingId !== bindingId) {
+        throw new RemoteDeliveryConflictError(
+          "Remote report does not match the local outcome binding",
+        );
+      }
+      assertRemoteBindingRow(peer, report.binding, this.dependencies);
+      if (row.processing_state === "local-result") {
+        if (
+          row.local_result_digest !== entryDigest ||
+          row.canonical_local_result !== canonicalEntry
+        ) {
+          throw new RemoteDeliveryConflictError(
+            "Remote local result retry differs from the durable terminal entry",
+          );
+        }
+        if (row.local_result_report_id !== report.reportId) {
+          throw new RemoteDeliveryConflictError(
+            "Remote local result retry does not use its durable report",
+          );
+        }
+        assertRemoteReportReplayExact(
+          this.#database,
+          report,
+          canonicalReport,
+          reportDigest,
+          eventAdvances,
+          this.dependencies,
+        );
+        this.#database.exec("COMMIT");
+        committed = true;
+        return false;
+      }
+      if (row.processing_state !== "local-accepted") {
+        throw new TypeError("Remote command has no durable local acceptance");
+      }
+      if (!remoteReportContainsInboxResult(report, row, canonicalEntry)) {
+        throw new RemoteDeliveryConflictError(
+          "Remote report does not contain the local outcome command chain",
+        );
+      }
+      const current = requireRemoteSynchronization(this.#database, bindingId);
+      const checkpoint = requireRemoteCheckpoint(this.#database, bindingId, "outbound-report");
+      if (
+        report.reportSequence !== checkpoint.contiguous_sequence + 1 ||
+        report.previousReportDigest !== checkpoint.last_digest
+      ) {
+        throw new RemoteDeliveryConflictError("Remote report does not extend the durable chain");
+      }
+      assertSynchronizationForEnqueue(report.synchronization, current);
+      this.#database
+        .prepare(
+          `UPDATE remote_command_inbox
+           SET processing_state = 'local-result', local_result_digest = ?,
+               canonical_local_result = ?, local_result_at = ?, local_result_report_id = ?
+           WHERE binding_id = ? AND sequence = ? AND processing_state = 'local-accepted'`,
+        )
+        .run(entryDigest, canonicalEntry, entry.recordedAt, report.reportId, bindingId, sequence);
+      this.#database
+        .prepare(
+          `INSERT INTO remote_report_outbox(
+             report_id, binding_id, repository_id, report_sequence,
+             previous_report_digest, report_digest, data_policy_digest,
+             source_cursor, event_advance_count, canonical_report, enqueued_at, delivery_state
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+        )
+        .run(
+          report.reportId,
+          bindingId,
+          report.binding.repositoryId,
+          report.reportSequence,
+          report.previousReportDigest,
+          reportDigest,
+          report.dataPolicyDigest,
+          report.synchronization.durablyEnqueuedCursor,
+          eventAdvances.length,
+          canonicalReport,
+          report.createdAt,
+        );
+      applyRemoteRunEventAdvances(this.#database, report, eventAdvances);
+      updateRemoteCheckpoint(
+        this.#database,
+        bindingId,
+        "outbound-report",
+        report.reportSequence,
+        reportDigest,
+        report.createdAt,
+      );
+      if (!isZeroRemoteSynchronization(report.synchronization)) {
+        this.#database
+          .prepare(
+            `UPDATE remote_synchronization_vectors
+             SET local_latest_cursor = ?, durably_enqueued_cursor = ?,
+                 local_observed_at = ?, last_enqueued_at = ?
+             WHERE binding_id = ?`,
+          )
+          .run(
+            report.synchronization.localLatestCursor,
+            report.synchronization.durablyEnqueuedCursor,
+            report.synchronization.localObservedAt,
+            report.synchronization.lastEnqueuedAt,
+            bindingId,
+          );
+      }
+      refreshRemoteHistoryCommitment(this.#database, bindingId, this.dependencies);
+      this.#fault("before-remote-local-result-report-commit");
+      this.#database.exec("COMMIT");
+      committed = true;
+      this.#fault("after-remote-local-result-report-commit-before-return");
+      return true;
+    } catch (error) {
+      if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  observeLocalCursor(bindingId: string, localLatestCursor: number, observedAt: string): void {
+    validateStorageIdentifier(bindingId, "bindingId");
+    validateNonNegativeSafeInteger(localLatestCursor, "localLatestCursor");
+    validateTimestamp(observedAt, "observedAt");
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      requireRemotePeer(this.#database, bindingId);
+      const current = requireRemoteSynchronization(this.#database, bindingId);
+      if (localLatestCursor < current.local_latest_cursor) {
+        throw new TypeError("Remote local latest cursor cannot move backwards");
+      }
+      if (Date.parse(observedAt) < Date.parse(current.local_observed_at)) {
+        throw new TypeError("Remote local observation time cannot move backwards");
+      }
+      this.#database
+        .prepare(
+          `UPDATE remote_synchronization_vectors
+           SET local_latest_cursor = ?, local_observed_at = ? WHERE binding_id = ?`,
+        )
+        .run(localLatestCursor, observedAt, bindingId);
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  enqueueReport(
+    input: string | RemoteClassifiedReport,
+    eventAdvanceInput?: RemoteRunEventAdvance | readonly RemoteRunEventAdvance[],
+  ): boolean {
+    const report = decodeRemoteClassifiedReport(input);
+    const canonicalReport = canonicalStringify(report);
+    const reportDigest = digestCanonicalText(canonicalReport, this.dependencies);
+    const bindingId = report.binding.bindingId;
+    const eventAdvances = normalizeRemoteRunEventAdvances(eventAdvanceInput);
+    this.#database.exec("BEGIN IMMEDIATE");
+    let committed = false;
+    try {
+      const peer = requireRemotePeer(this.#database, bindingId);
+      assertRemoteHistoryCommitmentCurrent(this.#database, bindingId, this.dependencies);
+      assertRemoteBindingRow(peer, report.binding, this.dependencies);
+      const current = requireRemoteSynchronization(this.#database, bindingId);
+      const existing = this.#database
+        .prepare<[string], { report_id: string }>(
+          `SELECT report_id
+           FROM remote_report_outbox WHERE report_id = ?`,
+        )
+        .get(report.reportId);
+      if (existing !== undefined) {
+        assertRemoteReportReplayExact(
+          this.#database,
+          report,
+          canonicalReport,
+          reportDigest,
+          eventAdvances,
+          this.dependencies,
+        );
+        this.#database.exec("COMMIT");
+        committed = true;
+        return false;
+      }
+      const sequenceConflict = this.#database
+        .prepare<[string, number], { report_id: string }>(
+          `SELECT report_id FROM remote_report_outbox
+           WHERE binding_id = ? AND report_sequence = ?`,
+        )
+        .get(bindingId, report.reportSequence);
+      if (sequenceConflict !== undefined) {
+        throw new RemoteDeliveryConflictError(
+          `Remote report sequence ${report.reportSequence} is already bound to ${sequenceConflict.report_id}`,
+        );
+      }
+      const checkpoint = requireRemoteCheckpoint(this.#database, bindingId, "outbound-report");
+      if (
+        report.reportSequence !== checkpoint.contiguous_sequence + 1 ||
+        report.previousReportDigest !== checkpoint.last_digest
+      ) {
+        throw new RemoteDeliveryConflictError("Remote report does not extend the durable chain");
+      }
+      assertSynchronizationForEnqueue(report.synchronization, current);
+      this.#database
+        .prepare(
+          `INSERT INTO remote_report_outbox(
+             report_id, binding_id, repository_id, report_sequence,
+             previous_report_digest, report_digest, data_policy_digest,
+             source_cursor, event_advance_count, canonical_report, enqueued_at, delivery_state
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+        )
+        .run(
+          report.reportId,
+          bindingId,
+          report.binding.repositoryId,
+          report.reportSequence,
+          report.previousReportDigest,
+          reportDigest,
+          report.dataPolicyDigest,
+          report.synchronization.durablyEnqueuedCursor,
+          eventAdvances.length,
+          canonicalReport,
+          report.createdAt,
+        );
+      applyRemoteRunEventAdvances(this.#database, report, eventAdvances);
+      updateRemoteCheckpoint(
+        this.#database,
+        bindingId,
+        "outbound-report",
+        report.reportSequence,
+        reportDigest,
+        report.createdAt,
+      );
+      if (!isZeroRemoteSynchronization(report.synchronization)) {
+        this.#database
+          .prepare(
+            `UPDATE remote_synchronization_vectors
+             SET local_latest_cursor = ?, durably_enqueued_cursor = ?,
+                 local_observed_at = ?, last_enqueued_at = ?
+             WHERE binding_id = ?`,
+          )
+          .run(
+            report.synchronization.localLatestCursor,
+            report.synchronization.durablyEnqueuedCursor,
+            report.synchronization.localObservedAt,
+            report.synchronization.lastEnqueuedAt,
+            bindingId,
+          );
+      }
+      refreshRemoteHistoryCommitment(this.#database, bindingId, this.dependencies);
+      this.#database.exec("COMMIT");
+      committed = true;
+      this.#fault("after-remote-report-enqueue-commit-before-return");
+      return true;
+    } catch (error) {
+      if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  claimReport(
+    bindingId: string,
+    ownerId: string,
+    currentTime: string,
+    expiresAt: string,
+  ): RemoteReportClaim | undefined {
+    validateStorageIdentifier(bindingId, "bindingId");
+    validateStorageIdentifier(ownerId, "ownerId");
+    validateTimestamp(currentTime, "currentTime");
+    validateTimestamp(expiresAt, "expiresAt");
+    if (Date.parse(expiresAt) <= Date.parse(currentTime)) {
+      throw new TypeError("Remote report claim expiry must be later than currentTime");
+    }
+    this.#database.exec("BEGIN IMMEDIATE");
+    let committed = false;
+    try {
+      requireRemotePeer(this.#database, bindingId);
+      const row = this.#database
+        .prepare<
+          [string],
+          {
+            report_id: string;
+            report_sequence: number;
+            report_digest: string;
+            claim_owner_id: string | null;
+            claim_fence: number | null;
+            claim_expires_at: string | null;
+          }
+        >(
+          `SELECT report_id, report_sequence, report_digest,
+                  claim_owner_id, claim_fence, claim_expires_at
+           FROM remote_report_outbox
+           WHERE binding_id = ? AND delivery_state <> 'acknowledged'
+           ORDER BY report_sequence LIMIT 1`,
+        )
+        .get(bindingId);
+      if (row === undefined) {
+        this.#database.exec("COMMIT");
+        committed = true;
+        return undefined;
+      }
+      if (
+        row.claim_owner_id === ownerId &&
+        row.claim_fence !== null &&
+        row.claim_expires_at !== null &&
+        Date.parse(row.claim_expires_at) > Date.parse(currentTime)
+      ) {
+        this.#database.exec("COMMIT");
+        committed = true;
+        return remoteReportClaim(row, bindingId, ownerId, row.claim_fence, row.claim_expires_at);
+      }
+      if (
+        row.claim_owner_id !== null &&
+        row.claim_owner_id !== ownerId &&
+        row.claim_expires_at !== null &&
+        Date.parse(row.claim_expires_at) > Date.parse(currentTime)
+      ) {
+        this.#database.exec("COMMIT");
+        committed = true;
+        return undefined;
+      }
+      const fence = (row.claim_fence ?? 0) + 1;
+      const changed = this.#database
+        .prepare(
+          `UPDATE remote_report_outbox
+           SET delivery_state = 'claimed', claim_owner_id = ?,
+               claim_fence = ?, claim_expires_at = ?
+           WHERE report_id = ? AND delivery_state <> 'acknowledged'
+             AND (delivery_state = 'pending' OR claim_owner_id = ? OR claim_expires_at <= ?)`,
+        )
+        .run(ownerId, fence, expiresAt, row.report_id, ownerId, currentTime);
+      if (changed.changes !== 1) throw new Error("Remote report claim lost a race");
+      this.#database.exec("COMMIT");
+      committed = true;
+      this.#fault("after-remote-report-claim-commit-before-return");
+      return remoteReportClaim(row, bindingId, ownerId, fence, expiresAt);
+    } catch (error) {
+      if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  readClaimedReport(claim: RemoteReportClaim, currentTime: string): ClaimedRemoteReport {
+    validateTimestamp(currentTime, "currentTime");
+    const row = this.#database
+      .prepare<
+        [string, string, number],
+        {
+          binding_id: string;
+          report_sequence: number;
+          report_digest: string;
+          canonical_report: string;
+          claim_expires_at: string | null;
+          delivery_state: string;
+        }
+      >(
+        `SELECT binding_id, report_sequence, report_digest, canonical_report,
+                claim_expires_at, delivery_state
+         FROM remote_report_outbox
+         WHERE report_id = ? AND claim_owner_id = ? AND claim_fence = ?`,
+      )
+      .get(claim.reportId, claim.ownerId, claim.fence);
+    if (
+      row === undefined ||
+      row.binding_id !== claim.bindingId ||
+      row.report_sequence !== claim.reportSequence ||
+      row.report_digest !== claim.reportDigest ||
+      row.delivery_state !== "claimed" ||
+      row.claim_expires_at !== claim.expiresAt ||
+      Date.parse(row.claim_expires_at) <= Date.parse(currentTime)
+    ) {
+      throw new StaleRemoteReportClaimError(claim.reportId, claim.fence);
+    }
+    return Object.freeze({
+      claim,
+      canonicalReport: row.canonical_report,
+      report: decodeRemoteClassifiedReport(row.canonical_report),
+    });
+  }
+
+  acknowledgeReport(
+    claim: RemoteReportClaim,
+    input: string | RemoteReportAcknowledgement,
+    currentTime: string,
+  ): boolean {
+    const acknowledgement = decodeRemoteReportAcknowledgement(input);
+    const canonicalAcknowledgement = canonicalStringify(acknowledgement);
+    const acknowledgementDigest = digestCanonicalText(canonicalAcknowledgement, this.dependencies);
+    validateTimestamp(currentTime, "currentTime");
+    this.#database.exec("BEGIN IMMEDIATE");
+    let committed = false;
+    try {
+      const peer = requireRemotePeer(this.#database, claim.bindingId);
+      assertRemoteHistoryCommitmentCurrent(this.#database, claim.bindingId, this.dependencies);
+      const binding = decodeRemoteRepositoryBinding(peer.canonical_binding);
+      const synchronization = requireRemoteSynchronization(this.#database, claim.bindingId);
+      if (Date.parse(currentTime) < Date.parse(synchronization.local_observed_at)) {
+        throw new TypeError("Remote acknowledgement observation time cannot move backwards");
+      }
+      const row = this.#database
+        .prepare<
+          [string],
+          {
+            binding_id: string;
+            repository_id: string;
+            report_sequence: number;
+            report_digest: string;
+            delivery_state: string;
+            claim_owner_id: string | null;
+            claim_fence: number | null;
+            claim_expires_at: string | null;
+            acknowledgement_digest: string | null;
+            canonical_acknowledgement: string | null;
+          }
+        >(
+          `SELECT binding_id, repository_id, report_sequence, report_digest,
+                  delivery_state, claim_owner_id, claim_fence, claim_expires_at,
+                  acknowledgement_digest, canonical_acknowledgement
+           FROM remote_report_outbox WHERE report_id = ?`,
+        )
+        .get(claim.reportId);
+      if (row === undefined) throw new StaleRemoteReportClaimError(claim.reportId, claim.fence);
+      assertRemoteAcknowledgement(row, claim, acknowledgement, binding.controlPlaneKeyId);
+      if (row.delivery_state === "acknowledged") {
+        if (row.claim_fence !== claim.fence) {
+          throw new StaleRemoteReportClaimError(claim.reportId, claim.fence);
+        }
+        if (
+          row.acknowledgement_digest !== acknowledgementDigest ||
+          row.canonical_acknowledgement !== canonicalAcknowledgement
+        ) {
+          throw new RemoteDeliveryConflictError(
+            `Remote report ${claim.reportId} acknowledgement conflicts with durable content`,
+          );
+        }
+        this.#database.exec("COMMIT");
+        committed = true;
+        return false;
+      }
+      if (
+        row.delivery_state !== "claimed" ||
+        row.claim_owner_id !== claim.ownerId ||
+        row.claim_fence !== claim.fence ||
+        row.claim_expires_at !== claim.expiresAt ||
+        Date.parse(row.claim_expires_at) <= Date.parse(currentTime)
+      ) {
+        throw new StaleRemoteReportClaimError(claim.reportId, claim.fence);
+      }
+      const changed = this.#database
+        .prepare(
+          `UPDATE remote_report_outbox
+           SET delivery_state = 'acknowledged', claim_owner_id = NULL,
+               claim_expires_at = NULL, acknowledgement_digest = ?,
+               canonical_acknowledgement = ?, central_receipt_id = ?, acknowledged_at = ?
+           WHERE report_id = ? AND delivery_state = 'claimed'
+             AND claim_owner_id = ? AND claim_fence = ? AND claim_expires_at = ?
+             AND claim_expires_at > ?`,
+        )
+        .run(
+          acknowledgementDigest,
+          canonicalAcknowledgement,
+          acknowledgement.centralReceiptId,
+          acknowledgement.acknowledgedAt,
+          claim.reportId,
+          claim.ownerId,
+          claim.fence,
+          claim.expiresAt,
+          currentTime,
+        );
+      if (changed.changes !== 1) {
+        throw new StaleRemoteReportClaimError(claim.reportId, claim.fence);
+      }
+      reconcileRemoteAcknowledgements(this.#database, claim.bindingId, currentTime);
+      refreshRemoteHistoryCommitment(this.#database, claim.bindingId, this.dependencies);
+      this.#database.exec("COMMIT");
+      committed = true;
+      this.#fault("after-remote-report-ack-commit-before-return");
+      return true;
+    } catch (error) {
+      if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  querySynchronization(bindingId: string): RemoteSynchronizationVector {
+    validateStorageIdentifier(bindingId, "bindingId");
+    const row = requireRemoteSynchronization(this.#database, bindingId);
+    return decodeRemoteSynchronizationVector({
+      repositoryId: row.repository_id,
+      localLatestCursor: row.local_latest_cursor,
+      durablyEnqueuedCursor: row.durably_enqueued_cursor,
+      centrallyAcknowledgedCursor: row.centrally_acknowledged_cursor,
+      localObservedAt: row.local_observed_at,
+      lastEnqueuedAt: row.last_enqueued_at,
+      lastAcknowledgedAt: row.last_acknowledged_at,
+    });
+  }
+
+  queryRunEventCheckpoint(
+    bindingId: string,
+    repositoryId: string,
+    runId: string,
+  ): RemoteRunEventCheckpoint {
+    validateStorageIdentifier(bindingId, "bindingId");
+    validateStorageIdentifier(repositoryId, "repositoryId");
+    validateStorageIdentifier(runId, "runId");
+    const peer = requireRemotePeer(this.#database, bindingId);
+    if (peer.repository_id !== repositoryId) {
+      throw new TypeError("Remote event checkpoint repository does not match its binding");
+    }
+    const row = readRemoteRunEventCheckpoint(this.#database, bindingId, runId);
+    return row === undefined
+      ? Object.freeze({
+          bindingId,
+          repositoryId,
+          runId,
+          localLatestCursor: 0,
+          durablyEnqueuedCursor: 0,
+          centrallyAcknowledgedCursor: 0,
+          lastEnqueuedReportSequence: 0,
+          lastAcknowledgedReportSequence: 0,
+        })
+      : remoteRunEventCheckpoint(row);
+  }
+
+  listRunEventCheckpoints(bindingId: string): readonly RemoteRunEventCheckpoint[] {
+    validateStorageIdentifier(bindingId, "bindingId");
+    requireRemotePeer(this.#database, bindingId);
+    return Object.freeze(
+      this.#database
+        .prepare<[string], RemoteRunEventCheckpointRow>(
+          `SELECT * FROM remote_run_event_checkpoints
+           WHERE binding_id = ? ORDER BY last_enqueued_report_sequence, run_id`,
+        )
+        .all(bindingId)
+        .map(remoteRunEventCheckpoint),
+    );
+  }
+
+  queryCheckpoint(
+    bindingId: string,
+    streamKind: RemoteStreamCheckpoint["streamKind"],
+  ): RemoteStreamCheckpoint {
+    validateStorageIdentifier(bindingId, "bindingId");
+    const row = requireRemoteCheckpoint(this.#database, bindingId, streamKind);
+    return Object.freeze({
+      bindingId,
+      streamKind,
+      contiguousSequence: row.contiguous_sequence,
+      lastDigest: row.last_digest,
+      updatedAt: row.updated_at,
+    });
+  }
+
+  queryPendingCounts(bindingId?: string): RemoteDeliveryPendingCounts {
+    if (bindingId !== undefined) validateStorageIdentifier(bindingId, "bindingId");
+    const filter = bindingId === undefined ? "" : "WHERE binding_id = ?";
+    const parameters = bindingId === undefined ? [] : [bindingId];
+    const inbox = this.#database
+      .prepare<unknown[], { state: RemoteInboxProcessingState; count: number }>(
+        `SELECT processing_state AS state, count(*) AS count
+         FROM remote_command_inbox ${filter}
+         GROUP BY processing_state`,
+      )
+      .all(...parameters);
+    const reports = this.#database
+      .prepare<unknown[], { state: string; count: number }>(
+        `SELECT delivery_state AS state, count(*) AS count
+         FROM remote_report_outbox ${filter}
+         GROUP BY delivery_state`,
+      )
+      .all(...parameters);
+    const inboxCounts = new Map(inbox.map((row) => [row.state, row.count]));
+    const reportCounts = new Map(reports.map((row) => [row.state, row.count]));
+    return Object.freeze({
+      waitingCommands: inboxCounts.get("waiting") ?? 0,
+      readyCommands: inboxCounts.get("ready") ?? 0,
+      acceptedCommands: inboxCounts.get("local-accepted") ?? 0,
+      pendingReports: reportCounts.get("pending") ?? 0,
+      claimedReports: reportCounts.get("claimed") ?? 0,
+    });
+  }
+
+  #recordRemoteLocalEntry(
+    bindingId: string,
+    sequence: number,
+    entry: RemoteReceiptChainEntry,
+    kind: "acceptance" | "result",
+  ): boolean {
+    validateStorageIdentifier(bindingId, "bindingId");
+    validatePositiveSafeInteger(sequence, "sequence");
+    const canonicalEntry = canonicalStringify(entry);
+    const entryDigest = digestCanonicalText(canonicalEntry, this.dependencies);
+    const localCommandId = remoteLocalCommandId(entry);
+    this.#database.exec("BEGIN IMMEDIATE");
+    let committed = false;
+    try {
+      const row = readRemoteInboxRow(this.#database, bindingId, sequence);
+      if (row === undefined) throw new TypeError("Remote inbox command does not exist");
+      const envelope = decodeRemoteCommandEnvelope(row.canonical_envelope);
+      if (
+        entry.bindingId !== bindingId ||
+        entry.commandId !== envelope.acceptedCommand.command.commandId ||
+        localCommandId !== envelope.acceptedCommand.command.commandId
+      ) {
+        throw new TypeError("Remote local receipt entry does not match its inbox command");
+      }
+      const existingCanonical =
+        kind === "acceptance" ? row.canonical_local_acceptance : row.canonical_local_result;
+      const existingDigest =
+        kind === "acceptance" ? row.local_acceptance_digest : row.local_result_digest;
+      if (existingCanonical !== null || existingDigest !== null) {
+        if (existingCanonical !== canonicalEntry || existingDigest !== entryDigest) {
+          throw new RemoteDeliveryConflictError(
+            `Remote local ${kind} conflicts with durable content`,
+          );
+        }
+        this.#database.exec("COMMIT");
+        committed = true;
+        return false;
+      }
+      if (kind === "acceptance") {
+        if (row.processing_state !== "ready") {
+          throw new TypeError("Remote command is not ready for local acceptance");
+        }
+        this.#database
+          .prepare(
+            `UPDATE remote_command_inbox
+             SET processing_state = 'local-accepted', local_command_id = ?,
+                 local_acceptance_digest = ?, canonical_local_acceptance = ?,
+                 local_accepted_at = ?
+             WHERE binding_id = ? AND sequence = ? AND processing_state = 'ready'`,
+          )
+          .run(localCommandId, entryDigest, canonicalEntry, entry.recordedAt, bindingId, sequence);
+      } else {
+        if (row.processing_state !== "local-accepted") {
+          throw new TypeError("Remote command has no durable local acceptance");
+        }
+        this.#database
+          .prepare(
+            `UPDATE remote_command_inbox
+             SET processing_state = 'local-result', local_result_digest = ?,
+                 canonical_local_result = ?, local_result_at = ?
+             WHERE binding_id = ? AND sequence = ? AND processing_state = 'local-accepted'`,
+          )
+          .run(entryDigest, canonicalEntry, entry.recordedAt, bindingId, sequence);
+      }
+      this.#database.exec("COMMIT");
+      committed = true;
+      this.#fault(
+        kind === "acceptance"
+          ? "after-remote-local-acceptance-commit-before-return"
+          : "after-remote-local-result-commit-before-return",
+      );
+      return true;
+    } catch (error) {
+      if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  #fault(point: SqliteRemoteAuthorityFaultPoint): void {
     this.#faultInjector?.(point);
   }
 }
@@ -7121,9 +8503,12 @@ function validateConfigurationSnapshot(
     "componentDigests",
     "snapshotDigest",
   ];
+  const snapshotKeys = Object.hasOwn(canonical, "remote")
+    ? [...requiredKeys, "remote"]
+    : requiredKeys;
   if (
-    Object.keys(canonical).length !== requiredKeys.length ||
-    requiredKeys.some((key) => !Object.hasOwn(canonical, key))
+    Object.keys(canonical).length !== snapshotKeys.length ||
+    snapshotKeys.some((key) => !Object.hasOwn(canonical, key))
   ) {
     throw new TypeError("Configuration snapshot must have the exact canonical shape");
   }
@@ -7131,6 +8516,7 @@ function validateConfigurationSnapshot(
     throw new TypeError("Configuration snapshot apiVersion is unsupported");
   }
   validateSnapshotExecution(canonical.execution);
+  if (Object.hasOwn(canonical, "remote")) validateSnapshotRemotePolicy(canonical.remote);
   const graph = validateWorkflowGraph(canonical.graph, dependencies.sha256);
   const registryKeys = [
     "schemas",
@@ -7162,7 +8548,9 @@ function validateConfigurationSnapshot(
     throw new TypeError("Configuration snapshot componentDigests must be an object");
   }
   const componentDigests = canonical.componentDigests;
-  const componentKeys = ["execution", "graph", ...registryKeys] as const;
+  const componentKeys = Object.hasOwn(canonical, "remote")
+    ? (["execution", "remote", "graph", ...registryKeys] as const)
+    : (["execution", "graph", ...registryKeys] as const);
   if (
     Object.keys(canonical.componentDigests).length !== componentKeys.length ||
     componentKeys.some((key) => !isSha256Digest(componentDigests[key]))
@@ -7183,6 +8571,95 @@ function validateConfigurationSnapshot(
     throw new TypeError("Configuration snapshot digest does not match canonical content");
   }
   return { snapshotDigest, graph, canonical };
+}
+
+function validateSnapshotRemotePolicy(value: unknown): void {
+  if (!isPlainRecord(value)) {
+    throw new TypeError("Configuration snapshot remote policy must be an object");
+  }
+  const keys = [
+    "disconnectedMode",
+    "roleMappings",
+    "maximumRemoteAuthorizationLeaseSeconds",
+    "synchronization",
+  ];
+  if (Object.keys(value).length !== keys.length || keys.some((key) => !Object.hasOwn(value, key))) {
+    throw new TypeError("Configuration snapshot remote policy has invalid fields");
+  }
+  if (
+    value.disconnectedMode !== "continue-authorized-local" &&
+    value.disconnectedMode !== "pause-new-local-work"
+  ) {
+    throw new TypeError("Configuration snapshot remote disconnected mode is invalid");
+  }
+  if (
+    !Number.isSafeInteger(value.maximumRemoteAuthorizationLeaseSeconds) ||
+    (value.maximumRemoteAuthorizationLeaseSeconds as number) < 1
+  ) {
+    throw new TypeError("Configuration snapshot remote authorization lease is invalid");
+  }
+  if (
+    !Array.isArray(value.roleMappings) ||
+    value.roleMappings.length > PROTOCOL_LIMITS.maxPageItems
+  ) {
+    throw new TypeError("Configuration snapshot remote role mappings are invalid");
+  }
+  let priorMapping: string | undefined;
+  for (const mapping of value.roleMappings) {
+    if (!isPlainRecord(mapping)) {
+      throw new TypeError("Configuration snapshot remote role mapping is invalid");
+    }
+    const mappingKeys = ["issuer", "tenant", "upstreamRole", "localRoles"];
+    if (
+      Object.keys(mapping).length !== mappingKeys.length ||
+      mappingKeys.some((key) => !Object.hasOwn(mapping, key)) ||
+      typeof mapping.issuer !== "string" ||
+      mapping.issuer.length === 0 ||
+      typeof mapping.tenant !== "string" ||
+      mapping.tenant.length === 0 ||
+      typeof mapping.upstreamRole !== "string" ||
+      mapping.upstreamRole.length === 0 ||
+      !Array.isArray(mapping.localRoles) ||
+      mapping.localRoles.length === 0 ||
+      mapping.localRoles.some((role) => typeof role !== "string" || role.length === 0)
+    ) {
+      throw new TypeError("Configuration snapshot remote role mapping is invalid");
+    }
+    const localRoles = mapping.localRoles as string[];
+    if (
+      localRoles.some((role, index) => {
+        const prior = localRoles[index - 1];
+        return prior !== undefined && prior >= role;
+      })
+    ) {
+      throw new TypeError("Configuration snapshot remote local roles must be uniquely sorted");
+    }
+    const mappingOrder = canonicalStringify([mapping.issuer, mapping.tenant, mapping.upstreamRole]);
+    if (priorMapping !== undefined && priorMapping >= mappingOrder) {
+      throw new TypeError("Configuration snapshot remote role mappings must be uniquely sorted");
+    }
+    priorMapping = mappingOrder;
+  }
+  const synchronization = value.synchronization;
+  if (!isPlainRecord(synchronization)) {
+    throw new TypeError("Configuration snapshot remote synchronization policy is invalid");
+  }
+  const synchronizationKeys = [
+    "classificationCeiling",
+    "receiptChain",
+    "events",
+    "projections",
+    "synchronizationState",
+  ];
+  if (
+    Object.keys(synchronization).length !== synchronizationKeys.length ||
+    synchronizationKeys.some((key) => !Object.hasOwn(synchronization, key)) ||
+    (synchronization.classificationCeiling !== "public" &&
+      synchronization.classificationCeiling !== "internal") ||
+    synchronizationKeys.slice(1).some((key) => typeof synchronization[key] !== "boolean")
+  ) {
+    throw new TypeError("Configuration snapshot remote synchronization policy is invalid");
+  }
 }
 
 function validateSnapshotExecution(value: unknown): void {
@@ -7900,6 +9377,869 @@ function openReadConnection(path: string): Database.Database {
   return database;
 }
 
+function digestCanonicalText(
+  canonical: string,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): string {
+  const digest = dependencies.sha256.digest(new TextEncoder().encode(canonical));
+  if (!isSha256Digest(digest)) {
+    throw new TypeError("SHA-256 implementations must return lowercase hexadecimal digests");
+  }
+  return digest;
+}
+
+function validateNonNegativeSafeInteger(value: number, field: string): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${field} must be a non-negative safe integer`);
+  }
+}
+
+function validatePositiveSafeInteger(value: number, field: string): void {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${field} must be a positive safe integer`);
+  }
+}
+
+function validateRemoteSequenceWindow(value: number): void {
+  validatePositiveSafeInteger(value, "sequenceWindow");
+  if (value > MAX_REMOTE_SEQUENCE_WINDOW) {
+    throw new TypeError(`sequenceWindow must not exceed ${MAX_REMOTE_SEQUENCE_WINDOW}`);
+  }
+}
+
+function requireRemotePeer(database: Database.Database, bindingId: string): RemotePeerRow {
+  const row = database
+    .prepare<[string], RemotePeerRow>("SELECT * FROM remote_peer_state WHERE binding_id = ?")
+    .get(bindingId);
+  if (row === undefined) throw new TypeError(`Remote binding ${bindingId} is not registered`);
+  return row;
+}
+
+function requireRemoteCheckpoint(
+  database: Database.Database,
+  bindingId: string,
+  streamKind: RemoteStreamCheckpoint["streamKind"],
+): RemoteCheckpointRow {
+  const row = database
+    .prepare<[string, string], RemoteCheckpointRow>(
+      `SELECT * FROM remote_stream_checkpoints
+       WHERE binding_id = ? AND stream_kind = ?`,
+    )
+    .get(bindingId, streamKind);
+  if (row === undefined) {
+    throw new Error(`Remote ${streamKind} checkpoint is missing for ${bindingId}`);
+  }
+  return row;
+}
+
+function requireRemoteHistoryCommitment(
+  database: Database.Database,
+  bindingId: string,
+): RemoteHistoryCommitmentRow {
+  const row = database
+    .prepare<[string], RemoteHistoryCommitmentRow>(
+      "SELECT * FROM remote_history_commitments WHERE binding_id = ?",
+    )
+    .get(bindingId);
+  if (row === undefined) {
+    throw new Error(`Remote history commitment is missing for ${bindingId}`);
+  }
+  return row;
+}
+
+function canonicalRemoteRunEventCommitments(
+  database: Database.Database,
+  bindingId: string,
+): string {
+  const rows = database
+    .prepare<[string], RemoteRunEventCheckpointRow>(
+      `SELECT * FROM remote_run_event_checkpoints
+       WHERE binding_id = ? ORDER BY run_id`,
+    )
+    .all(bindingId);
+  return canonicalStringify(rows.map(remoteRunEventCheckpoint));
+}
+
+function assertRemoteHistoryCommitmentCurrent(
+  database: Database.Database,
+  bindingId: string,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): void {
+  const peer = requireRemotePeer(database, bindingId);
+  const commitment = requireRemoteHistoryCommitment(database, bindingId);
+  const inbound = requireRemoteCheckpoint(database, bindingId, "inbound-command");
+  const outbound = requireRemoteCheckpoint(database, bindingId, "outbound-report");
+  const acknowledged = requireRemoteCheckpoint(database, bindingId, "outbound-acknowledgement");
+  const synchronization = requireRemoteSynchronization(database, bindingId);
+  const canonicalRunEventCommitments = canonicalRemoteRunEventCommitments(database, bindingId);
+  if (
+    commitment.repository_id !== peer.repository_id ||
+    commitment.binding_digest !== peer.binding_digest ||
+    commitment.canonical_binding !== peer.canonical_binding ||
+    commitment.inbound_sequence !== inbound.contiguous_sequence ||
+    commitment.inbound_digest !== inbound.last_digest ||
+    commitment.outbound_report_sequence !== outbound.contiguous_sequence ||
+    commitment.outbound_report_digest !== outbound.last_digest ||
+    commitment.acknowledged_report_sequence !== acknowledged.contiguous_sequence ||
+    commitment.acknowledged_report_digest !== acknowledged.last_digest ||
+    commitment.acknowledged_cursor !== synchronization.centrally_acknowledged_cursor ||
+    commitment.canonical_run_event_commitments !== canonicalRunEventCommitments ||
+    commitment.run_event_commitments_digest !==
+      digestCanonicalText(canonicalRunEventCommitments, dependencies)
+  ) {
+    throw new Error(`Remote history commitment diverges from normalized state for ${bindingId}`);
+  }
+}
+
+function refreshRemoteHistoryCommitment(
+  database: Database.Database,
+  bindingId: string,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): void {
+  const inbound = requireRemoteCheckpoint(database, bindingId, "inbound-command");
+  const outbound = requireRemoteCheckpoint(database, bindingId, "outbound-report");
+  const acknowledged = requireRemoteCheckpoint(database, bindingId, "outbound-acknowledgement");
+  const synchronization = requireRemoteSynchronization(database, bindingId);
+  const canonicalRunEventCommitments = canonicalRemoteRunEventCommitments(database, bindingId);
+  const result = database
+    .prepare(
+      `UPDATE remote_history_commitments
+       SET inbound_sequence = ?, inbound_digest = ?,
+           outbound_report_sequence = ?, outbound_report_digest = ?,
+           acknowledged_report_sequence = ?, acknowledged_report_digest = ?,
+           acknowledged_cursor = ?, canonical_run_event_commitments = ?,
+           run_event_commitments_digest = ?
+       WHERE binding_id = ?
+         AND inbound_sequence <= ?
+         AND outbound_report_sequence <= ?
+         AND acknowledged_report_sequence <= ?
+         AND acknowledged_cursor <= ?`,
+    )
+    .run(
+      inbound.contiguous_sequence,
+      inbound.last_digest,
+      outbound.contiguous_sequence,
+      outbound.last_digest,
+      acknowledged.contiguous_sequence,
+      acknowledged.last_digest,
+      synchronization.centrally_acknowledged_cursor,
+      canonicalRunEventCommitments,
+      digestCanonicalText(canonicalRunEventCommitments, dependencies),
+      bindingId,
+      inbound.contiguous_sequence,
+      outbound.contiguous_sequence,
+      acknowledged.contiguous_sequence,
+      synchronization.centrally_acknowledged_cursor,
+    );
+  if (result.changes !== 1) {
+    throw new Error(`Remote history commitment cannot move backwards for ${bindingId}`);
+  }
+}
+
+function updateRemoteCheckpoint(
+  database: Database.Database,
+  bindingId: string,
+  streamKind: RemoteStreamCheckpoint["streamKind"],
+  sequence: number,
+  digest: string,
+  updatedAt: string,
+): void {
+  const result = database
+    .prepare(
+      `UPDATE remote_stream_checkpoints
+       SET contiguous_sequence = ?, last_digest = ?, updated_at = ?
+       WHERE binding_id = ? AND stream_kind = ?`,
+    )
+    .run(sequence, digest, updatedAt, bindingId, streamKind);
+  if (result.changes !== 1) throw new Error(`Remote ${streamKind} checkpoint is missing`);
+}
+
+function requireRemoteSynchronization(
+  database: Database.Database,
+  bindingId: string,
+): RemoteSynchronizationRow {
+  const row = database
+    .prepare<[string], RemoteSynchronizationRow>(
+      "SELECT * FROM remote_synchronization_vectors WHERE binding_id = ?",
+    )
+    .get(bindingId);
+  if (row === undefined) throw new Error(`Remote synchronization is missing for ${bindingId}`);
+  return row;
+}
+
+function readRemoteRunEventCheckpoint(
+  database: Database.Database,
+  bindingId: string,
+  runId: string,
+): RemoteRunEventCheckpointRow | undefined {
+  return database
+    .prepare<[string, string], RemoteRunEventCheckpointRow>(
+      `SELECT * FROM remote_run_event_checkpoints
+       WHERE binding_id = ? AND run_id = ?`,
+    )
+    .get(bindingId, runId);
+}
+
+function remoteRunEventCheckpoint(row: RemoteRunEventCheckpointRow): RemoteRunEventCheckpoint {
+  return Object.freeze({
+    bindingId: row.binding_id,
+    repositoryId: row.repository_id,
+    runId: row.run_id,
+    localLatestCursor: row.local_latest_cursor,
+    durablyEnqueuedCursor: row.durably_enqueued_cursor,
+    centrallyAcknowledgedCursor: row.centrally_acknowledged_cursor,
+    lastEnqueuedReportSequence: row.last_enqueued_report_sequence,
+    lastAcknowledgedReportSequence: row.last_acknowledged_report_sequence,
+  });
+}
+
+function assertRemoteBindingRow(
+  peer: RemotePeerRow,
+  binding: RemoteRepositoryBinding,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): void {
+  const canonicalBinding = canonicalStringify(binding);
+  if (
+    peer.binding_id !== binding.bindingId ||
+    peer.repository_id !== binding.repositoryId ||
+    peer.binding_digest !== digestCanonicalText(canonicalBinding, dependencies) ||
+    peer.canonical_binding !== canonicalBinding
+  ) {
+    throw new RemoteDeliveryConflictError(
+      `Remote binding ${binding.bindingId} does not match durable peer state`,
+    );
+  }
+}
+
+function assertRemoteCommandDigestBindings(
+  envelope: RemoteCommandEnvelope,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): void {
+  const accepted = envelope.acceptedCommand;
+  const commandDigest = dependencies.sha256.digest(canonicalBytes(accepted.command));
+  const acceptedDigest = dependencies.sha256.digest(canonicalBytes(accepted));
+  if (commandDigest !== accepted.commandDigest) {
+    throw new RemoteDeliveryConflictError("Remote command digest does not bind its command");
+  }
+  if (acceptedDigest !== envelope.acceptedCommandDigest) {
+    throw new RemoteDeliveryConflictError(
+      "Remote accepted-command digest does not bind its accepted command",
+    );
+  }
+}
+
+const FORBIDDEN_REMOTE_COMMAND_FIELDS = new Set([
+  "assetbytes",
+  "assetcontent",
+  "canonicalpath",
+  "context",
+  "contextbytes",
+  "credential",
+  "credentials",
+  "endpoint",
+  "granttoken",
+  "lease",
+  "leases",
+  "privatekey",
+  "privatekeypath",
+  "prompt",
+  "promptbytes",
+  "rawassetcontent",
+  "repositorypath",
+  "sdksessionid",
+  "source",
+  "sourcepath",
+  "token",
+  "workspacepath",
+]);
+
+function assertNoForbiddenRemoteCommandData(value: JsonValue, path = "$.payload"): void {
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      assertNoForbiddenRemoteCommandData(item, `${path}[${index}]`);
+    }
+    return;
+  }
+  if (!isPlainRecord(value)) return;
+  for (const [key, item] of Object.entries(value)) {
+    const normalizedKey = key.replaceAll(/[^a-z0-9]/giu, "").toLowerCase();
+    if (FORBIDDEN_REMOTE_COMMAND_FIELDS.has(normalizedKey)) {
+      throw new TypeError(`Remote command contains forbidden local-only field ${path}.${key}`);
+    }
+    assertNoForbiddenRemoteCommandData(item as JsonValue, `${path}.${key}`);
+  }
+}
+
+function readRemoteInboxRow(
+  database: Database.Database,
+  bindingId: string,
+  sequence: number,
+): RemoteInboxRow | undefined {
+  return database
+    .prepare<[string, number], RemoteInboxRow>(
+      `SELECT * FROM remote_command_inbox WHERE binding_id = ? AND sequence = ?`,
+    )
+    .get(bindingId, sequence);
+}
+
+function assertRemoteInboxIdentityAvailable(
+  database: Database.Database,
+  envelope: RemoteCommandEnvelope,
+  envelopeDigest: string,
+): void {
+  const bindingId = envelope.acceptedCommand.binding.bindingId;
+  const row = database
+    .prepare<
+      [string, string, string, string],
+      { sequence: number; acceptance_id: string; command_id: string; envelope_digest: string }
+    >(
+      `SELECT sequence, acceptance_id, command_id, envelope_digest
+       FROM remote_command_inbox
+       WHERE binding_id = ?
+         AND (acceptance_id = ? OR command_id = ? OR envelope_digest = ?)
+       LIMIT 1`,
+    )
+    .get(
+      bindingId,
+      envelope.acceptedCommand.acceptanceId,
+      envelope.acceptedCommand.command.commandId,
+      envelopeDigest,
+    );
+  if (row !== undefined) {
+    throw new RemoteDeliveryConflictError(
+      `Remote command identity is already bound at sequence ${row.sequence}`,
+    );
+  }
+}
+
+function reconcileRemoteInbox(
+  database: Database.Database,
+  bindingId: string,
+  updatedAt: string,
+): void {
+  let checkpoint = requireRemoteCheckpoint(database, bindingId, "inbound-command");
+  while (true) {
+    const next = readRemoteInboxRow(database, bindingId, checkpoint.contiguous_sequence + 1);
+    if (next === undefined) return;
+    if (next.previous_envelope_digest !== checkpoint.last_digest) {
+      if (
+        next.processing_state === "waiting" ||
+        next.processing_state === "expired" ||
+        next.processing_state === "revoked"
+      ) {
+        database
+          .prepare(
+            `UPDATE remote_command_inbox SET processing_state = 'conflict'
+             WHERE binding_id = ? AND sequence = ?
+               AND processing_state IN ('waiting', 'expired', 'revoked')`,
+          )
+          .run(bindingId, next.sequence);
+      }
+      return;
+    }
+    if (next.processing_state === "waiting") {
+      database
+        .prepare(
+          `UPDATE remote_command_inbox SET processing_state = 'ready'
+           WHERE binding_id = ? AND sequence = ? AND processing_state = 'waiting'`,
+        )
+        .run(bindingId, next.sequence);
+    }
+    updateRemoteCheckpoint(
+      database,
+      bindingId,
+      "inbound-command",
+      next.sequence,
+      next.envelope_digest,
+      updatedAt,
+    );
+    checkpoint = {
+      ...checkpoint,
+      contiguous_sequence: next.sequence,
+      last_digest: next.envelope_digest,
+      updated_at: updatedAt,
+    };
+  }
+}
+
+function toRemoteInboxRecord(row: RemoteInboxRow): RemoteInboxRecord {
+  return Object.freeze({
+    bindingId: row.binding_id,
+    sequence: row.sequence,
+    envelopeDigest: row.envelope_digest,
+    canonicalEnvelope: row.canonical_envelope,
+    envelope: decodeRemoteCommandEnvelope(row.canonical_envelope),
+    deliveryEntry: decodeRemoteReceiptChainEntry(row.canonical_delivery_entry),
+    receivedAt: row.received_at,
+    processingState: row.processing_state,
+    ...(row.canonical_local_acceptance === null
+      ? {}
+      : { localAcceptance: decodeRemoteReceiptChainEntry(row.canonical_local_acceptance) }),
+    ...(row.canonical_local_result === null
+      ? {}
+      : { localResult: decodeRemoteReceiptChainEntry(row.canonical_local_result) }),
+  });
+}
+
+function remoteLocalCommandId(entry: RemoteReceiptChainEntry): string {
+  if (entry.evidence.type !== "local-receipt" && entry.evidence.type !== "local-outcome") {
+    throw new TypeError("Remote receipt entry does not contain local command evidence");
+  }
+  return entry.evidence.localCommandId;
+}
+
+function assertSynchronizationForEnqueue(
+  synchronization: RemoteSynchronizationVector,
+  current: RemoteSynchronizationRow,
+): void {
+  if (isZeroRemoteSynchronization(synchronization)) return;
+  if (
+    synchronization.repositoryId !== current.repository_id ||
+    synchronization.localLatestCursor < current.local_latest_cursor ||
+    synchronization.durablyEnqueuedCursor < current.durably_enqueued_cursor ||
+    synchronization.centrallyAcknowledgedCursor !== current.centrally_acknowledged_cursor ||
+    synchronization.lastAcknowledgedAt !== current.last_acknowledged_at ||
+    Date.parse(synchronization.localObservedAt) < Date.parse(current.local_observed_at)
+  ) {
+    throw new RemoteDeliveryConflictError(
+      "Remote report synchronization does not extend durable synchronization state",
+    );
+  }
+}
+
+function isZeroRemoteSynchronization(synchronization: RemoteSynchronizationVector): boolean {
+  return (
+    synchronization.localLatestCursor === 0 &&
+    synchronization.durablyEnqueuedCursor === 0 &&
+    synchronization.centrallyAcknowledgedCursor === 0 &&
+    synchronization.lastEnqueuedAt === null &&
+    synchronization.lastAcknowledgedAt === null
+  );
+}
+
+function applyRemoteRunEventAdvances(
+  database: Database.Database,
+  report: RemoteClassifiedReport,
+  advances: readonly RemoteRunEventAdvance[],
+): void {
+  const representedRunIds = new Set(report.events.map((event) => event.runId));
+  if (
+    (report.events.length > 0 && representedRunIds.size !== advances.length) ||
+    (report.events.length === 0 && advances.length > 1)
+  ) {
+    throw new RemoteDeliveryConflictError(
+      "Remote report event metadata requires an exact set of run checkpoint advances",
+    );
+  }
+  const advancedRunIds = new Set<string>();
+  for (const advance of advances) {
+    if (
+      advancedRunIds.has(advance.runId) ||
+      (report.events.length > 0 && !representedRunIds.has(advance.runId))
+    ) {
+      throw new RemoteDeliveryConflictError(
+        "Remote report event metadata requires an exact set of run checkpoint advances",
+      );
+    }
+    advancedRunIds.add(advance.runId);
+    applyRemoteRunEventAdvance(database, report, advance);
+  }
+  if (advances.length === 0) return;
+  const aggregate = remoteRunEventAggregate(database, report.binding.bindingId);
+  if (
+    report.synchronization.localLatestCursor !== aggregate.localLatestCursor ||
+    report.synchronization.durablyEnqueuedCursor !== aggregate.durablyEnqueuedCursor ||
+    report.synchronization.centrallyAcknowledgedCursor !== aggregate.centrallyAcknowledgedCursor
+  ) {
+    throw new RemoteDeliveryConflictError(
+      "Remote report synchronization does not equal its per-run event checkpoints",
+    );
+  }
+}
+
+function normalizeRemoteRunEventAdvances(
+  input: RemoteRunEventAdvance | readonly RemoteRunEventAdvance[] | undefined,
+): readonly RemoteRunEventAdvance[] {
+  return input === undefined ? [] : Array.isArray(input) ? input : [input as RemoteRunEventAdvance];
+}
+
+function assertRemoteReportReplayExact(
+  database: Database.Database,
+  report: RemoteClassifiedReport,
+  canonicalReport: string,
+  reportDigest: string,
+  advances: readonly RemoteRunEventAdvance[],
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): void {
+  const durableReport = database
+    .prepare<[string], RemoteReportReplayRow>(
+      `SELECT report_id, binding_id, report_sequence, previous_report_digest,
+              report_digest, event_advance_count, canonical_report
+       FROM remote_report_outbox WHERE report_id = ?`,
+    )
+    .get(report.reportId);
+  if (
+    durableReport === undefined ||
+    durableReport.binding_id !== report.binding.bindingId ||
+    durableReport.report_sequence !== report.reportSequence ||
+    durableReport.previous_report_digest !== report.previousReportDigest ||
+    durableReport.report_digest !== reportDigest ||
+    durableReport.canonical_report !== canonicalReport ||
+    durableReport.event_advance_count !== advances.length
+  ) {
+    throw new RemoteDeliveryConflictError(
+      `Remote report ${report.reportId} retry differs from durable content`,
+    );
+  }
+  const canonicalAdvances = canonicalStringify(
+    [...advances]
+      .sort((left, right) => (left.runId < right.runId ? -1 : left.runId > right.runId ? 1 : 0))
+      .map((advance) => ({
+        repositoryId: advance.repositoryId,
+        runId: advance.runId,
+        fromCursor: advance.fromCursor,
+        throughCursor: advance.throughCursor,
+        localLatestCursor: advance.localLatestCursor,
+      })),
+  );
+  const canonicalDurableAdvances = canonicalStringify(
+    database
+      .prepare<[string], RemoteReportRunEventAdvanceRow>(
+        `SELECT a.*, r.report_sequence, r.canonical_report,
+                r.binding_id AS report_binding_id,
+                r.repository_id AS report_repository_id
+         FROM remote_report_run_event_advances a
+         JOIN remote_report_outbox r
+           ON r.report_id = a.report_id AND r.binding_id = a.binding_id
+         WHERE a.report_id = ? ORDER BY a.run_id`,
+      )
+      .all(report.reportId)
+      .map((advance) => ({
+        repositoryId: advance.repository_id,
+        runId: advance.run_id,
+        fromCursor: advance.from_cursor,
+        throughCursor: advance.through_cursor,
+        localLatestCursor: advance.local_latest_cursor,
+      })),
+  );
+  if (canonicalAdvances !== canonicalDurableAdvances) {
+    throw new RemoteDeliveryConflictError(
+      `Remote report ${report.reportId} retry has different run event advances`,
+    );
+  }
+
+  const commitment = requireRemoteHistoryCommitment(database, report.binding.bindingId);
+  const committedReports = database
+    .prepare<[string], RemoteReportReplayRow>(
+      `SELECT report_id, binding_id, report_sequence, previous_report_digest,
+              report_digest, event_advance_count, canonical_report
+       FROM remote_report_outbox
+       WHERE binding_id = ? ORDER BY report_sequence`,
+    )
+    .all(report.binding.bindingId);
+  let expectedSequence = 1;
+  let expectedPreviousDigest: string | null = null;
+  let lastDigest: string | null = null;
+  let replayIncluded = false;
+  for (const committedReport of committedReports) {
+    const computedDigest = digestCanonicalText(committedReport.canonical_report, dependencies);
+    if (
+      committedReport.report_sequence !== expectedSequence ||
+      committedReport.previous_report_digest !== expectedPreviousDigest ||
+      committedReport.report_digest !== computedDigest
+    ) {
+      throw new RemoteDeliveryConflictError(
+        `Remote report ${report.reportId} retry diverges from committed report history`,
+      );
+    }
+    expectedSequence += 1;
+    expectedPreviousDigest = committedReport.report_digest;
+    lastDigest = committedReport.report_digest;
+    replayIncluded ||= committedReport.report_id === report.reportId;
+  }
+  if (
+    !replayIncluded ||
+    commitment.outbound_report_sequence !== expectedSequence - 1 ||
+    commitment.outbound_report_digest !== lastDigest
+  ) {
+    throw new RemoteDeliveryConflictError(
+      `Remote report ${report.reportId} retry is not covered by the history commitment`,
+    );
+  }
+}
+
+function applyRemoteRunEventAdvance(
+  database: Database.Database,
+  report: RemoteClassifiedReport,
+  advance: RemoteRunEventAdvance,
+): void {
+  validateStorageIdentifier(advance.repositoryId, "repositoryId");
+  validateStorageIdentifier(advance.runId, "runId");
+  validateNonNegativeSafeInteger(advance.fromCursor, "fromCursor");
+  validateNonNegativeSafeInteger(advance.throughCursor, "throughCursor");
+  validateNonNegativeSafeInteger(advance.localLatestCursor, "localLatestCursor");
+  if (
+    advance.repositoryId !== report.binding.repositoryId ||
+    advance.throughCursor < advance.fromCursor ||
+    advance.localLatestCursor < advance.throughCursor
+  ) {
+    throw new RemoteDeliveryConflictError("Remote run event advance is invalid");
+  }
+  const current = readRemoteRunEventCheckpoint(database, report.binding.bindingId, advance.runId);
+  if (
+    (current !== undefined && current.repository_id !== advance.repositoryId) ||
+    advance.fromCursor !== (current?.durably_enqueued_cursor ?? 0) ||
+    advance.localLatestCursor < (current?.local_latest_cursor ?? 0)
+  ) {
+    throw new RemoteDeliveryConflictError(
+      "Remote run event advance does not extend its durable checkpoint",
+    );
+  }
+  const runKey = canonicalStringify([advance.repositoryId, advance.runId]);
+  const durableRun = database
+    .prepare<[string], { repository_id: string; run_id: string; cursor: number }>(
+      "SELECT repository_id, run_id, cursor FROM runs WHERE run_key = ?",
+    )
+    .get(runKey);
+  if (
+    durableRun === undefined ||
+    durableRun.repository_id !== advance.repositoryId ||
+    durableRun.run_id !== advance.runId
+  ) {
+    throw new RemoteDeliveryConflictError(
+      "Remote run event advance does not reference an authoritative local run",
+    );
+  }
+  if (advance.localLatestCursor > durableRun.cursor) {
+    throw new RemoteDeliveryConflictError(
+      "Remote run event advance exceeds the local authority cursor",
+    );
+  }
+  const exactEvents = database
+    .prepare<[string, number, number], { canonical_frame: string }>(
+      `SELECT canonical_frame FROM event_frames
+       WHERE run_key = ? AND cursor > ? AND cursor <= ? ORDER BY cursor`,
+    )
+    .all(runKey, advance.fromCursor, advance.throughCursor)
+    .map((row) => remoteEventMetadata(decodeEventStreamFrame(row.canonical_frame)));
+  if (
+    report.events.some((event) => event.repositoryId !== report.binding.repositoryId) ||
+    canonicalStringify(report.events.filter((event) => event.runId === advance.runId)) !==
+      canonicalStringify(exactEvents)
+  ) {
+    throw new RemoteDeliveryConflictError(
+      "Remote report event metadata does not exactly cover its run checkpoint advance",
+    );
+  }
+  database
+    .prepare(
+      `INSERT INTO remote_run_event_checkpoints(
+         binding_id, repository_id, run_id, local_latest_cursor,
+         durably_enqueued_cursor, centrally_acknowledged_cursor,
+         last_enqueued_report_sequence, last_acknowledged_report_sequence
+       ) VALUES (?, ?, ?, ?, ?, 0, ?, 0)
+       ON CONFLICT(binding_id, run_id) DO UPDATE SET
+         local_latest_cursor = excluded.local_latest_cursor,
+         durably_enqueued_cursor = excluded.durably_enqueued_cursor,
+         last_enqueued_report_sequence = excluded.last_enqueued_report_sequence`,
+    )
+    .run(
+      report.binding.bindingId,
+      advance.repositoryId,
+      advance.runId,
+      advance.localLatestCursor,
+      advance.throughCursor,
+      report.reportSequence,
+    );
+  database
+    .prepare(
+      `INSERT INTO remote_report_run_event_advances(
+         report_id, binding_id, repository_id, run_id,
+         from_cursor, through_cursor, local_latest_cursor
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      report.reportId,
+      report.binding.bindingId,
+      advance.repositoryId,
+      advance.runId,
+      advance.fromCursor,
+      advance.throughCursor,
+      advance.localLatestCursor,
+    );
+}
+
+function remoteEventMetadata(event: EventStreamFrame): RemoteEventMetadata {
+  return Object.freeze({
+    cursor: event.cursor,
+    repositoryId: event.repositoryId,
+    runId: event.runId,
+    eventId: event.eventId,
+    eventType: event.eventType,
+    occurredAt: event.occurredAt,
+    payloadDigest: event.payloadDigest,
+    ...(event.commandId === undefined ? {} : { commandId: event.commandId }),
+  });
+}
+
+function remoteRunEventAggregate(
+  database: Database.Database,
+  bindingId: string,
+): {
+  readonly localLatestCursor: number;
+  readonly durablyEnqueuedCursor: number;
+  readonly centrallyAcknowledgedCursor: number;
+} {
+  return database
+    .prepare<
+      [string],
+      {
+        localLatestCursor: number;
+        durablyEnqueuedCursor: number;
+        centrallyAcknowledgedCursor: number;
+      }
+    >(
+      `SELECT
+         COALESCE(SUM(local_latest_cursor), 0) AS localLatestCursor,
+         COALESCE(SUM(durably_enqueued_cursor), 0) AS durablyEnqueuedCursor,
+         COALESCE(SUM(centrally_acknowledged_cursor), 0) AS centrallyAcknowledgedCursor
+       FROM remote_run_event_checkpoints WHERE binding_id = ?`,
+    )
+    .get(bindingId) as {
+    readonly localLatestCursor: number;
+    readonly durablyEnqueuedCursor: number;
+    readonly centrallyAcknowledgedCursor: number;
+  };
+}
+
+function remoteReportClaim(
+  row: {
+    readonly report_id: string;
+    readonly report_sequence: number;
+    readonly report_digest: string;
+  },
+  bindingId: string,
+  ownerId: string,
+  fence: number,
+  expiresAt: string,
+): RemoteReportClaim {
+  return Object.freeze({
+    reportId: row.report_id,
+    bindingId,
+    reportSequence: row.report_sequence,
+    reportDigest: row.report_digest,
+    ownerId,
+    fence,
+    expiresAt,
+  });
+}
+
+function assertRemoteAcknowledgement(
+  row: {
+    readonly binding_id: string;
+    readonly repository_id: string;
+    readonly report_sequence: number;
+    readonly report_digest: string;
+  },
+  claim: RemoteReportClaim,
+  acknowledgement: RemoteReportAcknowledgement,
+  controlPlaneKeyId: string,
+): void {
+  if (
+    row.binding_id !== claim.bindingId ||
+    row.report_sequence !== claim.reportSequence ||
+    row.report_digest !== claim.reportDigest ||
+    acknowledgement.bindingId !== row.binding_id ||
+    acknowledgement.repositoryId !== row.repository_id ||
+    acknowledgement.reportId !== claim.reportId ||
+    acknowledgement.reportSequence !== row.report_sequence ||
+    acknowledgement.reportDigest !== row.report_digest ||
+    acknowledgement.signingKeyId !== controlPlaneKeyId
+  ) {
+    throw new RemoteDeliveryConflictError(
+      `Remote report ${claim.reportId} acknowledgement does not match its durable report`,
+    );
+  }
+}
+
+function reconcileRemoteAcknowledgements(
+  database: Database.Database,
+  bindingId: string,
+  currentTime: string,
+): void {
+  let checkpoint = requireRemoteCheckpoint(database, bindingId, "outbound-acknowledgement");
+  let acknowledgedCursor = requireRemoteSynchronization(
+    database,
+    bindingId,
+  ).centrally_acknowledged_cursor;
+  let acknowledgedAt: string | null = null;
+  while (true) {
+    const next = database
+      .prepare<
+        [string, number],
+        {
+          report_id: string;
+          report_sequence: number;
+          report_digest: string;
+          source_cursor: number;
+          acknowledged_at: string;
+        }
+      >(
+        `SELECT report_id, report_sequence, report_digest, source_cursor, acknowledged_at
+         FROM remote_report_outbox
+         WHERE binding_id = ? AND report_sequence = ? AND delivery_state = 'acknowledged'`,
+      )
+      .get(bindingId, checkpoint.contiguous_sequence + 1);
+    if (next === undefined) break;
+    acknowledgedAt = next.acknowledged_at;
+    const advanced = database
+      .prepare(
+        `UPDATE remote_run_event_checkpoints
+         SET centrally_acknowledged_cursor = (
+               SELECT through_cursor FROM remote_report_run_event_advances
+               WHERE report_id = ? AND run_id = remote_run_event_checkpoints.run_id
+             ),
+             last_acknowledged_report_sequence = ?
+         WHERE binding_id = ? AND run_id IN (
+           SELECT run_id FROM remote_report_run_event_advances WHERE report_id = ?
+         )`,
+      )
+      .run(next.report_id, next.report_sequence, bindingId, next.report_id);
+    acknowledgedCursor =
+      advanced.changes === 0
+        ? next.source_cursor
+        : remoteRunEventAggregate(database, bindingId).centrallyAcknowledgedCursor;
+    updateRemoteCheckpoint(
+      database,
+      bindingId,
+      "outbound-acknowledgement",
+      next.report_sequence,
+      next.report_digest,
+      currentTime,
+    );
+    checkpoint = {
+      ...checkpoint,
+      contiguous_sequence: next.report_sequence,
+      last_digest: next.report_digest,
+      updated_at: currentTime,
+    };
+  }
+  if (acknowledgedAt !== null) {
+    database
+      .prepare(
+        `UPDATE remote_synchronization_vectors
+         SET centrally_acknowledged_cursor = ?, last_acknowledged_at = ?, local_observed_at = ?
+         WHERE binding_id = ?`,
+      )
+      .run(
+        acknowledgedCursor,
+        acknowledgedCursor === 0 ? null : acknowledgedAt,
+        currentTime,
+        bindingId,
+      );
+  }
+}
+
 function applyMigrations(
   database: Database.Database,
   dependencies: Pick<RuntimeDependencies, "sha256">,
@@ -7995,6 +10335,7 @@ function verifyDatabase(
   verifyHumanAuthorityTables(database, dependencies);
   verifyPortalRevisionTables(database);
   verifySupervisorTables(database);
+  verifyRemoteDeliveryTables(database, dependencies);
   if (!verifyAssets) return;
   for (const descriptor of readAssetDescriptors(database)) {
     verifyAssetBytes(
@@ -8003,6 +10344,607 @@ function verifyDatabase(
       dependencies,
     );
   }
+}
+
+function verifyRemoteDeliveryTables(
+  database: Database.Database,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): void {
+  const peers = database
+    .prepare<[], RemotePeerRow>("SELECT * FROM remote_peer_state ORDER BY binding_id")
+    .all();
+  const peerByBinding = new Map(peers.map((peer) => [peer.binding_id, peer]));
+  const bindings = new Map<string, RemoteRepositoryBinding>();
+  const commitments = database
+    .prepare<[], RemoteHistoryCommitmentRow>(
+      "SELECT * FROM remote_history_commitments ORDER BY binding_id",
+    )
+    .all();
+  if (
+    commitments.length !== peers.length ||
+    commitments.some((commitment) => !peerByBinding.has(commitment.binding_id))
+  ) {
+    throw new Error("SQLite remote history commitments do not exactly cover peer state");
+  }
+  const commitmentByBinding = new Map(
+    commitments.map((commitment) => [commitment.binding_id, commitment]),
+  );
+  for (const peer of peers) {
+    const binding = decodeRemoteRepositoryBinding(peer.canonical_binding);
+    const commitment = commitmentByBinding.get(peer.binding_id);
+    if (
+      commitment === undefined ||
+      canonicalStringify(binding) !== peer.canonical_binding ||
+      digestCanonicalText(peer.canonical_binding, dependencies) !== peer.binding_digest ||
+      binding.bindingId !== peer.binding_id ||
+      binding.repositoryId !== peer.repository_id ||
+      commitment.repository_id !== peer.repository_id ||
+      commitment.binding_digest !== peer.binding_digest ||
+      commitment.canonical_binding !== peer.canonical_binding ||
+      digestCanonicalText(commitment.canonical_run_event_commitments, dependencies) !==
+        commitment.run_event_commitments_digest ||
+      peer.current_revocation_epoch < binding.revocationEpoch
+    ) {
+      throw new Error("SQLite remote peer state and history commitment are not semantically bound");
+    }
+    if (peer.session_id !== null) validateStorageIdentifier(peer.session_id, "session_id");
+    const negotiated = [
+      peer.session_id,
+      peer.selected_protocol_version,
+      peer.canonical_capabilities,
+    ];
+    if (
+      negotiated.some((value) => value === null) !== negotiated.every((value) => value === null)
+    ) {
+      throw new Error("SQLite remote negotiated session is incomplete");
+    }
+    if (
+      peer.session_id !== null &&
+      (peer.selected_protocol_version !== REMOTE_PROTOCOL_VERSION ||
+        peer.canonical_capabilities !== canonicalStringify(REMOTE_CAPABILITIES))
+    ) {
+      throw new Error("SQLite remote negotiated session is invalid");
+    }
+    validateTimestamp(peer.last_observed_at, "last_observed_at");
+    bindings.set(peer.binding_id, binding);
+  }
+
+  const checkpoints = database
+    .prepare<[], RemoteCheckpointRow>(
+      `SELECT * FROM remote_stream_checkpoints ORDER BY binding_id, stream_kind`,
+    )
+    .all();
+  if (checkpoints.length !== peers.length * 3) {
+    throw new Error("SQLite remote stream checkpoints do not exactly cover peer state");
+  }
+  const checkpointByKey = new Map(
+    checkpoints.map((row) => [`${row.binding_id}:${row.stream_kind}`, row]),
+  );
+  for (const peer of peers) {
+    for (const streamKind of [
+      "inbound-command",
+      "outbound-report",
+      "outbound-acknowledgement",
+    ] as const) {
+      const checkpoint = checkpointByKey.get(`${peer.binding_id}:${streamKind}`);
+      if (
+        checkpoint === undefined ||
+        !Number.isSafeInteger(checkpoint.contiguous_sequence) ||
+        checkpoint.contiguous_sequence < 0 ||
+        (checkpoint.contiguous_sequence === 0) !== (checkpoint.last_digest === null) ||
+        (checkpoint.last_digest !== null && !isSha256Digest(checkpoint.last_digest))
+      ) {
+        throw new Error("SQLite remote stream checkpoint state is invalid");
+      }
+      validateTimestamp(checkpoint.updated_at, "updated_at");
+    }
+  }
+
+  const inboxRows = database
+    .prepare<[], RemoteInboxRow>(`SELECT * FROM remote_command_inbox ORDER BY binding_id, sequence`)
+    .all();
+  const inboxByBinding = groupRowsBy(inboxRows, (row) => row.binding_id);
+  for (const [bindingId, rows] of inboxByBinding) {
+    const peer = peerByBinding.get(bindingId);
+    const binding = bindings.get(bindingId);
+    if (peer === undefined || binding === undefined) {
+      throw new Error("SQLite remote inbox references missing peer state");
+    }
+    let contiguousSequence = 0;
+    let contiguousDigest: string | null = null;
+    for (const row of rows) {
+      const envelope = decodeRemoteCommandEnvelope(row.canonical_envelope);
+      const deliveryEntry = decodeRemoteReceiptChainEntry(row.canonical_delivery_entry);
+      assertRemoteCommandDigestBindings(envelope, dependencies);
+      assertRemoteBindingRow(peer, envelope.acceptedCommand.binding, dependencies);
+      const expectedConflict =
+        row.sequence === contiguousSequence + 1 &&
+        row.previous_envelope_digest !== contiguousDigest;
+      if (
+        canonicalStringify(envelope) !== row.canonical_envelope ||
+        digestCanonicalText(row.canonical_envelope, dependencies) !== row.envelope_digest ||
+        envelope.sequence !== row.sequence ||
+        envelope.previousEnvelopeDigest !== row.previous_envelope_digest ||
+        envelope.acceptedCommand.binding.repositoryId !== row.repository_id ||
+        envelope.acceptedCommand.acceptanceId !== row.acceptance_id ||
+        envelope.acceptedCommand.command.commandId !== row.command_id ||
+        envelope.acceptedCommand.binding.revocationEpoch !== row.revocation_epoch ||
+        envelope.acceptedCommand.expiresAt !== row.expires_at ||
+        deliveryEntry.entryDigest !== row.delivery_entry_digest ||
+        deliveryEntry.bindingId !== bindingId ||
+        deliveryEntry.commandId !== row.command_id ||
+        deliveryEntry.stage !== "connector-delivered" ||
+        deliveryEntry.evidence.type !== "connector-delivery" ||
+        deliveryEntry.evidence.envelopeSequence !== row.sequence ||
+        deliveryEntry.evidence.envelopeDigest !== row.envelope_digest ||
+        (row.processing_state === "conflict") !== expectedConflict
+      ) {
+        throw new Error("SQLite remote inbox row is not semantically bound");
+      }
+      validateTimestamp(row.received_at, "received_at");
+      if (!expectedConflict && row.sequence === contiguousSequence + 1) {
+        contiguousSequence = row.sequence;
+        contiguousDigest = row.envelope_digest;
+      }
+      verifyRemoteLocalEntry(row, binding, dependencies, "acceptance");
+      verifyRemoteLocalEntry(row, binding, dependencies, "result");
+      verifyRemoteInboxResultReport(database, row);
+    }
+    const checkpoint = requireRemoteCheckpoint(database, bindingId, "inbound-command");
+    const commitment = requireRemoteHistoryCommitment(database, bindingId);
+    if (
+      checkpoint.contiguous_sequence !== contiguousSequence ||
+      checkpoint.last_digest !== contiguousDigest ||
+      commitment.inbound_sequence !== contiguousSequence ||
+      commitment.inbound_digest !== contiguousDigest ||
+      rows.some(
+        (row) =>
+          ((row.processing_state === "ready" ||
+            row.processing_state === "local-accepted" ||
+            row.processing_state === "local-result") &&
+            row.sequence > contiguousSequence) ||
+          (row.processing_state === "waiting" && row.sequence <= contiguousSequence) ||
+          (row.processing_state === "revoked" &&
+            row.revocation_epoch >= peer.current_revocation_epoch),
+      )
+    ) {
+      throw new Error("SQLite remote inbox checkpoint diverges from its envelope chain");
+    }
+  }
+  for (const peer of peers) {
+    if (inboxByBinding.has(peer.binding_id)) continue;
+    const checkpoint = requireRemoteCheckpoint(database, peer.binding_id, "inbound-command");
+    const commitment = requireRemoteHistoryCommitment(database, peer.binding_id);
+    if (
+      checkpoint.contiguous_sequence !== 0 ||
+      checkpoint.last_digest !== null ||
+      commitment.inbound_sequence !== 0 ||
+      commitment.inbound_digest !== null
+    ) {
+      throw new Error("SQLite empty remote inbox has a non-empty checkpoint");
+    }
+  }
+
+  const reports = database
+    .prepare<
+      [],
+      {
+        report_id: string;
+        binding_id: string;
+        repository_id: string;
+        report_sequence: number;
+        previous_report_digest: string | null;
+        report_digest: string;
+        data_policy_digest: string;
+        source_cursor: number;
+        event_advance_count: number;
+        canonical_report: string;
+        enqueued_at: string;
+        delivery_state: string;
+        claim_owner_id: string | null;
+        claim_fence: number | null;
+        claim_expires_at: string | null;
+        acknowledgement_digest: string | null;
+        canonical_acknowledgement: string | null;
+        central_receipt_id: string | null;
+        acknowledged_at: string | null;
+      }
+    >(`SELECT * FROM remote_report_outbox ORDER BY binding_id, report_sequence`)
+    .all();
+  const reportsByBinding = groupRowsBy(reports, (row) => row.binding_id);
+  for (const peer of peers) {
+    const binding = bindings.get(peer.binding_id);
+    if (binding === undefined) throw new Error("SQLite remote binding decode was lost");
+    const bindingReports = reportsByBinding.get(peer.binding_id) ?? [];
+    let previousDigest: string | null = null;
+    let acknowledgedSequence = 0;
+    let acknowledgedDigest: string | null = null;
+    let acknowledgedCursor = 0;
+    let lastAcknowledgedAt: string | null = null;
+    for (const [index, row] of bindingReports.entries()) {
+      const report = decodeRemoteClassifiedReport(row.canonical_report);
+      const reportDigest = digestCanonicalText(row.canonical_report, dependencies);
+      const representedRunCount = new Set(report.events.map((event) => event.runId)).size;
+      if (
+        canonicalStringify(report) !== row.canonical_report ||
+        reportDigest !== row.report_digest ||
+        report.reportId !== row.report_id ||
+        report.binding.bindingId !== row.binding_id ||
+        report.binding.repositoryId !== row.repository_id ||
+        report.reportSequence !== row.report_sequence ||
+        report.previousReportDigest !== row.previous_report_digest ||
+        report.dataPolicyDigest !== row.data_policy_digest ||
+        report.synchronization.durablyEnqueuedCursor !== row.source_cursor ||
+        (report.events.length > 0 && row.event_advance_count !== representedRunCount) ||
+        (report.events.length === 0 && row.event_advance_count > 1) ||
+        report.createdAt !== row.enqueued_at ||
+        row.report_sequence !== index + 1 ||
+        row.previous_report_digest !== previousDigest
+      ) {
+        throw new Error("SQLite remote report row is not semantically bound");
+      }
+      assertRemoteBindingRow(peer, report.binding, dependencies);
+      previousDigest = reportDigest;
+      if (row.claim_owner_id !== null)
+        validateStorageIdentifier(row.claim_owner_id, "claim_owner_id");
+      if (row.claim_expires_at !== null)
+        validateTimestamp(row.claim_expires_at, "claim_expires_at");
+      if (row.delivery_state === "acknowledged") {
+        if (row.canonical_acknowledgement === null || row.acknowledgement_digest === null) {
+          throw new Error("SQLite remote report acknowledgement is incomplete");
+        }
+        const acknowledgement = decodeRemoteReportAcknowledgement(row.canonical_acknowledgement);
+        if (
+          canonicalStringify(acknowledgement) !== row.canonical_acknowledgement ||
+          digestCanonicalText(row.canonical_acknowledgement, dependencies) !==
+            row.acknowledgement_digest ||
+          acknowledgement.centralReceiptId !== row.central_receipt_id ||
+          acknowledgement.acknowledgedAt !== row.acknowledged_at
+        ) {
+          throw new Error("SQLite remote report acknowledgement is not exact");
+        }
+        assertRemoteAcknowledgement(
+          row,
+          {
+            reportId: row.report_id,
+            bindingId: row.binding_id,
+            reportSequence: row.report_sequence,
+            reportDigest: row.report_digest,
+            ownerId: "integrity-verifier",
+            fence: row.claim_fence ?? 0,
+            expiresAt: row.acknowledged_at ?? binding.issuedAt,
+          },
+          acknowledgement,
+          binding.controlPlaneKeyId,
+        );
+        if (row.report_sequence === acknowledgedSequence + 1) {
+          acknowledgedSequence = row.report_sequence;
+          acknowledgedDigest = row.report_digest;
+          acknowledgedCursor = row.source_cursor;
+          lastAcknowledgedAt = acknowledgement.acknowledgedAt;
+        }
+      }
+    }
+    const reportCheckpoint = requireRemoteCheckpoint(database, peer.binding_id, "outbound-report");
+    const acknowledgementCheckpoint = requireRemoteCheckpoint(
+      database,
+      peer.binding_id,
+      "outbound-acknowledgement",
+    );
+    if (
+      reportCheckpoint.contiguous_sequence !== bindingReports.length ||
+      reportCheckpoint.last_digest !== previousDigest ||
+      acknowledgementCheckpoint.contiguous_sequence !== acknowledgedSequence ||
+      acknowledgementCheckpoint.last_digest !== acknowledgedDigest
+    ) {
+      throw new Error("SQLite remote report checkpoint diverges from its durable chain");
+    }
+    const synchronization = requireRemoteSynchronization(database, peer.binding_id);
+    const decodedSynchronization = decodeRemoteSynchronizationVector({
+      repositoryId: synchronization.repository_id,
+      localLatestCursor: synchronization.local_latest_cursor,
+      durablyEnqueuedCursor: synchronization.durably_enqueued_cursor,
+      centrallyAcknowledgedCursor: synchronization.centrally_acknowledged_cursor,
+      localObservedAt: synchronization.local_observed_at,
+      lastEnqueuedAt: synchronization.last_enqueued_at,
+      lastAcknowledgedAt: synchronization.last_acknowledged_at,
+    });
+    const latestReport = bindingReports.at(-1);
+    const latestReportValue =
+      latestReport === undefined
+        ? undefined
+        : decodeRemoteClassifiedReport(latestReport.canonical_report);
+    const runEventAggregate = verifyRemoteRunEventCheckpoints(
+      database,
+      peer,
+      acknowledgementCheckpoint.contiguous_sequence,
+    );
+    const commitment = requireRemoteHistoryCommitment(database, peer.binding_id);
+    const canonicalRunEventCommitments = canonicalRemoteRunEventCommitments(
+      database,
+      peer.binding_id,
+    );
+    if (
+      commitment.outbound_report_sequence !== bindingReports.length ||
+      commitment.outbound_report_digest !== previousDigest ||
+      commitment.acknowledged_report_sequence !== acknowledgedSequence ||
+      commitment.acknowledged_report_digest !== acknowledgedDigest ||
+      commitment.acknowledged_cursor !== acknowledgedCursor ||
+      commitment.canonical_run_event_commitments !== canonicalRunEventCommitments ||
+      commitment.run_event_commitments_digest !==
+        digestCanonicalText(canonicalRunEventCommitments, dependencies) ||
+      decodedSynchronization.repositoryId !== peer.repository_id ||
+      decodedSynchronization.durablyEnqueuedCursor !== (latestReport?.source_cursor ?? 0) ||
+      decodedSynchronization.centrallyAcknowledgedCursor !== acknowledgedCursor ||
+      decodedSynchronization.lastAcknowledgedAt !== lastAcknowledgedAt ||
+      decodedSynchronization.lastEnqueuedAt !==
+        (latestReportValue?.synchronization.lastEnqueuedAt ?? null) ||
+      (runEventAggregate !== undefined &&
+        (decodedSynchronization.localLatestCursor !== runEventAggregate.localLatestCursor ||
+          decodedSynchronization.durablyEnqueuedCursor !==
+            runEventAggregate.durablyEnqueuedCursor ||
+          decodedSynchronization.centrallyAcknowledgedCursor !==
+            runEventAggregate.centrallyAcknowledgedCursor))
+    ) {
+      throw new Error("SQLite remote synchronization diverges from durable reports");
+    }
+  }
+}
+
+function verifyRemoteRunEventCheckpoints(
+  database: Database.Database,
+  peer: RemotePeerRow,
+  acknowledgedReportSequence: number,
+):
+  | {
+      readonly localLatestCursor: number;
+      readonly durablyEnqueuedCursor: number;
+      readonly centrallyAcknowledgedCursor: number;
+    }
+  | undefined {
+  const rows = database
+    .prepare<[string], RemoteRunEventCheckpointRow>(
+      `SELECT * FROM remote_run_event_checkpoints
+       WHERE binding_id = ? ORDER BY run_id`,
+    )
+    .all(peer.binding_id);
+  const reports = database
+    .prepare<
+      [string],
+      {
+        readonly report_id: string;
+        readonly canonical_report: string;
+        readonly event_advance_count: number;
+      }
+    >(
+      `SELECT report_id, canonical_report, event_advance_count FROM remote_report_outbox
+       WHERE binding_id = ? ORDER BY report_sequence`,
+    )
+    .all(peer.binding_id);
+  const advances = database
+    .prepare<[string, string], RemoteReportRunEventAdvanceRow>(
+      `SELECT a.*, r.report_sequence, r.canonical_report,
+              r.binding_id AS report_binding_id,
+              r.repository_id AS report_repository_id
+       FROM remote_report_run_event_advances a
+       JOIN remote_report_outbox r ON r.report_id = a.report_id
+       WHERE a.binding_id = ? OR r.binding_id = ?
+       ORDER BY r.report_sequence, a.run_id`,
+    )
+    .all(peer.binding_id, peer.binding_id);
+  const expectedAdvanceKeys = new Set<string>();
+  const actualAdvanceCounts = new Map<string, number>();
+  for (const row of reports) {
+    const report = decodeRemoteClassifiedReport(row.canonical_report);
+    const representedRunIds = new Set<string>();
+    for (const event of report.events) {
+      if (event.repositoryId !== peer.repository_id) {
+        throw new Error("SQLite remote report event metadata is not binding-owned");
+      }
+      representedRunIds.add(event.runId);
+    }
+    for (const runId of representedRunIds) {
+      expectedAdvanceKeys.add(canonicalStringify([row.report_id, runId]));
+    }
+  }
+  if (reports.some((report) => report.event_advance_count > 0) && advances.length === 0) {
+    throw new Error("SQLite remote report run event advance evidence is incomplete");
+  }
+  if (rows.length === 0 && advances.length === 0) return undefined;
+  if (
+    advances.length === 0 &&
+    rows.every(
+      (row) =>
+        row.repository_id === peer.repository_id &&
+        row.local_latest_cursor === 0 &&
+        row.durably_enqueued_cursor === 0 &&
+        row.centrally_acknowledged_cursor === 0 &&
+        row.last_enqueued_report_sequence === 0 &&
+        row.last_acknowledged_report_sequence === 0,
+    )
+  )
+    return undefined;
+  const reconstructed = new Map<string, RemoteRunEventCheckpoint>();
+  for (const advance of advances) {
+    const report = decodeRemoteClassifiedReport(advance.canonical_report);
+    const reportEvents = report.events.filter((event) => event.runId === advance.run_id);
+    if (
+      advance.report_id !== report.reportId ||
+      advance.binding_id !== peer.binding_id ||
+      advance.binding_id !== advance.report_binding_id ||
+      advance.repository_id !== advance.report_repository_id ||
+      report.binding.bindingId !== advance.binding_id ||
+      report.binding.repositoryId !== advance.repository_id ||
+      advance.repository_id !== peer.repository_id ||
+      (report.events.length > 0 && reportEvents.length === 0) ||
+      advance.from_cursor > advance.through_cursor ||
+      advance.through_cursor > advance.local_latest_cursor
+    ) {
+      throw new Error("SQLite remote report run event advance is not binding-owned");
+    }
+    expectedAdvanceKeys.delete(canonicalStringify([advance.report_id, advance.run_id]));
+    actualAdvanceCounts.set(
+      advance.report_id,
+      (actualAdvanceCounts.get(advance.report_id) ?? 0) + 1,
+    );
+    const prior = reconstructed.get(advance.run_id);
+    if (
+      advance.from_cursor !== (prior?.durablyEnqueuedCursor ?? 0) ||
+      advance.local_latest_cursor < (prior?.localLatestCursor ?? 0)
+    ) {
+      throw new Error("SQLite remote report run event advance is not contiguous");
+    }
+    const runKey = canonicalStringify([advance.repository_id, advance.run_id]);
+    const exactEvents = database
+      .prepare<[string, number, number], { canonical_frame: string }>(
+        `SELECT canonical_frame FROM event_frames
+         WHERE run_key = ? AND cursor > ? AND cursor <= ? ORDER BY cursor`,
+      )
+      .all(runKey, advance.from_cursor, advance.through_cursor)
+      .map((row) => remoteEventMetadata(decodeEventStreamFrame(row.canonical_frame)));
+    if (canonicalStringify(reportEvents) !== canonicalStringify(exactEvents)) {
+      throw new Error("SQLite remote report run event advance is not exact");
+    }
+    const acknowledged = advance.report_sequence <= acknowledgedReportSequence;
+    reconstructed.set(
+      advance.run_id,
+      Object.freeze({
+        bindingId: peer.binding_id,
+        repositoryId: advance.repository_id,
+        runId: advance.run_id,
+        localLatestCursor: advance.local_latest_cursor,
+        durablyEnqueuedCursor: advance.through_cursor,
+        centrallyAcknowledgedCursor: acknowledged
+          ? advance.through_cursor
+          : (prior?.centrallyAcknowledgedCursor ?? 0),
+        lastEnqueuedReportSequence: advance.report_sequence,
+        lastAcknowledgedReportSequence: acknowledged
+          ? advance.report_sequence
+          : (prior?.lastAcknowledgedReportSequence ?? 0),
+      }),
+    );
+  }
+  if (expectedAdvanceKeys.size > 0) {
+    throw new Error("SQLite remote report run event advance evidence is incomplete");
+  }
+  if (
+    reports.some(
+      (report) => (actualAdvanceCounts.get(report.report_id) ?? 0) !== report.event_advance_count,
+    )
+  ) {
+    throw new Error("SQLite remote report run event advance evidence is incomplete");
+  }
+  for (const row of rows) {
+    const authoritativeRun = database
+      .prepare<[string, string], { repository_id: string; run_id: string }>(
+        `SELECT repository_id, run_id FROM runs
+         WHERE repository_id = ? AND run_id = ?`,
+      )
+      .get(row.repository_id, row.run_id);
+    if (
+      authoritativeRun === undefined ||
+      authoritativeRun.repository_id !== peer.repository_id ||
+      authoritativeRun.run_id !== row.run_id
+    ) {
+      throw new Error("SQLite remote run event checkpoint is not bound to an authoritative run");
+    }
+    const expected = reconstructed.get(row.run_id);
+    const zeroCheckpoint =
+      expected === undefined &&
+      row.repository_id === peer.repository_id &&
+      row.local_latest_cursor === 0 &&
+      row.durably_enqueued_cursor === 0 &&
+      row.centrally_acknowledged_cursor === 0 &&
+      row.last_enqueued_report_sequence === 0 &&
+      row.last_acknowledged_report_sequence === 0;
+    if (
+      !zeroCheckpoint &&
+      (expected === undefined ||
+        canonicalStringify(remoteRunEventCheckpoint(row)) !== canonicalStringify(expected))
+    ) {
+      throw new Error("SQLite remote run event checkpoint diverges from durable reports");
+    }
+    reconstructed.delete(row.run_id);
+  }
+  if (reconstructed.size > 0) {
+    throw new Error("SQLite remote report run event advance is missing its checkpoint");
+  }
+  return remoteRunEventAggregate(database, peer.binding_id);
+}
+
+function verifyRemoteLocalEntry(
+  row: RemoteInboxRow,
+  binding: RemoteRepositoryBinding,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+  kind: "acceptance" | "result",
+): void {
+  const canonical =
+    kind === "acceptance" ? row.canonical_local_acceptance : row.canonical_local_result;
+  const digest = kind === "acceptance" ? row.local_acceptance_digest : row.local_result_digest;
+  const recordedAt = kind === "acceptance" ? row.local_accepted_at : row.local_result_at;
+  if (canonical === null && digest === null && recordedAt === null) return;
+  if (canonical === null || digest === null || recordedAt === null) {
+    throw new Error(`SQLite remote local ${kind} is incomplete`);
+  }
+  const entry = decodeRemoteReceiptChainEntry(canonical);
+  if (
+    canonicalStringify(entry) !== canonical ||
+    digestCanonicalText(canonical, dependencies) !== digest ||
+    entry.bindingId !== binding.bindingId ||
+    entry.commandId !== row.command_id ||
+    remoteLocalCommandId(entry) !== row.command_id ||
+    entry.recordedAt !== recordedAt ||
+    (kind === "acceptance" && entry.stage !== "local-accepted") ||
+    (kind === "result" && entry.stage !== "local-outcome")
+  ) {
+    throw new Error(`SQLite remote local ${kind} is not semantically bound`);
+  }
+}
+
+function verifyRemoteInboxResultReport(database: Database.Database, row: RemoteInboxRow): void {
+  if (row.local_result_report_id === null) return;
+  if (row.canonical_local_result === null) {
+    throw new Error("SQLite remote inbox result report has no terminal entry");
+  }
+  const reportRow = database
+    .prepare<[string, string], { canonical_report: string }>(
+      `SELECT canonical_report FROM remote_report_outbox
+       WHERE report_id = ? AND binding_id = ?`,
+    )
+    .get(row.local_result_report_id, row.binding_id);
+  if (reportRow === undefined) {
+    throw new Error("SQLite remote inbox result references a missing or cross-binding report");
+  }
+  const report = decodeRemoteClassifiedReport(reportRow.canonical_report);
+  if (!remoteReportContainsInboxResult(report, row, row.canonical_local_result)) {
+    throw new Error(
+      "SQLite remote inbox result report does not contain its terminal command chain",
+    );
+  }
+}
+
+function remoteReportContainsInboxResult(
+  report: RemoteClassifiedReport,
+  row: RemoteInboxRow,
+  canonicalResult: string,
+): boolean {
+  const chain = report.receiptChains.find(
+    (candidate) =>
+      candidate.bindingId === report.binding.bindingId && candidate.commandId === row.command_id,
+  );
+  if (chain === undefined) return false;
+  return chain.entries.some((entry) => canonicalStringify(entry) === canonicalResult);
+}
+
+function groupRowsBy<T>(rows: readonly T[], keyOf: (row: T) => string): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const row of rows) {
+    const key = keyOf(row);
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [row]);
+    else group.push(row);
+  }
+  return groups;
 }
 
 function verifyHumanAuthorityTables(

@@ -84,6 +84,14 @@ if (portalDependencies.length !== 1 || portalDependencies[0] !== "@senawa/protoc
   violations.push("packages/portal/package.json: portal may depend only on protocol in production");
 }
 
+const controlPlaneManifest = JSON.parse(await readFile("apps/control-plane/package.json", "utf8"));
+const controlPlaneDependencies = Object.keys(controlPlaneManifest.dependencies ?? {});
+if (controlPlaneDependencies.length !== 1 || controlPlaneDependencies[0] !== "@senawa/protocol") {
+  violations.push(
+    "apps/control-plane/package.json: control-plane may depend only on protocol in production",
+  );
+}
+
 for (const file of [...packageFiles, ...appFiles]) {
   const content = await readFile(file, "utf8");
   violations.push(...checkSource(file, content));
@@ -108,6 +116,7 @@ function checkSource(file, content) {
   const isConfiguration = file.startsWith("packages/configuration/");
   const isExecutionHost = file.startsWith("packages/execution-host/");
   const isPortal = file.startsWith("packages/portal/src/") && !file.endsWith(".test.ts");
+  const isControlPlane = file.startsWith("apps/control-plane/src/") && !file.endsWith(".test.ts");
   const isPackage = file.startsWith("packages/");
   const isBrowserSystemTest = /^packages\/[^/]+\/tests\/browser\//u.test(file);
   if (
@@ -135,6 +144,11 @@ function checkSource(file, content) {
   }
   if (isPortal && /@senawa\/(?!protocol(?:["'/]|$))[a-z0-9-]+/u.test(content)) {
     findings.push(`${file}: portal production source may import only protocol`);
+  }
+  if (isControlPlane && hasUnsupportedControlPlaneImport(content)) {
+    findings.push(
+      `${file}: control-plane production source may import only protocol, Node built-ins, and sibling modules`,
+    );
   }
   if (isProtocol && content.includes("@senawa/kernel")) {
     findings.push(`${file}: protocol cannot import kernel behavior`);
@@ -221,6 +235,33 @@ function moduleSpecifier(node) {
 function isNodeBuiltin(specifier) {
   const normalized = specifier.replace(/^node:/u, "");
   return NODE_BUILTINS.has(normalized) || isBuiltin(specifier) || isBuiltin(normalized);
+}
+
+function hasUnsupportedControlPlaneImport(content) {
+  const source = ts.createSourceFile(
+    "control-plane-boundary-probe.ts",
+    content,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.TS,
+  );
+  let found = false;
+  const visit = (node) => {
+    if (found) return;
+    const specifier = moduleSpecifier(node);
+    if (
+      specifier !== undefined &&
+      specifier !== "@senawa/protocol" &&
+      !isNodeBuiltin(specifier) &&
+      !specifier.startsWith("./")
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
 }
 
 function verifyRules() {
@@ -310,6 +351,16 @@ function verifyRules() {
       "packages/execution-host/src/bad.ts",
       'import "../../../apps/senawa/src/main.js";',
       "packages cannot import apps",
+    ],
+    [
+      "apps/control-plane/src/bad.ts",
+      'import "@senawa/supervisor";',
+      "may import only protocol, Node built-ins, and sibling modules",
+    ],
+    [
+      "apps/control-plane/src/bad.ts",
+      'import "../../../packages/storage-sqlite/src/index.js";',
+      "may import only protocol, Node built-ins, and sibling modules",
     ],
     ["packages/example/src/bad.ts", 'import "@senawa/testing";', "cannot import testing"],
     [

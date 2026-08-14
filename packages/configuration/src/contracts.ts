@@ -17,6 +17,8 @@ export const WORKFLOW_AMENDMENT_API_VERSION = "senawa.dev/workflow-amendment/v1a
 
 export type WorkspaceMode = "repository" | "worktree";
 export type FailurePolicy = "continue" | "fail-fast";
+export type RemoteDisconnectedMode = "continue-authorized-local" | "pause-new-local-work";
+export type RemoteSynchronizationClassification = "public" | "internal";
 
 export interface ExecutionDeclaration {
   readonly workspaceMode?: WorkspaceMode;
@@ -33,10 +35,40 @@ export type ExecutionPolicy = Readonly<
   } & { readonly integrationRef?: string }
 >;
 
+export interface RemoteRoleMappingDeclaration {
+  readonly issuer: string;
+  readonly tenant: string;
+  readonly upstreamRole: string;
+  readonly localRoles: readonly string[];
+}
+
+export interface RemoteSynchronizationDeclaration {
+  readonly classificationCeiling: RemoteSynchronizationClassification;
+  readonly receiptChain: boolean;
+  readonly events: boolean;
+  readonly projections: boolean;
+  readonly synchronizationState: boolean;
+}
+
+export interface RemotePolicyDeclaration {
+  readonly disconnectedMode?: RemoteDisconnectedMode;
+  readonly roleMappings: readonly RemoteRoleMappingDeclaration[];
+  readonly maximumRemoteAuthorizationLeaseSeconds: number;
+  readonly synchronization: RemoteSynchronizationDeclaration;
+}
+
+export interface RemotePolicy {
+  readonly disconnectedMode: RemoteDisconnectedMode;
+  readonly roleMappings: readonly RemoteRoleMappingDeclaration[];
+  readonly maximumRemoteAuthorizationLeaseSeconds: number;
+  readonly synchronization: RemoteSynchronizationDeclaration;
+}
+
 export interface WorkflowConfigurationDocument {
   readonly apiVersion: typeof WORKFLOW_CONFIGURATION_API_VERSION;
   readonly kind: "Workflow";
   readonly execution?: ExecutionDeclaration;
+  readonly remote?: RemotePolicyDeclaration;
   readonly workflow: WorkflowDeclaration;
   readonly schemas: readonly SchemaDeclaration[];
   readonly roles: readonly RoleDeclaration[];
@@ -233,6 +265,7 @@ export interface ConfigurationRegistryEntry {
 
 export type ConfigurationComponentCategory =
   | "execution"
+  | "remote"
   | "graph"
   | "schemas"
   | "roles"
@@ -242,12 +275,15 @@ export type ConfigurationComponentCategory =
   | "projections";
 
 export type ConfigurationComponentDigests = Readonly<
-  Record<ConfigurationComponentCategory, Sha256Digest>
+  Record<Exclude<ConfigurationComponentCategory, "remote">, Sha256Digest> & {
+    readonly remote?: Sha256Digest;
+  }
 >;
 
 export interface ConfigurationSnapshot {
   readonly apiVersion: typeof CONFIGURATION_SNAPSHOT_API_VERSION;
   readonly execution: ExecutionPolicy;
+  readonly remote?: RemotePolicy;
   readonly graph: WorkflowGraph;
   readonly schemas: readonly ConfigurationRegistryEntry[];
   readonly roles: readonly ConfigurationRegistryEntry[];

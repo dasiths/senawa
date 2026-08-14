@@ -11,6 +11,7 @@ export * from "./local-security.js";
 export * from "./portal-api.js";
 export * from "./portal-assets.js";
 export * from "./recovery.js";
+export * from "./remote-connector.js";
 export * from "./run-controller.js";
 export * from "./run-event-notifier.js";
 export * from "./service.js";

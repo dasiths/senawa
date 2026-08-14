@@ -89,6 +89,38 @@ export interface CopilotSessionStoreHealthPort {
   health(expectedSessionIds: readonly string[]): Promise<CopilotSessionStoreHealth>;
 }
 
+export type RemoteConnectorLifecycle = "stopped" | "running" | "draining" | "drained" | "closed";
+
+export interface RemoteConnectorSyncLag {
+  readonly state: "never-synchronized" | "current" | "stale";
+  readonly stalenessMs: number | null;
+  readonly inboundSequence: number;
+  readonly waitingCommands: number;
+  readonly readyCommands: number;
+  readonly acceptedCommands: number;
+  readonly pendingReports: number;
+  readonly claimedReports: number;
+  readonly localToEnqueued: number;
+  readonly enqueuedToAcknowledged: number;
+}
+
+export interface RemoteConnectorStatus {
+  readonly connectorId: string;
+  readonly bindingId: string;
+  readonly repositoryId: string;
+  readonly lifecycle: RemoteConnectorLifecycle;
+  readonly health: SupervisorHealth;
+  readonly partitioned: boolean;
+  readonly lastAttemptAt: string | null;
+  readonly lastSuccessfulContactAt: string | null;
+  readonly lastErrorCode: string | null;
+  readonly synchronization: RemoteConnectorSyncLag;
+}
+
+export interface RemoteConnectorStatusPort {
+  status(): RemoteConnectorStatus;
+}
+
 export interface SupervisorServiceStatus {
   readonly lifecycle: "stopped" | "starting" | "running" | "draining" | "drained" | "stopping";
   readonly mode: SupervisorMode;
@@ -99,6 +131,7 @@ export interface SupervisorServiceStatus {
   readonly pending: SupervisorPendingCounts;
   readonly leases: readonly SupervisorLeaseStatus[];
   readonly sdkSessionStore: CopilotSessionStoreHealth;
+  readonly remoteConnectors: readonly RemoteConnectorStatus[];
 }
 
 export interface SupervisorLogEntry {
@@ -173,17 +206,21 @@ export function decodeAmendmentReviewRecords(
 }
 
 export function decodeSupervisorServiceStatus(input: string | unknown): SupervisorServiceStatus {
-  const object = exactObject(input, [
-    "lifecycle",
-    "mode",
-    "health",
-    "processId",
-    "startedAt",
-    "listeners",
-    "pending",
-    "leases",
-    "sdkSessionStore",
-  ]);
+  const object = exactObject(
+    input,
+    [
+      "lifecycle",
+      "mode",
+      "health",
+      "processId",
+      "startedAt",
+      "listeners",
+      "pending",
+      "leases",
+      "sdkSessionStore",
+    ],
+    ["remoteConnectors"],
+  );
   const lifecycle = enumValue(object.lifecycle, [
     "stopped",
     "starting",
@@ -255,6 +292,80 @@ export function decodeSupervisorServiceStatus(input: string | unknown): Supervis
       ? {}
       : { message: nonControlText(sdkObject.message, "SDK health message") }),
   });
+  const remoteValues = object.remoteConnectors ?? [];
+  if (!Array.isArray(remoteValues)) throw new TypeError("remoteConnectors must be an array");
+  const remoteConnectors = remoteValues.map((value) => {
+    const connector = exactObject(value, [
+      "connectorId",
+      "bindingId",
+      "repositoryId",
+      "lifecycle",
+      "health",
+      "partitioned",
+      "lastAttemptAt",
+      "lastSuccessfulContactAt",
+      "lastErrorCode",
+      "synchronization",
+    ]);
+    if (typeof connector.partitioned !== "boolean") {
+      throw new TypeError("remote connector partitioned must be boolean");
+    }
+    const synchronization = exactObject(connector.synchronization, [
+      "state",
+      "stalenessMs",
+      "inboundSequence",
+      "waitingCommands",
+      "readyCommands",
+      "acceptedCommands",
+      "pendingReports",
+      "claimedReports",
+      "localToEnqueued",
+      "enqueuedToAcknowledged",
+    ]);
+    return Object.freeze({
+      connectorId: nonControlText(connector.connectorId, "remote connector ID"),
+      bindingId: nonControlText(connector.bindingId, "remote binding ID"),
+      repositoryId: nonControlText(connector.repositoryId, "remote repository ID"),
+      lifecycle: enumValue(connector.lifecycle, [
+        "stopped",
+        "running",
+        "draining",
+        "drained",
+        "closed",
+      ] as const),
+      health: enumValue(connector.health, ["healthy", "degraded"] as const),
+      partitioned: connector.partitioned,
+      lastAttemptAt: nullableTimestampValue(connector.lastAttemptAt, "remote lastAttemptAt"),
+      lastSuccessfulContactAt: nullableTimestampValue(
+        connector.lastSuccessfulContactAt,
+        "remote lastSuccessfulContactAt",
+      ),
+      lastErrorCode: nullableText(connector.lastErrorCode, "remote lastErrorCode"),
+      synchronization: Object.freeze({
+        state: enumValue(synchronization.state, [
+          "never-synchronized",
+          "current",
+          "stale",
+        ] as const),
+        stalenessMs:
+          synchronization.stalenessMs === null
+            ? null
+            : safeInteger(synchronization.stalenessMs, "stalenessMs", 0),
+        inboundSequence: safeInteger(synchronization.inboundSequence, "inboundSequence", 0),
+        waitingCommands: safeInteger(synchronization.waitingCommands, "waitingCommands", 0),
+        readyCommands: safeInteger(synchronization.readyCommands, "readyCommands", 0),
+        acceptedCommands: safeInteger(synchronization.acceptedCommands, "acceptedCommands", 0),
+        pendingReports: safeInteger(synchronization.pendingReports, "pendingReports", 0),
+        claimedReports: safeInteger(synchronization.claimedReports, "claimedReports", 0),
+        localToEnqueued: safeInteger(synchronization.localToEnqueued, "localToEnqueued", 0),
+        enqueuedToAcknowledged: safeInteger(
+          synchronization.enqueuedToAcknowledged,
+          "enqueuedToAcknowledged",
+          0,
+        ),
+      }),
+    });
+  });
   return Object.freeze({
     lifecycle,
     mode,
@@ -265,7 +376,16 @@ export function decodeSupervisorServiceStatus(input: string | unknown): Supervis
     pending,
     leases: Object.freeze(leases),
     sdkSessionStore,
+    remoteConnectors: Object.freeze(remoteConnectors),
   });
+}
+
+function nullableTimestampValue(value: unknown, field: string): string | null {
+  return value === null ? null : timestampValue(value, field);
+}
+
+function nullableText(value: unknown, field: string): string | null {
+  return value === null ? null : nonControlText(value, field);
 }
 
 export function decodeSupervisorLogPage(input: string | unknown): SupervisorLogPage {
