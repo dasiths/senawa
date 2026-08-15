@@ -28,14 +28,15 @@ Current behavior
 : Staged bytes are content-addressed, bounded by the declared slot ceiling and
 the global 256 KiB output ceiling, and reachable only by an exact validation
 receipt digest. No projection, report, portal view, or remote synchronization
-exposes an unreferenced staged asset. Total staging is bounded by the route
-selection's `maxSubmissions`.
+exposes an unreferenced staged asset. Every refused admission now records a
+durable rejected attempt, so the finite per-slot attempt budget bounds how many
+distinct bodies one dispatch can stage.
 
 Risk and tradeoff
 : A model can consume bounded local storage with distinct valid-but-conflicting
-outputs. Installing after admission instead would reintroduce the failure mode
-that Decision D-033 rejected, where a committed descriptor can name absent
-bytes.
+outputs, capped by the attempt budget multiplied by the output ceiling.
+Installing after admission instead would reintroduce the failure mode that
+Decision D-033 rejected, where a committed descriptor can name absent bytes.
 
 Deferral reason
 : The behavior is bounded, unreferenced, and never observable as authority. A

@@ -116,6 +116,7 @@ export interface PhaseOutputFactPort {
 export const PHASE_OUTPUT_LIMITS = Object.freeze({
   maxOutputBytes: 262_144,
   maxOutputNodes: 10_000,
+  maxOutputDepth: 64,
   maxChangeNotes: 16,
   maxChangeNoteLength: 512,
   maxReportedFindings: 8,

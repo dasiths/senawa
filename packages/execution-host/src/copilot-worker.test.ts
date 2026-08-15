@@ -752,7 +752,7 @@ describe("CopilotSerialWorkerAdapter", () => {
     ).toEqual([
       "output-schema-invalid",
       "output-schema-invalid",
-      "output-attempt-budget-exhausted",
+      "output-schema-invalid",
       "output-attempt-budget-exhausted",
       "output-attempt-budget-exhausted",
     ]);
@@ -786,6 +786,39 @@ describe("CopilotSerialWorkerAdapter", () => {
       outputs.map(({ textResultForLlm }) => JSON.parse(textResultForLlm).code as string),
     ).toEqual(["output-too-large", "output-arguments-invalid"]);
     expect(fixture.broker.installedOutputs).toHaveLength(0);
+  });
+
+  it("keeps the generated output tool schema closed and identity free", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk, { phaseOutput: true });
+
+    await fixture.adapter.run(fixture.input);
+
+    const tool = required(
+      required(sdk.createCalls[0]).tools.find(({ name }) => name === "submit_phase_output"),
+    );
+    expectClosedObjectSchemas(tool.parameters);
+    const parameters = JSON.stringify(tool.parameters);
+    for (const forbidden of [
+      "repositoryId",
+      "runId",
+      "dispatchId",
+      "contextId",
+      "principalId",
+      "submissionId",
+      "requestId",
+      "grantToken",
+      "taskId",
+    ]) {
+      expect(parameters).not.toContain(forbidden);
+    }
+    const properties = required(tool.parameters.properties) as Readonly<Record<string, unknown>>;
+    const output = required(properties.output) as Readonly<Record<string, unknown>>;
+    expect(Object.hasOwn(output, "$schema")).toBe(false);
+    expect(Object.hasOwn(output, "$id")).toBe(false);
+    expect(output).toMatchObject({ type: "object", additionalProperties: false });
+    expect(tool.skipPermission).toBe(true);
+    expect(tool.defer).toBe("never");
   });
 });
 

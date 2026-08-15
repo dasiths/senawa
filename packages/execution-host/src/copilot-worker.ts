@@ -704,131 +704,161 @@ function phaseOutputTool(
     phaseOutputParameters(slot.contract, maxBytes),
     scope,
     async (args, invocation) => {
-      const attemptId = derivedIdentity("attempt", dispatch.dispatchId, invocation, sha256);
-      const rejected =
-        input.broker.countRejectedPhaseOutputAttempts?.(dispatch.dispatchId, outputName) ??
-        state.rejectedPhaseOutputs;
-      if (rejected >= PHASE_OUTPUT_LIMITS.maxAttempts) {
-        return outputFailure("output-attempt-budget-exhausted", []);
-      }
-      let canonical: CanonicalValue;
       try {
-        const wrapper = exactObject(args, ["output"], ["changeNotes"]);
-        changeNotes(wrapper.changeNotes);
-        canonical = canonicalValue(wrapper.output);
-      } catch {
-        return recordRejected(
-          input,
-          state,
-          sha256,
-          { attemptId, dispatchId: dispatch.dispatchId, outputName, invocation },
-          "output-arguments-invalid",
-          [],
-        );
-      }
-      const bytes = canonicalBytes(canonical);
-      if (
-        bytes.byteLength > maxBytes ||
-        countNodes(canonical) > PHASE_OUTPUT_LIMITS.maxOutputNodes
-      ) {
-        return recordRejected(
-          input,
-          state,
-          sha256,
-          { attemptId, dispatchId: dispatch.dispatchId, outputName, invocation },
-          "output-too-large",
-          [],
-        );
-      }
-      const findings = validateSchemaInstance(
-        slot.contract.schema,
-        canonical,
-        slot.contract.externalSchemas.map(({ id, schema }) => ({ id, schema })),
-      );
-      if (findings.length > 0) {
-        return recordRejected(
-          input,
-          state,
-          sha256,
-          { attemptId, dispatchId: dispatch.dispatchId, outputName, invocation },
-          "output-schema-invalid",
-          findings.map(({ pointer, schemaPointer, keyword }) => ({
-            instancePointer: pointer,
-            ...(schemaPointer === undefined ? {} : { schemaPointer }),
-            ...(keyword === undefined ? {} : { keyword }),
-          })),
-        );
-      }
-      try {
-        const submissionId = derivedIdentity("submission", dispatch.dispatchId, invocation, sha256);
-        if (!state.submissionIds.has(submissionId)) {
-          if (state.submissionCount >= selection.limits.maxSubmissions) {
-            return failure("submission-limit-reached");
-          }
-          state.submissionIds.add(submissionId);
-          state.submissionCount += 1;
-        }
-        const contentDigest = sha256.digest(bytes);
-        if (!isSha256Digest(contentDigest)) throw new TypeError("Invalid canonical output digest");
-        const validationReceiptDigest = schemaValidationReceiptDigest(
-          "phase output",
-          slot.contract,
-          contentDigest,
-          sha256,
-        );
-        input.broker.installCanonicalOutputAsset?.(
-          {
-            contentDigest,
-            byteLength: bytes.byteLength,
-            mediaType: "application/json",
-            schemaResourceDigest: slot.contract.schemaResourceDigest,
-            validationReceiptDigest,
-          },
-          bytes,
-        );
-        const result = input.broker.admitSubmission({
-          submission: {
-            apiVersion: PROTOCOL_VERSION,
-            submissionId,
-            repositoryId: dispatch.repositoryId,
-            runId: dispatch.runId,
-            dispatchId: dispatch.dispatchId,
-            task: dispatch.task,
-            contextId: dispatch.contextId,
-            contextDigest: dispatch.contextDigest,
-            principalId: dispatch.worker.principalId,
-            type: "phase-output",
-            output: {
-              phase: context.phaseAttempt.phase,
-              outputName,
-              schemaKey: slot.contract.key,
-              schemaResourceDigest: slot.contract.schemaResourceDigest,
-              contentDigest,
-              byteLength: bytes.byteLength,
-              mediaType: "application/json",
-              sensitivity: slot.declaration.sensitivity,
-              graphRevisionDigest: context.graphRevisionDigest,
-              configurationSnapshotDigest: context.configurationSnapshotDigest,
-              inputBindingDigest: context.phaseInputBinding.bindingDigest,
-              validationReceiptDigest,
-            },
-          },
-        });
-        state.submissions.push(result);
-        input.broker.recordPhaseOutputAttempt?.({
-          dispatchId: dispatch.dispatchId,
-          attemptId,
+        return await submitPhaseOutput(
+          { input, context, dispatch, selection, sha256, state, scope, slot },
+          args,
+          invocation,
           outputName,
-          toolCallId: invocation.toolCallId,
-          outcome: "accepted",
-          submissionId,
-        });
-        return success({ status: result.status, replayed: result.replayed });
+          maxBytes,
+        );
       } catch {
-        return failure("submission-refused");
+        // A throwing handler would send raw exception text to the model.
+        return outputFailure("output-refused", []);
       }
     },
   );
+}
+
+async function submitPhaseOutput(
+  bound: {
+    readonly input: CopilotWorkerRunInput;
+    readonly context: WorkerContextBase;
+    readonly dispatch: WorkerDispatch;
+    readonly selection: WorkerModelRouteSelection;
+    readonly sha256: Sha256;
+    readonly state: RunState;
+    readonly scope: RunScope;
+    readonly slot: PhaseOutputSlot;
+  },
+  args: unknown,
+  invocation: CopilotSdkToolInvocation,
+  outputName: string,
+  maxBytes: number,
+): Promise<CopilotSdkToolResult> {
+  const { input, context, dispatch, selection, sha256, state, slot } = bound;
+  const attemptId = derivedIdentity("attempt", dispatch.dispatchId, invocation, sha256);
+  const identity = { attemptId, dispatchId: dispatch.dispatchId, outputName, invocation };
+  const durableRejected = input.broker.countRejectedPhaseOutputAttempts?.(
+    dispatch.dispatchId,
+    outputName,
+  );
+  const rejected = Math.max(durableRejected ?? 0, state.rejectedPhaseOutputs);
+  if (rejected >= PHASE_OUTPUT_LIMITS.maxAttempts) {
+    return outputFailure("output-attempt-budget-exhausted", []);
+  }
+  let canonical: CanonicalValue;
+  try {
+    const wrapper = exactObject(args, ["output"], ["changeNotes"]);
+    changeNotes(wrapper.changeNotes);
+    assertBoundedArgument(wrapper.output);
+    canonical = canonicalValue(wrapper.output);
+  } catch {
+    return recordRejected(input, state, sha256, identity, "output-arguments-invalid", []);
+  }
+  const bytes = canonicalBytes(canonical);
+  if (bytes.byteLength > maxBytes) {
+    return recordRejected(input, state, sha256, identity, "output-too-large", []);
+  }
+  const findings = validateSchemaInstance(
+    slot.contract.schema,
+    canonical,
+    slot.contract.externalSchemas.map(({ id, schema }) => ({ id, schema })),
+  );
+  if (findings.length > 0) {
+    return recordRejected(
+      input,
+      state,
+      sha256,
+      identity,
+      "output-schema-invalid",
+      findings.map(({ pointer, schemaPointer, keyword }) => ({
+        instancePointer: pointer,
+        ...(schemaPointer === undefined ? {} : { schemaPointer }),
+        ...(keyword === undefined ? {} : { keyword }),
+      })),
+    );
+  }
+  const submissionId = derivedIdentity("submission", dispatch.dispatchId, invocation, sha256);
+  if (!state.submissionIds.has(submissionId)) {
+    if (state.submissionCount >= selection.limits.maxSubmissions) {
+      return failure("submission-limit-reached");
+    }
+    state.submissionIds.add(submissionId);
+    state.submissionCount += 1;
+  }
+  const contentDigest = sha256.digest(bytes);
+  if (!isSha256Digest(contentDigest)) {
+    return recordRejected(input, state, sha256, identity, "output-digest-invalid", []);
+  }
+  const validationReceiptDigest = schemaValidationReceiptDigest(
+    "phase output",
+    slot.contract,
+    contentDigest,
+    sha256,
+  );
+  let result: SubmissionAdmissionResult;
+  try {
+    input.broker.installCanonicalOutputAsset?.(
+      {
+        contentDigest,
+        byteLength: bytes.byteLength,
+        mediaType: "application/json",
+        schemaResourceDigest: slot.contract.schemaResourceDigest,
+        validationReceiptDigest,
+      },
+      bytes,
+    );
+    result = input.broker.admitSubmission({
+      submission: {
+        apiVersion: PROTOCOL_VERSION,
+        submissionId,
+        repositoryId: dispatch.repositoryId,
+        runId: dispatch.runId,
+        dispatchId: dispatch.dispatchId,
+        task: dispatch.task,
+        contextId: dispatch.contextId,
+        contextDigest: dispatch.contextDigest,
+        principalId: dispatch.worker.principalId,
+        type: "phase-output",
+        output: {
+          phase: context.phaseAttempt.phase,
+          outputName,
+          schemaKey: slot.contract.key,
+          schemaResourceDigest: slot.contract.schemaResourceDigest,
+          contentDigest,
+          byteLength: bytes.byteLength,
+          mediaType: "application/json",
+          sensitivity: slot.declaration.sensitivity,
+          graphRevisionDigest: context.graphRevisionDigest,
+          configurationSnapshotDigest: context.configurationSnapshotDigest,
+          inputBindingDigest: context.phaseInputBinding.bindingDigest,
+          validationReceiptDigest,
+        },
+      },
+    });
+  } catch {
+    // A refused admission still consumed a bounded attempt and staged its bytes.
+    return recordRejected(input, state, sha256, identity, "submission-refused", []);
+  }
+  state.submissions.push(result);
+  if (result.status !== "accepted") {
+    // A stale or duplicate admission is not an acceptance and must read as one.
+    return recordRejected(input, state, sha256, identity, `output-${result.status}`, []);
+  }
+  try {
+    input.broker.recordPhaseOutputAttempt?.({
+      dispatchId: dispatch.dispatchId,
+      attemptId,
+      outputName,
+      toolCallId: invocation.toolCallId,
+      outcome: "accepted",
+      submissionId,
+    });
+  } catch {
+    // The submission is already durable and attributable through its own identity.
+  }
+  return success({ status: result.status, replayed: result.replayed });
 }
 
 interface PhaseOutputAttemptIdentity {
@@ -851,9 +881,12 @@ function recordRejected(
     canonicalBytes(canonicalValue({ code, findings: reported })),
   );
   state.rejectedPhaseOutputs += 1;
-  let exhausted = state.rejectedPhaseOutputs >= PHASE_OUTPUT_LIMITS.maxAttempts;
+  if (input.broker.recordPhaseOutputAttempt === undefined) {
+    // Without a durable ledger the budget is only process-local, so report the code as is.
+    return outputFailure(code, reported);
+  }
   try {
-    const recorded = input.broker.recordPhaseOutputAttempt?.({
+    input.broker.recordPhaseOutputAttempt({
       dispatchId: identity.dispatchId,
       attemptId: identity.attemptId,
       outputName: identity.outputName,
@@ -861,11 +894,31 @@ function recordRejected(
       outcome: "rejected",
       findingsDigest,
     });
-    if (recorded !== undefined) exhausted = recorded.exhausted;
   } catch {
-    return failure("attempt-refused");
+    return outputFailure("attempt-refused", []);
   }
-  return outputFailure(exhausted ? "output-attempt-budget-exhausted" : code, reported);
+  return outputFailure(code, reported);
+}
+
+/** Bounds raw tool arguments iteratively before any canonical materialization. */
+function assertBoundedArgument(value: unknown): void {
+  const stack: { readonly value: unknown; readonly depth: number }[] = [{ value, depth: 1 }];
+  let nodes = 0;
+  while (stack.length > 0) {
+    const entry = stack.pop();
+    if (entry === undefined) break;
+    nodes += 1;
+    if (nodes > PHASE_OUTPUT_LIMITS.maxOutputNodes) invalidArguments();
+    if (entry.depth > PHASE_OUTPUT_LIMITS.maxOutputDepth) invalidArguments();
+    const current = entry.value;
+    if (typeof current === "string") {
+      if (current.length > PHASE_OUTPUT_LIMITS.maxOutputBytes) invalidArguments();
+      continue;
+    }
+    if (current === null || typeof current !== "object") continue;
+    const children = Array.isArray(current) ? current : Object.values(current);
+    for (const child of children) stack.push({ value: child, depth: entry.depth + 1 });
+  }
 }
 
 function outputFailure(
@@ -910,19 +963,6 @@ function changeNotes(value: unknown): readonly string[] {
   if (!Array.isArray(value) || value.length > PHASE_OUTPUT_LIMITS.maxChangeNotes)
     return invalidArguments();
   return value.map((note) => boundedString(note, PHASE_OUTPUT_LIMITS.maxChangeNoteLength));
-}
-
-function countNodes(value: CanonicalValue): number {
-  if (Array.isArray(value)) {
-    return value.reduce<number>((total, entry) => total + countNodes(entry as CanonicalValue), 1);
-  }
-  if (value !== null && typeof value === "object") {
-    return Object.values(value).reduce<number>(
-      (total, entry) => total + countNodes(entry as CanonicalValue),
-      1,
-    );
-  }
-  return 1;
 }
 
 function submissionPayload(

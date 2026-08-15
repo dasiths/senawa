@@ -7,6 +7,7 @@ import {
 import type { PhaseOutputSchemaResolverPort } from "@senawa/execution-host";
 import type { CanonicalValue, Sha256 } from "@senawa/kernel";
 import type {
+  PhaseOutputFact,
   RuntimeSchemaContract,
   RuntimeSchemaFinding,
   RuntimeSchemaValidatorPort,
@@ -47,17 +48,43 @@ export function configurationPhaseOutputSchemas(
       if (snapshot === undefined) return new Map();
       const contracts = new Map<string, RuntimeSchemaContract>();
       for (const declaration of declarations) {
-        const contract = runtimeSchemaContract(
-          snapshot as ConfigurationSnapshot,
-          String(declaration.schemaKey),
-          sha256,
-        );
+        let contract: RuntimeSchemaContract;
+        try {
+          contract = runtimeSchemaContract(
+            snapshot as ConfigurationSnapshot,
+            String(declaration.schemaKey),
+            sha256,
+          );
+        } catch {
+          continue;
+        }
         if (contract.schemaResourceDigest !== declaration.schemaResourceDigest) continue;
         contracts.set(String(declaration.outputName), contract);
       }
       return contracts;
     },
   });
+}
+
+/** Resolves the accepted output schema an admitted phase output fact binds. */
+export function configurationOutputSchemaFor(
+  loadSnapshot: (snapshotDigest: string) => unknown | undefined,
+  sha256: Sha256,
+  fact: PhaseOutputFact,
+): RuntimeSchemaContract | undefined {
+  const snapshot = loadSnapshot(String(fact.output.configurationSnapshotDigest));
+  if (snapshot === undefined) return undefined;
+  let contract: RuntimeSchemaContract;
+  try {
+    contract = runtimeSchemaContract(
+      snapshot as ConfigurationSnapshot,
+      String(fact.output.schemaKey),
+      sha256,
+    );
+  } catch {
+    return undefined;
+  }
+  return contract.schemaResourceDigest === fact.output.schemaResourceDigest ? contract : undefined;
 }
 
 export function configurationRuntimeSchemaValidator(): RuntimeSchemaValidatorPort {

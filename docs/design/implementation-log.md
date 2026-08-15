@@ -8267,6 +8267,75 @@ Passed on 2026-08-15:
 * Model correction behavior remains unmeasured without paid inference. Recorded
   as PE-003.
 
+## Phase 14J review and repairs
+
+### Review disposition
+
+The specialized Implementation Validator had no filesystem access, so a
+filesystem-capable independent reviewer performed the adversarial Phase 14
+review, matching the precedent recorded in Phase 0. That review rejected Phase
+14 with two P0 findings, five P1 findings, six P2 findings, and cleanup notes.
+
+It also confirmed three properties independently: `schemaValidationReceiptDigest`
+is byte-identical to the pre-refactor derivation, an absent
+`installCanonicalOutputAsset` still fails closed through the broker's own
+`hasCanonicalOutputAsset` check, and no tool argument can widen authority or
+close a phase.
+
+### Repairs
+
+* P0-1. The daemon composed no `phaseOutputFacts` port, so an accepted output was
+  enqueued and never published. The daemon now composes
+  `RuntimePhaseOutputFactBridge` over a `RuntimeDataflowAuthority` with a
+  snapshot-derived accepted schema resolver. The acceptance journey now proves
+  delivery and exactly one publication rather than a queued entry.
+* P0-2. Identity derivation, the durable attempt count, canonical encoding, and
+  node counting sat outside every `try`, so an internal exception reached the
+  model verbatim and skipped the attempt budget. The whole handler body now runs
+  inside one guard that returns a bounded `output-refused` result.
+* P1-1. Raw tool arguments are bounded iteratively for node count, depth, and
+  string length before any canonical materialization. The recursive node counter
+  is removed, so a deeply nested payload cannot exhaust the stack.
+* P1-2. A refused admission now records a durable rejected attempt, so staging is
+  bounded by the finite per-slot budget rather than a per-run counter. PE-001 is
+  corrected accordingly.
+* P1-3. A failure while recording the accepted attempt no longer converts a
+  published submission into a reported failure.
+* P1-4. A missing or mismatched schema resource now leaves the output slot closed
+  instead of throwing out of the effect host after grants were issued.
+* P1-5. The proof journey gains stale-context refusal, hostile-content inertness,
+  publication counts, and a closed identity-free generated schema scan.
+* P2-1. A broker that can count attempts but cannot record them no longer reports
+  a budget it does not enforce.
+* P2-6. A rejected attempt always reports its own code and findings; exhaustion is
+  reported by the pre-check on the next call.
+
+### Additional repair beyond the review
+
+A stale or duplicate admission previously returned an SDK success envelope with
+a `stale` payload. Structured output now reports any non-accepted admission as a
+bounded failure result, so the model cannot read a refused submission as an
+acceptance.
+
+### Deferred with evidence
+
+PE-001 through PE-004 in
+[Production Enhancements](production-enhancements.md) record staged
+refused bodies, one output slot per dispatch, unmeasured model correction
+behavior, and one command-driven lifecycle phase per run. None of them defers a
+correctness, authority, data-loss, secret-exposure, or unbounded-cost defect.
+
+### Validation
+
+Passed on 2026-08-15:
+
+* Structured output adapter and acceptance suites: 36 tests
+* Complete offline suite: 96 files and 1,234 tests passed with 2 skipped live
+  tests
+* Root build, typecheck, Biome across 278 files with 30 intentional
+  prompt-template warnings, architecture boundaries across 443 source files,
+  documentation links across 25 Markdown files, and `git diff --check`
+
 ## Entry template
 
 ```markdown

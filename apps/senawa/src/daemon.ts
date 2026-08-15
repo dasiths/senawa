@@ -30,8 +30,13 @@ import {
   type SupervisorAllocationFact,
 } from "@senawa/protocol";
 import type { RunExecutionBinding } from "@senawa/runtime";
-import { createRoleAuthorizationPolicy, type RuntimeDependencies } from "@senawa/runtime";
 import {
+  createRoleAuthorizationPolicy,
+  RuntimeDataflowAuthority,
+  type RuntimeDependencies,
+} from "@senawa/runtime";
+import {
+  SqliteCanonicalJsonAssetStore,
   SqliteContextBroker,
   SqlitePortalQueryAuthority,
   SqliteRunnerAuthority,
@@ -56,7 +61,12 @@ import {
   startLoopbackSupervisorServer,
   startUnixSupervisorServer,
 } from "@senawa/supervisor";
-import { configurationPhaseOutputSchemas } from "./dataflow-composition.js";
+import {
+  configurationOutputSchemaFor,
+  configurationPhaseOutputSchemas,
+  configurationRuntimeSchemaValidator,
+} from "./dataflow-composition.js";
+import { RuntimePhaseOutputFactBridge } from "./phase-output-bridge.js";
 import { optionalPortalAssetSource } from "./portal-assets.js";
 import { ProductionScheduler } from "./production-scheduler.js";
 import {
@@ -200,6 +210,22 @@ export async function startSenawaService(
       completionEligibility,
       currentTime: () => new Date().toISOString(),
     });
+    const phaseOutputBridge = new RuntimePhaseOutputFactBridge(
+      new RuntimeDataflowAuthority(
+        dependencies.sha256,
+        configurationRuntimeSchemaValidator(),
+        new SqliteCanonicalJsonAssetStore(authority.commandAuthority),
+        authority.commandAuthority,
+      ),
+      {
+        resolve: (fact) =>
+          configurationOutputSchemaFor(
+            (snapshotDigest) => authority.commandAuthority.getConfigurationSnapshot(snapshotDigest),
+            dependencies.sha256,
+            fact,
+          ),
+      },
+    );
     contextBroker = new SqliteContextBroker({
       databasePath: paths.databasePath,
       dependencies: {
@@ -208,6 +234,7 @@ export async function startSenawaService(
         issueGrantToken: () => randomBytes(32),
       },
       completionFacts: completionBridge,
+      phaseOutputFacts: phaseOutputBridge,
     });
     ownedContextBroker = contextBroker;
     const amendmentBridge = new AmendmentProposalCommandBridge({
