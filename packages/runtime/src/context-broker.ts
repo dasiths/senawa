@@ -113,6 +113,27 @@ export interface PhaseOutputFactPort {
   admitPhaseOutputFact(fact: PhaseOutputFact): CompletionFactAdmission;
 }
 
+export type AgentTranscriptOwnerKind = "dispatch" | "task" | "phase";
+
+export interface AgentTranscriptOwner {
+  readonly kind: AgentTranscriptOwnerKind;
+  readonly id: string;
+}
+
+export interface AgentTranscriptLine {
+  readonly repositoryId: string;
+  readonly runId: string;
+  readonly owner: AgentTranscriptOwner;
+  readonly occurredAt: string;
+  readonly stream: "stdout" | "stderr" | "system";
+  readonly text: string;
+}
+
+export interface AgentTranscriptPort {
+  /** Assigns the next owner-scoped sequence and must be idempotent for an exact replay. */
+  append(record: AgentTranscriptLine): void;
+}
+
 export const PHASE_OUTPUT_LIMITS = Object.freeze({
   maxOutputBytes: 262_144,
   maxOutputNodes: 10_000,

@@ -1,6 +1,7 @@
 import { validateWorkerModelRouteSelection, type WorkerModelRouteSelection } from "@senawa/kernel";
 import { canonicalBytes, type JsonValue, WORKER_PROTOCOL_LIMITS } from "@senawa/protocol";
 import {
+  type AgentTranscriptPort,
   type AsyncEffectHost,
   type AsyncEffectHostContext,
   type ContextBrokerClient,
@@ -43,6 +44,7 @@ export interface CopilotWorkerEffectHostOptions {
   readonly sessionBaseDirectory?: string;
   readonly workspaceFiles?: WorkspaceFilePort;
   readonly phaseOutputSchemas?: PhaseOutputSchemaResolverPort;
+  readonly transcript?: AgentTranscriptPort;
 }
 
 export class CopilotWorkerEffectHost implements AsyncEffectHost {
@@ -53,6 +55,7 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
   readonly sessionBaseDirectory: string | undefined;
   readonly workspaceFiles: WorkspaceFilePort | undefined;
   readonly phaseOutputSchemas: PhaseOutputSchemaResolverPort | undefined;
+  readonly transcript: AgentTranscriptPort | undefined;
   readonly #active = new Map<string, AbortController>();
 
   constructor(options: CopilotWorkerEffectHostOptions) {
@@ -63,6 +66,7 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
     this.sessionBaseDirectory = options.sessionBaseDirectory;
     this.workspaceFiles = options.workspaceFiles;
     this.phaseOutputSchemas = options.phaseOutputSchemas;
+    this.transcript = options.transcript;
   }
 
   async dispatch(
@@ -111,6 +115,7 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
         ...(this.phaseOutputSchemas === undefined
           ? {}
           : { phaseOutputSchemas: this.phaseOutputSchemas.resolve(stored) }),
+        ...(this.transcript === undefined ? {} : { transcript: this.transcript }),
         timeoutMs: input.timeoutMs,
         signal: AbortSignal.any([context.signal, localAbort.signal]),
       });

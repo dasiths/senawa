@@ -23,6 +23,7 @@ import {
   decodePortalRepositoryPage,
   decodePortalRunOverview,
   decodePortalRunPage,
+  decodePortalTranscriptPage,
   decodePortalWorkspacePage,
   decodeProjectionEnvelope,
   decodeReceiptPage,
@@ -46,6 +47,7 @@ import {
   type PortalRepositoryPage,
   type PortalRunOverview,
   type PortalRunPage,
+  type PortalTranscriptPage,
   type PortalWorkspacePage,
   PROTOCOL_LIMITS,
   type ProjectionEnvelope,
@@ -244,6 +246,20 @@ export class HttpSupervisorClient {
 
   async listPortalGraphNodes(input: string | unknown): Promise<PortalGraphNodePage> {
     return (await this.#portalGraphPage(input, "nodes")) as PortalGraphNodePage;
+  }
+
+  async listPortalTranscript(input: string | unknown): Promise<PortalTranscriptPage> {
+    const request = exactClientObject(
+      input,
+      ["repositoryId", "runId", "ownerKind", "ownerId"],
+      ["after", "limit"],
+    );
+    return decodePortalTranscriptPage(
+      await this.#json(
+        "GET",
+        `${portalRunPath(request)}/transcript/${segment(request.ownerKind)}/${segment(request.ownerId)}${lexicalQuery(request)}`,
+      ),
+    );
   }
 
   async listPortalGraphEdges(input: string | unknown): Promise<PortalGraphEdgePage> {

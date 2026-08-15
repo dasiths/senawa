@@ -1,4 +1,10 @@
-import { PORTAL_LIMITS, type PortalRecordKind, validateOpaqueIdentity } from "@senawa/protocol";
+import {
+  PORTAL_LIMITS,
+  type PortalRecordKind,
+  type PortalTranscriptOwnerKind,
+  TRANSCRIPT_LIMITS,
+  validateOpaqueIdentity,
+} from "@senawa/protocol";
 
 const MAX_REQUEST_TARGET_LENGTH = 2_048;
 const DECIMAL_PATTERN = /^(?:0|[1-9][0-9]*)$/u;
@@ -53,6 +59,15 @@ export type SupervisorHttpRoute =
       readonly kind: "portal-delivery-list";
       readonly repositoryId: string;
       readonly runId: string;
+      readonly afterCursor?: number;
+      readonly limit?: number;
+    }
+  | {
+      readonly kind: "portal-transcript";
+      readonly repositoryId: string;
+      readonly runId: string;
+      readonly ownerKind: PortalTranscriptOwnerKind;
+      readonly ownerId: string;
       readonly afterCursor?: number;
       readonly limit?: number;
     }
@@ -302,6 +317,20 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
         kind: "portal-delivery-list",
         repositoryId,
         runId,
+        ...(afterCursor === undefined ? {} : { afterCursor }),
+        ...(limit === undefined ? {} : { limit }),
+      };
+    }
+    if (suffix.length === 3 && suffix[0] === "transcript") {
+      requireQuery(query, ["after", "limit"]);
+      const afterCursor = optionalInteger(query, "after", 0, Number.MAX_SAFE_INTEGER);
+      const limit = optionalInteger(query, "limit", 1, TRANSCRIPT_LIMITS.maxRecordsPerPage);
+      return {
+        kind: "portal-transcript",
+        repositoryId,
+        runId,
+        ownerKind: validateTranscriptOwnerKind(suffix[1]),
+        ownerId: validateIdentity(suffix[2]),
         ...(afterCursor === undefined ? {} : { afterCursor }),
         ...(limit === undefined ? {} : { limit }),
       };
@@ -570,6 +599,11 @@ function validateRecordKind(value: string | undefined): PortalRecordKind {
 function validateAssetName(value: string | undefined): string {
   if (value === undefined || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/u.test(value)) throw badTarget();
   return value;
+}
+
+function validateTranscriptOwnerKind(value: string | undefined): PortalTranscriptOwnerKind {
+  if (!new Set(["dispatch", "task", "phase"]).has(value ?? "")) throw notFound();
+  return value as PortalTranscriptOwnerKind;
 }
 
 function validateIdentity(value: string | undefined): string {

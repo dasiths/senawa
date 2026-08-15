@@ -330,6 +330,19 @@ export class SupervisorHttpHandler {
               route.limit,
             ),
           );
+        case "portal-transcript":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().query.listTranscript(
+              route.repositoryId,
+              route.runId,
+              { kind: route.ownerKind, id: route.ownerId },
+              route.afterCursor,
+              route.limit,
+            ),
+          );
         case "portal-graph-nodes":
         case "portal-graph-edges": {
           requireNoBody(request);

@@ -21,6 +21,7 @@ import {
   type WorkerSubmission,
 } from "@senawa/protocol";
 import {
+  type AgentTranscriptPort,
   type ContextBrokerClient,
   PHASE_OUTPUT_LIMITS,
   type RuntimeSchemaContract,
@@ -75,6 +76,8 @@ export interface CopilotWorkerRunInput {
   readonly workspaceFiles?: WorkspaceFilePort;
   /** Accepted output schema contracts keyed by declared output name. */
   readonly phaseOutputSchemas?: ReadonlyMap<string, RuntimeSchemaContract>;
+  /** Durable dispatch-scoped transcript sink for session and tool lifecycle lines. */
+  readonly transcript?: AgentTranscriptPort;
   readonly sessionBaseDirectory?: string;
   readonly sessionResume?: Readonly<{
     readonly requestedBinding: unknown;
@@ -124,7 +127,9 @@ export class CopilotSerialWorkerAdapter {
       dispatchId: validated.dispatch.dispatchId,
       sessionId: validated.dispatch.dispatchId,
       pending: new Set(),
+      note: transcriptNoteSink(input, validated.dispatch),
     };
+    scope.note("session started");
     let session: CopilotSdkSessionPort | undefined;
     let status: CopilotWorkerRunResult["status"] = "missing-completion";
     try {
@@ -204,6 +209,7 @@ export class CopilotSerialWorkerAdapter {
       }
       await Promise.allSettled([...scope.pending]);
       this.#activeDispatchId = undefined;
+      scope.note(`session ended ${status}`);
     }
     const base = {
       status,
@@ -290,6 +296,29 @@ interface RunScope {
   readonly dispatchId: string;
   sessionId: string;
   readonly pending: Set<Promise<void>>;
+  readonly note: (text: string) => void;
+}
+
+function transcriptNoteSink(
+  input: CopilotWorkerRunInput,
+  dispatch: WorkerDispatch,
+): (text: string) => void {
+  const port = input.transcript;
+  if (port === undefined) return () => undefined;
+  return (text) => {
+    try {
+      port.append({
+        repositoryId: dispatch.repositoryId,
+        runId: dispatch.runId,
+        owner: { kind: "dispatch", id: dispatch.dispatchId },
+        occurredAt: input.broker.dependencies.currentTime(),
+        stream: "system",
+        text,
+      });
+    } catch {
+      // Transcript capture is observability and must never fail a dispatch.
+    }
+  };
 }
 
 function sessionConfig(
@@ -1119,12 +1148,17 @@ function tool(
         invocation.sessionId !== scope.sessionId ||
         invocation.toolName !== name
       ) {
+        scope.note(`tool ${name} refused`);
         return Promise.resolve(failure("invocation-refused"));
       }
       const execution = handler(args, invocation);
       const pending = execution.then(
-        () => undefined,
-        () => undefined,
+        (result) => {
+          scope.note(`tool ${name} ${result.resultType}`);
+        },
+        () => {
+          scope.note(`tool ${name} failure`);
+        },
       );
       scope.pending.add(pending);
       void pending.finally(() => scope.pending.delete(pending));

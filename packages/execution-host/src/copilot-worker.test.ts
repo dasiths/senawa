@@ -27,6 +27,8 @@ import {
   type WorkerSubmission,
 } from "@senawa/protocol";
 import {
+  type AgentTranscriptLine,
+  type AgentTranscriptPort,
   type AssetReadResult,
   type ContextBrokerClient,
   evaluatePhaseOutputAttempt,
@@ -289,6 +291,85 @@ describe("CopilotSerialWorkerAdapter", () => {
       "exact dispatch working directory",
     );
     expect(sdk.createCalls).toHaveLength(0);
+  });
+
+  it("records only dispatch-scoped session and tool lifecycle lines in the transcript", async () => {
+    const sdk = new FakeSdkPort();
+    const transcript = new RecordingTranscript();
+    const fixture = harness(sdk, { transcript });
+    const hostileSummary = `<script>alert(1)</script> ${GRANT_TOKEN} /etc/shadow`;
+    sdk.onSend = async (config, session) => {
+      const tools = new Map(config.tools.map((candidate) => [candidate.name, candidate]));
+      await invoke(required(tools.get("propose_asset")), session.sessionId, "hostile", {
+        assetId: "asset_hostile",
+        contentDigest: "a".repeat(64),
+        byteLength: 12,
+        mediaType: "text/plain",
+        sensitivity: "internal",
+        summary: hostileSummary,
+        grantToken: GRANT_TOKEN,
+      });
+      await invoke(required(tools.get("record_discovery")), "session_other", "stolen", {
+        summary: "Discovery",
+        details: "Details",
+      });
+      await complete("completed")(config, session);
+    };
+
+    const result = await fixture.adapter.run(fixture.input);
+
+    expect(result.status).toBe("completed");
+    expect(transcript.lines.map(({ text }) => text)).toEqual([
+      "session started",
+      "tool propose_asset failure",
+      "tool record_discovery refused",
+      "tool submit_completion success",
+      "session ended completed",
+    ]);
+    for (const line of transcript.lines) {
+      expect(line).toMatchObject({
+        repositoryId: fixture.dispatch.repositoryId,
+        runId: fixture.dispatch.runId,
+        owner: { kind: "dispatch", id: fixture.dispatch.dispatchId },
+        occurredAt: "2026-08-13T00:00:00.000Z",
+        stream: "system",
+      });
+    }
+    const captured = JSON.stringify(transcript.lines);
+    for (const forbidden of [
+      hostileSummary,
+      GRANT_TOKEN,
+      "asset_hostile",
+      "alert(1)",
+      "/etc/shadow",
+      fixture.context.prompt.contentDigest,
+      "Completed",
+    ]) {
+      expect(captured).not.toContain(forbidden);
+    }
+  });
+
+  it("reports the exact ending status and survives a failing transcript sink", async () => {
+    const failing = new RecordingTranscript(true);
+    const blockingSdk = new FakeSdkPort();
+    blockingSdk.onSend = complete("blocked");
+    const blocked = harness(blockingSdk, { transcript: failing });
+    expect((await blocked.adapter.run(blocked.input)).status).toBe("blocked");
+    expect(failing.lines).toHaveLength(0);
+
+    const transcript = new RecordingTranscript();
+    const abortSdk = new FakeSdkPort();
+    const controller = new AbortController();
+    abortSdk.onSend = async () => {
+      controller.abort();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    };
+    const aborted = harness(abortSdk, { transcript, signal: controller.signal });
+    expect((await aborted.adapter.run(aborted.input)).status).toBe("aborted");
+    expect(transcript.lines.map(({ text }) => text)).toEqual([
+      "session started",
+      "session ended aborted",
+    ]);
   });
 
   it("denies every permission and unknown tool independently without broker mutation", async () => {
@@ -1020,6 +1101,7 @@ function harness(
     readonly provider?: string;
     readonly workspaceFiles?: WorkspaceFilePort;
     readonly phaseOutput?: boolean;
+    readonly transcript?: AgentTranscriptPort;
   } = {},
 ) {
   const capabilities = options.capabilities ?? ALL_CAPABILITIES;
@@ -1143,6 +1225,7 @@ function harness(
     ...(options.phaseOutput === true
       ? { phaseOutputSchemas: new Map([["verification", OUTPUT_CONTRACT]]) }
       : {}),
+    ...(options.transcript === undefined ? {} : { transcript: options.transcript }),
     sessionBaseDirectory: sdk.baseDirectory,
     timeoutMs: options.timeoutMs ?? 1_000,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -1270,6 +1353,17 @@ function invoke(
   args: unknown,
 ): Promise<CopilotSdkToolResult> {
   return tool.handler(args, { sessionId, toolCallId, toolName: tool.name });
+}
+
+class RecordingTranscript implements AgentTranscriptPort {
+  readonly lines: AgentTranscriptLine[] = [];
+
+  constructor(private readonly failing = false) {}
+
+  append(record: AgentTranscriptLine): void {
+    if (this.failing) throw new TypeError("Transcript sink is unavailable");
+    this.lines.push(record);
+  }
 }
 
 class FakeWorkspaceFiles implements WorkspaceFilePort {

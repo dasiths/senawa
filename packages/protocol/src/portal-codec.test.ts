@@ -9,8 +9,11 @@ import {
   decodePortalRepositoryPage,
   decodePortalRunOverview,
   decodePortalSessionDescriptor,
+  decodePortalTranscriptPage,
+  decodePortalTranscriptRecord,
+  encodePortalTranscriptRecord,
 } from "./portal-codec.js";
-import { PORTAL_CAPABILITIES, PORTAL_LIMITS } from "./portal-contracts.js";
+import { PORTAL_CAPABILITIES, PORTAL_LIMITS, TRANSCRIPT_LIMITS } from "./portal-contracts.js";
 
 const digest = "a".repeat(64);
 const timestamp = "2026-08-14T12:00:00.000Z";
@@ -351,5 +354,124 @@ describe("portal codecs", () => {
         jsonNodeBudget: PORTAL_LIMITS.jsonViewerNodeBudget,
       }),
     ).toThrow(/65536/);
+  });
+
+  it("decodes one owner-scoped transcript page and refuses every transcript bound", () => {
+    const record = (sequence: number, overrides: Record<string, unknown> = {}) => ({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId: "repository_alpha",
+      runId: "run_alpha",
+      owner: { kind: "dispatch", id: "dispatch_alpha" },
+      sequence,
+      occurredAt: timestamp,
+      stream: "system",
+      text: "session started",
+      ...overrides,
+    });
+    const transcriptPage = (
+      records: readonly Record<string, unknown>[],
+      overrides: Record<string, unknown> = {},
+    ) => ({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId: "repository_alpha",
+      runId: "run_alpha",
+      owner: { kind: "dispatch", id: "dispatch_alpha" },
+      after: 0,
+      nextAfter: records.length === 0 ? 0 : Number(records[records.length - 1]?.sequence),
+      hasMore: false,
+      records,
+      ...overrides,
+    });
+
+    const page = decodePortalTranscriptPage(transcriptPage([record(1), record(2)]));
+    expect(page).toEqual({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId: "repository_alpha",
+      runId: "run_alpha",
+      owner: { kind: "dispatch", id: "dispatch_alpha" },
+      after: 0,
+      nextAfter: 2,
+      hasMore: false,
+      records: [record(1), record(2)],
+    });
+    expect(encodePortalTranscriptRecord(record(1))).toBe(
+      `{"apiVersion":"${PROTOCOL_VERSION}","occurredAt":"${timestamp}","owner":{"id":"dispatch_alpha","kind":"dispatch"},"repositoryId":"repository_alpha","runId":"run_alpha","sequence":1,"stream":"system","text":"session started"}`,
+    );
+    expect(
+      decodePortalTranscriptRecord(
+        record(7, { stream: "stdout", text: "column\tvalue\nnext line" }),
+      ).text,
+    ).toBe("column\tvalue\nnext line");
+
+    expect(() => decodePortalTranscriptRecord(record(1, { toolArguments: {} }))).toThrow(
+      /toolArguments is not allowed/,
+    );
+    expect(() => decodePortalTranscriptRecord(record(0))).toThrow(
+      /sequence must be a safe integer of at least 1/,
+    );
+    expect(() => decodePortalTranscriptRecord(record(1, { stream: "stdin" }))).toThrow(
+      /stream must be one of/,
+    );
+    expect(() =>
+      decodePortalTranscriptRecord(record(1, { owner: { kind: "criterion", id: "c" } })),
+    ).toThrow(/owner.kind must be one of/);
+    expect(() =>
+      decodePortalTranscriptRecord(record(1, { occurredAt: "2026-08-14 12:00" })),
+    ).toThrow(/occurredAt must be a UTC RFC 3339 timestamp/);
+    expect(() => decodePortalTranscriptRecord(record(1, { text: "" }))).toThrow(
+      /text must contain/,
+    );
+    expect(() =>
+      decodePortalTranscriptRecord(
+        record(1, { text: "a".repeat(TRANSCRIPT_LIMITS.maxLineBytes + 1) }),
+      ),
+    ).toThrow(/text must contain 1-4096/);
+    expect(() =>
+      decodePortalTranscriptRecord(
+        record(1, { text: "\u00e9".repeat(TRANSCRIPT_LIMITS.maxLineBytes / 2 + 1) }),
+      ),
+    ).toThrow(/at most 4096 UTF-8 bytes/);
+    for (const hostile of ["bell\u0007", "escape\u001b[31m", "carriage\rreturn", "delete\u007f"]) {
+      expect(() => decodePortalTranscriptRecord(record(1, { text: hostile }))).toThrow(
+        /no control characters/,
+      );
+    }
+    expect(() => decodePortalTranscriptRecord(record(1, { text: "lone\ud800surrogate" }))).toThrow(
+      /unpaired UTF-16 surrogates/,
+    );
+
+    expect(() => decodePortalTranscriptPage(transcriptPage([record(2), record(2)]))).toThrow(
+      /must be strictly ascending after the cursor/,
+    );
+    expect(() =>
+      decodePortalTranscriptPage(transcriptPage([record(1)], { after: 4, nextAfter: 1 })),
+    ).toThrow(/must be strictly ascending after the cursor/);
+    expect(() =>
+      decodePortalTranscriptPage(transcriptPage([record(1), record(2)], { nextAfter: 1 })),
+    ).toThrow(/nextAfter must equal the last returned sequence/);
+    expect(() => decodePortalTranscriptPage(transcriptPage([], { hasMore: true }))).toThrow(
+      /hasMore must be false for an empty page/,
+    );
+    expect(() =>
+      decodePortalTranscriptPage(
+        transcriptPage([record(1, { owner: { kind: "task", id: "task_alpha" } })], {
+          nextAfter: 1,
+        }),
+      ),
+    ).toThrow(/must match the page owner/);
+    expect(() =>
+      decodePortalTranscriptPage(
+        transcriptPage([record(1, { runId: "run_beta" })], { nextAfter: 1 }),
+      ),
+    ).toThrow(/must match the page repository and run/);
+    expect(() =>
+      decodePortalTranscriptPage(
+        transcriptPage(
+          Array.from({ length: TRANSCRIPT_LIMITS.maxRecordsPerPage + 1 }, (_, index) =>
+            record(index + 1),
+          ),
+        ),
+      ),
+    ).toThrow(/at most 200/);
   });
 });

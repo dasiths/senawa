@@ -305,6 +305,7 @@ export async function startSenawaService(
                     authority.commandAuthority.getConfigurationSnapshot(snapshotDigest),
                   dependencies.sha256,
                 ),
+                transcript: contextBroker.transcript,
               });
             },
             createGitHost: async (binding) => {

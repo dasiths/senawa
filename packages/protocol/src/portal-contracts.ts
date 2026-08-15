@@ -465,3 +465,40 @@ export interface PortalReceiptWindow extends PortalActivityWindowBase {
 export interface PortalEventWindow extends PortalActivityWindowBase {
   readonly events: readonly EventStreamFrame[];
 }
+
+export const TRANSCRIPT_LIMITS = Object.freeze({
+  maxLineBytes: 4_096,
+  maxRecordsPerPage: 200,
+  maxRetainedLinesPerOwner: 5_000,
+});
+
+export type PortalTranscriptOwnerKind = "dispatch" | "task" | "phase";
+
+export interface PortalTranscriptOwner {
+  readonly kind: PortalTranscriptOwnerKind;
+  readonly id: OpaqueIdentity;
+}
+
+export type PortalTranscriptStream = "stdout" | "stderr" | "system";
+
+export interface PortalTranscriptRecord {
+  readonly apiVersion: ProtocolVersion;
+  readonly repositoryId: RepositoryId;
+  readonly runId: RunId;
+  readonly owner: PortalTranscriptOwner;
+  readonly sequence: number;
+  readonly occurredAt: string;
+  readonly stream: PortalTranscriptStream;
+  readonly text: string;
+}
+
+export interface PortalTranscriptPage {
+  readonly apiVersion: ProtocolVersion;
+  readonly repositoryId: RepositoryId;
+  readonly runId: RunId;
+  readonly owner: PortalTranscriptOwner;
+  readonly after: number;
+  readonly nextAfter: number;
+  readonly hasMore: boolean;
+  readonly records: readonly PortalTranscriptRecord[];
+}

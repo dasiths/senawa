@@ -90,6 +90,8 @@ import {
   decodePortalRepositoryPage,
   decodePortalRunOverview,
   decodePortalRunPage,
+  decodePortalTranscriptPage,
+  decodePortalTranscriptRecord,
   decodePortalWorkspacePage,
   decodeReceiptPage,
   decodeRemoteClassifiedReport,
@@ -130,6 +132,8 @@ import {
   type PortalRunOverview,
   type PortalRunPage,
   type PortalSyncVector,
+  type PortalTranscriptOwner,
+  type PortalTranscriptPage,
   type PortalWorkspacePage,
   PROTOCOL_LIMITS,
   PROTOCOL_VERSION,
@@ -144,10 +148,13 @@ import {
   type RemoteReportAcknowledgement,
   type RemoteRepositoryBinding,
   type RemoteSynchronizationVector,
+  TRANSCRIPT_LIMITS,
   validateOpaqueIdentity,
 } from "@senawa/protocol";
 import {
   type AdmissionFacts,
+  type AgentTranscriptLine,
+  type AgentTranscriptPort,
   type AssetReadInput,
   type AssetReadResult,
   assetReadWorstCaseBytes,
@@ -231,7 +238,7 @@ import {
 } from "@senawa/runtime";
 import Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 12;
+export const CURRENT_SCHEMA_VERSION = 13;
 export const ASSET_SECURITY_LIMITS = Object.freeze({
   maxObjectBytes: 256 * 1024 * 1024,
   defaultMaxObjects: 10_000,
@@ -281,6 +288,12 @@ export interface SqlitePortalQueryAuthorityOptions {
   readonly databasePath: string;
   readonly assetDirectory: string;
   readonly dependencies: RuntimeDependencies;
+}
+
+export interface AgentTranscriptAppendResult {
+  readonly sequence: number;
+  readonly retained: number;
+  readonly replayed: boolean;
 }
 
 export interface PortalArtifactDownload {
@@ -4312,6 +4325,56 @@ export class SqlitePortalQueryAuthority {
     query: { readonly after?: number; readonly before?: number; readonly limit?: number } = {},
   ): PortalEventWindow {
     return this.#activityWindow(repositoryId, runId, "events", query) as PortalEventWindow;
+  }
+
+  listTranscript(
+    repositoryId: string,
+    runId: string,
+    owner: PortalTranscriptOwner,
+    after = 0,
+    limit = TRANSCRIPT_LIMITS.maxRecordsPerPage,
+  ): PortalTranscriptPage {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    validateOpaqueIdentity(owner.id);
+    validatePortalOffset(after);
+    validatePortalLimit(limit, TRANSCRIPT_LIMITS.maxRecordsPerPage);
+    const run = this.#database
+      .prepare<[string, string], { run_key: string }>(
+        "SELECT run_key FROM runs WHERE repository_id = ? AND run_id = ?",
+      )
+      .get(repositoryId, runId);
+    if (run === undefined) throw new PageQueryError("cursor-ahead", "Portal run does not exist");
+    const rows = this.#database
+      .prepare<
+        [string, string, string, number, number],
+        { sequence: number; occurred_at: string; stream: string; text: string }
+      >(
+        `SELECT sequence, occurred_at, stream, text FROM agent_transcript_lines
+         WHERE run_key = ? AND owner_kind = ? AND owner_id = ? AND sequence > ?
+         ORDER BY sequence LIMIT ?`,
+      )
+      .all(run.run_key, owner.kind, owner.id, after, limit + 1);
+    const page = rows.slice(0, limit);
+    return decodePortalTranscriptPage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      owner: { kind: owner.kind, id: owner.id },
+      after,
+      nextAfter: page.at(-1)?.sequence ?? after,
+      hasMore: rows.length > limit,
+      records: page.map((row) => ({
+        apiVersion: PROTOCOL_VERSION,
+        repositoryId,
+        runId,
+        owner: { kind: owner.kind, id: owner.id },
+        sequence: row.sequence,
+        occurredAt: row.occurred_at,
+        stream: row.stream,
+        text: row.text,
+      })),
+    });
   }
 
   #activityWindow(
@@ -8895,6 +8958,7 @@ export class SqliteContextBroker {
   readonly databasePath: string;
   readonly dependencies: ContextBrokerDependencies;
   readonly assets: SqliteContextAssetAuthority;
+  readonly transcript: AgentTranscriptPort;
   readonly authority: {
     snapshot: () => ContextAuthoritySnapshot;
     projection: () => ContextBrokerProjection;
@@ -8981,6 +9045,84 @@ export class SqliteContextBroker {
     return row?.total ?? 0;
   }
 
+  appendTranscript(input: AgentTranscriptLine): AgentTranscriptAppendResult {
+    this.#database.exec("BEGIN IMMEDIATE");
+    let committed = false;
+    try {
+      const run = this.#database
+        .prepare<[string, string], { run_key: string }>(
+          "SELECT run_key FROM runs WHERE repository_id = ? AND run_id = ?",
+        )
+        .get(input.repositoryId, input.runId);
+      if (run === undefined) throw new TypeError("Agent transcript references an unknown run");
+      const latest = this.#database
+        .prepare<
+          [string, string],
+          { sequence: number; occurred_at: string; stream: string; text: string }
+        >(
+          `SELECT sequence, occurred_at, stream, text FROM agent_transcript_lines
+           WHERE owner_kind = ? AND owner_id = ? ORDER BY sequence DESC LIMIT 1`,
+        )
+        .get(input.owner.kind, input.owner.id);
+      const replayed =
+        latest !== undefined &&
+        latest.occurred_at === input.occurredAt &&
+        latest.stream === input.stream &&
+        latest.text === input.text;
+      const sequence = replayed ? latest.sequence : (latest?.sequence ?? 0) + 1;
+      if (!replayed) {
+        decodePortalTranscriptRecord({
+          apiVersion: PROTOCOL_VERSION,
+          repositoryId: input.repositoryId,
+          runId: input.runId,
+          owner: { kind: input.owner.kind, id: input.owner.id },
+          sequence,
+          occurredAt: input.occurredAt,
+          stream: input.stream,
+          text: input.text,
+        });
+        this.#database
+          .prepare(
+            `INSERT INTO agent_transcript_lines(
+               run_key, owner_kind, owner_id, sequence, occurred_at, stream, text
+             ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            run.run_key,
+            input.owner.kind,
+            input.owner.id,
+            sequence,
+            input.occurredAt,
+            input.stream,
+            input.text,
+          );
+        this.#database
+          .prepare(
+            `DELETE FROM agent_transcript_lines
+             WHERE owner_kind = ? AND owner_id = ? AND sequence <= ?`,
+          )
+          .run(
+            input.owner.kind,
+            input.owner.id,
+            sequence - TRANSCRIPT_LIMITS.maxRetainedLinesPerOwner,
+          );
+      }
+      const retained =
+        this.#database
+          .prepare<[string, string], { total: number }>(
+            `SELECT COUNT(*) AS total FROM agent_transcript_lines
+             WHERE owner_kind = ? AND owner_id = ?`,
+          )
+          .get(input.owner.kind, input.owner.id)?.total ?? 0;
+      this.#database.exec("COMMIT");
+      committed = true;
+      return Object.freeze({ sequence, retained, replayed });
+    } catch (error) {
+      if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   #loadPhaseOutputAttempts(dispatchId: string): readonly PhaseOutputAttemptRecord[] {
     return this.#database
       .prepare<
@@ -9065,6 +9207,9 @@ export class SqliteContextBroker {
       throw error;
     }
     this.assets = new SqliteContextAssetAuthority(this);
+    this.transcript = Object.freeze({
+      append: (record: AgentTranscriptLine) => void this.appendTranscript(record),
+    });
     this.authority = Object.freeze({
       snapshot: () => this.#loadAuthority().snapshot(),
       projection: () => this.#loadAuthority().projection(),

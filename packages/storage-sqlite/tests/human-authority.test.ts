@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalBytes, PROTOCOL_VERSION } from "@senawa/protocol";
+import { canonicalBytes, PROTOCOL_VERSION, TRANSCRIPT_LIMITS } from "@senawa/protocol";
 import {
+  type AgentTranscriptLine,
   createRoleAuthorizationPolicy,
   FencedRunner,
   type RuntimeDependencies,
@@ -805,7 +806,167 @@ describe("SQLite Phase 11B portal query authority", () => {
     authority.close();
     fixture.dispose();
   });
+
+  it("keeps owner-scoped transcript sequences durable, replayable, bounded, and paged", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    authority.close();
+    let broker = new SqliteContextBroker({
+      databasePath: fixture.databasePath,
+      dependencies: contextDependencies(),
+    });
+
+    expect(broker.appendTranscript(transcriptLine({ text: "session started" }))).toEqual({
+      sequence: 1,
+      retained: 1,
+      replayed: false,
+    });
+    expect(
+      broker.appendTranscript(transcriptLine({ text: "tool submit_completion success" })),
+    ).toEqual({ sequence: 2, retained: 2, replayed: false });
+    expect(
+      broker.appendTranscript(transcriptLine({ stream: "stdout", text: "line\twith\ttabs" })),
+    ).toEqual({ sequence: 3, retained: 3, replayed: false });
+    expect(
+      broker.appendTranscript(transcriptLine({ stream: "stdout", text: "line\twith\ttabs" })),
+    ).toEqual({ sequence: 3, retained: 3, replayed: true });
+    expect(
+      broker.appendTranscript(
+        transcriptLine({ owner: { kind: "phase", id: "phase_transcript" }, text: "phase opened" }),
+      ),
+    ).toEqual({ sequence: 1, retained: 1, replayed: false });
+
+    for (const invalid of [
+      { text: "" },
+      { text: "a".repeat(TRANSCRIPT_LIMITS.maxLineBytes + 1) },
+      { text: "bell\u0007" },
+      { text: "escape\u001b[31mred" },
+      { text: "carriage\rreturn" },
+    ]) {
+      expect(() => broker.appendTranscript(transcriptLine(invalid))).toThrow(/\$\./u);
+    }
+    expect(() =>
+      broker.appendTranscript({
+        ...transcriptLine({}),
+        stream: "stdin" as unknown as AgentTranscriptLine["stream"],
+      }),
+    ).toThrow(/stream must be one of/u);
+    expect(() =>
+      broker.appendTranscript(transcriptLine({ runId: "run_absent", text: "orphan" })),
+    ).toThrow("unknown run");
+
+    broker.close();
+    broker = new SqliteContextBroker({
+      databasePath: fixture.databasePath,
+      dependencies: contextDependencies(),
+    });
+    const portal = new SqlitePortalQueryAuthority(fixture.options);
+    const owner = { kind: "dispatch", id: "dispatch_transcript" } as const;
+    const firstPage = portal.listTranscript(
+      runtimeFixture.repositoryId,
+      runtimeFixture.runId,
+      owner,
+      0,
+      2,
+    );
+    expect(firstPage).toMatchObject({ after: 0, nextAfter: 2, hasMore: true });
+    expect(firstPage.records.map(({ sequence, text }) => [sequence, text])).toEqual([
+      [1, "session started"],
+      [2, "tool submit_completion success"],
+    ]);
+    const secondPage = portal.listTranscript(
+      runtimeFixture.repositoryId,
+      runtimeFixture.runId,
+      owner,
+      firstPage.nextAfter,
+      2,
+    );
+    expect(secondPage).toMatchObject({ after: 2, nextAfter: 3, hasMore: false });
+    expect(secondPage.records).toHaveLength(1);
+    expect(
+      portal.listTranscript(runtimeFixture.repositoryId, runtimeFixture.runId, owner, 3, 2),
+    ).toMatchObject({ after: 3, nextAfter: 3, hasMore: false, records: [] });
+    expect(
+      portal.listTranscript(runtimeFixture.repositoryId, runtimeFixture.runId, {
+        kind: "phase",
+        id: "phase_transcript",
+      }).records,
+    ).toHaveLength(1);
+    expect(() => portal.listTranscript(runtimeFixture.repositoryId, "run_absent", owner)).toThrow(
+      "Portal run does not exist",
+    );
+    expect(() =>
+      portal.listTranscript(
+        runtimeFixture.repositoryId,
+        runtimeFixture.runId,
+        owner,
+        0,
+        TRANSCRIPT_LIMITS.maxRecordsPerPage + 1,
+      ),
+    ).toThrow(/limit/u);
+
+    const ceiling = TRANSCRIPT_LIMITS.maxRetainedLinesPerOwner;
+    seedTranscriptLines(fixture.databasePath, "dispatch_transcript", 4, ceiling + 1);
+    expect(broker.appendTranscript(transcriptLine({ text: `line ${ceiling + 2}` }))).toEqual({
+      sequence: ceiling + 2,
+      retained: ceiling,
+      replayed: false,
+    });
+    const evicted = portal.listTranscript(
+      runtimeFixture.repositoryId,
+      runtimeFixture.runId,
+      owner,
+      0,
+      1,
+    );
+    expect(evicted.records[0]?.sequence).toBe(3);
+    portal.close();
+    broker.close();
+    fixture.dispose();
+  });
 });
+
+function transcriptLine(overrides: Partial<AgentTranscriptLine>): AgentTranscriptLine {
+  return {
+    repositoryId: runtimeFixture.repositoryId,
+    runId: runtimeFixture.runId,
+    owner: { kind: "dispatch", id: "dispatch_transcript" },
+    occurredAt: "2026-08-14T12:00:00.000Z",
+    stream: "system",
+    text: "session started",
+    ...overrides,
+  };
+}
+
+function seedTranscriptLines(
+  databasePath: string,
+  ownerId: string,
+  from: number,
+  to: number,
+): void {
+  const database = new Database(databasePath);
+  try {
+    const run = database
+      .prepare<[string, string], { run_key: string }>(
+        "SELECT run_key FROM runs WHERE repository_id = ? AND run_id = ?",
+      )
+      .get(runtimeFixture.repositoryId, runtimeFixture.runId);
+    if (run === undefined) throw new Error("Expected a durable run fixture");
+    const insert = database.prepare(
+      `INSERT INTO agent_transcript_lines(
+         run_key, owner_kind, owner_id, sequence, occurred_at, stream, text
+       ) VALUES (?, 'dispatch', ?, ?, '2026-08-14T12:00:00.000Z', 'system', ?)`,
+    );
+    database.transaction(() => {
+      for (let sequence = from; sequence <= to; sequence += 1) {
+        insert.run(run.run_key, ownerId, sequence, `line ${sequence}`);
+      }
+    })();
+  } finally {
+    database.close();
+  }
+}
 
 function createFixture() {
   const root = mkdtempSync(join(tmpdir(), "senawa-human-authority-"));

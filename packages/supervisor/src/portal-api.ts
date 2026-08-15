@@ -18,6 +18,8 @@ import type {
   PortalRepositoryPage,
   PortalRunOverview,
   PortalRunPage,
+  PortalTranscriptOwner,
+  PortalTranscriptPage,
   PortalWorkspacePage,
 } from "@senawa/protocol";
 
@@ -125,6 +127,13 @@ export interface PortalQueryPort {
     runId: string,
     query?: { readonly after?: number; readonly before?: number; readonly limit?: number },
   ): PortalEventWindow;
+  listTranscript(
+    repositoryId: string,
+    runId: string,
+    owner: PortalTranscriptOwner,
+    after?: number,
+    limit?: number,
+  ): PortalTranscriptPage;
 }
 
 export class PortalApiError extends Error {

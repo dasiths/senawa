@@ -84,6 +84,79 @@ describe("supervisor HTTP route matching", () => {
     });
   });
 
+  it("bounds owner-scoped transcript routes and refuses unknown owner kinds", () => {
+    expect(
+      matchSupervisorHttpRoute(
+        "GET",
+        "/api/v1alpha1/repositories/repository_a/runs/run_a/transcript/dispatch/dispatch_a?after=12&limit=200",
+      ),
+    ).toEqual({
+      kind: "portal-transcript",
+      repositoryId: "repository_a",
+      runId: "run_a",
+      ownerKind: "dispatch",
+      ownerId: "dispatch_a",
+      afterCursor: 12,
+      limit: 200,
+    });
+    expect(
+      matchSupervisorHttpRoute(
+        "GET",
+        "/api/v1alpha1/repositories/repository_a/runs/run_a/transcript/phase/phase_a",
+      ),
+    ).toEqual({
+      kind: "portal-transcript",
+      repositoryId: "repository_a",
+      runId: "run_a",
+      ownerKind: "phase",
+      ownerId: "phase_a",
+    });
+    expectRouteError(400, () =>
+      matchSupervisorHttpRoute(
+        "GET",
+        "/api/v1alpha1/repositories/repository_a/runs/run_a/transcript/task/task_a?limit=201",
+      ),
+    );
+    expectRouteError(400, () =>
+      matchSupervisorHttpRoute(
+        "GET",
+        "/api/v1alpha1/repositories/repository_a/runs/run_a/transcript/task/task_a?limit=0",
+      ),
+    );
+    expectRouteError(400, () =>
+      matchSupervisorHttpRoute(
+        "GET",
+        "/api/v1alpha1/repositories/repository_a/runs/run_a/transcript/task/task_a?cursor=1",
+      ),
+    );
+    for (const cursor of ["-1", "abc", "01", "9007199254740992"]) {
+      expectRouteError(400, () =>
+        matchSupervisorHttpRoute(
+          "GET",
+          `/api/v1alpha1/repositories/repository_a/runs/run_a/transcript/task/task_a?after=${cursor}`,
+        ),
+      );
+    }
+    expectRouteError(404, () =>
+      matchSupervisorHttpRoute(
+        "GET",
+        "/api/v1alpha1/repositories/repository_a/runs/run_a/transcript/criterion/criterion_a",
+      ),
+    );
+    expectRouteError(400, () =>
+      matchSupervisorHttpRoute(
+        "GET",
+        "/api/v1alpha1/repositories/repository_a/runs/run_a/transcript/dispatch/Dispatch%20A",
+      ),
+    );
+    expectRouteError(405, () =>
+      matchSupervisorHttpRoute(
+        "POST",
+        "/api/v1alpha1/repositories/repository_a/runs/run_a/transcript/dispatch/dispatch_a",
+      ),
+    );
+  });
+
   it("matches exact supervisor operational routes and bounds log paging", () => {
     expect(matchSupervisorHttpRoute("GET", "/supervisor/v1alpha1/status")).toEqual({
       kind: "supervisor-status",

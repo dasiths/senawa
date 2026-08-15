@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PORTAL_CAPABILITIES } from "@senawa/protocol";
-import { SqlitePortalQueryAuthority } from "@senawa/storage-sqlite";
+import { SqliteContextBroker, SqlitePortalQueryAuthority } from "@senawa/storage-sqlite";
 import {
   createRuntimeGraph,
   deterministicSha256,
@@ -61,6 +61,24 @@ describe("portal API transport", () => {
       },
     );
     const query = new SqlitePortalQueryAuthority({ databasePath, assetDirectory, dependencies });
+    const broker = new SqliteContextBroker({
+      databasePath,
+      dependencies: {
+        sha256: deterministicSha256,
+        currentTime: () => runtimeFixture.currentTime,
+        issueGrantToken: () => new Uint8Array(32).fill(3),
+      },
+    });
+    for (const text of ["session started", "session ended completed"]) {
+      broker.appendTranscript({
+        repositoryId: runtimeFixture.repositoryId,
+        runId: runtimeFixture.runId,
+        owner: { kind: "dispatch", id: "dispatch_portal-transport" },
+        occurredAt: runtimeFixture.currentTime,
+        stream: "system",
+        text,
+      });
+    }
     const api = new SupervisorApi(authority, "supervisor_portal-test", new PortalApi(query));
     const sessions = new PortalSessionSecurity({
       clock: { now: () => Date.now() },
@@ -137,9 +155,35 @@ describe("portal API transport", () => {
       expect(
         (await loopbackClient.listPortalEvents({ ...identity, limit: 2 })).events,
       ).toHaveLength(2);
+
+      const transcriptRequest = {
+        ...identity,
+        ownerKind: "dispatch",
+        ownerId: "dispatch_portal-transport",
+        limit: 1,
+      };
+      const transcript = await ipcClient.listPortalTranscript(transcriptRequest);
+      expect(transcript).toMatchObject({ after: 0, nextAfter: 1, hasMore: true });
+      expect(transcript.records.map(({ text }) => text)).toEqual(["session started"]);
+      expect(await loopbackClient.listPortalTranscript(transcriptRequest)).toEqual(transcript);
+      expect(
+        (
+          await loopbackClient.listPortalTranscript({
+            ...transcriptRequest,
+            after: transcript.nextAfter,
+          })
+        ).records.map(({ text, stream }) => [stream, text]),
+      ).toEqual([["system", "session ended completed"]]);
+      await expect(
+        loopbackClient.listPortalTranscript({ ...transcriptRequest, limit: 201 }),
+      ).rejects.toMatchObject({ status: 400 });
+      await expect(
+        loopbackClient.listPortalTranscript({ ...transcriptRequest, ownerKind: "criterion" }),
+      ).rejects.toMatchObject({ status: 404 });
     } finally {
       await loopback.close();
       await ipc.close();
+      broker.close();
       query.close();
       authority.close();
       rmSync(root, { recursive: true, force: true });

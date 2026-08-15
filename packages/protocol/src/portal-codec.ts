@@ -51,8 +51,14 @@ import {
   type PortalRunSummary,
   type PortalSessionDescriptor,
   type PortalSyncVector,
+  type PortalTranscriptOwner,
+  type PortalTranscriptOwnerKind,
+  type PortalTranscriptPage,
+  type PortalTranscriptRecord,
+  type PortalTranscriptStream,
   type PortalWorkspacePage,
   type PortalWorkspaceSummary,
+  TRANSCRIPT_LIMITS,
 } from "./portal-contracts.js";
 import type { AssetSensitivity } from "./worker-contracts.js";
 
@@ -110,6 +116,14 @@ const DELIVERY_KINDS = new Set<PortalDeliveryRecordKind>([
   "generated-task",
   "plan-import",
 ]);
+const TRANSCRIPT_OWNER_KINDS = new Set<PortalTranscriptOwnerKind>(["dispatch", "task", "phase"]);
+const TRANSCRIPT_STREAMS = new Set<PortalTranscriptStream>(["stdout", "stderr", "system"]);
+const TRANSCRIPT_TAB = 0x09;
+const TRANSCRIPT_NEWLINE = 0x0a;
+const TRANSCRIPT_SPACE = 0x20;
+const TRANSCRIPT_DELETE = 0x7f;
+const SURROGATE_FIRST = 0xd800;
+const SURROGATE_LAST = 0xdfff;
 
 export function decodePortalSessionDescriptor(input: string | unknown): PortalSessionDescriptor {
   const object = exact(wire(input), "$", ["apiVersion", "expiresAt", "csrfMode", "capabilities"]);
@@ -680,6 +694,114 @@ export function decodePortalEventWindow(input: string | unknown): PortalEventWin
 
 export function encodePortalEventWindow(input: unknown): string {
   return canonicalStringify(decodePortalEventWindow(input));
+}
+
+export function decodePortalTranscriptRecord(input: string | unknown): PortalTranscriptRecord {
+  return transcriptRecord(wire(input), "$");
+}
+
+export function encodePortalTranscriptRecord(input: unknown): string {
+  return canonicalStringify(decodePortalTranscriptRecord(input));
+}
+
+export function decodePortalTranscriptPage(input: string | unknown): PortalTranscriptPage {
+  const object = exact(wire(input), "$", [
+    "apiVersion",
+    "repositoryId",
+    "runId",
+    "owner",
+    "after",
+    "nextAfter",
+    "hasMore",
+    "records",
+  ]);
+  version(object.apiVersion, "$.apiVersion");
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  const owner = transcriptOwner(object.owner, "$.owner");
+  integer(object.after, "$.after");
+  integer(object.nextAfter, "$.nextAfter");
+  bool(object.hasMore, "$.hasMore");
+  const records = page(
+    object.records,
+    "$.records",
+    TRANSCRIPT_LIMITS.maxRecordsPerPage,
+    transcriptRecord,
+  );
+  let prior = object.after as number;
+  for (const [index, record] of records.entries()) {
+    if (record.repositoryId !== object.repositoryId || record.runId !== object.runId)
+      fail("invalid-value", `$.records[${index}]`, "must match the page repository and run");
+    if (record.owner.kind !== owner.kind || record.owner.id !== owner.id)
+      fail("invalid-value", `$.records[${index}].owner`, "must match the page owner");
+    if (record.sequence <= prior)
+      fail(
+        "invalid-value",
+        `$.records[${index}].sequence`,
+        "must be strictly ascending after the cursor",
+      );
+    prior = record.sequence;
+  }
+  if ((object.nextAfter as number) !== prior)
+    fail("invalid-value", "$.nextAfter", "must equal the last returned sequence");
+  if (object.hasMore === true && records.length === 0)
+    fail("invalid-value", "$.hasMore", "must be false for an empty page");
+  return Object.freeze({ ...object, owner, records }) as unknown as PortalTranscriptPage;
+}
+
+export function encodePortalTranscriptPage(input: unknown): string {
+  return canonicalStringify(decodePortalTranscriptPage(input));
+}
+
+function transcriptRecord(value: unknown, path: string): PortalTranscriptRecord {
+  const object = exact(value, path, [
+    "apiVersion",
+    "repositoryId",
+    "runId",
+    "owner",
+    "sequence",
+    "occurredAt",
+    "stream",
+    "text",
+  ]);
+  version(object.apiVersion, `${path}.apiVersion`);
+  identity(object.repositoryId, `${path}.repositoryId`);
+  identity(object.runId, `${path}.runId`);
+  integer(object.sequence, `${path}.sequence`, 1);
+  timestamp(object.occurredAt, `${path}.occurredAt`);
+  oneOf(object.stream, `${path}.stream`, TRANSCRIPT_STREAMS);
+  transcriptText(object.text, `${path}.text`);
+  return Object.freeze({
+    ...object,
+    owner: transcriptOwner(object.owner, `${path}.owner`),
+  }) as unknown as PortalTranscriptRecord;
+}
+
+function transcriptOwner(value: unknown, path: string): PortalTranscriptOwner {
+  const object = exact(value, path, ["kind", "id"]);
+  oneOf(object.kind, `${path}.kind`, TRANSCRIPT_OWNER_KINDS);
+  identity(object.id, `${path}.id`);
+  return Object.freeze(object) as unknown as PortalTranscriptOwner;
+}
+
+function transcriptText(value: unknown, path: string): void {
+  boundedString(value, path, 1, TRANSCRIPT_LIMITS.maxLineBytes);
+  const text = value as string;
+  if (new TextEncoder().encode(text).byteLength > TRANSCRIPT_LIMITS.maxLineBytes)
+    fail("oversized", path, `must encode to at most ${TRANSCRIPT_LIMITS.maxLineBytes} UTF-8 bytes`);
+  for (const character of text) {
+    const code = character.codePointAt(0) ?? 0;
+    if (
+      (code < TRANSCRIPT_SPACE && code !== TRANSCRIPT_TAB && code !== TRANSCRIPT_NEWLINE) ||
+      code === TRANSCRIPT_DELETE ||
+      (code >= SURROGATE_FIRST && code <= SURROGATE_LAST)
+    )
+      fail(
+        "invalid-value",
+        path,
+        "must contain no control characters other than tab and newline and no lone surrogates",
+      );
+  }
 }
 
 function repositorySummary(value: unknown, path: string): PortalRepositorySummary {
