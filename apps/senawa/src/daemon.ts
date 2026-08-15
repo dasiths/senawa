@@ -56,6 +56,7 @@ import {
   startLoopbackSupervisorServer,
   startUnixSupervisorServer,
 } from "@senawa/supervisor";
+import { configurationPhaseOutputSchemas } from "./dataflow-composition.js";
 import { optionalPortalAssetSource } from "./portal-assets.js";
 import { ProductionScheduler } from "./production-scheduler.js";
 import {
@@ -268,6 +269,11 @@ export async function startSenawaService(
                   ? {}
                   : { sessionBaseDirectory: sdk.baseDirectory }),
                 workspaceFiles,
+                phaseOutputSchemas: configurationPhaseOutputSchemas(
+                  (snapshotDigest) =>
+                    authority.commandAuthority.getConfigurationSnapshot(snapshotDigest),
+                  dependencies.sha256,
+                ),
               });
             },
             createGitHost: async (binding) => {

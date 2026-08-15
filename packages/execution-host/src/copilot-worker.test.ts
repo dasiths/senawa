@@ -29,6 +29,10 @@ import {
 import {
   type AssetReadResult,
   type ContextBrokerClient,
+  evaluatePhaseOutputAttempt,
+  type InstalledCanonicalOutputAsset,
+  type PhaseOutputAttemptInput,
+  type PhaseOutputAttemptResult,
   renderPromptPack,
   type SubmissionAdmissionResult,
   WORKER_CAPABILITIES,
@@ -60,6 +64,35 @@ const sha256: Sha256 = {
 };
 const GRANT_TOKEN = "A".repeat(43);
 const ALL_CAPABILITIES = Object.freeze(Object.values(WORKER_CAPABILITIES));
+// The base harness supplies no accepted output schema, so the output tool stays closed.
+const GRANTED_WORKER_TOOL_NAMES = Object.freeze(
+  COPILOT_WORKER_TOOL_NAMES.filter((name) => name !== "submit_phase_output"),
+);
+const OUTPUT_SCHEMA = canonicalValue({
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  $id: "https://senawa.test/worker/verification-output",
+  type: "object",
+  additionalProperties: false,
+  required: ["verified", "summary"],
+  properties: {
+    verified: { type: "boolean" },
+    summary: { type: "string", minLength: 1, maxLength: 200 },
+  },
+});
+const OUTPUT_CONTRACT = Object.freeze({
+  key: "verification-output",
+  schemaResourceDigest: sha256Digest("c".repeat(64)),
+  validatorProfileDigest: sha256Digest("d".repeat(64)),
+  schema: OUTPUT_SCHEMA,
+  externalSchemas: [],
+});
+const OUTPUT_DECLARATION = Object.freeze({
+  outputName: consumerKey("verification"),
+  schemaKey: consumerKey("verification-output"),
+  schemaResourceDigest: OUTPUT_CONTRACT.schemaResourceDigest,
+  maxBytes: 4_096,
+  sensitivity: "internal" as const,
+});
 
 describe("CopilotSerialWorkerAdapter", () => {
   it("resumes by dispatch identity, creates only when absent, and configures exact limits", async () => {
@@ -149,8 +182,8 @@ describe("CopilotSerialWorkerAdapter", () => {
     await all.adapter.run(all.input);
     const config = required(sdk.createCalls[0]);
 
-    expect(config.tools.map(({ name }) => name)).toEqual(COPILOT_WORKER_TOOL_NAMES);
-    expect(config.availableTools).toEqual(COPILOT_WORKER_TOOL_NAMES);
+    expect(config.tools.map(({ name }) => name)).toEqual(GRANTED_WORKER_TOOL_NAMES);
+    expect(config.availableTools).toEqual(GRANTED_WORKER_TOOL_NAMES);
     expect(
       config.tools.every(({ skipPermission, defer }) => skipPermission && defer === "never"),
     ).toBe(true);
@@ -223,7 +256,7 @@ describe("CopilotSerialWorkerAdapter", () => {
       );
       expect(config.availableTools).toEqual([
         ...COPILOT_WORKSPACE_TOOL_NAMES,
-        ...COPILOT_WORKER_TOOL_NAMES,
+        ...GRANTED_WORKER_TOOL_NAMES,
       ]);
       expect(config).toMatchObject({
         excludedTools: ["builtin:*", "mcp:*"],
@@ -636,6 +669,124 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect(JSON.stringify(result)).not.toContain(GRANT_TOKEN);
     expect(required(sdk.sessions.get(fixture.dispatch.dispatchId)).disconnectCalls).toBe(1);
   });
+
+  it("accepts a corrected phase output after bounded structured rejections", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk, { phaseOutput: true });
+    const outputs: CopilotSdkToolResult[] = [];
+    sdk.onSend = async (config, session) => {
+      const tool = required(
+        config.tools.find((candidate) => candidate.name === "submit_phase_output"),
+      );
+      expectClosedObjectSchemas(tool.parameters as Readonly<Record<string, unknown>>);
+      outputs.push(
+        await invoke(tool, session.sessionId, "call_invalid", { output: { verified: "yes" } }),
+        await invoke(tool, session.sessionId, "call_extra", {
+          output: { verified: true, summary: "ok", extra: 1 },
+        }),
+        await invoke(tool, session.sessionId, "call_valid", {
+          output: { verified: true, summary: "Both generated tasks completed" },
+          changeNotes: ["edited alpha.txt"],
+        }),
+      );
+    };
+
+    const result = await fixture.adapter.run(fixture.input);
+
+    expect(result.status).toBe("missing-completion");
+    expect(outputs.map(({ resultType }) => resultType)).toEqual(["failure", "failure", "success"]);
+    const firstFailure = JSON.parse(required(outputs[0]).textResultForLlm) as {
+      readonly code: string;
+      readonly findings: readonly { readonly instancePointer: string }[];
+    };
+    expect(firstFailure.code).toBe("output-schema-invalid");
+    expect(
+      firstFailure.findings.some(({ instancePointer }) => instancePointer === "/verified"),
+    ).toBe(true);
+    expect(required(outputs[0]).textResultForLlm).not.toContain("json-schema.org");
+    expect(fixture.broker.outputAttempts.map(({ outcome }) => outcome)).toEqual([
+      "rejected",
+      "rejected",
+      "accepted",
+    ]);
+    expect(fixture.broker.installedOutputs).toHaveLength(1);
+    const submission = required(fixture.broker.submissions.at(-1));
+    if (submission.type !== "phase-output") throw new Error("Expected a phase output submission");
+    expect(submission.output).toMatchObject({
+      outputName: "verification",
+      schemaKey: "verification-output",
+      mediaType: "application/json",
+      sensitivity: "internal",
+    });
+    expect(submission.output.validationReceiptDigest).toBe(
+      required(fixture.broker.installedOutputs[0]).validationReceiptDigest,
+    );
+    expect(JSON.stringify(fixture.broker.outputAttempts)).not.toContain("summary");
+  });
+
+  it("refuses phase output beyond its finite attempt budget", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk, { phaseOutput: true });
+    const outputs: CopilotSdkToolResult[] = [];
+    sdk.onSend = async (config, session) => {
+      const tool = required(
+        config.tools.find((candidate) => candidate.name === "submit_phase_output"),
+      );
+      for (const attempt of ["one", "two", "three", "four"]) {
+        outputs.push(
+          await invoke(tool, session.sessionId, `call_${attempt}`, { output: { verified: "no" } }),
+        );
+      }
+      outputs.push(
+        await invoke(tool, session.sessionId, "call_valid", {
+          output: { verified: true, summary: "late" },
+        }),
+      );
+    };
+
+    await fixture.adapter.run(fixture.input);
+
+    expect(outputs.every(({ resultType }) => resultType === "failure")).toBe(true);
+    expect(
+      outputs.map(({ textResultForLlm }) => JSON.parse(textResultForLlm).code as string),
+    ).toEqual([
+      "output-schema-invalid",
+      "output-schema-invalid",
+      "output-attempt-budget-exhausted",
+      "output-attempt-budget-exhausted",
+      "output-attempt-budget-exhausted",
+    ]);
+    expect(fixture.broker.outputAttempts).toHaveLength(3);
+    expect(fixture.broker.installedOutputs).toHaveLength(0);
+    expect(fixture.broker.submissions).toHaveLength(0);
+  });
+
+  it("refuses phase output larger than its declared ceiling", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk, { phaseOutput: true });
+    const outputs: CopilotSdkToolResult[] = [];
+    sdk.onSend = async (config, session) => {
+      const tool = required(
+        config.tools.find((candidate) => candidate.name === "submit_phase_output"),
+      );
+      outputs.push(
+        await invoke(tool, session.sessionId, "call_large", {
+          output: { verified: true, summary: "x".repeat(8_000) },
+        }),
+        await invoke(tool, session.sessionId, "call_unknown_key", {
+          output: { verified: true, summary: "ok" },
+          unexpected: true,
+        }),
+      );
+    };
+
+    await fixture.adapter.run(fixture.input);
+
+    expect(
+      outputs.map(({ textResultForLlm }) => JSON.parse(textResultForLlm).code as string),
+    ).toEqual(["output-too-large", "output-arguments-invalid"]);
+    expect(fixture.broker.installedOutputs).toHaveLength(0);
+  });
 });
 
 class FakeSdkPort implements CopilotSdkPort {
@@ -798,6 +949,29 @@ class CapturingBroker implements ContextBrokerClient {
   deliverCompletionFact(): boolean {
     return true;
   }
+
+  readonly installedOutputs: InstalledCanonicalOutputAsset[] = [];
+  readonly outputAttempts: PhaseOutputAttemptInput[] = [];
+
+  installCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset, bytes: Uint8Array): void {
+    if (bytes.byteLength !== asset.byteLength) throw new TypeError("Inexact output bytes");
+    this.installedOutputs.push(asset);
+  }
+
+  recordPhaseOutputAttempt(input: PhaseOutputAttemptInput): PhaseOutputAttemptResult {
+    const { result, insert } = evaluatePhaseOutputAttempt(this.outputAttempts, input);
+    if (insert) this.outputAttempts.push(input);
+    return result;
+  }
+
+  countRejectedPhaseOutputAttempts(dispatchId: string, outputName: string): number {
+    return this.outputAttempts.filter(
+      (attempt) =>
+        attempt.outcome === "rejected" &&
+        attempt.dispatchId === dispatchId &&
+        attempt.outputName === outputName,
+    ).length;
+  }
 }
 
 function harness(
@@ -812,6 +986,7 @@ function harness(
     readonly maxSubmissions?: number;
     readonly provider?: string;
     readonly workspaceFiles?: WorkspaceFilePort;
+    readonly phaseOutput?: boolean;
   } = {},
 ) {
   const capabilities = options.capabilities ?? ALL_CAPABILITIES;
@@ -884,7 +1059,7 @@ function harness(
       mappedInput,
       phaseAttempt,
       phaseInputBinding,
-      phaseOutputDeclarations: [],
+      phaseOutputDeclarations: options.phaseOutput === true ? [OUTPUT_DECLARATION] : [],
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 4 }],
     },
@@ -932,6 +1107,9 @@ function harness(
     grantTokens,
     workingDirectory: "/tmp/senawa-copilot/work",
     ...(options.workspaceFiles === undefined ? {} : { workspaceFiles: options.workspaceFiles }),
+    ...(options.phaseOutput === true
+      ? { phaseOutputSchemas: new Map([["verification", OUTPUT_CONTRACT]]) }
+      : {}),
     sessionBaseDirectory: sdk.baseDirectory,
     timeoutMs: options.timeoutMs ?? 1_000,
     ...(options.signal === undefined ? {} : { signal: options.signal }),

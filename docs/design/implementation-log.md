@@ -8131,6 +8131,85 @@ Passed on 2026-08-15:
   attempt budget is unproven without a live probe. Phase 14I keeps that probe
   optional and cost-labelled.
 
+## Decision D-092: Keep structured output authority in the adapter and broker
+
+* Date: 2026-08-15
+* Status: Accepted for Phase 14H
+* Phase: Phase 14
+* Decision: The `submit_phase_output` tool exists only when the dispatch holds
+  `worker.submit.phase-output`, the immutable context declares an output slot,
+  and the composition supplies the exact accepted schema contract for that slot.
+  The handler canonicalizes the wrapper, enforces declared and global byte and
+  node ceilings, validates through `@senawa/configuration`, installs the
+  content-addressed canonical asset, derives the shared validation receipt, and
+  admits the existing metadata-only `phase-output` submission. Rejected attempts
+  are recorded in a durable ledger keyed by dispatch and derived attempt
+  identity. The finite budget bounds rejected attempts per output slot.
+* Alternatives: Add an output-attempt limit to the kernel route selection; count
+  attempts only in process memory; validate through a new injected port; embed
+  the consumer schema as the tool parameters without a wrapper.
+* Rationale: A kernel selection field would change context and dispatch digests
+  across every existing fixture for a concern the adapter owns. Process-local
+  counters reset on restart, which the plan forbids. Execution-host already
+  depends on `@senawa/configuration`, so reusing `validateSchemaInstance` keeps
+  one validator profile without another port. A wrapper keeps Senawa's own
+  object nodes closed while the consumer subtree stays verbatim.
+* Consequence: Migration 012 owns `phase_output_attempts`. The ledger lives
+  outside the canonical broker authority image, so the in-memory implementation
+  is process-local while SQLite is durable. Compositions that supply no schema
+  resolver leave the tool closed, which fails closed by default.
+
+## Phase 14H log
+
+### Scope
+
+* `PHASE_OUTPUT_LIMITS`, `PhaseOutputAttemptInput`, `PhaseOutputAttemptResult`,
+  and `evaluatePhaseOutputAttempt` in `@senawa/runtime`, plus optional
+  `installCanonicalOutputAsset`, `recordPhaseOutputAttempt`, and
+  `countRejectedPhaseOutputAttempts` on `ContextBrokerClient`.
+* `schemaValidationReceiptDigest` exported from runtime and reused by the
+  dataflow authority so publication and worker submission cannot diverge.
+* Migration 012 `phase_output_attempts` with exact outcome, findings digest, and
+  submission constraints, plus SQLite record and count implementations under
+  immediate transactions.
+* `submit_phase_output` in the Copilot serial worker adapter with generated
+  wrapper parameters, bounded change notes, canonicalization, ceilings, schema
+  validation, asset installation, receipt derivation, submission admission, and
+  bounded structured failures.
+* `PhaseOutputSchemaResolverPort` on `CopilotWorkerEffectHost` and
+  `configurationPhaseOutputSchemas` in the app, resolving contracts from the
+  exact configuration snapshot each context binds.
+
+### Executive decisions
+
+* The attempt ledger is deliberately outside the canonical broker authority
+  image. Adding it would force a hydration and normalized-projection contract
+  change across Phase 7 durability tests for a record that is an audit ledger
+  rather than workflow authority.
+* `submission-conflict` is reused for attempt identity reuse instead of adding a
+  broker error code, because an attempt identity is a submission-scoped identity.
+* Only the first declared output slot receives a tool. Multiple slots per
+  dispatch remain unsupported and are recorded in production enhancements.
+
+### Validation
+
+Passed on 2026-08-15:
+
+* Shared context broker conformance including attempt replay, conflict, and
+  exhaustion, in memory and on SQLite
+* Copilot adapter suite: 28 tests, including invalid-first correction, budget
+  exhaustion, oversize refusal, and unknown-argument refusal
+* Complete offline suite: 95 files and 1,226 tests passed with one opt-in live
+  SDK test skipped
+* Root build, typecheck, Biome, architecture boundaries, documentation links,
+  and `git diff --check`
+
+### Remaining risks
+
+* No production caller yet grants `worker.submit.phase-output` to a dispatch.
+  Phase 14I must prove the complete path through a no-credit journey.
+* Multiple declared output slots per dispatch are not supported.
+
 ## Entry template
 
 ```markdown

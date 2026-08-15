@@ -7,6 +7,8 @@ import {
   type EffectInspection,
   type EffectIntent,
   type EffectObservation,
+  type RuntimeSchemaContract,
+  type StoredDispatch,
   WORKER_CAPABILITIES,
 } from "@senawa/runtime";
 import type { CopilotSdkPort } from "./copilot-sdk-port.js";
@@ -29,12 +31,18 @@ export interface CopilotWorkerEffectInput {
   readonly grantPolicy: CopilotWorkerGrantPolicy;
 }
 
+export interface PhaseOutputSchemaResolverPort {
+  /** Resolves accepted output schema contracts for one dispatch, keyed by declared output name. */
+  resolve(stored: StoredDispatch): ReadonlyMap<string, RuntimeSchemaContract>;
+}
+
 export interface CopilotWorkerEffectHostOptions {
   readonly broker: ContextBrokerClient;
   readonly sdk: CopilotSdkPort;
   readonly workingDirectory: string;
   readonly sessionBaseDirectory?: string;
   readonly workspaceFiles?: WorkspaceFilePort;
+  readonly phaseOutputSchemas?: PhaseOutputSchemaResolverPort;
 }
 
 export class CopilotWorkerEffectHost implements AsyncEffectHost {
@@ -44,6 +52,7 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
   readonly workingDirectory: string;
   readonly sessionBaseDirectory: string | undefined;
   readonly workspaceFiles: WorkspaceFilePort | undefined;
+  readonly phaseOutputSchemas: PhaseOutputSchemaResolverPort | undefined;
   readonly #active = new Map<string, AbortController>();
 
   constructor(options: CopilotWorkerEffectHostOptions) {
@@ -53,6 +62,7 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
     this.workingDirectory = options.workingDirectory;
     this.sessionBaseDirectory = options.sessionBaseDirectory;
     this.workspaceFiles = options.workspaceFiles;
+    this.phaseOutputSchemas = options.phaseOutputSchemas;
   }
 
   async dispatch(
@@ -98,6 +108,9 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
           ? {}
           : { sessionBaseDirectory: this.sessionBaseDirectory }),
         ...(this.workspaceFiles === undefined ? {} : { workspaceFiles: this.workspaceFiles }),
+        ...(this.phaseOutputSchemas === undefined
+          ? {}
+          : { phaseOutputSchemas: this.phaseOutputSchemas.resolve(stored) }),
         timeoutMs: input.timeoutMs,
         signal: AbortSignal.any([context.signal, localAbort.signal]),
       });

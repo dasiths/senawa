@@ -4,11 +4,13 @@ import {
   schemaValidatorProfileDigest,
   validateSchemaInstance,
 } from "@senawa/configuration";
+import type { PhaseOutputSchemaResolverPort } from "@senawa/execution-host";
 import type { CanonicalValue, Sha256 } from "@senawa/kernel";
 import type {
   RuntimeSchemaContract,
   RuntimeSchemaFinding,
   RuntimeSchemaValidatorPort,
+  StoredDispatch,
 } from "@senawa/runtime";
 
 export function runtimeSchemaContract(
@@ -26,6 +28,35 @@ export function runtimeSchemaContract(
     validatorProfileDigest: schemaValidatorProfileDigest(sha256),
     schema: schema.schema,
     externalSchemas: externalSchemaContracts(snapshot.schemas, schema),
+  });
+}
+
+/**
+ * Resolves accepted output schema contracts from the exact configuration snapshot
+ * a dispatch context binds. A missing snapshot or schema leaves the slot closed.
+ */
+export function configurationPhaseOutputSchemas(
+  loadSnapshot: (snapshotDigest: string) => unknown | undefined,
+  sha256: Sha256,
+): PhaseOutputSchemaResolverPort {
+  return Object.freeze({
+    resolve(stored: StoredDispatch): ReadonlyMap<string, RuntimeSchemaContract> {
+      const declarations = stored.context.phaseOutputDeclarations;
+      if (declarations.length === 0) return new Map();
+      const snapshot = loadSnapshot(String(stored.context.configurationSnapshotDigest));
+      if (snapshot === undefined) return new Map();
+      const contracts = new Map<string, RuntimeSchemaContract>();
+      for (const declaration of declarations) {
+        const contract = runtimeSchemaContract(
+          snapshot as ConfigurationSnapshot,
+          String(declaration.schemaKey),
+          sha256,
+        );
+        if (contract.schemaResourceDigest !== declaration.schemaResourceDigest) continue;
+        contracts.set(String(declaration.outputName), contract);
+      }
+      return contracts;
+    },
   });
 }
 
