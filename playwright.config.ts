@@ -31,12 +31,12 @@ export default defineConfig({
   projects: [
     {
       name: "desktop-chromium",
-      testMatch: /(?:portal|visual)\.spec\.ts/u,
+      testMatch: /(?:diagram|portal|visual)\.spec\.ts/u,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
     {
       name: "mobile-chromium",
-      testMatch: /(?:portal|visual)\.spec\.ts/u,
+      testMatch: /(?:diagram|portal|visual)\.spec\.ts/u,
       use: { ...devices["Pixel 5"], viewport: { width: 390, height: 844 } },
     },
     {

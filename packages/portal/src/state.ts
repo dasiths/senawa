@@ -101,12 +101,27 @@ export interface PortalDialogState {
   readonly message?: string;
 }
 
+export type GraphMode = "diagram" | "table" | "tree";
+
+export interface PortalGraphViewport {
+  readonly scale: number;
+  readonly panX: number;
+  readonly panY: number;
+}
+
+export const INITIAL_GRAPH_VIEWPORT: PortalGraphViewport = Object.freeze({
+  scale: 1,
+  panX: 0,
+  panY: 0,
+});
+
 export interface PortalUiState {
   readonly dialog: PortalDialogState | undefined;
   readonly filter: string;
   readonly focusedRecord: string | undefined;
   readonly rightRailOpen: boolean;
-  readonly graphMode: "table" | "tree";
+  readonly graphMode: GraphMode;
+  readonly graphViewport: PortalGraphViewport;
 }
 
 export interface PortalState {
@@ -163,7 +178,8 @@ export type PortalAction =
   | { readonly type: "filter"; readonly value: string }
   | { readonly type: "focus-record"; readonly recordId?: string }
   | { readonly type: "right-rail"; readonly open: boolean }
-  | { readonly type: "graph-mode"; readonly mode: "table" | "tree" };
+  | { readonly type: "graph-mode"; readonly mode: GraphMode }
+  | { readonly type: "graph-viewport"; readonly viewport: PortalGraphViewport };
 
 const emptyCaches: PortalCaches = Object.freeze({
   runsByRepository: Object.freeze({}),
@@ -203,6 +219,7 @@ export function initialPortalState(route: PortalRoute): PortalState {
       focusedRecord: undefined,
       rightRailOpen: false,
       graphMode: "table",
+      graphViewport: INITIAL_GRAPH_VIEWPORT,
     }),
   });
 }
@@ -262,7 +279,12 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
         freshness: Object.freeze({}),
         humanNeeds: Object.freeze([]),
         visibleEvents: Object.freeze([]),
-        ui: Object.freeze({ ...state.ui, dialog: undefined, focusedRecord: undefined }),
+        ui: Object.freeze({
+          ...state.ui,
+          dialog: undefined,
+          focusedRecord: undefined,
+          graphViewport: INITIAL_GRAPH_VIEWPORT,
+        }),
       });
     case "repositories":
       return next(state, { caches: Object.freeze({ ...state.caches, repositories: action.page }) });
@@ -366,7 +388,15 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
     case "right-rail":
       return next(state, { ui: Object.freeze({ ...state.ui, rightRailOpen: action.open }) });
     case "graph-mode":
-      return next(state, { ui: Object.freeze({ ...state.ui, graphMode: action.mode }) });
+      return next(state, {
+        ui: Object.freeze({
+          ...state.ui,
+          graphMode: action.mode,
+          graphViewport: INITIAL_GRAPH_VIEWPORT,
+        }),
+      });
+    case "graph-viewport":
+      return next(state, { ui: Object.freeze({ ...state.ui, graphViewport: action.viewport }) });
   }
 }
 

@@ -697,6 +697,7 @@ export class PortalApplication {
       selectRun: (repositoryId, runId) => void this.#selectRun(repositoryId, runId, true),
       setFilter: (value) => this.#dispatch({ type: "filter", value }),
       setGraphMode: (mode) => this.#dispatch({ type: "graph-mode", mode }),
+      setGraphViewport: (viewport) => this.#dispatch({ type: "graph-viewport", viewport }),
       focusRecord: (recordId) => this.#dispatch({ type: "focus-record", recordId }),
       openNeed: (need, triggerId) => void this.#openNeed(need, triggerId),
       openRunControl: (kind, triggerId) => this.#openRunControl(kind, triggerId),

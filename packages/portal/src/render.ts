@@ -3,11 +3,13 @@ import {
   type JsonValue,
   type PortalArtifactMetadata,
   type PortalDeliveryRecord,
+  type PortalGraphEdge,
   type PortalGraphNode,
   type PortalHumanNeed,
 } from "@senawa/protocol";
 import { allowanceResult, allowanceReviewFromSource } from "./allowance-review.js";
 import { type BoundedJsonNode, boundedJsonModel } from "./bounded-json.js";
+import { graphDiagramView } from "./graph-diagram.js";
 import { PORTAL_ROUTES, type PortalRouteName } from "./router.js";
 import {
   actionsLocked,
@@ -19,17 +21,22 @@ import {
 import {
   artifactContentKey,
   type DialogKind,
+  type GraphMode,
   type PortalDialogState,
+  type PortalGraphViewport,
   type PortalState,
   revisionKey,
   runKey,
 } from "./state.js";
 
+const GRAPH_MODES: readonly GraphMode[] = Object.freeze(["diagram", "table", "tree"]);
+
 export interface PortalRenderActions {
   readonly navigate: (route: PortalRouteName) => void;
   readonly selectRun: (repositoryId: string, runId: string) => void;
   readonly setFilter: (value: string) => void;
-  readonly setGraphMode: (mode: "table" | "tree") => void;
+  readonly setGraphMode: (mode: GraphMode) => void;
+  readonly setGraphViewport: (viewport: PortalGraphViewport) => void;
   readonly focusRecord: (recordId: string) => void;
   readonly openNeed: (need: PortalHumanNeed, triggerId: string) => void;
   readonly openRunControl: (kind: "pause" | "resume" | "end", triggerId: string) => void;
@@ -101,7 +108,7 @@ type FocusIdentity =
 
 function focusIdentity(root: HTMLElement): FocusIdentity | undefined {
   const active = document.activeElement;
-  if (!(active instanceof HTMLElement) || !root.contains(active)) return undefined;
+  if (!isFocusable(active) || !root.contains(active)) return undefined;
   if (active.id.length > 0) return { kind: "id", value: active.id };
   if (active.dataset.focusKey !== undefined) {
     return { kind: "key", value: active.dataset.focusKey };
@@ -113,6 +120,14 @@ function focusIdentity(root: HTMLElement): FocusIdentity | undefined {
   return name === null ? undefined : { kind: "name", value: name };
 }
 
+function isFocusable(value: Element | null): value is HTMLElement | SVGElement {
+  return value instanceof HTMLElement || value instanceof SVGElement;
+}
+
+function focusableMatches(selector: string): readonly (HTMLElement | SVGElement)[] {
+  return [...document.querySelectorAll(selector)].filter(isFocusable);
+}
+
 function restoreFocus(identity: FocusIdentity | undefined): void {
   if (identity === undefined) return;
   if (identity.kind === "id") {
@@ -120,14 +135,14 @@ function restoreFocus(identity: FocusIdentity | undefined): void {
     return;
   }
   if (identity.kind === "key") {
-    const target = [...document.querySelectorAll<HTMLElement>("[data-focus-key]")].find(
+    const target = focusableMatches("[data-focus-key]").find(
       (candidate) => candidate.dataset.focusKey === identity.value,
     );
     target?.focus();
     return;
   }
   const selector = identity.kind === "tab" ? "[role=tab]" : "[name]";
-  const target = [...document.querySelectorAll<HTMLElement>(selector)].find((candidate) =>
+  const target = focusableMatches(selector).find((candidate) =>
     identity.kind === "tab"
       ? candidate.textContent === identity.value
       : candidate.getAttribute("name") === identity.value,
@@ -388,14 +403,13 @@ function renderGraph(state: PortalState, actions: PortalRenderActions): HTMLElem
   const key = revisionKey(ids.repositoryId, ids.runId, state.vector.graphRevision);
   const summary = state.caches.graphSummaries[runKey(ids.repositoryId, ids.runId)];
   const nodes = state.caches.graphNodes[key]?.nodes ?? [];
+  const edges = state.caches.graphEdges[key]?.edges ?? [];
   const toolbar = element("div", "view-toolbar");
   toolbar.append(filterInput(state, actions, "Filter loaded graph nodes"));
   const modes = element("div", "segmented-control");
   modes.setAttribute("role", "tablist");
-  for (const mode of ["table", "tree"] as const) {
-    const button = commandButton(mode === "table" ? "Table" : "Tree", () =>
-      actions.setGraphMode(mode),
-    );
+  for (const mode of GRAPH_MODES) {
+    const button = commandButton(graphModeLabel(mode), () => actions.setGraphMode(mode));
     button.setAttribute("role", "tab");
     button.setAttribute("aria-selected", String(state.ui.graphMode === mode));
     modes.append(button);
@@ -408,12 +422,45 @@ function renderGraph(state: PortalState, actions: PortalRenderActions): HTMLElem
   const filtered = nodes.filter((node) =>
     graphText(node).includes(state.ui.filter.toLocaleLowerCase()),
   );
-  section.append(
-    state.ui.graphMode === "table" ? graphTable(filtered, actions) : graphTree(filtered, actions),
-  );
-  const focused = filtered.find(({ nodeId }) => nodeId === state.ui.focusedRecord);
+  section.append(graphBody(state, actions, nodes, edges, filtered));
+  const focused = nodes.find(({ nodeId }) => nodeId === state.ui.focusedRecord);
   if (focused !== undefined) section.append(graphDetail(focused));
   return section;
+}
+
+function graphBody(
+  state: PortalState,
+  actions: PortalRenderActions,
+  nodes: readonly PortalGraphNode[],
+  edges: readonly PortalGraphEdge[],
+  filtered: readonly PortalGraphNode[],
+): HTMLElement {
+  switch (state.ui.graphMode) {
+    case "diagram":
+      return graphDiagramView({
+        nodes,
+        edges,
+        selectedNodeId: state.ui.focusedRecord,
+        viewport: state.ui.graphViewport,
+        actions: {
+          select: (nodeId) => actions.focusRecord(nodeId),
+          setViewport: (viewport) => actions.setGraphViewport(viewport),
+        },
+      });
+    case "table":
+      return graphTable(filtered, actions);
+    case "tree":
+      return graphTree(filtered, actions);
+  }
+}
+
+function graphModeLabel(mode: GraphMode): string {
+  const labels: Readonly<Record<GraphMode, string>> = {
+    diagram: "Diagram",
+    table: "Table",
+    tree: "Tree",
+  };
+  return labels[mode];
 }
 
 function graphTable(nodes: readonly PortalGraphNode[], actions: PortalRenderActions): HTMLElement {

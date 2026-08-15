@@ -431,6 +431,10 @@ button:disabled {
   color: #ffffff;
 }
 
+.segmented-control [aria-selected="true"]:hover:not(:disabled) {
+  color: #ffffff;
+}
+
 .result-count {
   color: var(--muted);
   font-size: 12px;
@@ -487,6 +491,152 @@ button:disabled {
   background: var(--surface);
   padding: 10px;
   list-style: none;
+}
+
+.diagram-frame {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.diagram-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.diagram-zoom-level {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.diagram-canvas {
+  display: block;
+  width: 100%;
+  height: 62vh;
+  min-height: 320px;
+  border: 1px solid var(--rule-strong);
+  background: var(--paper);
+  cursor: grab;
+  touch-action: none;
+}
+
+.diagram-canvas:active {
+  cursor: grabbing;
+}
+
+.diagram-node-label {
+  overflow: hidden;
+}
+
+.diagram-node {
+  cursor: pointer;
+}
+
+.diagram-node-shape {
+  fill: var(--surface);
+  stroke: var(--rule-strong);
+  stroke-width: 1;
+  transition:
+    fill 120ms linear,
+    stroke 120ms linear;
+}
+
+.diagram-container .diagram-node-shape {
+  fill: #f0f2ee;
+  stroke-dasharray: 4 3;
+}
+
+.diagram-line {
+  fill: var(--ink);
+  font-size: 13px;
+}
+
+.diagram-line-0 {
+  font-weight: 700;
+}
+
+.diagram-line-1,
+.diagram-line-2 {
+  fill: var(--muted);
+  font-size: 12px;
+}
+
+.diagram-badge {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.diagram-badge-needs {
+  fill: var(--amber);
+}
+
+.diagram-badge-evidence {
+  fill: var(--green);
+}
+
+.diagram-state-running .diagram-node-shape {
+  fill: var(--blue-soft);
+  stroke: var(--blue);
+  stroke-width: 2;
+}
+
+.diagram-state-awaiting-human .diagram-node-shape {
+  fill: var(--amber-soft);
+  stroke: var(--amber);
+  stroke-width: 2;
+}
+
+.diagram-state-accepted .diagram-node-shape {
+  fill: var(--green-soft);
+  stroke: var(--green);
+}
+
+.diagram-state-failed .diagram-node-shape {
+  fill: var(--red-soft);
+  stroke: var(--red);
+  stroke-width: 2;
+}
+
+.diagram-state-superseded .diagram-node-shape {
+  fill: #eeece6;
+  stroke: var(--rule);
+  stroke-dasharray: 3 3;
+}
+
+.diagram-state-superseded .diagram-line {
+  fill: var(--muted);
+}
+
+.diagram-selected .diagram-node-shape {
+  stroke: #7a4b00;
+  stroke-width: 3;
+}
+
+.diagram-node:focus-visible .diagram-node-shape {
+  stroke: #f3b52f;
+  stroke-width: 3;
+}
+
+.diagram-node:focus {
+  outline: none;
+}
+
+.diagram-edge {
+  fill: none;
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+}
+
+.diagram-edge-dependency {
+  stroke: var(--blue);
+}
+
+.diagram-edge-supersession {
+  stroke: var(--red);
+  stroke-dasharray: 5 4;
 }
 
 .tree-group {
@@ -1076,6 +1226,11 @@ button:disabled {
     grid-template-columns: minmax(70px, 0.35fr) minmax(0, 1fr);
   }
 
+  .diagram-canvas {
+    height: 54vh;
+    min-height: 260px;
+  }
+
   .limit-label {
     grid-column: 2;
   }
@@ -1087,6 +1242,10 @@ button:disabled {
   *::after {
     scroll-behavior: auto;
     transition-duration: 0.01ms;
+  }
+
+  .diagram-node-shape {
+    transition: none;
   }
 }
 
