@@ -4,6 +4,8 @@ import {
   type PortalHumanNeed,
   type PortalQuestionRecord,
   type PortalRunOverview,
+  type PortalTranscriptOwner,
+  TRANSCRIPT_LIMITS,
 } from "@senawa/protocol";
 import { allowanceCommandDraft, allowanceReviewIsCurrent } from "./allowance-review.js";
 import {
@@ -32,10 +34,15 @@ import {
   revisionKey,
   runKey,
 } from "./state.js";
+import { sameTranscriptOwner, transcriptOwnerForNode } from "./transcript-view-model.js";
 import { PortalHttpClient, PortalTransportError } from "./transport.js";
 
 const POLL_INTERVAL_MS = 10_000;
 const RECEIPT_POLL_MS = 1_000;
+/** Paging ceiling that can never retain more than one owner's bounded window. */
+const TRANSCRIPT_MAX_PAGES = Math.ceil(
+  TRANSCRIPT_LIMITS.maxRetainedLinesPerOwner / TRANSCRIPT_LIMITS.maxRecordsPerPage,
+);
 
 export class PortalApplication {
   readonly #root: HTMLElement;
@@ -49,6 +56,8 @@ export class PortalApplication {
   #consistentLoadIdentity: string | undefined;
   #restoredCanRetry = false;
   #dialogNeed: PortalHumanNeed | undefined;
+  #transcriptSync: Promise<void> | undefined;
+  #transcriptQueued = false;
 
   constructor(root: HTMLElement) {
     this.#root = root;
@@ -311,9 +320,10 @@ export class PortalApplication {
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
         if (summary.graphRevision !== overview.sync.graphRevision)
           throw new Error("Graph summary revision changed during assembly");
-        const [nodes, edges] = await Promise.all([
+        const [nodes, edges, workspaces] = await Promise.all([
           this.#client.graphNodes(repositoryId, runId, summary.graphRevision),
           this.#client.graphEdges(repositoryId, runId, summary.graphRevision),
+          this.#client.workspaces(repositoryId, runId),
         ]);
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
         if (
@@ -325,6 +335,8 @@ export class PortalApplication {
         this.#dispatch({ type: "cache", cache: "graphSummaries", key, value: summary });
         this.#dispatch({ type: "cache", cache: "graphNodes", key: revision, value: nodes });
         this.#dispatch({ type: "cache", cache: "graphEdges", key: revision, value: edges });
+        this.#dispatch({ type: "cache", cache: "workspaces", key, value: workspaces });
+        void this.#syncTranscript();
         return true;
       }
       case "delivery": {
@@ -687,6 +699,86 @@ export class PortalApplication {
     this.#dispatch({ type: "cache", cache: kind, key, value });
   }
 
+  /** Derives the transcript owner from the selected node, preferring its dispatch. */
+  #transcriptOwner(): PortalTranscriptOwner | undefined {
+    const identity = this.#selectedIdentity();
+    if (identity === undefined || this.#state.route.name !== "graph") return undefined;
+    const revision = this.#state.vector?.graphRevision;
+    if (revision === undefined) return undefined;
+    const node = this.#state.caches.graphNodes[
+      revisionKey(identity.repositoryId, identity.runId, revision)
+    ]?.nodes.find(({ nodeId }) => nodeId === this.#state.ui.focusedRecord);
+    if (node === undefined) return undefined;
+    const workspaces =
+      this.#state.caches.workspaces[runKey(identity.repositoryId, identity.runId)]?.workspaces ??
+      [];
+    const dispatchId = workspaces
+      .filter(
+        (workspace) =>
+          workspace.taskId === node.nodeId &&
+          workspace.definitionGeneration === node.definitionGeneration,
+      )
+      .map(({ dispatchId: value }) => value)
+      .sort()
+      .at(-1);
+    return transcriptOwnerForNode(node, dispatchId);
+  }
+
+  #syncTranscript(): Promise<void> {
+    if (this.#transcriptSync !== undefined) {
+      this.#transcriptQueued = true;
+      return this.#transcriptSync;
+    }
+    const sync = this.#performTranscriptSync().finally(() => {
+      this.#transcriptSync = undefined;
+      if (!this.#transcriptQueued) return;
+      this.#transcriptQueued = false;
+      void this.#syncTranscript();
+    });
+    this.#transcriptSync = sync;
+    return sync;
+  }
+
+  async #performTranscriptSync(): Promise<void> {
+    const identity = this.#selectedIdentity();
+    if (identity === undefined) return;
+    const owner = this.#transcriptOwner();
+    if (!sameTranscriptOwner(this.#state.ui.transcript.owner, owner))
+      this.#dispatch({ type: "transcript-owner", owner });
+    if (owner === undefined) return;
+    const route = this.#state.route.name;
+    try {
+      for (let fetched = 0; fetched < TRANSCRIPT_MAX_PAGES; fetched += 1) {
+        const page = await this.#client.transcript(
+          identity.repositoryId,
+          identity.runId,
+          owner,
+          this.#state.ui.transcript.nextAfter,
+        );
+        if (
+          !this.#isCurrentAssembly(identity.repositoryId, identity.runId, route) ||
+          !sameTranscriptOwner(this.#state.ui.transcript.owner, owner)
+        ) {
+          return;
+        }
+        this.#dispatch({ type: "transcript-page", page });
+        if (!page.hasMore) return;
+      }
+    } catch (error) {
+      if (
+        this.#sessionExpired() ||
+        !this.#isCurrentAssembly(identity.repositoryId, identity.runId, route)
+      ) {
+        return;
+      }
+      this.#dispatch({
+        type: "freshness",
+        resource: route,
+        freshness: { status: "failed", message: safeMessage(error, "Agent output load failed") },
+      });
+    }
+  }
+
   #actions(): PortalRenderActions {
     return {
       navigate: (route) => {
@@ -698,7 +790,10 @@ export class PortalApplication {
       setFilter: (value) => this.#dispatch({ type: "filter", value }),
       setGraphMode: (mode) => this.#dispatch({ type: "graph-mode", mode }),
       setGraphViewport: (viewport) => this.#dispatch({ type: "graph-viewport", viewport }),
-      focusRecord: (recordId) => this.#dispatch({ type: "focus-record", recordId }),
+      focusRecord: (recordId) => {
+        this.#dispatch({ type: "focus-record", recordId });
+        void this.#syncTranscript();
+      },
       openNeed: (need, triggerId) => void this.#openNeed(need, triggerId),
       openRunControl: (kind, triggerId) => this.#openRunControl(kind, triggerId),
       closeDialog: () => this.#closeDialog(),
@@ -706,6 +801,7 @@ export class PortalApplication {
       loadArtifact: (artifact) => void this.#loadArtifact(artifact.artifactId),
       pageActivity: (kind, before) => void this.#pageActivity(kind, before),
       toggleRightRail: (open) => this.#dispatch({ type: "right-rail", open }),
+      setTranscriptPinned: (pinned) => this.#dispatch({ type: "transcript-pin", pinned }),
     };
   }
 

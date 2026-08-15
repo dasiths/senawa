@@ -28,6 +28,11 @@ import {
   revisionKey,
   runKey,
 } from "./state.js";
+import {
+  captureTranscriptScroll,
+  restoreTranscriptScroll,
+  transcriptPaneView,
+} from "./transcript-pane.js";
 
 const GRAPH_MODES: readonly GraphMode[] = Object.freeze(["diagram", "table", "tree"]);
 
@@ -45,6 +50,7 @@ export interface PortalRenderActions {
   readonly loadArtifact: (artifact: PortalArtifactMetadata) => void;
   readonly pageActivity: (kind: "events" | "receipts", before: number) => void;
   readonly toggleRightRail: (open: boolean) => void;
+  readonly setTranscriptPinned: (pinned: boolean) => void;
 }
 
 const renderedDialogs = new WeakMap<HTMLElement, PortalDialogState>();
@@ -55,6 +61,7 @@ export function renderPortal(
   actions: PortalRenderActions,
 ): void {
   const focus = focusIdentity(root);
+  const transcriptScroll = captureTranscriptScroll(root);
   const dialogValues =
     renderedDialogs.get(root) === state.ui.dialog ? captureDialogValues(root) : undefined;
   const shell = element("div", "portal-shell");
@@ -74,6 +81,7 @@ export function renderPortal(
   } else {
     renderedDialogs.delete(root);
   }
+  restoreTranscriptScroll(root, transcriptScroll, state.ui.transcript.pinned);
   restoreFocus(focus);
 }
 
@@ -425,6 +433,12 @@ function renderGraph(state: PortalState, actions: PortalRenderActions): HTMLElem
   section.append(graphBody(state, actions, nodes, edges, filtered));
   const focused = nodes.find(({ nodeId }) => nodeId === state.ui.focusedRecord);
   if (focused !== undefined) section.append(graphDetail(focused));
+  section.append(
+    transcriptPaneView({
+      view: state.ui.transcript,
+      actions: { setTranscriptPinned: (pinned) => actions.setTranscriptPinned(pinned) },
+    }),
+  );
   return section;
 }
 

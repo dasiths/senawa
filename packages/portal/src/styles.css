@@ -639,6 +639,105 @@ button:disabled {
   stroke-dasharray: 5 4;
 }
 
+.agent-terminal {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.agent-terminal-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-terminal-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.agent-terminal-scope {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agent-terminal-count {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.agent-terminal-jump {
+  border-color: var(--blue);
+  color: var(--blue);
+  font-weight: 700;
+}
+
+.agent-terminal-log {
+  max-height: 40vh;
+  min-height: 140px;
+  overflow-y: auto;
+  border: 1px solid var(--rule-strong);
+  background: #10140f;
+  padding: 8px 10px;
+  color: #e6e9e2;
+  font-family: ui-monospace, "SFMono-Regular", "Cascadia Mono", "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agent-terminal-log:focus-visible {
+  outline: 3px solid var(--blue);
+  outline-offset: -3px;
+}
+
+.agent-terminal-empty {
+  margin: 0;
+  color: #b9bfb4;
+}
+
+.agent-terminal-row {
+  display: grid;
+  grid-template-columns: 72px 56px minmax(0, 1fr);
+  gap: 8px;
+  border-bottom: 1px solid #1e241d;
+  padding: 1px 0;
+}
+
+.agent-terminal-time {
+  color: #93a08d;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-terminal-stream {
+  text-transform: uppercase;
+  color: #93a08d;
+  font-size: 11px;
+}
+
+.agent-terminal-text {
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.agent-terminal-row.stdout .agent-terminal-text {
+  color: #e6e9e2;
+}
+
+.agent-terminal-row.stderr .agent-terminal-stream,
+.agent-terminal-row.stderr .agent-terminal-text {
+  color: #ffb4a8;
+}
+
+.agent-terminal-row.system .agent-terminal-stream,
+.agent-terminal-row.system .agent-terminal-text {
+  color: #9fd0ff;
+}
+
 .tree-group {
   border-left: 1px solid var(--rule);
   margin: 3px 0 0 9px;
@@ -1229,6 +1328,22 @@ button:disabled {
   .diagram-canvas {
     height: 54vh;
     min-height: 260px;
+  }
+
+  .agent-terminal-controls {
+    margin-left: 0;
+  }
+
+  .agent-terminal-row {
+    grid-template-columns: 62px minmax(0, 1fr);
+  }
+
+  .agent-terminal-stream {
+    grid-column: 2;
+  }
+
+  .agent-terminal-text {
+    grid-column: 1 / -1;
   }
 
   .limit-label {

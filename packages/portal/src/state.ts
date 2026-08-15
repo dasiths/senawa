@@ -17,9 +17,18 @@ import type {
   PortalRunPage,
   PortalSessionDescriptor,
   PortalSyncVector,
+  PortalTranscriptOwner,
+  PortalTranscriptPage,
   PortalWorkspacePage,
 } from "@senawa/protocol";
 import type { PortalRoute } from "./router.js";
+import {
+  emptyTranscriptView,
+  mergeTranscriptPage,
+  selectTranscriptOwner,
+  setTranscriptPinned,
+  type TranscriptView,
+} from "./transcript-view-model.js";
 
 export type SessionStatus = "booting" | "read-write" | "read-only" | "expired" | "invalid";
 export type ConnectionStatus =
@@ -122,6 +131,7 @@ export interface PortalUiState {
   readonly rightRailOpen: boolean;
   readonly graphMode: GraphMode;
   readonly graphViewport: PortalGraphViewport;
+  readonly transcript: TranscriptView;
 }
 
 export interface PortalState {
@@ -179,7 +189,10 @@ export type PortalAction =
   | { readonly type: "focus-record"; readonly recordId?: string }
   | { readonly type: "right-rail"; readonly open: boolean }
   | { readonly type: "graph-mode"; readonly mode: GraphMode }
-  | { readonly type: "graph-viewport"; readonly viewport: PortalGraphViewport };
+  | { readonly type: "graph-viewport"; readonly viewport: PortalGraphViewport }
+  | { readonly type: "transcript-owner"; readonly owner: PortalTranscriptOwner | undefined }
+  | { readonly type: "transcript-page"; readonly page: PortalTranscriptPage }
+  | { readonly type: "transcript-pin"; readonly pinned: boolean };
 
 const emptyCaches: PortalCaches = Object.freeze({
   runsByRepository: Object.freeze({}),
@@ -220,6 +233,7 @@ export function initialPortalState(route: PortalRoute): PortalState {
       rightRailOpen: false,
       graphMode: "table",
       graphViewport: INITIAL_GRAPH_VIEWPORT,
+      transcript: emptyTranscriptView(),
     }),
   });
 }
@@ -254,7 +268,11 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
         caches: emptyCaches,
         humanNeeds: Object.freeze([]),
         visibleEvents: Object.freeze([]),
-        ui: Object.freeze({ ...state.ui, dialog: undefined }),
+        ui: Object.freeze({
+          ...state.ui,
+          dialog: undefined,
+          transcript: emptyTranscriptView(),
+        }),
       });
     case "connection":
       return next(state, {
@@ -268,7 +286,11 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
     case "route":
       return next(state, {
         route: action.route,
-        ui: Object.freeze({ ...state.ui, focusedRecord: undefined }),
+        ui: Object.freeze({
+          ...state.ui,
+          focusedRecord: undefined,
+          transcript: emptyTranscriptView(),
+        }),
       });
     case "select-run":
       return next(state, {
@@ -284,6 +306,7 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
           dialog: undefined,
           focusedRecord: undefined,
           graphViewport: INITIAL_GRAPH_VIEWPORT,
+          transcript: emptyTranscriptView(),
         }),
       });
     case "repositories":
@@ -340,7 +363,11 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
         freshness: Object.freeze({}),
         caches: clearRunCaches(state.caches),
         humanNeeds: Object.freeze([]),
-        ui: Object.freeze({ ...state.ui, dialog: undefined }),
+        ui: Object.freeze({
+          ...state.ui,
+          dialog: undefined,
+          transcript: emptyTranscriptView(),
+        }),
       });
     case "resync-complete":
       return next(portalReducer(state, { type: "overview", overview: action.overview }), {
@@ -397,6 +424,27 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
       });
     case "graph-viewport":
       return next(state, { ui: Object.freeze({ ...state.ui, graphViewport: action.viewport }) });
+    case "transcript-owner":
+      return next(state, {
+        ui: Object.freeze({
+          ...state.ui,
+          transcript: selectTranscriptOwner(state.ui.transcript, action.owner),
+        }),
+      });
+    case "transcript-page":
+      return next(state, {
+        ui: Object.freeze({
+          ...state.ui,
+          transcript: mergeTranscriptPage(state.ui.transcript, action.page),
+        }),
+      });
+    case "transcript-pin":
+      return next(state, {
+        ui: Object.freeze({
+          ...state.ui,
+          transcript: setTranscriptPinned(state.ui.transcript, action.pinned),
+        }),
+      });
   }
 }
 

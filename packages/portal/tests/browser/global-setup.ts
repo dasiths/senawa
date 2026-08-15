@@ -112,7 +112,58 @@ function seedAuthority(options: AuthorityOptions): void {
   const compactGraph = portalGraph(false);
   seedHumanRun(authority, options, graph, RUNS.journey, true);
   seedWorkspaceRun(authority, options, compactGraph);
+  seedTranscripts(options);
   authority.close();
+}
+
+/** Owner-scoped agent output so the terminal pane has durable authority to read. */
+function seedTranscripts(options: AuthorityOptions): void {
+  const broker = new SqliteContextBroker({
+    databasePath: options.databasePath,
+    dependencies: {
+      sha256: productionSha256,
+      currentTime: () => NOW,
+      issueGrantToken: () => new Uint8Array(32).fill(9),
+    },
+  });
+  const append = (
+    runId: string,
+    owner: { readonly kind: "dispatch" | "task" | "phase"; readonly id: string },
+    lines: readonly { readonly stream: "stdout" | "stderr" | "system"; readonly text: string }[],
+  ) => {
+    for (const [index, line] of lines.entries()) {
+      broker.appendTranscript({
+        repositoryId: repositoryForRun(runId),
+        runId,
+        owner,
+        occurredAt: new Date(Date.parse(NOW) + index * 1_000).toISOString(),
+        stream: line.stream,
+        text: line.text,
+      });
+    }
+  };
+  append(RUNS.journey, { kind: "task", id: runtimeFixture.task.taskId }, [
+    { stream: "system", text: "session started" },
+    { stream: "stdout", text: "hostile line <script>blocked()</script></div> stays inert" },
+    { stream: "stderr", text: "tool call refused: capability worker.write is absent" },
+    ...Array.from({ length: 140 }, (_, index) => ({
+      stream: "stdout" as const,
+      text: `journey task output line ${index + 1}`,
+    })),
+    { stream: "system", text: "session ended completed" },
+  ]);
+  append(RUNS.journey, { kind: "phase", id: runtimeFixture.phase.phaseId }, [
+    { stream: "system", text: "phase attempt 1 opened" },
+    { stream: "stdout", text: "journey phase output line 1" },
+  ]);
+  append(RUNS.workspace, { kind: "task", id: runtimeFixture.task.taskId }, [
+    { stream: "stdout", text: "workspace task-owned line that a dispatch scope must not show" },
+  ]);
+  append(RUNS.workspace, { kind: "dispatch", id: "dispatch-browser" }, [
+    { stream: "system", text: "dispatch-browser session started" },
+    { stream: "stdout", text: "workspace dispatch output line 1" },
+  ]);
+  broker.close();
 }
 
 function seedHumanRun(

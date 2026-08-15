@@ -146,6 +146,51 @@ describe("portal state", () => {
       artifactContentKey("repository_one", "run_two", "artifact_shared"),
     );
   });
+
+  it("discards retained transcript lines when the run, route, or stream changes", () => {
+    const owner = { kind: "task", id: "task_verify" } as const;
+    const record = {
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId: "repository_one",
+      runId: "run_one",
+      owner,
+      sequence: 1,
+      occurredAt: "2026-08-14T12:00:00.000Z",
+      stream: "stdout" as const,
+      text: "one line",
+    };
+    const scoped = portalReducer(initialPortalState({ name: "graph" }), {
+      type: "transcript-owner",
+      owner,
+    });
+    const loaded = portalReducer(scoped, {
+      type: "transcript-page",
+      page: {
+        apiVersion: PROTOCOL_VERSION,
+        repositoryId: "repository_one",
+        runId: "run_one",
+        owner,
+        after: 0,
+        nextAfter: 1,
+        hasMore: false,
+        records: [record],
+      },
+    });
+    expect(loaded.ui.transcript.lines).toHaveLength(1);
+    const unpinned = portalReducer(loaded, { type: "transcript-pin", pinned: false });
+    expect(unpinned.ui.transcript.pinned).toBe(false);
+    for (const action of [
+      { type: "select-run", repositoryId: "repository_one", runId: "run_two" },
+      { type: "route", route: { name: "activity" } },
+      { type: "gap", message: "Stream gap" },
+      { type: "session-expired", message: "Session expired" },
+    ] as const) {
+      const cleared = portalReducer(unpinned, action);
+      expect(cleared.ui.transcript.lines).toEqual([]);
+      expect(cleared.ui.transcript.owner).toBeUndefined();
+      expect(cleared.ui.transcript.pinned).toBe(true);
+    }
+  });
 });
 
 describe("portal pure models", () => {

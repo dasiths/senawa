@@ -21,6 +21,7 @@ import {
   decodePortalRunOverview,
   decodePortalRunPage,
   decodePortalSessionDescriptor,
+  decodePortalTranscriptPage,
   decodePortalWorkspacePage,
   decodeSupervisorReceipt,
   type JsonValue,
@@ -43,9 +44,12 @@ import {
   type PortalRunOverview,
   type PortalRunPage,
   type PortalSessionDescriptor,
+  type PortalTranscriptOwner,
+  type PortalTranscriptPage,
   type PortalWorkspacePage,
   PROTOCOL_LIMITS,
   PROTOCOL_VERSION,
+  TRANSCRIPT_LIMITS,
 } from "@senawa/protocol";
 
 type Decoder<Value> = (input: string | unknown) => Value;
@@ -160,6 +164,18 @@ export class PortalHttpClient {
 
   needs(repositoryId: string, runId: string): Promise<PortalHumanNeedPage> {
     return this.#get(`${runBase(repositoryId, runId)}/needs?limit=100`, decodePortalHumanNeedPage);
+  }
+
+  transcript(
+    repositoryId: string,
+    runId: string,
+    owner: PortalTranscriptOwner,
+    after = 0,
+  ): Promise<PortalTranscriptPage> {
+    return this.#get(
+      `${runBase(repositoryId, runId)}/transcript/${encodeURIComponent(owner.kind)}/${encodeURIComponent(owner.id)}?after=${after}&limit=${TRANSCRIPT_LIMITS.maxRecordsPerPage}`,
+      decodePortalTranscriptPage,
+    );
   }
 
   allowanceReview(
