@@ -4,8 +4,8 @@ import { isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CONFIGURATION_SNAPSHOT_API_VERSION,
-  compileWorkflowConfiguration,
   type ConfigurationSnapshot,
+  compileWorkflowConfiguration,
   validateSchemaInstance,
 } from "@senawa/configuration";
 import {
@@ -43,15 +43,15 @@ import { canonicalBytes, decodeCanonicalJsonValue, PROTOCOL_VERSION } from "@sen
 import { assertSecretSafePositiveProjection, decodeDeterministicReport } from "@senawa/reporting";
 import {
   type AsyncEffectHost,
+  createFanOutAmendmentOperations,
+  createRoleAuthorizationPolicy,
   type EffectInspection,
   type EffectIntent,
   type EffectObservation,
-  createFanOutAmendmentOperations,
   PlanImportCoordinator,
   RuntimeDataflowAuthority,
-  createRoleAuthorizationPolicy,
-  renderPromptPack,
   type RuntimeDependencies,
+  renderPromptPack,
 } from "@senawa/runtime";
 import {
   SqliteAuthority,
@@ -86,6 +86,7 @@ const CHECKOUT_ROOT = await realpath(fileURLToPath(new URL("../../../", import.m
 const REPOSITORY_ID = "repository_standard-delivery";
 const RUN_ID = "run_standard-delivery";
 const NOW = "2026-08-15T12:00:00.000Z";
+const GENERATED_WORKER_CAPABILITIES = ["worker.submit.asset", "worker.submit.completion"] as const;
 const roots = new Set<string>();
 let allocation = 0;
 
@@ -159,7 +160,9 @@ describe("Phase 14F standard delivery acceptance", () => {
         dependencies,
       });
       supervisor.commandAuthority.putConfigurationSnapshot(snapshot);
-      const verifyPhase = phaseNode(snapshot, "verify");
+      // The alpha runtime binds one command-driven lifecycle phase per run. Bind it to
+      // the phase whose generated tasks execute through the production supervisor.
+      const lifecyclePhase = phaseNode(snapshot, "implement");
       const instantiateReceipt = submit(
         supervisor,
         runtimeCommand({
@@ -171,8 +174,8 @@ describe("Phase 14F standard delivery acceptance", () => {
             execution: snapshot.execution,
             graph: snapshot.graph,
             phase: {
-              phaseId: verifyPhase.definition.id,
-              definitionGeneration: verifyPhase.definition.generation,
+              phaseId: lifecyclePhase.definition.id,
+              definitionGeneration: lifecyclePhase.definition.generation,
             },
             approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
             escalationPolicyDigest: sha256Digest("9".repeat(64)),
@@ -270,9 +273,6 @@ describe("Phase 14F standard delivery acceptance", () => {
       accepted.set("plan", plan);
       expect([...promptDigests.keys()]).toEqual(["define", "research", "plan"]);
 
-      const implementAttempt = startPhase(dataflow, snapshot, "implement", [
-        outputSource(plan, planValue),
-      ]);
       const evaluation = evaluatePlan(
         snapshot,
         plan.attempt.attempt.attemptDigest,
@@ -399,6 +399,27 @@ describe("Phase 14F standard delivery acceptance", () => {
       });
       await amendmentService.stop();
 
+      // The amendment service owns and closes the authority it applied through.
+      supervisor = new SqliteSupervisorAuthority({
+        databasePath: fixture.databasePath,
+        assetDirectory: fixture.assetDirectory,
+        dependencies,
+      });
+
+      // Generated tasks exist only in the applied graph revision, so the implement
+      // attempt must bind the post-import snapshot.
+      const implementAttempt = startPhase(
+        new RuntimeDataflowAuthority(
+          deterministicSha256,
+          configurationRuntimeSchemaValidator(),
+          new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
+          supervisor.commandAuthority,
+        ),
+        resultSnapshot,
+        "implement",
+        [outputSource(plan, planValue)],
+      );
+
       const production = await runGeneratedImplementation({
         fixture,
         supervisor,
@@ -415,8 +436,12 @@ describe("Phase 14F standard delivery acceptance", () => {
         resultSnapshot,
         implementAttempt,
         production.assessments,
+        true,
       );
       accepted.set("implement", implementation);
+      expect(supervisor.queryProjection(REPOSITORY_ID, RUN_ID)?.payload).toMatchObject({
+        status: "closed",
+      });
 
       const evidence = canonicalValue({
         acceptedTasks: production.assessments.map(({ assessment }) => ({
@@ -822,8 +847,9 @@ function closeTaskPhase(
   snapshot: ConfigurationSnapshot,
   started: ReturnType<RuntimeDataflowAuthority["startPhaseAttempt"]>,
   assessments: readonly { assessment: AccountingAssessment; assessmentDigest: string }[],
+  finalAuthority = false,
 ): AcceptedPhase {
-  return closePhaseAuthority(supervisor, snapshot, started, [], assessments, false);
+  return closePhaseAuthority(supervisor, snapshot, started, [], assessments, finalAuthority);
 }
 
 function closePhaseAuthority(
@@ -1174,7 +1200,7 @@ async function runGeneratedImplementation(input: {
         phaseAttempt: input.attempt.attempt,
         phaseInputBinding: input.attempt.inputBinding,
         phaseOutputDeclarations: [],
-        capabilities: (role.value as any).capabilities,
+        capabilities: GENERATED_WORKER_CAPABILITIES,
         budgets: (registry(input.snapshot.taskTemplates, "implementation") as any).budgets,
       },
       deterministicSha256,
@@ -1185,7 +1211,7 @@ async function runGeneratedImplementation(input: {
       ordinal: index + 1,
       workerPrincipalId: `principal_implementation-${member.identity}`,
       roleKey: consumerKey("implementor"),
-      capabilities: (role.value as any).capabilities,
+      capabilities: GENERATED_WORKER_CAPABILITIES,
       promptResource: {
         key: prompt.key,
         resourceDigest: prompt.digest,
@@ -1299,6 +1325,62 @@ async function runGeneratedImplementation(input: {
     .filter(({ assessment }) =>
       input.evaluation.members.some(({ taskId }) => taskId === assessment.submission.task.taskId),
     );
+  if (assessments.length !== 2) {
+    console.log("DEBUG order", worker.order, "reworks", worker.reworks);
+    console.log("DEBUG runs", scheduler.listRuns());
+    console.log(
+      "DEBUG fresh",
+      scheduler.listFreshDispatchRequirements(REPOSITORY_ID, RUN_ID).length,
+    );
+    console.log(
+      "DEBUG runtime",
+      input.supervisor.commandAuthority.queryRunScheduling(REPOSITORY_ID, RUN_ID) === undefined,
+      input.supervisor.commandAuthority.queryRunExecution(REPOSITORY_ID, RUN_ID) === undefined,
+    );
+    console.log(
+      "DEBUG dispatches",
+      broker.listWorkerDispatches(REPOSITORY_ID, RUN_ID).length,
+      broker.authority.snapshot().taskScopes.length,
+    );
+    const runtimeSnapshot = input.supervisor.commandAuthority.queryRunScheduling(
+      REPOSITORY_ID,
+      RUN_ID,
+    );
+    console.log(
+      "DEBUG graph tasks",
+      runtimeSnapshot?.graph.nodes
+        .filter((node) => node.kind === "task")
+        .map((node) => `${node.definition.id}@${node.definition.generation}`),
+    );
+    console.log(
+      "DEBUG scopes",
+      broker.authority
+        .snapshot()
+        .taskScopes.map(
+          (scope: any) =>
+            `${scope.taskId}@${scope.definitionGeneration} claims=${scope.claimsAccepted} fence=${scope.fenceGeneration}`,
+        ),
+    );
+    console.log(
+      "DEBUG stored",
+      broker
+        .listWorkerDispatches(REPOSITORY_ID, RUN_ID)
+        .map(
+          (stored: any) =>
+            `${stored.dispatch.task.taskId}@${stored.dispatch.task.definitionGeneration} effect=${stored.effect !== undefined} ctx=${stored.context.contextDigest === stored.taskScope.acceptedContextDigest}`,
+        ),
+    );
+    console.log(
+      "DEBUG seeds",
+      seeds.map(({ member }) => member.taskId),
+    );
+    console.log(
+      "DEBUG receipts",
+      input.supervisor.commandAuthority
+        .queryReceiptHistory(REPOSITORY_ID, RUN_ID)
+        .map((receipt) => `${receipt.status}:${JSON.stringify((receipt as any).error ?? "")}`),
+    );
+  }
   expect(assessments).toHaveLength(2);
   await service.stop();
   broker.close();
@@ -1325,6 +1407,14 @@ class GeneratedWorkers implements AsyncEffectHost {
     readonly snapshot: ConfigurationSnapshot,
   ) {}
   async dispatch(intent: EffectIntent): Promise<EffectObservation> {
+    try {
+      return await this.#dispatch(intent);
+    } catch (error) {
+      console.log("DEBUG dispatch failure", error);
+      throw error;
+    }
+  }
+  async #dispatch(intent: EffectIntent): Promise<EffectObservation> {
     const dispatchId = String((intent.command.input as any).dispatchId);
     const seed = required(this.seeds.find(({ dispatch }) => dispatch.dispatchId === dispatchId));
     if (!this.completed.has(dispatchId)) {

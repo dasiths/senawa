@@ -25,6 +25,119 @@ supervisor authority when enabled. See the [remote control-plane
 reference](docs/reference/remote-control-plane.md) for local enrollment,
 classified synchronization, partition behavior, and reference-server limits.
 
+## High-level design
+
+Senawa executes consumer-defined workflows as a deterministic state machine.
+Every transition is an immutable, content-addressed record derived from exact
+authority facts, so a run can be replayed, audited, and resumed from the exact
+boundary where it stopped.
+
+Five rules shape the whole system:
+
+* Authority flows one way. The kernel decides, storage commits, adapters act,
+  and clients observe. No client, prompt, or model response can widen authority.
+* Agents propose. Humans and workflow policy approve. Model output, central
+  receipts, and prompt text are evidence, never decisions.
+* Intent is persisted before any external effect, and the outcome is reconciled
+  before it is committed, so a crash never silently duplicates work.
+* Every autonomous loop carries an independent finite budget that escalates
+  instead of running unbounded.
+* Local-first control. Source, credentials, leases, and unsynchronized assets
+  stay on the repository host even when a remote control plane is enrolled.
+
+### Package graph
+
+The kernel is pure and has no filesystem, process, network, database, Git,
+clock, random, worker, sensor, or UI dependency. Protocol carries contracts with
+no behavior. Only direct edges appear below.
+
+```mermaid
+flowchart TD
+    protocol["protocol<br/>versioned wire contracts"]
+    kernel["kernel<br/>pure workflow authority"]
+    configuration["configuration<br/>workflow compiler"]
+    runtime["runtime<br/>ports, commands, runner"]
+    storage["storage-sqlite<br/>transactional authority"]
+    host["execution-host<br/>process, Git, worker adapters"]
+    supervisor["supervisor<br/>local control plane"]
+    reporting["reporting<br/>reports and exports"]
+    portal["portal<br/>browser client"]
+    cli["apps/senawa<br/>CLI composition root"]
+    control["apps/control-plane<br/>reference server"]
+
+    configuration --> kernel
+    runtime --> kernel
+    runtime --> protocol
+    storage --> runtime
+    storage --> configuration
+    host --> runtime
+    host --> configuration
+    supervisor --> storage
+    supervisor --> runtime
+    reporting --> runtime
+    portal --> protocol
+    control --> protocol
+    cli --> supervisor
+    cli --> host
+    cli --> reporting
+```
+
+### Command and effect lifecycle
+
+A command becomes a durable receipt before anything external happens. The runner
+then performs exactly one recoverable transition per operation under a fenced
+run lease.
+
+```mermaid
+sequenceDiagram
+    participant Client as CLI or portal
+    participant Supervisor
+    participant Authority as SQLite authority
+    participant Runner as Fenced runner
+    participant Host as Execution host
+
+    Client->>Supervisor: submit command
+    Supervisor->>Authority: queued, then claimed receipt
+    Authority->>Authority: kernel decision in one transaction
+    Authority-->>Supervisor: terminal receipt and cursor
+    Supervisor-->>Client: receipt, events, projections
+    Supervisor->>Runner: wake under run lease
+    Runner->>Authority: persist effect intent with fence
+    Runner->>Host: one external effect
+    Host-->>Runner: outcome or uncertainty
+    Runner->>Authority: reconcile, then commit outcome
+```
+
+### Phase lifecycle
+
+Phase state is derived, never stored as mutable status. Each projection is
+rebuilt from the current candidate, gate evaluation, authority decision,
+closure, and escalation records.
+
+```mermaid
+stateDiagram-v2
+    [*] --> awaiting_completion
+    awaiting_completion --> awaiting_gate: every active task accounted
+    awaiting_gate --> gate_rejected: blocking rule failed or unknown
+    awaiting_gate --> awaiting_approval: gate accepted
+    awaiting_approval --> approval_rejected: human rejected
+    awaiting_approval --> awaiting_closure: human approved
+    awaiting_closure --> closed
+    closed --> [*]
+    awaiting_completion --> escalated: budget exhausted
+    awaiting_gate --> escalated: budget exhausted
+    awaiting_approval --> escalated: budget exhausted
+```
+
+### Where the branch stands
+
+Phases 0 through 13 are delivered. Phase 14 adds standard delivery workflow
+authoring: external prompt and schema resources, typed phase dataflow,
+schema-selected task fan-out, reviewed plan import, and schema-validated agent
+output. Phase 15 adds consumer documentation. Current status, acceptance
+criteria, and remaining work live in the [comprehensive
+plan](docs/design/implementation-plan.md).
+
 ## Development
 
 ```bash

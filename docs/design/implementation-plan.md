@@ -1064,11 +1064,15 @@ clean at this handoff. Do not restart the phase or rewrite the checkpoint.
   apps/senawa/src/standard-delivery-acceptance.test.ts:1146
   ```
 
-* The failure occurs while `runGeneratedImplementation` constructs a generated
-  implementation worker context. Compare the generated task's phase-attempt and
-  phase-input binding with the implement attempt created before plan import. Fix
-  the fixture or owning composition only after proving which authority identity
-  is incorrect. Do not weaken `createWorkerContextBase` validation.
+* Diagnosed cause: the fixture starts the implement phase attempt against the
+  pre-import configuration snapshot and graph revision, then constructs
+  generated implementation contexts against the post-import result snapshot.
+  `compileWorkerContextBase` requires the phase attempt's graph revision and
+  configuration snapshot digests to equal the context's own digests, so the two
+  can never agree. Generated tasks exist only in the post-import graph revision,
+  so the kernel binding is correct and the fixture ordering is wrong. Start the
+  implement attempt after the reviewed amendment applies, against the result
+  snapshot. Do not weaken `createWorkerContextBase` validation.
 * The same test contains unresolved Biome `noExplicitAny` findings and type-only
   import organization findings. Replace the temporary `any` annotations with
   actual configuration, dataflow, fan-out, assessment, seed, and effect types;
