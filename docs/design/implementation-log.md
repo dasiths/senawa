@@ -7924,6 +7924,18 @@ No commit or push was performed, as required for Phase 14E and Phase 14F.
   pushed as work progresses; implementation continues through all unchecked
   Phase 14 items before Phase 15 begins.
 
+## Phase 14 authoring foundation checkpoint
+
+### Commit and push
+
+* Checkpoint commit: `9c7b899` (`feat: checkpoint standard delivery authoring`)
+* Push: `origin/redesign/workflow-state-machine` advanced from `0cd38b5` to
+  `9c7b899` on 2026-08-15.
+* The checkpoint is intentionally incomplete. The consolidated standard-delivery
+  acceptance remains red at the documented phase-attempt/input-binding mismatch,
+  its temporary lint diagnostics remain, and Phase 14G through Phase 14J are
+  unchecked.
+
 ## Entry template
 
 ```markdown

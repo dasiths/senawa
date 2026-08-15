@@ -1003,9 +1003,9 @@ alternatives in the implementation log.
 ### Current implementation status and session handoff
 
 Status captured on 2026-08-15 from branch
-`redesign/workflow-state-machine` at delivered baseline `0cd38b5`. Phase 14 is
-uncommitted and the worktree is intentionally dirty. Do not restart the phase or
-discard current changes.
+`redesign/workflow-state-machine` at pushed checkpoint `9c7b899`. Phase 14 is
+still in progress, but its authoring foundation is committed and the worktree is
+clean at this handoff. Do not restart the phase or rewrite the checkpoint.
 
 #### Completed implementation
 
@@ -1097,10 +1097,9 @@ discard current changes.
   order, one bounded rework occurs, plan-import crash replay is idempotent,
   verification closes the run, and SDK adapter/model invocation counts remain
   zero.
-* [ ] After the existing authoring foundation is green and independently checked,
-  create and push a checkpoint commit before starting the structured-output
-  implementation. Do not leave the complete phase only in one long-lived dirty
-  worktree.
+* [x] Create and push authoring-foundation checkpoint `9c7b899` before starting
+  the structured-output implementation. The checkpoint intentionally records
+  the failing consolidated acceptance and unchecked continuation work.
 * [ ] Complete Phase 14G SDK research and persist its evidence and selected
   implementation path in the implementation log.
 * [ ] Complete and push the Phase 14H structured-output implementation checkpoint.
@@ -1133,7 +1132,8 @@ discard current changes.
 
 * `/workspaces/senawa` is the only Git worktree. Any worktree-mode test must
   create and clean a fresh OS-temporary Git repository outside this checkout.
-* No Phase 14 implementation commit or push has occurred.
+* Checkpoint `9c7b899` is pushed. No final Phase 14 delivery commit or delivery
+  record has occurred.
 * Phase 15 consumer documentation has not started. It remains the final
   implementation phase after Phase 14 delivery, followed by the single final
   pull request.
