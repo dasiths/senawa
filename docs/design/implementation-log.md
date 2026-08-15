@@ -8210,6 +8210,63 @@ Passed on 2026-08-15:
   Phase 14I must prove the complete path through a no-credit journey.
 * Multiple declared output slots per dispatch are not supported.
 
+## Phase 14I log
+
+### Scope
+
+* `apps/senawa/src/structured-output-acceptance.test.ts` proves the complete
+  structured output path against a real SQLite context broker with no model,
+  no credits, and no network.
+* The optional live probe gains a second gated case that submits one bounded
+  schema-validated phase output. Both live cases remain skipped without explicit
+  model, credit ceiling, timeout, and cost acknowledgement settings.
+* `docs/design/production-enhancements.md` records evidence-backed deferred
+  hardening.
+
+### Proof
+
+The no-credit acceptance proves:
+
+* A schema-invalid submission returns a bounded structured failure carrying an
+  instance pointer, and its rejected attempt survives closing and reopening the
+  database.
+* A corrected submission on the reopened authority installs exactly one
+  canonical asset, admits one submission, and produces exactly one outbox entry.
+* Exact replay of an accepted submission is idempotent and publishes nothing
+  further.
+* A conflicting output for the same slot is refused while the accepted digest
+  remains the only published one.
+* A rejected body containing a marker string never reaches the authority
+  snapshot, the durable canonical JSON, or the on-disk database bytes, verified
+  against a positive control that proves the scan is not vacuous.
+* No production SDK client is constructed and no `SENAWA_COPILOT_*` setting is
+  read.
+
+### Executive decisions
+
+* Conflicting valid output still stages its canonical bytes before admission
+  refuses it. This preserves Decision D-033's ordering, so it is recorded as
+  PE-001 with a bounded risk statement and a concrete collector acceptance test
+  rather than reordered.
+* The live probe shares the existing gating rather than adding new environment
+  variables, keeping one opt-in surface for paid inference.
+
+### Validation
+
+Passed on 2026-08-15:
+
+* Phase 14I structured output acceptance: 5 tests
+* Live probe: 2 tests skipped without opt-in
+* Complete offline suite: 96 files and 1,231 tests passed with 2 skipped live
+  tests
+* Root build, typecheck, Biome, architecture boundaries across 443 source files,
+  documentation links across 25 Markdown files, and `git diff --check`
+
+### Remaining risks
+
+* Model correction behavior remains unmeasured without paid inference. Recorded
+  as PE-003.
+
 ## Entry template
 
 ```markdown
