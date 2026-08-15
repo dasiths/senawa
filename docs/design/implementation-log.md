@@ -8037,6 +8037,100 @@ are not pixel-diff baselines.
   closure records rather than protocol commands, because the run binds its one
   command lifecycle phase to `implement`.
 
+## Decision D-091: Return structured tool failures instead of throwing
+
+* Date: 2026-08-15
+* Status: Accepted for Phase 14G through Phase 14J
+* Phase: Phase 14
+* Decision: `submit_phase_output` returns a `CopilotSdkToolResult` with
+  `resultType: "failure"` and a bounded machine-readable
+  `textResultForLlm` for every rejected submission. Handlers never throw to
+  signal rejection. Feedback contains a stable failure code plus at most eight
+  findings, each carrying an instance JSON Pointer, a schema pointer, and a
+  keyword. It never contains schema bodies, secrets, repository content, or
+  internal exception text.
+* Alternatives: Throw from the handler; return a plain `{ status: "failed" }`
+  object; return `resultType: "rejected"`; return the complete Ajv error list.
+* Rationale: The Phase 14G probe against the pinned SDK proves three things.
+  A returned object that satisfies `textResultForLlm` plus an allowed
+  `resultType` reaches the model verbatim with its result type preserved. A
+  thrown handler is converted into an opaque RPC error and loses all structure.
+  A plain object without `textResultForLlm` is JSON-stringified and classified
+  as success, which would silently accept invalid output. `failure` also enables
+  the SDK's post-tool-use failure hook, which `rejected` does not.
+* Consequence: Phase 14H must build every tool result through the existing
+  `success` and `failure` helpers or an equivalent bounded constructor. The SDK
+  performs no argument validation of its own, so Senawa's runtime validation is
+  the only authority. Retry is model behavior driven by the result text; the SDK
+  exposes no retry API, so the attempt budget must be enforced in the handler.
+
+## Phase 14G log
+
+### Research
+
+The pinned `@github/copilot-sdk@1.0.9` custom-tool surface is:
+
+* `Tool` requires only `name`. `parameters` accepts a raw JSON Schema record or
+  a Zod schema, and `defineTool` is a pure shaper that preserves both
+  `parameters` and `handler` by reference.
+* `ToolHandler` receives `(args, invocation)` where `invocation` carries
+  `sessionId`, `toolCallId`, and `toolName`.
+* `ToolResultObject` requires `textResultForLlm` and a `resultType` drawn from
+  `success`, `failure`, `rejected`, `denied`, and `timeout`.
+* `CopilotSession._executeToolAndRespond` normalizes results: `null` becomes an
+  empty string, a string passes through, a valid result object passes through
+  verbatim, any other value is JSON-stringified as success, and a thrown handler
+  becomes `handlePendingToolCall({ requestId, error })`.
+* The SDK declares no JSON Schema dialect and performs no argument validation.
+* Tool-search deferral is irrelevant because Senawa sets `toolSearch.enabled` to
+  false and `defer` to `never` on every tool.
+
+### Probe
+
+`packages/execution-host/src/copilot-sdk-tool-feedback.test.ts` runs in the
+default offline suite. It constructs a real `CopilotSession`, replaces its RPC
+with a recorder, and drives the real normalization path. No client, connection,
+model, or credit is involved. The probe proves:
+
+* The declared SDK pin is exactly `1.0.9` in peer and development dependencies.
+* `defineTool` preserves a raw JSON Schema `parameters` object and the handler.
+* A bounded structured failure reaches the model verbatim with
+  `resultType: "failure"`, exposing instance pointers and keywords while
+  containing no schema body.
+* An invalid first call followed by a corrected second call in the same session
+  records exactly `["failure", "success"]` with distinct request identities and
+  no RPC error.
+* A throwing handler loses all structure and becomes an opaque RPC error.
+* A plain `{ status: "failed" }` object is stringified and classified as
+  success.
+
+The probe establishes the SDK-side feedback path required before Phase 14H. It
+does not prove model behavior; whether a model actually corrects its call
+remains a Phase 14I optional live probe.
+
+### Executive decisions
+
+* The probe lives in the repository test suite rather than
+  `experiments/probes/`, because the plan requires it to be mandatory and
+  repeatable rather than historical evidence.
+* Model correction behavior is deliberately out of scope for the no-credit
+  probe. Senawa can only guarantee that the correction channel exists and is
+  well-formed.
+
+### Validation
+
+Passed on 2026-08-15:
+
+* Phase 14G probe: 6 tests
+* Workspace typecheck
+* Biome check for the probe file
+
+### Remaining risks
+
+* Whether a given model reliably corrects an invalid submission within its
+  attempt budget is unproven without a live probe. Phase 14I keeps that probe
+  optional and cost-labelled.
+
 ## Entry template
 
 ```markdown
