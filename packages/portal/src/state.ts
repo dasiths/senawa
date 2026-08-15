@@ -21,6 +21,18 @@ import type {
   PortalTranscriptPage,
   PortalWorkspacePage,
 } from "@senawa/protocol";
+import {
+  type CommandNarration,
+  narrateCleared,
+  narrateReceipt,
+  narrateSubmission,
+} from "./command-narrator.js";
+import {
+  collapseRail,
+  DEFAULT_RAIL_LAYOUT,
+  type RailLayout,
+  type RailSide,
+} from "./rail-layout.js";
 import type { PortalRoute } from "./router.js";
 import {
   emptyTranscriptView,
@@ -108,6 +120,7 @@ export interface PortalDialogState {
   readonly loading: boolean;
   readonly source?: unknown;
   readonly message?: string;
+  readonly answerDraft?: string;
 }
 
 export type GraphMode = "diagram" | "table" | "tree";
@@ -124,6 +137,11 @@ export const INITIAL_GRAPH_VIEWPORT: PortalGraphViewport = Object.freeze({
   panY: 0,
 });
 
+export interface PortalAssetOverlayState {
+  readonly artifactId: string;
+  readonly triggerId: string;
+}
+
 export interface PortalUiState {
   readonly dialog: PortalDialogState | undefined;
   readonly filter: string;
@@ -132,6 +150,9 @@ export interface PortalUiState {
   readonly graphMode: GraphMode;
   readonly graphViewport: PortalGraphViewport;
   readonly transcript: TranscriptView;
+  readonly narration: CommandNarration | undefined;
+  readonly railLayout: RailLayout;
+  readonly assetOverlay: PortalAssetOverlayState | undefined;
 }
 
 export interface PortalState {
@@ -192,7 +213,11 @@ export type PortalAction =
   | { readonly type: "graph-viewport"; readonly viewport: PortalGraphViewport }
   | { readonly type: "transcript-owner"; readonly owner: PortalTranscriptOwner | undefined }
   | { readonly type: "transcript-page"; readonly page: PortalTranscriptPage }
-  | { readonly type: "transcript-pin"; readonly pinned: boolean };
+  | { readonly type: "transcript-pin"; readonly pinned: boolean }
+  | { readonly type: "rail-layout"; readonly layout: RailLayout }
+  | { readonly type: "rail-collapse"; readonly side: RailSide; readonly collapsed: boolean }
+  | { readonly type: "asset-overlay-open"; readonly artifactId: string; readonly triggerId: string }
+  | { readonly type: "asset-overlay-close" };
 
 const emptyCaches: PortalCaches = Object.freeze({
   runsByRepository: Object.freeze({}),
@@ -234,6 +259,9 @@ export function initialPortalState(route: PortalRoute): PortalState {
       graphMode: "table",
       graphViewport: INITIAL_GRAPH_VIEWPORT,
       transcript: emptyTranscriptView(),
+      narration: undefined,
+      railLayout: DEFAULT_RAIL_LAYOUT,
+      assetOverlay: undefined,
     }),
   });
 }
@@ -271,6 +299,7 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
         ui: Object.freeze({
           ...state.ui,
           dialog: undefined,
+          assetOverlay: undefined,
           transcript: emptyTranscriptView(),
         }),
       });
@@ -289,6 +318,7 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
         ui: Object.freeze({
           ...state.ui,
           focusedRecord: undefined,
+          assetOverlay: undefined,
           transcript: emptyTranscriptView(),
         }),
       });
@@ -305,6 +335,7 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
           ...state.ui,
           dialog: undefined,
           focusedRecord: undefined,
+          assetOverlay: undefined,
           graphViewport: INITIAL_GRAPH_VIEWPORT,
           transcript: emptyTranscriptView(),
         }),
@@ -366,6 +397,7 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
         ui: Object.freeze({
           ...state.ui,
           dialog: undefined,
+          assetOverlay: undefined,
           transcript: emptyTranscriptView(),
         }),
       });
@@ -376,6 +408,7 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
     case "pending-add":
       return next(state, {
         pending: withEntry(state.pending, action.pending.commandId, action.pending),
+        ui: Object.freeze({ ...state.ui, narration: narrateSubmission(action.pending) }),
       });
     case "pending-retry": {
       const pending = state.pending[action.commandId];
@@ -397,10 +430,20 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
           action.receipt.commandId,
           Object.freeze({ ...pending, receipt: action.receipt }),
         ),
+        ui: Object.freeze({
+          ...state.ui,
+          narration: narrateReceipt(state.ui.narration, action.receipt),
+        }),
       });
     }
     case "pending-clear":
-      return next(state, { pending: withoutEntry(state.pending, action.commandId) });
+      return next(state, {
+        pending: withoutEntry(state.pending, action.commandId),
+        ui: Object.freeze({
+          ...state.ui,
+          narration: narrateCleared(state.ui.narration, action.commandId),
+        }),
+      });
     case "dialog-open":
     case "dialog-update":
       return next(state, { ui: Object.freeze({ ...state.ui, dialog: action.dialog }) });
@@ -445,6 +488,27 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
           transcript: setTranscriptPinned(state.ui.transcript, action.pinned),
         }),
       });
+    case "rail-layout":
+      return next(state, { ui: Object.freeze({ ...state.ui, railLayout: action.layout }) });
+    case "rail-collapse":
+      return next(state, {
+        ui: Object.freeze({
+          ...state.ui,
+          railLayout: collapseRail(state.ui.railLayout, action.side, action.collapsed),
+        }),
+      });
+    case "asset-overlay-open":
+      return next(state, {
+        ui: Object.freeze({
+          ...state.ui,
+          assetOverlay: Object.freeze({
+            artifactId: action.artifactId,
+            triggerId: action.triggerId,
+          }),
+        }),
+      });
+    case "asset-overlay-close":
+      return next(state, { ui: Object.freeze({ ...state.ui, assetOverlay: undefined }) });
   }
 }
 

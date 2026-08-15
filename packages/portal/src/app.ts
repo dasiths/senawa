@@ -9,6 +9,12 @@ import {
 } from "@senawa/protocol";
 import { allowanceCommandDraft, allowanceReviewIsCurrent } from "./allowance-review.js";
 import {
+  answerDraftIdentity,
+  pruneAnswerDrafts,
+  readAnswerDraft,
+  writeAnswerDraft,
+} from "./answer-draft.js";
+import {
   type CommandDraft,
   clearPortalSession,
   createPendingSubmission,
@@ -18,7 +24,9 @@ import {
   savePending,
   savePortalSession,
 } from "./pending.js";
-import { type PortalRenderActions, renderPortal } from "./render.js";
+import { pendingQuestionNeed } from "./question-attention.js";
+import { readRailLayout, saveRailLayout } from "./rail-layout.js";
+import { type PortalRenderActions, refreshQuestionAttention, renderPortal } from "./render.js";
 import { parsePortalHash, portalHash } from "./router.js";
 import { vectorsEqual } from "./selectors.js";
 import { sessionAccess } from "./session.js";
@@ -39,6 +47,8 @@ import { PortalHttpClient, PortalTransportError } from "./transport.js";
 
 const POLL_INTERVAL_MS = 10_000;
 const RECEIPT_POLL_MS = 1_000;
+/** Bounded tick that ages the open question banner without a full rerender. */
+const QUESTION_TICK_MS = 1_000;
 /** Paging ceiling that can never retain more than one owner's bounded window. */
 const TRANSCRIPT_MAX_PAGES = Math.ceil(
   TRANSCRIPT_LIMITS.maxRetainedLinesPerOwner / TRANSCRIPT_LIMITS.maxRecordsPerPage,
@@ -58,10 +68,15 @@ export class PortalApplication {
   #dialogNeed: PortalHumanNeed | undefined;
   #transcriptSync: Promise<void> | undefined;
   #transcriptQueued = false;
+  #questionTick: number | undefined;
 
   constructor(root: HTMLElement) {
     this.#root = root;
     this.#state = initialPortalState(parsePortalHash(location.hash));
+    this.#state = portalReducer(this.#state, {
+      type: "rail-layout",
+      layout: readRailLayout(localStorage),
+    });
     this.#client = new PortalHttpClient({ onUnauthorized: () => this.#expireSession() });
     this.#stream = new PortalEventStream({
       create: (url) => new BrowserEventSource(url),
@@ -154,6 +169,13 @@ export class PortalApplication {
         document.querySelector<HTMLSelectElement>("#run-switcher")?.focus();
       }
       if (event.key === "Escape" && this.#state.ui.dialog !== undefined) this.#closeDialog();
+      if (
+        event.key === "Escape" &&
+        this.#state.ui.dialog === undefined &&
+        this.#state.ui.assetOverlay !== undefined
+      ) {
+        this.#closeAssetOverlay();
+      }
     });
   }
 
@@ -455,9 +477,17 @@ export class PortalApplication {
     const kind = dialogKindForNeed(need);
     if (kind === undefined) return;
     this.#dialogNeed = need;
+    const answerDraft = this.#answerDraft(need, kind);
     this.#dispatch({
       type: "dialog-open",
-      dialog: { kind, title: need.title, triggerId, verified: false, loading: true },
+      dialog: {
+        kind,
+        title: need.title,
+        triggerId,
+        verified: false,
+        loading: true,
+        ...answerDraft,
+      },
     });
     try {
       const source = await this.#loadReviewSource(
@@ -482,6 +512,7 @@ export class PortalApplication {
           verified,
           loading: false,
           source,
+          ...answerDraft,
           ...(verified
             ? {}
             : {
@@ -507,10 +538,19 @@ export class PortalApplication {
           triggerId,
           verified: false,
           loading: false,
+          ...answerDraft,
           message: safeMessage(error, "Exact review source could not be loaded"),
         },
       });
     }
+  }
+
+  #answerDraft(need: PortalHumanNeed, kind: DialogKind): { readonly answerDraft?: string } {
+    if (kind !== "answer") return {};
+    const draftIdentity = this.#answerDraftIdentity(need);
+    if (draftIdentity === undefined) return {};
+    const draft = readAnswerDraft(sessionStorage, draftIdentity);
+    return draft === undefined ? {} : { answerDraft: draft };
   }
 
   async #loadReviewSource(
@@ -802,17 +842,76 @@ export class PortalApplication {
       pageActivity: (kind, before) => void this.#pageActivity(kind, before),
       toggleRightRail: (open) => this.#dispatch({ type: "right-rail", open }),
       setTranscriptPinned: (pinned) => this.#dispatch({ type: "transcript-pin", pinned }),
+      setRailLayout: (layout) => {
+        this.#dispatch({ type: "rail-layout", layout });
+        saveRailLayout(localStorage, this.#state.ui.railLayout);
+      },
+      setRailCollapsed: (side, collapsed) => {
+        this.#dispatch({ type: "rail-collapse", side, collapsed });
+        saveRailLayout(localStorage, this.#state.ui.railLayout);
+      },
+      openAssetOverlay: (artifactId, triggerId) =>
+        this.#dispatch({ type: "asset-overlay-open", artifactId, triggerId }),
+      closeAssetOverlay: () => this.#closeAssetOverlay(),
+      saveAnswerDraft: (value) => this.#saveAnswerDraft(value),
     };
+  }
+
+  #closeAssetOverlay(): void {
+    const triggerId = this.#state.ui.assetOverlay?.triggerId;
+    this.#dispatch({ type: "asset-overlay-close" });
+    if (triggerId !== undefined)
+      requestAnimationFrame(() => document.getElementById(triggerId)?.focus());
+  }
+
+  #answerDraftIdentity(need: PortalHumanNeed | undefined): string | undefined {
+    const identity = this.#selectedIdentity();
+    if (identity === undefined || need === undefined || need.kind !== "question") return undefined;
+    return answerDraftIdentity(identity.repositoryId, identity.runId, need);
+  }
+
+  #saveAnswerDraft(value: string): void {
+    const draftIdentity = this.#answerDraftIdentity(this.#dialogNeed);
+    if (draftIdentity === undefined) return;
+    writeAnswerDraft(sessionStorage, draftIdentity, value);
+  }
+
+  /** Drops drafts for questions that were answered, superseded, or replaced by a new digest. */
+  #pruneAnswerDrafts(): void {
+    const identity = this.#selectedIdentity();
+    if (identity === undefined) return;
+    pruneAnswerDrafts(
+      sessionStorage,
+      this.#state.humanNeeds
+        .filter((need) => need.kind === "question")
+        .map((need) => answerDraftIdentity(identity.repositoryId, identity.runId, need)),
+    );
+  }
+
+  #syncQuestionTick(): void {
+    const pending = pendingQuestionNeed(this.#state.humanNeeds) !== undefined;
+    if (!pending) {
+      if (this.#questionTick !== undefined) window.clearInterval(this.#questionTick);
+      this.#questionTick = undefined;
+      return;
+    }
+    if (this.#questionTick !== undefined) return;
+    this.#questionTick = window.setInterval(
+      () => refreshQuestionAttention(this.#root, this.#state),
+      QUESTION_TICK_MS,
+    );
   }
 
   #dispatch(action: PortalAction): void {
     this.#state = portalReducer(this.#state, action);
     if (action.type.startsWith("pending-")) savePending(sessionStorage, this.#state.pending);
+    if (action.type === "human-needs") this.#pruneAnswerDrafts();
     this.#render();
   }
 
   #render(): void {
     renderPortal(this.#root, this.#state, this.#actions());
+    this.#syncQuestionTick();
   }
 
   #expireSession(): void {

@@ -9,7 +9,29 @@ import {
 } from "@senawa/protocol";
 import { allowanceResult, allowanceReviewFromSource } from "./allowance-review.js";
 import { type BoundedJsonNode, boundedJsonModel } from "./bounded-json.js";
-import { graphDiagramView } from "./graph-diagram.js";
+import { narrationBusy, narrationText } from "./command-narrator.js";
+import { focusGraphViewport, graphDiagramView } from "./graph-diagram.js";
+import { graphLayout } from "./graph-layout.js";
+import { type NodeToolbarAction, nodeToolbarView } from "./node-toolbar.js";
+import {
+  attentionTitle,
+  pendingQuestionNeed,
+  type QuestionAttention,
+  questionAttention,
+} from "./question-attention.js";
+import {
+  dragRailWidth,
+  RAIL_MAX,
+  RAIL_MIN,
+  type RailLayout,
+  type RailSide,
+  railCollapsed,
+  railKeyboardLayout,
+  railTrackToken,
+  railTrackWidth,
+  railWidth,
+  resizeRail,
+} from "./rail-layout.js";
 import { PORTAL_ROUTES, type PortalRouteName } from "./router.js";
 import {
   actionsLocked,
@@ -22,6 +44,7 @@ import {
   artifactContentKey,
   type DialogKind,
   type GraphMode,
+  INITIAL_GRAPH_VIEWPORT,
   type PortalDialogState,
   type PortalGraphViewport,
   type PortalState,
@@ -51,9 +74,25 @@ export interface PortalRenderActions {
   readonly pageActivity: (kind: "events" | "receipts", before: number) => void;
   readonly toggleRightRail: (open: boolean) => void;
   readonly setTranscriptPinned: (pinned: boolean) => void;
+  readonly setRailLayout: (layout: RailLayout) => void;
+  readonly setRailCollapsed: (side: RailSide, collapsed: boolean) => void;
+  readonly openAssetOverlay: (artifactId: string, triggerId: string) => void;
+  readonly closeAssetOverlay: () => void;
+  readonly saveAnswerDraft: (value: string) => void;
 }
 
 const renderedDialogs = new WeakMap<HTMLElement, PortalDialogState>();
+
+declare global {
+  interface Window {
+    __senawaRailLayout?: {
+      readonly left: number;
+      readonly right: number;
+      readonly leftCollapsed: boolean;
+      readonly rightCollapsed: boolean;
+    };
+  }
+}
 
 export function renderPortal(
   root: HTMLElement,
@@ -64,16 +103,25 @@ export function renderPortal(
   const transcriptScroll = captureTranscriptScroll(root);
   const dialogValues =
     renderedDialogs.get(root) === state.ui.dialog ? captureDialogValues(root) : undefined;
+  const narrator = root.querySelector<HTMLParagraphElement>(".command-narrator") ?? undefined;
+  const banner = root.querySelector<HTMLElement>(".question-attention") ?? undefined;
+  const attention = questionAttention(pendingQuestionNeed(state.humanNeeds), Date.now());
   const shell = element("div", "portal-shell");
-  shell.append(renderHeader(state, actions), renderStatusStrip(state));
+  shell.append(renderHeader(state, actions), renderStatusStrip(state, narrator));
+  const attentionBanner = renderQuestionAttention(state, actions, attention, banner);
+  if (attentionBanner !== undefined) shell.append(attentionBanner);
   const body = element("div", "portal-body");
+  applyRailGeometry(body, state.ui.railLayout);
   body.append(
     renderNavigation(state, actions),
+    railDivider("left", state, actions),
     renderMain(state, actions),
+    railDivider("right", state, actions),
     renderRightRail(state, actions),
   );
   shell.append(body);
   root.replaceChildren(shell);
+  document.title = attentionTitle(attention !== undefined);
   if (state.ui.dialog !== undefined) {
     renderDialog(root, state.ui.dialog, actions);
     renderedDialogs.set(root, state.ui.dialog);
@@ -81,8 +129,24 @@ export function renderPortal(
   } else {
     renderedDialogs.delete(root);
   }
+  if (state.ui.dialog === undefined && state.ui.assetOverlay !== undefined)
+    renderAssetOverlay(root, state, actions);
   restoreTranscriptScroll(root, transcriptScroll, state.ui.transcript.pinned);
   restoreFocus(focus);
+}
+
+/** Recomputes only the elapsed strings so a live question ages without a full rerender. */
+export function refreshQuestionAttention(root: HTMLElement, state: PortalState): void {
+  const banner = root.querySelector<HTMLElement>(".question-attention");
+  const attention = questionAttention(pendingQuestionNeed(state.humanNeeds), Date.now());
+  document.title = attentionTitle(attention !== undefined);
+  if (banner === null || attention === undefined) return;
+  const elapsed = banner.querySelector<HTMLElement>(".question-attention-elapsed");
+  if (elapsed !== null && elapsed.textContent !== attention.label)
+    elapsed.textContent = attention.label;
+  banner.classList.toggle("overdue", attention.overdue);
+  const overdue = banner.querySelector<HTMLElement>(".question-attention-overdue");
+  if (overdue !== null) overdue.hidden = !attention.overdue;
 }
 
 function captureDialogValues(root: HTMLElement): ReadonlyMap<string, string> {
@@ -197,7 +261,10 @@ function renderHeader(state: PortalState, actions: PortalRenderActions): HTMLEle
   return header;
 }
 
-function renderStatusStrip(state: PortalState): HTMLElement {
+function renderStatusStrip(
+  state: PortalState,
+  narrator: HTMLParagraphElement | undefined,
+): HTMLElement {
   const strip = element("section", "global-strip");
   strip.setAttribute("aria-label", "Portal status");
   const connection = statusBadge(state.connection.status, `Connection ${state.connection.status}`);
@@ -215,6 +282,7 @@ function renderStatusStrip(state: PortalState): HTMLElement {
       state.humanNeeds.length > 0 ? "needs" : "clear",
       `${state.humanNeeds.length} human needs`,
     ),
+    renderCommandNarrator(state, narrator),
   );
   const summary = textElement("span", "visually-hidden", globalStatus(state));
   summary.setAttribute("aria-live", "polite");
@@ -222,10 +290,169 @@ function renderStatusStrip(state: PortalState): HTMLElement {
   return strip;
 }
 
+/**
+ * Reuses the same live-region node across renders so the narrator announces only
+ * when the one pending command actually changes.
+ */
+function renderCommandNarrator(
+  state: PortalState,
+  narrator: HTMLParagraphElement | undefined,
+): HTMLElement {
+  const element_ = narrator ?? element("p", "command-narrator");
+  element_.setAttribute("role", "status");
+  element_.setAttribute("aria-live", "polite");
+  const text = narrationText(state.ui.narration);
+  if (element_.textContent !== text) element_.textContent = text;
+  const busy = narrationBusy(state.ui.narration);
+  element_.setAttribute("aria-busy", String(busy));
+  element_.classList.toggle("busy", busy);
+  return element_;
+}
+
+/**
+ * The banner element persists while one question identity persists so its
+ * `role="alert"` announces on arrival instead of on every rerender.
+ */
+function renderQuestionAttention(
+  state: PortalState,
+  actions: PortalRenderActions,
+  attention: QuestionAttention | undefined,
+  previous: HTMLElement | undefined,
+): HTMLElement | undefined {
+  if (attention === undefined) return undefined;
+  const need = attention.need;
+  const reused = previous !== undefined && previous.dataset.needId === need.needId;
+  const banner =
+    reused && previous !== undefined ? previous : element("section", "question-attention");
+  banner.className = attention.overdue ? "question-attention overdue" : "question-attention";
+  banner.setAttribute("role", "alert");
+  banner.dataset.needId = need.needId;
+  const heading = textElement("p", "question-attention-title", need.title);
+  const facts = element("p", "question-attention-facts");
+  facts.append(textElement("span", "question-attention-elapsed", attention.label));
+  const overdue = textElement("span", "question-attention-overdue", "Overdue");
+  overdue.hidden = !attention.overdue;
+  facts.append(overdue);
+  const triggerId = `question-attention-${safeDomId(need.needId)}`;
+  const review = commandButton("Answer this question", () => actions.openNeed(need, triggerId));
+  review.id = triggerId;
+  review.disabled =
+    actionsLocked(state) ||
+    need.allowedCommands.length === 0 ||
+    !needAllowedByCapabilities(need, state);
+  banner.replaceChildren(heading, facts, review);
+  return banner;
+}
+
+function applyRailGeometry(body: HTMLElement, layout: RailLayout): void {
+  body.dataset.railLeft = railTrackToken(layout, "left");
+  body.dataset.railRight = railTrackToken(layout, "right");
+  window.__senawaRailLayout = Object.freeze({
+    left: layout.left,
+    right: layout.right,
+    leftCollapsed: layout.leftCollapsed,
+    rightCollapsed: layout.rightCollapsed,
+  });
+}
+
+function railDivider(
+  side: RailSide,
+  state: PortalState,
+  actions: PortalRenderActions,
+): HTMLElement {
+  const layout = state.ui.railLayout;
+  const name = side === "left" ? "navigation" : "attention";
+  const divider = element("div", `rail-divider rail-divider-${side}`);
+  const handle = element("div", "rail-handle");
+  handle.id = `rail-handle-${side}`;
+  handle.setAttribute("role", "separator");
+  handle.setAttribute("aria-orientation", "vertical");
+  handle.setAttribute("aria-label", `Resize ${name} rail`);
+  handle.setAttribute("aria-controls", side === "left" ? "primary-nav" : "right-rail");
+  handle.setAttribute("aria-valuemin", String(RAIL_MIN));
+  handle.setAttribute("aria-valuemax", String(RAIL_MAX));
+  handle.setAttribute("aria-valuenow", String(railTrackWidth(layout, side)));
+  handle.tabIndex = 0;
+  handle.addEventListener("keydown", (event) => {
+    const next = railKeyboardLayout(layout, side, event.key, event.shiftKey);
+    if (next === undefined) return;
+    event.preventDefault();
+    actions.setRailLayout(next);
+  });
+  attachRailDrag(handle, side, layout, actions);
+  divider.append(handle);
+  return divider;
+}
+
+/**
+ * The drag paints the geometry directly and commits once on release, so a
+ * rerender can never interrupt the gesture.
+ */
+function attachRailDrag(
+  handle: HTMLElement,
+  side: RailSide,
+  layout: RailLayout,
+  actions: PortalRenderActions,
+): void {
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = railWidth(layout, side);
+    const body = handle.closest<HTMLElement>(".portal-body");
+    let latest = startWidth;
+    document.documentElement.dataset.railDragging = "true";
+    const move = (moved: PointerEvent) => {
+      latest = dragRailWidth(side, startWidth, moved.clientX - startX);
+      handle.setAttribute("aria-valuenow", String(latest));
+      if (body === null) return;
+      if (side === "left") body.dataset.railLeft = String(latest);
+      else body.dataset.railRight = String(latest);
+    };
+    const settle = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", settle);
+      window.removeEventListener("pointercancel", settle);
+      delete document.documentElement.dataset.railDragging;
+      actions.setRailLayout(resizeRail(layout, side, latest));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", settle);
+    window.addEventListener("pointercancel", settle);
+  });
+}
+
+function railToggle(
+  side: RailSide,
+  state: PortalState,
+  actions: PortalRenderActions,
+): HTMLButtonElement {
+  const collapsed = railCollapsed(state.ui.railLayout, side);
+  const name = side === "left" ? "navigation" : "attention";
+  const pointsRight = side === "left" ? collapsed : !collapsed;
+  const button = commandButton(pointsRight ? "\u203a" : "\u2039", () =>
+    actions.setRailCollapsed(side, !collapsed),
+  );
+  button.className = "rail-collapse";
+  button.id = `rail-collapse-${side}`;
+  button.setAttribute("aria-expanded", String(!collapsed));
+  button.setAttribute("aria-controls", side === "left" ? "primary-nav" : "right-rail");
+  button.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${name} rail`);
+  return button;
+}
+
 function renderNavigation(state: PortalState, actions: PortalRenderActions): HTMLElement {
   const nav = element("nav", "primary-nav");
+  nav.id = "primary-nav";
   nav.setAttribute("aria-label", "Run views");
-  const heading = textElement("p", "nav-label", "Run workspace");
+  nav.dataset.collapsed = String(railCollapsed(state.ui.railLayout, "left"));
+  const heading = element("div", "rail-heading");
+  heading.append(
+    textElement("p", "nav-label", "Run workspace"),
+    railToggle("left", state, actions),
+  );
+  const spine = textElement("span", "rail-spine", "Views");
+  spine.setAttribute("aria-hidden", "true");
   const list = element("div", "nav-list");
   list.setAttribute("role", "tablist");
   for (const route of PORTAL_ROUTES) {
@@ -242,7 +469,7 @@ function renderNavigation(state: PortalState, actions: PortalRenderActions): HTM
   appendFact(facts, "Mode", overview?.mode ?? "Unavailable");
   appendFact(facts, "Graph", overview?.sync.graphRevision.slice(0, 12) ?? "Unavailable");
   appendFact(facts, "Cursor", String(state.cursor));
-  nav.append(heading, list, facts);
+  nav.append(heading, spine, list, facts);
   return nav;
 }
 
@@ -432,7 +659,7 @@ function renderGraph(state: PortalState, actions: PortalRenderActions): HTMLElem
   );
   section.append(graphBody(state, actions, nodes, edges, filtered));
   const focused = nodes.find(({ nodeId }) => nodeId === state.ui.focusedRecord);
-  if (focused !== undefined) section.append(graphDetail(focused));
+  if (focused !== undefined) section.append(graphDetail(focused, state, actions, nodes, edges));
   section.append(
     transcriptPaneView({
       view: state.ui.transcript,
@@ -548,9 +775,21 @@ function graphTree(nodes: readonly PortalGraphNode[], actions: PortalRenderActio
   return tree;
 }
 
-function graphDetail(node: PortalGraphNode): HTMLElement {
+function graphDetail(
+  node: PortalGraphNode,
+  state: PortalState,
+  actions: PortalRenderActions,
+  nodes: readonly PortalGraphNode[],
+  edges: readonly PortalGraphEdge[],
+): HTMLElement {
   const detail = element("section", "detail-panel");
   detail.append(textElement("h2", "compact-heading", node.title));
+  detail.append(
+    nodeToolbarView({
+      nodeId: node.nodeId,
+      actions: nodeActions(node, state, actions, nodes, edges),
+    }),
+  );
   const facts = element("dl", "dense-facts");
   appendFact(facts, "Identity", node.nodeId);
   appendFact(facts, "Source", node.sourcePointer ?? "Not supplied");
@@ -561,6 +800,64 @@ function graphDetail(node: PortalGraphNode): HTMLElement {
   if (node.completionPolicy !== undefined)
     detail.append(renderJson(node.completionPolicy, "Completion policy"));
   return detail;
+}
+
+/**
+ * Only authority the current command contracts already carry for this node is
+ * offered. A node with no matching human need gets no authority control at all.
+ */
+function nodeActions(
+  node: PortalGraphNode,
+  state: PortalState,
+  actions: PortalRenderActions,
+  nodes: readonly PortalGraphNode[],
+  edges: readonly PortalGraphEdge[],
+): readonly NodeToolbarAction[] {
+  const need = state.humanNeeds.find(
+    (candidate) =>
+      candidate.taskId === node.nodeId &&
+      (candidate.definitionGeneration === undefined ||
+        candidate.definitionGeneration === node.definitionGeneration),
+  );
+  const reviewId = `node-review-${safeDomId(node.nodeId)}`;
+  return Object.freeze([
+    Object.freeze({
+      key: "copy",
+      label: "Copy identity",
+      disabled: false,
+      run: () => copyText(node.nodeId),
+    }),
+    Object.freeze({
+      key: "focus",
+      label: "Focus in diagram",
+      disabled: false,
+      run: () => {
+        const viewport =
+          state.ui.graphMode === "diagram" ? state.ui.graphViewport : INITIAL_GRAPH_VIEWPORT;
+        if (state.ui.graphMode !== "diagram") actions.setGraphMode("diagram");
+        actions.setGraphViewport(
+          focusGraphViewport(graphLayout(nodes, edges), viewport, node.nodeId),
+        );
+      },
+    }),
+    Object.freeze({
+      key: "review",
+      label: "Review linked human need",
+      disabled:
+        need === undefined ||
+        actionsLocked(state) ||
+        need.allowedCommands.length === 0 ||
+        !needAllowedByCapabilities(need, state),
+      run: () => {
+        if (need !== undefined) actions.openNeed(need, reviewId);
+      },
+    }),
+  ]);
+}
+
+function copyText(value: string): void {
+  const clipboard = navigator.clipboard as Clipboard | undefined;
+  if (clipboard !== undefined) void clipboard.writeText(value).catch(() => undefined);
 }
 
 function renderActivity(state: PortalState, actions: PortalRenderActions): HTMLElement {
@@ -666,8 +963,15 @@ function renderArtifacts(state: PortalState, actions: PortalRenderActions): HTML
         ),
       );
     }
-    if (preview !== undefined)
+    if (preview !== undefined) {
+      const expandId = `artifact-expand-${safeDomId(artifact.artifactId)}`;
+      const expand = commandButton("Expand full screen", () =>
+        actions.openAssetOverlay(artifact.artifactId, expandId),
+      );
+      expand.id = expandId;
+      row.append(expand);
       row.append(renderArtifactPreview(preview.content, preview.encoding, artifact.mediaType));
+    }
     list.append(row);
   }
   section.append(list);
@@ -692,6 +996,47 @@ function renderArtifactPreview(
   }
   preview.append(textElement("pre", "text-preview", content.slice(0, 65_536)));
   return preview;
+}
+
+function renderAssetOverlay(
+  root: HTMLElement,
+  state: PortalState,
+  actions: PortalRenderActions,
+): void {
+  const ids = selectedIds(state);
+  const overlayState = state.ui.assetOverlay;
+  if (ids === undefined || overlayState === undefined) return;
+  const artifact = state.caches.artifacts[runKey(ids.repositoryId, ids.runId)]?.artifacts.find(
+    ({ artifactId }) => artifactId === overlayState.artifactId,
+  );
+  const content =
+    state.caches.artifactContent[
+      artifactContentKey(ids.repositoryId, ids.runId, overlayState.artifactId)
+    ];
+  if (artifact === undefined || content === undefined) return;
+  const overlay = document.createElement("dialog");
+  overlay.className = "asset-overlay";
+  overlay.setAttribute("aria-labelledby", "asset-overlay-heading");
+  overlay.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    actions.closeAssetOverlay();
+  });
+  overlay.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    actions.closeAssetOverlay();
+  });
+  const bar = element("div", "asset-overlay-bar");
+  const heading = textElement("h2", "dialog-heading", artifact.summary);
+  heading.id = "asset-overlay-heading";
+  bar.append(heading, textElement("span", "mono", artifact.contentDigest));
+  const close = commandButton("Close full screen", () => actions.closeAssetOverlay());
+  close.id = "asset-overlay-close";
+  bar.append(close);
+  overlay.append(bar, renderArtifactPreview(content.content, content.encoding, artifact.mediaType));
+  root.append(overlay);
+  overlay.showModal();
 }
 
 function renderNeeds(state: PortalState, actions: PortalRenderActions): HTMLElement {
@@ -796,17 +1141,22 @@ function renderWorkspaces(state: PortalState): HTMLElement {
 
 function renderRightRail(state: PortalState, actions: PortalRenderActions): HTMLElement {
   const aside = element("aside", state.ui.rightRailOpen ? "right-rail open" : "right-rail");
+  aside.id = "right-rail";
   aside.setAttribute("aria-label", "Human needs and pending commands");
+  aside.dataset.collapsed = String(railCollapsed(state.ui.railLayout, "right"));
   if (!state.ui.rightRailOpen) {
     aside.inert = true;
     aside.setAttribute("aria-hidden", "true");
   }
   const heading = element("div", "rail-heading");
+  heading.append(railToggle("right", state, actions));
   heading.append(textElement("h2", "compact-heading", "Attention"));
   const close = commandButton("Close", () => actions.toggleRightRail(false));
   close.className = "rail-close";
   heading.append(close);
-  aside.append(heading);
+  const spine = textElement("span", "rail-spine", "Attention");
+  spine.setAttribute("aria-hidden", "true");
+  aside.append(heading, spine);
   const pendingSection = element("section", "rail-section");
   pendingSection.append(textElement("h3", "rail-section-heading", "Pending receipts"));
   const pendingList = element("ul", "pending-list");
@@ -876,7 +1226,7 @@ function renderDialog(
         : renderAllowanceReview(allowance),
     );
   }
-  appendDialogFields(form, dialogState.kind, dialogState.source, dialogState.loading);
+  appendDialogFields(form, dialogState, actions);
   if (dialogState.message !== undefined) {
     const message = textElement("p", "dialog-message", dialogState.message);
     message.setAttribute("role", "alert");
@@ -900,11 +1250,21 @@ function renderDialog(
 
 function appendDialogFields(
   form: HTMLFormElement,
-  kind: DialogKind,
-  source: unknown,
-  loading: boolean,
+  dialogState: PortalDialogState,
+  actions: PortalRenderActions,
 ): void {
-  if (kind === "answer") form.append(textAreaField("answer", "Answer", true, loading));
+  const kind = dialogState.kind;
+  const source = dialogState.source;
+  const loading = dialogState.loading;
+  if (kind === "answer") {
+    const field = textAreaField("answer", "Answer", true, loading);
+    const input = field.querySelector("textarea");
+    if (input !== null) {
+      if (dialogState.answerDraft !== undefined) input.value = dialogState.answerDraft;
+      input.addEventListener("input", () => actions.saveAnswerDraft(input.value));
+    }
+    form.append(field);
+  }
   if (kind === "approval" || kind === "amendment") {
     const field = element("label", "form-field");
     field.append(textElement("span", "field-label", "Decision"));
