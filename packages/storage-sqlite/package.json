@@ -27,6 +27,7 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@senawa/configuration": "workspace:*",
     "@senawa/kernel": "workspace:*",
     "@senawa/protocol": "workspace:*",
     "@senawa/runtime": "workspace:*",

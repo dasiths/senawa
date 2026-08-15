@@ -10,6 +10,7 @@ import {
   createPhaseCandidate as createPhaseCandidateWithGraph,
   deriveCompletionRequirements,
   digestAccountingAssessment,
+  digestPhaseOutputSet,
   digestSelectedTaskSet,
   type PhaseCandidateInput,
   validateAuthorityDecision,
@@ -23,15 +24,19 @@ import {
   type CompletionSubmission,
   type TaskGenerationReference,
 } from "./completion.js";
+import { createPhaseOutputPublication, type PhaseOutputPublication } from "./dataflow.js";
 import { defineGate, evaluateGate } from "./gates.js";
 import { compileWorkflowGraph, type WorkflowGraph } from "./graph.js";
 import {
   approvalId,
   assetId,
   consumerKey,
+  contextId,
   criterionId,
   definitionGeneration,
+  dispatchId,
   phaseId,
+  runId,
   taskId,
   workflowId,
 } from "./identity.js";
@@ -515,11 +520,17 @@ describe("phase closure", () => {
       },
       deterministicSha256,
     );
-    const { closureDigest: _closureDigest, ...content } = closure;
+    const {
+      closureDigest: _closureDigest,
+      outputAcceptances: _outputAcceptances,
+      ...content
+    } = closure;
 
     expect(closure).toMatchObject({
       phase: candidate.phase,
+      phaseAttempt: candidate.phaseAttempt,
       graphRevisionDigest: candidate.graphRevisionDigest,
+      outputSetDigest: candidate.outputSetDigest,
       candidateDigest: candidate.candidateDigest,
       gateEvaluationDigest: gateEvidence.evaluation.evaluationDigest,
       approval: { policy: "approval-required", decisionDigest: decision.decisionDigest },
@@ -529,6 +540,7 @@ describe("phase closure", () => {
     );
     expect(Object.isFrozen(closure)).toBe(true);
     expect(Object.isFrozen(closure.approval)).toBe(true);
+    expect(closure.outputAcceptances).toEqual([]);
   });
 
   it("closes under an explicit no-approval policy", () => {
@@ -543,6 +555,55 @@ describe("phase closure", () => {
         deterministicSha256,
       ).approval,
     ).toEqual({ policy: "no-approval" });
+  });
+
+  it("creates one exact output acceptance for every required publication", () => {
+    const gate = emptyGate();
+    const input = candidateInput(gate.policyDigest);
+    const publication = createPhaseOutputPublication(
+      {
+        repositoryId: "repository_fixture",
+        runId: runId("run_fixture"),
+        phase: input.phaseAttempt,
+        outputName: consumerKey("verification"),
+        schemaKey: consumerKey("verification-output"),
+        schemaResourceDigest: DEPENDENCY_DIGEST,
+        contentDigest: INTEGRATION_DIGEST,
+        byteLength: 42,
+        mediaType: "application/json",
+        sensitivity: "internal",
+        producingTask: required(input.tasks[0]),
+        dispatchId: dispatchId("dispatch_verifier"),
+        contextId: contextId("context_verifier"),
+        contextDigest: OTHER_DIGEST,
+        graphRevisionDigest: input.graphRevisionDigest,
+        configurationSnapshotDigest: DEPENDENCY_DIGEST,
+        inputBindingDigest: input.inputBindingDigest,
+        validationReceiptDigest: INTEGRATION_DIGEST,
+      },
+      deterministicSha256,
+    );
+    input.requiredOutputPublications = [publication];
+    input.outputSetDigest = digestPhaseOutputSet([publication], deterministicSha256);
+    const candidate = createPhaseCandidate(input, deterministicSha256);
+    const gateEvidence = {
+      definition: gate,
+      readings: [],
+      evaluation: evaluateGate(gate, [], candidate.candidateDigest, deterministicSha256),
+    };
+    const closure = closePhase(
+      { candidate, gateEvidence, approval: { policy: "no-approval" } },
+      deterministicSha256,
+    );
+
+    expect(closure.outputAcceptances).toEqual([
+      expect.objectContaining({
+        publicationId: publication.publicationId,
+        publicationDigest: publication.publicationDigest,
+        candidateDigest: candidate.candidateDigest,
+        closureDigest: closure.closureDigest,
+      }),
+    ]);
   });
 
   it("rejects stale candidate bindings, wrong gate policies, and rejected gates", () => {
@@ -771,7 +832,15 @@ function candidateInput(gatePolicyDigest: ReturnType<typeof sha256Digest>): Muta
       phaseId: phaseId("phase_verify"),
       definitionGeneration: definitionGeneration(2),
     },
+    phaseAttempt: {
+      phaseId: phaseId("phase_verify"),
+      definitionGeneration: definitionGeneration(2),
+      attempt: 1,
+    },
     graphRevisionDigest: GRAPH_DIGEST,
+    inputBindingDigest: OTHER_DIGEST,
+    requiredOutputPublications: [],
+    outputSetDigest: digestPhaseOutputSet([], deterministicSha256),
     selectedTaskSetDigest: digestSelectedTaskSet(tasks, deterministicSha256),
     tasks,
     acceptedAccountingAssessments,
@@ -1025,7 +1094,15 @@ interface MutableCandidateInput {
     phaseId: ReturnType<typeof phaseId>;
     definitionGeneration: ReturnType<typeof definitionGeneration>;
   };
+  phaseAttempt: {
+    phaseId: ReturnType<typeof phaseId>;
+    definitionGeneration: ReturnType<typeof definitionGeneration>;
+    attempt: number;
+  };
   graphRevisionDigest: ReturnType<typeof sha256Digest>;
+  inputBindingDigest: ReturnType<typeof sha256Digest>;
+  requiredOutputPublications: PhaseOutputPublication[];
+  outputSetDigest: ReturnType<typeof sha256Digest>;
   selectedTaskSetDigest: ReturnType<typeof sha256Digest>;
   tasks: TaskGenerationReference[];
   acceptedAccountingAssessments: MutableAcceptedAssessment[];

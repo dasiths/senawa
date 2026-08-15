@@ -318,6 +318,18 @@ export class SupervisorHttpHandler {
               "Graph",
             ),
           );
+        case "portal-delivery-list":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().query.listDeliveryRecords(
+              route.repositoryId,
+              route.runId,
+              route.afterCursor,
+              route.limit,
+            ),
+          );
         case "portal-graph-nodes":
         case "portal-graph-edges": {
           requireNoBody(request);

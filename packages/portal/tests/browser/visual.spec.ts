@@ -61,6 +61,13 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   await amendmentDialog.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
+  await navigate(page, "Delivery");
+  await expect(page.getByRole("heading", { name: "Standard delivery authority" })).toBeVisible();
+  await expect(page.getByText("Dataflow revision", { exact: true })).toBeVisible();
+  await expect(page.getByText("Task frontier revision", { exact: true })).toBeVisible();
+  await expect(page.getByText("No phase delivery metadata has been recorded.")).toBeVisible();
+  await captureState(page, "delivery", mobile);
+
   await selectRun(page, runs.workspace);
   await navigate(page, "Workspaces");
   await expect(

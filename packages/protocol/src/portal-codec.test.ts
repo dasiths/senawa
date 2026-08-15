@@ -3,6 +3,7 @@ import { PROTOCOL_VERSION } from "./contracts.js";
 import {
   decodePortalAllowanceReview,
   decodePortalArtifactContent,
+  decodePortalDeliveryPage,
   decodePortalEventWindow,
   decodePortalGraphNodePage,
   decodePortalRepositoryPage,
@@ -168,6 +169,59 @@ describe("portal codecs", () => {
         nodes: [{ ...node, normalizedInput: Array.from({ length: 10_000 }, () => null) }],
       }),
     ).toThrow(/10000 nodes/);
+  });
+
+  it("accepts bounded delivery metadata and rejects body-bearing records", () => {
+    const page = {
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId: "repository_alpha",
+      runId: "run_alpha",
+      dataflowRevision: 7,
+      taskFrontierRevision: 4,
+      after: 0,
+      nextAfter: 2,
+      hasMore: false,
+      records: [
+        {
+          identity: digest,
+          kind: "phase-output",
+          phaseId: "phase_plan",
+          attempt: 1,
+          outputName: "plan",
+          schemaKey: "plan-output",
+          contentDigest: "b".repeat(64),
+          byteLength: 120,
+          sensitivity: "internal",
+          accepted: true,
+        },
+        {
+          identity: "c".repeat(64),
+          kind: "plan-import",
+          evaluationDigest: "d".repeat(64),
+          proposalDigest: "e".repeat(64),
+          applicationDigest: "f".repeat(64),
+          state: "applied",
+        },
+      ],
+    } as const;
+    expect(decodePortalDeliveryPage(page).records).toHaveLength(2);
+    expect(() =>
+      decodePortalDeliveryPage({
+        ...page,
+        records: [{ ...page.records[0], outputBody: { tasks: [] } }],
+        nextAfter: 1,
+      }),
+    ).toThrow(/outputBody.*not allowed/);
+    expect(() =>
+      decodePortalDeliveryPage({
+        ...page,
+        nextAfter: PORTAL_LIMITS.maxDeliveryItems + 1,
+        records: Array.from({ length: PORTAL_LIMITS.maxDeliveryItems + 1 }, (_, index) => ({
+          identity: `record-${index}`,
+          kind: "phase-attempt",
+        })),
+      }),
+    ).toThrow(/at most 256/);
   });
 
   it("enforces mutually exclusive activity cursors and ascending bounded windows", () => {

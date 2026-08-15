@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GOLDEN_COMMAND_JSON, GOLDEN_RECEIPT_JSON } from "./fixtures/v1alpha2.js";
+import { GOLDEN_COMMAND_JSON, GOLDEN_RECEIPT_JSON } from "./fixtures/v1alpha3.js";
 import {
   canonicalBytes,
   decodeAnswerQuestionPayload,
@@ -13,10 +13,13 @@ import {
   decodeEventReplayPage,
   decodeEventStreamFrame,
   decodeGrantAllowancePayload,
+  decodeImportPlanPayload,
   decodeProjectionEnvelope,
   decodeReceiptPage,
   decodeRecordAmendmentDecisionPayload,
+  decodeRecordFanOutDiffDecisionPayload,
   decodeRecordIntegrationBarrierPayload,
+  decodeRecordPhaseAttemptTransitionPayload,
   decodeRunControlPayload,
   decodeRunIdentity,
   decodeSubmitAmendmentProposalPayload,
@@ -24,6 +27,7 @@ import {
   decodeSupervisorReceipt,
   decodeSupervisorServiceRecord,
   decodeSupervisorWake,
+  decodeTaskFrontierStatus,
   decodeTransportAttribution,
   decodeWithdrawAmendmentProposalPayload,
   encodeAnswerQuestionPayload,
@@ -37,13 +41,17 @@ import {
   encodeEventReplayPage,
   encodeEventStreamFrame,
   encodeGrantAllowancePayload,
+  encodeImportPlanPayload,
   encodeProjectionEnvelope,
   encodeReceiptPage,
   encodeRecordAmendmentDecisionPayload,
+  encodeRecordFanOutDiffDecisionPayload,
   encodeRecordIntegrationBarrierPayload,
+  encodeRecordPhaseAttemptTransitionPayload,
   encodeRunControlPayload,
   encodeRunIdentity,
   encodeSubmitAmendmentProposalPayload,
+  encodeTaskFrontierStatus,
   encodeTransportAttribution,
   encodeWithdrawAmendmentProposalPayload,
   PROTOCOL_LIMITS,
@@ -128,7 +136,7 @@ const errorEnvelope = {
   details: { actualRevision: "revision_08" },
 } as const;
 
-describe("v1alpha2 command codec", () => {
+describe("v1alpha3 command codec", () => {
   it("matches the canonical command golden fixture and round trips", () => {
     const encoded = encodeCommandEnvelope(command);
 
@@ -170,11 +178,16 @@ describe("v1alpha2 command codec", () => {
 
   it.each([
     "instantiate-run",
+    "start-phase-attempt",
+    "publish-phase-output",
     "accept-graph-revision",
     "submit-completion",
     "evaluate-gate",
     "record-authority-decision",
     "close-phase",
+    "record-phase-attempt-transition",
+    "import-plan",
+    "record-fan-out-diff-decision",
     "submit-amendment-proposal",
     "withdraw-amendment-proposal",
     "record-amendment-decision",
@@ -188,6 +201,64 @@ describe("v1alpha2 command codec", () => {
     "end-run",
   ] as const)("accepts the %s intent discriminator", (type) => {
     expect(decodeCommandEnvelope({ ...command, intent: { type } }).intent).toEqual({ type });
+  });
+
+  it("round trips metadata-only iteration, plan import, diff decision, and frontier status", () => {
+    const transition = {
+      attemptDigest: DIGEST,
+      transitionDigest: "b".repeat(64),
+      triggerDigest: "c".repeat(64),
+      disposition: "iterate",
+    };
+    expect(
+      decodeRecordPhaseAttemptTransitionPayload(
+        encodeRecordPhaseAttemptTransitionPayload(transition),
+      ),
+    ).toEqual(transition);
+
+    const planImport = {
+      attemptDigest: DIGEST,
+      acceptanceDigest: "b".repeat(64),
+      closureDigest: "c".repeat(64),
+      forEachKey: "plan-tasks",
+      definitionDigest: "d".repeat(64),
+      evaluationDigest: "e".repeat(64),
+      taskSetDigest: "f".repeat(64),
+    };
+    expect(decodeImportPlanPayload(encodeImportPlanPayload(planImport))).toEqual(planImport);
+
+    const decision = {
+      evaluationDigest: DIGEST,
+      priorEvaluationDigest: "b".repeat(64),
+      diffDigest: "c".repeat(64),
+      authorityDigest: "d".repeat(64),
+      changed: "supersede-changed",
+      removed: "retain-removed",
+    };
+    expect(
+      decodeRecordFanOutDiffDecisionPayload(encodeRecordFanOutDiffDecisionPayload(decision)),
+    ).toEqual(decision);
+
+    const status = {
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId: "repository_alpha",
+      runId: "run_alpha",
+      attemptDigest: DIGEST,
+      forEachKey: "plan-tasks",
+      evaluationDigest: "b".repeat(64),
+      taskSetDigest: "c".repeat(64),
+      graphRevisionDigest: "d".repeat(64),
+      configurationSnapshotDigest: "e".repeat(64),
+      state: "applied",
+      selectedCount: 3,
+      effectiveCount: 3,
+      activeCount: 1,
+      completedCount: 2,
+      maxActive: 2,
+    };
+    expect(decodeTaskFrontierStatus(encodeTaskFrontierStatus(status))).toEqual(status);
+    expect(Object.keys(status)).not.toContain("output");
+    expect(Object.keys(status)).not.toContain("prompt");
   });
 
   it("round trips the exact trusted integration barrier payload", () => {
@@ -426,7 +497,7 @@ describe("v1alpha2 identity and attribution values", () => {
   });
 });
 
-describe("v1alpha2 receipts", () => {
+describe("v1alpha3 receipts", () => {
   it("matches the canonical receipt golden fixture and round trips", () => {
     const encoded = encodeDurableReceipt(receipt);
 

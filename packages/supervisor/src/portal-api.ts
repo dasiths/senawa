@@ -3,6 +3,7 @@ import type {
   PortalArtifactContent,
   PortalArtifactMetadata,
   PortalArtifactPage,
+  PortalDeliveryPage,
   PortalEventWindow,
   PortalGraphEdgePage,
   PortalGraphNodePage,
@@ -31,6 +32,12 @@ export interface PortalQueryPort {
   listRuns(repositoryId: string, after?: string, limit?: number): PortalRunPage;
   getRunOverview(repositoryId: string, runId: string): PortalRunOverview | undefined;
   getGraphSummary(repositoryId: string, runId: string): PortalGraphSummary | undefined;
+  listDeliveryRecords(
+    repositoryId: string,
+    runId: string,
+    after?: number,
+    limit?: number,
+  ): PortalDeliveryPage;
   listGraphNodes(
     repositoryId: string,
     runId: string,

@@ -1,8 +1,11 @@
+import { createBudgetLedger } from "@senawa/kernel";
 import { describe, expect, it } from "vitest";
 import {
   effectiveWriterLimit,
+  planAppliedTaskFrontier,
   planFailurePolicyActions,
   planReadySiblingBatch,
+  planTaskRetry,
   type ReadyEffectFact,
   type ReadyTaskFact,
 } from "./scheduler.js";
@@ -98,6 +101,95 @@ describe("runtime sibling scheduler", () => {
       { type: "fence-task", taskId: "task-c" },
       { type: "request-cancellation", operationId: "operation-c" },
     ]);
+  });
+});
+
+describe("applied task-frontier scheduler", () => {
+  const limits = {
+    supervisorWriterLimit: 4,
+    hostWriterLimit: 4,
+    availableDurableWriterCapacity: 4,
+  };
+
+  it("admits generated work only after application and respects dependencies and repository writers", () => {
+    const members = [
+      {
+        taskId: "task-b",
+        definitionGeneration: 1,
+        dependencyTaskIds: ["task-a"],
+        state: "pending" as const,
+        repositoryChanges: "required" as const,
+      },
+      {
+        taskId: "task-a",
+        definitionGeneration: 1,
+        dependencyTaskIds: [],
+        state: "pending" as const,
+        repositoryChanges: "required" as const,
+      },
+    ];
+    const executionPolicy = {
+      workspaceMode: "repository" as const,
+      maxWriterConcurrency: 1,
+      failurePolicy: "continue" as const,
+    };
+    expect(
+      planAppliedTaskFrontier({
+        applicationStatus: "pending",
+        maxActive: 4,
+        executionPolicy,
+        schedulerLimits: limits,
+        members,
+      }).admitted,
+    ).toEqual([]);
+    expect(
+      planAppliedTaskFrontier({
+        applicationStatus: "applied",
+        maxActive: 4,
+        executionPolicy,
+        schedulerLimits: limits,
+        members,
+      }).admitted,
+    ).toEqual([{ taskId: "task-a", definitionGeneration: 1 }]);
+  });
+
+  it("completes against the effective applied set", () => {
+    const plan = planAppliedTaskFrontier({
+      applicationStatus: "applied",
+      maxActive: 2,
+      executionPolicy: worktreePolicy,
+      schedulerLimits: limits,
+      members: [
+        {
+          taskId: "task-old",
+          definitionGeneration: 1,
+          dependencyTaskIds: [],
+          state: "superseded",
+          repositoryChanges: "allowed",
+        },
+        {
+          taskId: "task-new",
+          definitionGeneration: 2,
+          dependencyTaskIds: [],
+          state: "completed",
+          repositoryChanges: "allowed",
+        },
+      ],
+    });
+    expect(plan.complete).toBe(true);
+    expect(plan.effectiveTaskSet).toEqual([{ taskId: "task-new", definitionGeneration: 2 }]);
+  });
+
+  it("bounds dispatch failure and rework with existing budget units", () => {
+    const ledger = createBudgetLedger({
+      counters: [
+        { unit: "dispatch-failure", limit: 1, used: 0 },
+        { unit: "review-iteration", limit: 1, used: 1 },
+      ],
+      appliedAllowanceDecisionDigests: [],
+    });
+    expect(planTaskRetry("dispatch-failure", ledger, { exhaustion: "fail" }).action).toBe("retry");
+    expect(planTaskRetry("rework", ledger, { exhaustion: "escalate" }).action).toBe("escalate");
   });
 });
 

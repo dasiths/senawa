@@ -63,10 +63,13 @@ import {
   decodeDurableReceipt,
   decodeEventReplayPage,
   decodeEventStreamFrame,
+  decodeImportPlanPayload,
   decodeProjectionEnvelope,
   decodeReceiptPage,
   decodeRecordAmendmentDecisionPayload,
+  decodeRecordFanOutDiffDecisionPayload,
   decodeRecordIntegrationBarrierPayload,
+  decodeRecordPhaseAttemptTransitionPayload,
   decodeSubmitAmendmentProposalPayload,
   decodeWithdrawAmendmentProposalPayload,
   type ErrorEnvelope,
@@ -678,6 +681,12 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
         return this.recordAuthorityDecision(command, admission, run);
       case "close-phase":
         return this.closePhase(command, run);
+      case "record-phase-attempt-transition":
+        return canonicalValue(decodeRecordPhaseAttemptTransitionPayload(command.payload));
+      case "import-plan":
+        return canonicalValue(decodeImportPlanPayload(command.payload));
+      case "record-fan-out-diff-decision":
+        return canonicalValue(decodeRecordFanOutDiffDecisionPayload(command.payload));
       case "submit-amendment-proposal":
         return this.submitAmendmentProposal(command, admission, run);
       case "withdraw-amendment-proposal":
@@ -944,7 +953,16 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     const payload = exactObject(
       command.payload,
       "evaluate-gate payload",
-      ["phase", "dependencyBarrierDigest", "gateDefinition", "readings"],
+      [
+        "phase",
+        "phaseAttempt",
+        "inputBindingDigest",
+        "requiredOutputPublications",
+        "outputSetDigest",
+        "dependencyBarrierDigest",
+        "gateDefinition",
+        "readings",
+      ],
       ["integrationBarrierDigest"],
     );
     if (records.execution.workspaceMode === "repository") {
@@ -969,10 +987,20 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       throw new RuntimeRefusal("invalid-gate", "Gate readings must be an array");
     }
     const tasks = records.assessments.map((accepted) => accepted.assessment.submission.task);
+    if (!Array.isArray(payload.requiredOutputPublications)) {
+      throw new RuntimeRefusal(
+        "invalid-candidate",
+        "Required output publications must be an array",
+      );
+    }
     const candidate = createPhaseCandidate(
       {
         phase: payload.phase as unknown as PhaseGenerationReference,
+        phaseAttempt: payload.phaseAttempt as never,
         graphRevisionDigest: graph.revisionDigest,
+        inputBindingDigest: requiredDigest(payload.inputBindingDigest, "inputBindingDigest"),
+        requiredOutputPublications: payload.requiredOutputPublications as never,
+        outputSetDigest: requiredDigest(payload.outputSetDigest, "outputSetDigest"),
         selectedTaskSetDigest: digestSelectedTaskSet(tasks, this.dependencies.sha256),
         tasks,
         acceptedAccountingAssessments: records.assessments,

@@ -53,6 +53,7 @@ const executionHostManifest = JSON.parse(
 const executionHostDependencies = Object.keys(executionHostManifest.dependencies ?? {});
 const allowedExecutionHostDependencies = new Set([
   "@github/copilot-sdk",
+  "@senawa/configuration",
   "@senawa/kernel",
   "@senawa/protocol",
   "@senawa/runtime",
@@ -68,6 +69,7 @@ if (
 const storageManifest = JSON.parse(await readFile("packages/storage-sqlite/package.json", "utf8"));
 const storageDependencies = Object.keys(storageManifest.dependencies ?? {});
 const allowedStorageDependencies = new Set([
+  "@senawa/configuration",
   "@senawa/kernel",
   "@senawa/protocol",
   "@senawa/runtime",
@@ -193,9 +195,13 @@ function checkSource(file, content) {
   }
   if (
     isExecutionHost &&
-    /@senawa\/(?!kernel(?:["'/]|$)|protocol(?:["'/]|$)|runtime(?:["'/]|$))[a-z0-9-]+/u.test(content)
+    /@senawa\/(?!configuration(?:["'/]|$)|kernel(?:["'/]|$)|protocol(?:["'/]|$)|runtime(?:["'/]|$))[a-z0-9-]+/u.test(
+      content,
+    )
   ) {
-    findings.push(`${file}: execution-host may import only kernel, protocol, and runtime packages`);
+    findings.push(
+      `${file}: execution-host may import only configuration, kernel, protocol, and runtime packages`,
+    );
   }
   if (
     isKernel &&
@@ -377,7 +383,7 @@ function verifyRules() {
     [
       "packages/execution-host/src/bad.ts",
       'import "@senawa/storage-sqlite";',
-      "may import only kernel, protocol, and runtime packages",
+      "may import only configuration, kernel, protocol, and runtime packages",
     ],
     [
       "packages/execution-host/src/bad.ts",

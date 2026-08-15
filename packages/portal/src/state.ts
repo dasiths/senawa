@@ -3,6 +3,7 @@ import type {
   EventStreamFrame,
   PortalArtifactContent,
   PortalArtifactPage,
+  PortalDeliveryPage,
   PortalEventWindow,
   PortalGraphEdgePage,
   PortalGraphNodePage,
@@ -72,6 +73,7 @@ export interface PortalCaches {
   readonly events: Readonly<Record<string, PortalEventWindow>>;
   readonly receipts: Readonly<Record<string, PortalReceiptWindow>>;
   readonly artifacts: Readonly<Record<string, PortalArtifactPage>>;
+  readonly delivery: Readonly<Record<string, PortalDeliveryPage>>;
   readonly artifactContent: Readonly<Record<string, PortalArtifactContent>>;
   readonly questions: Readonly<Record<string, PortalQuestionPage>>;
   readonly workspaces: Readonly<Record<string, PortalWorkspacePage>>;
@@ -172,6 +174,7 @@ const emptyCaches: PortalCaches = Object.freeze({
   events: Object.freeze({}),
   receipts: Object.freeze({}),
   artifacts: Object.freeze({}),
+  delivery: Object.freeze({}),
   artifactContent: Object.freeze({}),
   questions: Object.freeze({}),
   workspaces: Object.freeze({}),

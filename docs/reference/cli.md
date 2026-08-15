@@ -1,7 +1,7 @@
 ---
 title: CLI Reference
 description: Local supervisor, workflow, and configuration commands for Senawa alpha
-ms.date: 2026-08-14
+ms.date: 2026-08-15
 ms.topic: reference
 ---
 
@@ -171,57 +171,56 @@ development. If the selected manifest is missing or invalid, the authenticated
 portal shell returns a typed unavailable response while service and query
 commands remain operational.
 
-Create a complete `senawa.dev/workflow/v1alpha2` JSON example without
+Create a complete `senawa.dev/workflow/v1alpha3` standard delivery tree without
 overwriting an existing destination:
 
 ```bash
-senawa init [path]
+senawa init [project-directory]
 ```
 
-With no path, init non-recursively creates a real `.senawa` directory when
-needed and creates `.senawa/workflow.json`. The one canonical document contains
-workflow structure, execution and remote policy, schemas, roles, model policy,
-sensors, gates, and projected work. Configuration imports and split files are
-not supported.
+With no directory, init targets the current project root. An explicit argument
+selects an existing project directory. In both forms, init publishes a
+`.senawa` tree containing `workflow.json`, five external agent prompts, and the
+external workflow, phase, output, plan task, implementation task, and
+verification schemas used by the standard define, research, plan, implement,
+and verify workflow.
 
-The default operation creates the file exclusively, writes the complete
-content, syncs the file, closes it, syncs `.senawa`, and syncs the project root.
-The root sync runs on every successful default init, including when `.senawa`
-already existed. Concurrent default invocations allow exactly one file writer.
-Existing destination files and directories remain unchanged. A regular file at
-`.senawa` fails with `ENOTDIR`; a stable symlink at `.senawa` fails with
-`ELOOP`. Init never removes a partial path after a failure.
+Init creates a private lock and staging directory beneath the project root. It
+creates every file exclusively with private permissions, syncs each file,
+syncs every staging directory, verifies that the final `.senawa` name remains
+absent, renames the complete staged directory into place, and syncs the project
+root. Cleanup removes only staging and lock directories whose device and inode
+still match the objects created by this invocation. Concurrent invocations
+allow one publisher. Any existing `.senawa` filesystem object is refused as
+`already exists` and remains unchanged.
 
-An explicit path creates exactly the supplied file and syncs only that file and
-its immediate parent. The parent must already exist. This distinction also
-applies to `senawa init .senawa/workflow.json`: because the path was explicit,
-the command does not create `.senawa`.
-
-Stable default-parent symlinks fail closed. The alpha uses pathname-only Node
-filesystem APIs, so it cannot prevent a hostile process from swapping the
-parent between validation and file creation. Descriptor-relative parent-swap
-resistance is not part of this alpha contract.
+The tracked repository tree, packaged template assets, default init, and
+explicit-directory init come from one generated template inventory and have
+byte-identical files. The installed-package test verifies this equality.
 
 Validate a JSON workflow configuration and report all deterministic compiler
 diagnostics:
 
 ```bash
-senawa doctor [path]
+senawa doctor [workflow-path|project-directory]
 ```
 
-With no path, doctor reads only `.senawa/workflow.json` relative to the current
-directory. It does not search ancestors, scan `.senawa`, or fall back to
-`senawa.json`. A missing default file exits with code `1` and includes a stable
-migration hint. An explicit path reads exactly that path and does not include
-the migration hint, even when the supplied string is
-`.senawa/workflow.json`. Doctor refuses files above 256 KiB before complete
-buffering or JSON parsing.
+With no path, doctor reads `.senawa/workflow.json` relative to the current
+directory. A directory argument resolves its `.senawa/workflow.json`; a JSON
+argument reads that exact file and resolves declared resources relative to its
+parent. Doctor does not search ancestors or fall back to `senawa.json`. A
+missing default file exits with code `1` and includes a stable migration hint.
+Doctor refuses workflow files above 256 KiB before complete buffering or JSON
+parsing.
 
 A valid document exits with code `0`. Invalid configuration, invalid JSON, and
 read failures exit with code `1`. JSON failures include a normalized syntax
 category and line and column. Filesystem failures expose an allowlisted error
-code without stack traces or internal paths. Doctor does not execute sensors,
-start work, invoke models, or contact a runner.
+code without stack traces or internal paths. Doctor loads every declared prompt
+and schema through the confined, symlink-refusing resource reader and compiles
+the complete immutable snapshot. It does not execute sensors, start work,
+invoke models, or contact a runner. A v1alpha2 document receives a deterministic
+migration diagnostic and is never reinterpreted as v1alpha3.
 
 Inspect both locations before manually moving an earlier alpha file. The CLI
 does not overwrite the destination or provide an automatic migration command:
@@ -256,8 +255,9 @@ The alpha package supports Node.js 22.12.0 or newer on Linux x64 with glibc
 ownership remains available through `senawa service start` and
 `senawa service run`.
 
-The installed package includes prebuilt process and workspace-file helpers,
-SQLite migrations, and the verified portal asset manifest. It does not compile
+The installed package includes the standard workflow template, prebuilt process
+and workspace-file helpers, SQLite migrations, and the verified portal asset
+manifest. It does not compile
 native helpers during installation. The no-credit install and ordinary CLI or
 service paths do not declare, resolve, install, or load the Copilot SDK or
 Koffi. Live worker operation requires separately available

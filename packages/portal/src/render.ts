@@ -2,6 +2,7 @@ import {
   decodeCanonicalJsonValue,
   type JsonValue,
   type PortalArtifactMetadata,
+  type PortalDeliveryRecord,
   type PortalGraphNode,
   type PortalHumanNeed,
 } from "@senawa/protocol";
@@ -259,6 +260,9 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
     case "graph":
       main.append(renderGraph(state, actions));
       break;
+    case "delivery":
+      main.append(renderDelivery(state));
+      break;
     case "activity":
       main.append(renderActivity(state, actions));
       break;
@@ -315,6 +319,65 @@ function renderOverview(state: PortalState, actions: PortalRenderActions): HTMLE
   vector.append(vectorFacts);
   section.append(modeBand, counts, vector);
   return section;
+}
+
+function renderDelivery(state: PortalState): HTMLElement {
+  const section = element("section", "delivery-view");
+  const ids = selectedIds(state);
+  if (ids === undefined) return emptySection("Loading delivery metadata");
+  const page = state.caches.delivery[runKey(ids.repositoryId, ids.runId)];
+  if (page === undefined) return emptySection("Loading delivery metadata");
+  const stale = currentFreshness(state) === "stale";
+  const summary = element("div", "mode-band");
+  summary.append(
+    textElement("h2", "section-heading", "Standard delivery authority"),
+    statusBadge(stale ? "stale" : "fresh", stale ? "Projection stale" : "Projection current"),
+  );
+  const facts = element("dl", "inline-facts");
+  appendFact(facts, "Dataflow revision", String(page.dataflowRevision));
+  appendFact(facts, "Task frontier revision", String(page.taskFrontierRevision));
+  appendFact(facts, "Loaded records", String(page.records.length));
+  section.append(summary, facts);
+  if (page.records.length === 0) {
+    section.append(
+      textElement("p", "empty-state", "No phase delivery metadata has been recorded."),
+    );
+    return section;
+  }
+  section.append(
+    summaryTable(
+      ["Kind", "Phase or task", "Attempt", "State", "Metadata"],
+      page.records.map((record) => [
+        record.kind,
+        record.phaseId ?? record.taskId ?? "-",
+        record.attempt === undefined ? "-" : String(record.attempt),
+        deliveryState(record),
+        deliveryMetadata(record),
+      ]),
+      "Standard delivery metadata records",
+    ),
+  );
+  return section;
+}
+
+function deliveryState(record: PortalDeliveryRecord): string {
+  if (record.kind === "phase-output") return record.accepted ? "accepted" : "published";
+  if (record.kind === "fan-out-evaluation") return record.applied ? "applied" : "evaluated";
+  return record.state ?? record.disposition ?? "recorded";
+}
+
+function deliveryMetadata(record: PortalDeliveryRecord): string {
+  return [
+    record.outputName,
+    record.schemaKey,
+    record.forEachKey,
+    record.trigger,
+    record.contentDigest?.slice(0, 12),
+    record.taskSetDigest?.slice(0, 12),
+    record.proposalDigest?.slice(0, 12),
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join(" / ");
 }
 
 function renderGraph(state: PortalState, actions: PortalRenderActions): HTMLElement {
@@ -1057,6 +1120,7 @@ function routeLabel(route: PortalRouteName): string {
   const labels: Readonly<Record<PortalRouteName, string>> = {
     overview: "Overview",
     graph: "Graph",
+    delivery: "Delivery",
     activity: "Activity",
     artifacts: "Artifacts",
     needs: "Human needs",

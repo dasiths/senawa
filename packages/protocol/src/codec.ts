@@ -13,6 +13,7 @@ import {
   type EventReplayPage,
   type EventStreamFrame,
   type GrantAllowancePayload,
+  type ImportPlanPayload,
   type JsonValue,
   type OpaqueIdentity,
   PROTOCOL_VERSION,
@@ -20,7 +21,9 @@ import {
   type ReceiptPage,
   type ReceiptStatus,
   type RecordAmendmentDecisionPayload,
+  type RecordFanOutDiffDecisionPayload,
   type RecordIntegrationBarrierPayload,
+  type RecordPhaseAttemptTransitionPayload,
   type RunControlPayload,
   type RunIdentity,
   type SubmitAmendmentProposalPayload,
@@ -33,6 +36,7 @@ import {
   type SupervisorServiceRecord,
   type SupervisorWake,
   type SupervisorWakeReason,
+  type TaskFrontierStatus,
   type TransportAttribution,
   type TransportKind,
   type WithdrawAmendmentProposalPayload,
@@ -90,11 +94,16 @@ const ASSURANCE_LEVELS = new Set<AssuranceLevel>([
 const TRANSPORT_KINDS = new Set<TransportKind>(["cli", "http", "runner", "portal", "remote"]);
 const INTENT_TYPES = new Set<CommandIntent["type"]>([
   "instantiate-run",
+  "start-phase-attempt",
+  "publish-phase-output",
   "accept-graph-revision",
   "submit-completion",
   "evaluate-gate",
   "record-authority-decision",
   "close-phase",
+  "record-phase-attempt-transition",
+  "import-plan",
+  "record-fan-out-diff-decision",
   "submit-amendment-proposal",
   "withdraw-amendment-proposal",
   "record-amendment-decision",
@@ -290,6 +299,182 @@ export function decodeRunControlPayload(input: string | unknown): RunControlPayl
 
 export function encodeRunControlPayload(input: unknown): string {
   return canonicalStringify(decodeRunControlPayload(input));
+}
+
+export function decodeRecordPhaseAttemptTransitionPayload(
+  input: string | unknown,
+): RecordPhaseAttemptTransitionPayload {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "attemptDigest",
+    "transitionDigest",
+    "triggerDigest",
+    "disposition",
+  ]);
+  digest(object.attemptDigest, "$.attemptDigest");
+  digest(object.transitionDigest, "$.transitionDigest");
+  digest(object.triggerDigest, "$.triggerDigest");
+  if (!["iterate", "escalate", "fail", "closed", "refused"].includes(String(object.disposition))) {
+    fail("invalid-value", "$.disposition", "must be a phase attempt transition disposition");
+  }
+  return Object.freeze({
+    attemptDigest: object.attemptDigest as string,
+    transitionDigest: object.transitionDigest as string,
+    triggerDigest: object.triggerDigest as string,
+    disposition: object.disposition as RecordPhaseAttemptTransitionPayload["disposition"],
+  });
+}
+
+export function encodeRecordPhaseAttemptTransitionPayload(input: unknown): string {
+  return canonicalStringify(decodeRecordPhaseAttemptTransitionPayload(input));
+}
+
+export function decodeImportPlanPayload(input: string | unknown): ImportPlanPayload {
+  const object = exactObject(
+    decodeWireValue(input),
+    "$",
+    [
+      "attemptDigest",
+      "acceptanceDigest",
+      "closureDigest",
+      "forEachKey",
+      "definitionDigest",
+      "evaluationDigest",
+      "taskSetDigest",
+    ],
+    ["expectedPriorEvaluationDigest"],
+  );
+  for (const field of [
+    "attemptDigest",
+    "acceptanceDigest",
+    "closureDigest",
+    "definitionDigest",
+    "evaluationDigest",
+    "taskSetDigest",
+  ] as const)
+    digest(object[field], `$.${field}`);
+  token(object.forEachKey, "$.forEachKey");
+  optional(object, "expectedPriorEvaluationDigest", digest, "$.");
+  return Object.freeze({
+    attemptDigest: object.attemptDigest as string,
+    acceptanceDigest: object.acceptanceDigest as string,
+    closureDigest: object.closureDigest as string,
+    forEachKey: object.forEachKey as string,
+    definitionDigest: object.definitionDigest as string,
+    evaluationDigest: object.evaluationDigest as string,
+    taskSetDigest: object.taskSetDigest as string,
+    ...optionalField(object, "expectedPriorEvaluationDigest"),
+  });
+}
+
+export function encodeImportPlanPayload(input: unknown): string {
+  return canonicalStringify(decodeImportPlanPayload(input));
+}
+
+export function decodeRecordFanOutDiffDecisionPayload(
+  input: string | unknown,
+): RecordFanOutDiffDecisionPayload {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "evaluationDigest",
+    "priorEvaluationDigest",
+    "diffDigest",
+    "authorityDigest",
+    "changed",
+    "removed",
+  ]);
+  for (const field of [
+    "evaluationDigest",
+    "priorEvaluationDigest",
+    "diffDigest",
+    "authorityDigest",
+  ] as const)
+    digest(object[field], `$.${field}`);
+  if (object.changed !== "supersede-changed" || object.removed !== "retain-removed") {
+    fail("invalid-value", "$", "fan-out changes must supersede and removals must be retained");
+  }
+  return Object.freeze({
+    evaluationDigest: object.evaluationDigest as string,
+    priorEvaluationDigest: object.priorEvaluationDigest as string,
+    diffDigest: object.diffDigest as string,
+    authorityDigest: object.authorityDigest as string,
+    changed: "supersede-changed",
+    removed: "retain-removed",
+  });
+}
+
+export function encodeRecordFanOutDiffDecisionPayload(input: unknown): string {
+  return canonicalStringify(decodeRecordFanOutDiffDecisionPayload(input));
+}
+
+export function decodeTaskFrontierStatus(input: string | unknown): TaskFrontierStatus {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "apiVersion",
+    "repositoryId",
+    "runId",
+    "attemptDigest",
+    "forEachKey",
+    "evaluationDigest",
+    "taskSetDigest",
+    "graphRevisionDigest",
+    "configurationSnapshotDigest",
+    "state",
+    "selectedCount",
+    "effectiveCount",
+    "activeCount",
+    "completedCount",
+    "maxActive",
+  ]);
+  protocolVersion(object.apiVersion, "$.apiVersion");
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  for (const field of [
+    "attemptDigest",
+    "evaluationDigest",
+    "taskSetDigest",
+    "graphRevisionDigest",
+    "configurationSnapshotDigest",
+  ] as const)
+    digest(object[field], `$.${field}`);
+  token(object.forEachKey, "$.forEachKey");
+  if (
+    !["evaluated", "review-required", "proposed", "applied", "complete", "failed"].includes(
+      String(object.state),
+    )
+  ) {
+    fail("invalid-value", "$.state", "must be a task-frontier state");
+  }
+  for (const field of [
+    "selectedCount",
+    "effectiveCount",
+    "activeCount",
+    "completedCount",
+  ] as const) {
+    cursor(object[field], `$.${field}`);
+  }
+  cursor(object.maxActive, "$.maxActive");
+  if ((object.maxActive as number) < 1 || (object.maxActive as number) > 32) {
+    fail("invalid-value", "$.maxActive", "must be between 1 and 32");
+  }
+  return Object.freeze({
+    apiVersion: PROTOCOL_VERSION,
+    repositoryId: object.repositoryId as string,
+    runId: object.runId as string,
+    attemptDigest: object.attemptDigest as string,
+    forEachKey: object.forEachKey as string,
+    evaluationDigest: object.evaluationDigest as string,
+    taskSetDigest: object.taskSetDigest as string,
+    graphRevisionDigest: object.graphRevisionDigest as string,
+    configurationSnapshotDigest: object.configurationSnapshotDigest as string,
+    state: object.state as TaskFrontierStatus["state"],
+    selectedCount: object.selectedCount as number,
+    effectiveCount: object.effectiveCount as number,
+    activeCount: object.activeCount as number,
+    completedCount: object.completedCount as number,
+    maxActive: object.maxActive as number,
+  });
+}
+
+export function encodeTaskFrontierStatus(input: unknown): string {
+  return canonicalStringify(decodeTaskFrontierStatus(input));
 }
 
 export function decodeSubmitAmendmentProposalPayload(

@@ -8,6 +8,7 @@ export * from "./http-handler.js";
 export * from "./http-router.js";
 export * from "./http-server.js";
 export * from "./local-security.js";
+export * from "./plan-import-command-bridge.js";
 export * from "./portal-api.js";
 export * from "./portal-assets.js";
 export * from "./recovery.js";

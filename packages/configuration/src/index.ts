@@ -3,3 +3,7 @@ export * from "./contracts.js";
 export * from "./diagnostics.js";
 export * from "./drift.js";
 export * from "./example.js";
+export * from "./prompt-template.js";
+export * from "./resources.js";
+export * from "./schema.js";
+export * from "./standard-template.js";

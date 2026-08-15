@@ -44,6 +44,7 @@ const SECTION_NAMES: readonly ReportingSectionName[] = Object.freeze([
   "models",
   "assets",
   "context",
+  "dataflow",
   "amendments",
   "escalations",
   "gates",
@@ -80,10 +81,10 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
     this.#database.pragma("trusted_schema = OFF");
     this.#database.pragma("query_only = ON");
     this.#schemaVersion = this.#database.pragma("user_version", { simple: true }) as number;
-    if (this.#schemaVersion !== 9) {
+    if (this.#schemaVersion !== 11) {
       this.#database.close();
       throw new TypeError(
-        `Reporting requires SQLite schema version 9, received ${this.#schemaVersion}`,
+        `Reporting requires SQLite schema version 11, received ${this.#schemaVersion}`,
       );
     }
   }
@@ -131,6 +132,7 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
         records("costs"),
       );
       this.#captureAmendments(run.run_key, records("amendments"));
+      this.#captureDataflow(run.run_key, records("dataflow"));
       this.#captureLifecycle(run.records_json, records("gates"), records("approvals"));
       this.#captureRunner(
         run.run_key,
@@ -197,13 +199,14 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
           cursor: number;
           workflow_revision: number;
           context_revision: number;
+          dataflow_revision: number;
           runner_revision: number;
           workspace_revision: number;
           human_revision: number;
           portal_revision: number;
         }
       >(
-        `SELECT r.cursor, p.workflow_revision, p.context_revision,
+        `SELECT r.cursor, p.workflow_revision, p.context_revision, p.dataflow_revision,
                 p.runner_revision, p.workspace_revision, p.human_revision,
                 p.portal_revision
          FROM runs r JOIN portal_run_revisions p
@@ -231,6 +234,7 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
       workflowCursor: row.cursor,
       lifecycleRevision: row.workflow_revision,
       contextRevision: row.context_revision,
+      dataflowRevision: row.dataflow_revision,
       runnerRevision: row.runner_revision,
       workspaceRevision: row.workspace_revision,
       humanRevision: row.human_revision,
@@ -259,6 +263,417 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
     if (!isRecord(value)) return undefined;
     const digest = value.configurationSnapshotDigest;
     return typeof digest === "string" && isSha256Digest(digest) ? digest : undefined;
+  }
+
+  #captureDataflow(runKey: string, output: ReportingRecord[]): void {
+    const workflowInput = this.#database
+      .prepare<
+        [string],
+        {
+          binding_digest: string;
+          schema_key: string;
+          schema_resource_digest: string;
+          content_digest: string;
+          byte_length: number;
+          validation_receipt_digest: string;
+        }
+      >(
+        `SELECT binding_digest, schema_key, schema_resource_digest, content_digest,
+                byte_length, validation_receipt_digest
+         FROM workflow_input_bindings WHERE run_key = ?`,
+      )
+      .get(runKey);
+    if (workflowInput !== undefined) {
+      output.push(
+        record({
+          kind: "workflow-input-binding",
+          identity: workflowInput.binding_digest,
+          digest: workflowInput.binding_digest,
+          references: [
+            reference("source", "schema-resource", workflowInput.schema_resource_digest),
+            reference("result", "asset", workflowInput.content_digest),
+            reference("result", "validation-receipt", workflowInput.validation_receipt_digest),
+          ],
+          scalars: [
+            scalar("schemaKey", workflowInput.schema_key),
+            scalar("byteLength", workflowInput.byte_length),
+          ],
+        }),
+      );
+    }
+    const attempts = this.#database
+      .prepare<
+        [string],
+        {
+          attempt_digest: string;
+          phase_id: string;
+          definition_generation: number;
+          attempt_ordinal: number;
+          input_binding_digest: string;
+          source_set_digest: string;
+          executor_digest: string;
+          graph_revision_digest: string;
+          configuration_snapshot_digest: string;
+          schema_key: string;
+          schema_resource_digest: string;
+          content_digest: string;
+          byte_length: number;
+          validation_receipt_digest: string;
+        }
+      >(
+        `SELECT a.attempt_digest, a.phase_id, a.definition_generation, a.attempt_ordinal,
+                a.input_binding_digest, a.source_set_digest, a.executor_digest,
+                a.graph_revision_digest, a.configuration_snapshot_digest,
+                i.schema_key, i.schema_resource_digest, i.content_digest, i.byte_length,
+                i.validation_receipt_digest
+         FROM phase_attempts a
+         JOIN phase_input_bindings i ON i.attempt_digest = a.attempt_digest
+         WHERE a.run_key = ?
+         ORDER BY a.phase_id, a.definition_generation, a.attempt_ordinal`,
+      )
+      .all(runKey);
+    for (const attempt of attempts) {
+      output.push(
+        record({
+          kind: "phase-attempt",
+          identity: attempt.attempt_digest,
+          digest: attempt.attempt_digest,
+          references: [
+            reference("related", "phase", attempt.phase_id),
+            reference("source", "graph-revision", attempt.graph_revision_digest),
+            reference("source", "configuration-snapshot", attempt.configuration_snapshot_digest),
+            reference("source", "executor", attempt.executor_digest),
+            reference("result", "phase-input-binding", attempt.input_binding_digest),
+          ],
+          scalars: [
+            scalar("generation", attempt.definition_generation),
+            scalar("attempt", attempt.attempt_ordinal),
+          ],
+        }),
+      );
+      output.push(
+        record({
+          kind: "phase-input-binding",
+          identity: attempt.input_binding_digest,
+          digest: attempt.input_binding_digest,
+          references: [
+            reference("source", "phase-attempt", attempt.attempt_digest),
+            reference("source", "mapping-source-set", attempt.source_set_digest),
+            reference("source", "schema-resource", attempt.schema_resource_digest),
+            reference("result", "asset", attempt.content_digest),
+            reference("result", "validation-receipt", attempt.validation_receipt_digest),
+          ],
+          scalars: [
+            scalar("schemaKey", attempt.schema_key),
+            scalar("byteLength", attempt.byte_length),
+          ],
+        }),
+      );
+    }
+    const publications = this.#database
+      .prepare<
+        [string],
+        {
+          publication_id: string;
+          publication_digest: string;
+          attempt_digest: string;
+          output_name: string;
+          schema_key: string;
+          schema_resource_digest: string;
+          content_digest: string;
+          byte_length: number;
+          sensitivity: string;
+          producing_task_id: string;
+          dispatch_id: string;
+          context_id: string;
+          validation_receipt_digest: string;
+          acceptance_digest: string | null;
+          candidate_digest: string | null;
+          closure_digest: string | null;
+        }
+      >(
+        `SELECT p.publication_id, p.publication_digest, p.attempt_digest, p.output_name,
+                p.schema_key, p.schema_resource_digest, p.content_digest, p.byte_length,
+                p.sensitivity, p.producing_task_id, p.dispatch_id, p.context_id,
+                p.validation_receipt_digest, a.acceptance_digest, a.candidate_digest,
+                a.closure_digest
+         FROM phase_output_publications p
+         LEFT JOIN phase_output_acceptances a ON a.publication_id = p.publication_id
+         WHERE p.run_key = ? ORDER BY p.attempt_digest, p.output_name`,
+      )
+      .all(runKey);
+    for (const publication of publications) {
+      output.push(
+        record({
+          kind: "phase-output-publication",
+          identity: publication.publication_id,
+          digest: publication.publication_digest,
+          references: [
+            reference("source", "phase-attempt", publication.attempt_digest),
+            reference("source", "schema-resource", publication.schema_resource_digest),
+            reference("source", "task", publication.producing_task_id),
+            reference("source", "dispatch", publication.dispatch_id),
+            reference("source", "context", publication.context_id),
+            reference("result", "asset", publication.content_digest),
+            reference("result", "validation-receipt", publication.validation_receipt_digest),
+          ],
+          scalars: [
+            scalar("outputName", publication.output_name),
+            scalar("schemaKey", publication.schema_key),
+            scalar("byteLength", publication.byte_length),
+            scalar("sensitivity", publication.sensitivity),
+            scalar("accepted", publication.acceptance_digest !== null),
+          ],
+        }),
+      );
+      if (
+        publication.acceptance_digest !== null &&
+        publication.candidate_digest !== null &&
+        publication.closure_digest !== null
+      ) {
+        output.push(
+          record({
+            kind: "phase-output-acceptance",
+            identity: publication.acceptance_digest,
+            digest: publication.acceptance_digest,
+            references: [
+              reference("source", "phase-output-publication", publication.publication_id),
+              reference("source", "candidate", publication.candidate_digest),
+              reference("source", "closure", publication.closure_digest),
+            ],
+            scalars: [],
+          }),
+        );
+      }
+    }
+    for (const transition of this.#database
+      .prepare<
+        [string],
+        {
+          transition_digest: string;
+          attempt_digest: string;
+          predecessor_transition_digest: string | null;
+          trigger_kind: string;
+          disposition: string;
+          next_attempt_ordinal: number | null;
+        }
+      >(
+        `SELECT t.transition_digest, t.attempt_digest, t.predecessor_transition_digest,
+                t.trigger_kind, t.disposition, t.next_attempt_ordinal
+         FROM phase_attempt_transitions t JOIN phase_attempts a
+           ON a.attempt_digest = t.attempt_digest
+         WHERE a.run_key = ? ORDER BY t.attempt_digest`,
+      )
+      .all(runKey)) {
+      output.push(
+        record({
+          kind: "phase-attempt-transition",
+          identity: transition.transition_digest,
+          digest: transition.transition_digest,
+          references: [
+            reference("source", "phase-attempt", transition.attempt_digest),
+            ...(transition.predecessor_transition_digest === null
+              ? []
+              : [
+                  reference(
+                    "source",
+                    "phase-attempt-transition",
+                    transition.predecessor_transition_digest,
+                  ),
+                ]),
+            reference(
+              "result",
+              transition.disposition === "closed" ? "phase-closure" : "attempt-disposition",
+              transition.next_attempt_ordinal === null
+                ? `${transition.disposition}:${transition.transition_digest}`
+                : `attempt:${transition.next_attempt_ordinal}`,
+            ),
+          ],
+          scalars: scalars({
+            trigger: transition.trigger_kind,
+            disposition: transition.disposition,
+            nextAttempt: transition.next_attempt_ordinal ?? undefined,
+          }),
+        }),
+      );
+    }
+    for (const binding of this.#database
+      .prepare<
+        [string],
+        {
+          binding_digest: string;
+          predecessor_dispatch_id: string;
+          task_id: string;
+          task_generation: number;
+          context_digest: string;
+          prompt_resource_digest: string;
+          prompt_content_digest: string;
+          prompt_pack_digest: string;
+          mapped_input_digest: string;
+          model_selection_digest: string;
+          repository_commit_digest: string;
+          repository_tree_digest: string;
+        }
+      >(
+        `SELECT b.binding_digest, b.predecessor_dispatch_id, b.task_id, b.task_generation,
+                b.context_digest, b.prompt_resource_digest, b.prompt_content_digest,
+                b.prompt_pack_digest, b.mapped_input_digest, b.model_selection_digest,
+                b.repository_commit_digest, b.repository_tree_digest
+         FROM agent_session_resume_bindings b
+         JOIN context_dispatches d ON d.dispatch_id = b.predecessor_dispatch_id
+         JOIN runs r ON r.repository_id = d.repository_id AND r.run_id = d.run_id
+         WHERE r.run_key = ? ORDER BY b.binding_digest`,
+      )
+      .all(runKey)) {
+      output.push(
+        record({
+          kind: "agent-session-resume-binding",
+          identity: binding.binding_digest,
+          digest: binding.binding_digest,
+          references: [
+            reference("source", "dispatch", binding.predecessor_dispatch_id),
+            reference("source", "task", binding.task_id),
+            reference("source", "context", binding.context_digest),
+            reference("source", "prompt-resource", binding.prompt_resource_digest),
+            reference("source", "prompt-content", binding.prompt_content_digest),
+            reference("source", "prompt-pack", binding.prompt_pack_digest),
+            reference("source", "mapped-input", binding.mapped_input_digest),
+            reference("source", "model-selection", binding.model_selection_digest),
+            reference("source", "repository-commit", binding.repository_commit_digest),
+            reference("source", "repository-tree", binding.repository_tree_digest),
+          ],
+          scalars: [scalar("generation", binding.task_generation)],
+        }),
+      );
+    }
+    for (const evaluation of this.#database
+      .prepare<
+        [string],
+        {
+          evaluation_digest: string;
+          attempt_digest: string;
+          for_each_key: string;
+          prior_evaluation_digest: string | null;
+          definition_digest: string;
+          source_binding_digest: string;
+          collection_digest: string;
+          task_set_digest: string;
+          graph_revision_digest: string;
+          configuration_snapshot_digest: string;
+          applied: number;
+        }
+      >(
+        `SELECT evaluation_digest, attempt_digest, for_each_key, prior_evaluation_digest,
+                definition_digest, source_binding_digest, collection_digest, task_set_digest,
+                graph_revision_digest, configuration_snapshot_digest, applied
+         FROM fan_out_evaluations WHERE run_key = ?
+         ORDER BY for_each_key, evaluation_digest`,
+      )
+      .all(runKey)) {
+      output.push(
+        record({
+          kind: "fan-out-evaluation",
+          identity: evaluation.evaluation_digest,
+          digest: evaluation.evaluation_digest,
+          references: [
+            reference("source", "phase-attempt", evaluation.attempt_digest),
+            reference("source", "fan-out-definition", evaluation.definition_digest),
+            reference("source", "phase-output-binding", evaluation.source_binding_digest),
+            reference("source", "fan-out-collection", evaluation.collection_digest),
+            reference("source", "graph-revision", evaluation.graph_revision_digest),
+            reference("source", "configuration-snapshot", evaluation.configuration_snapshot_digest),
+            ...(evaluation.prior_evaluation_digest === null
+              ? []
+              : [
+                  reference(
+                    "source",
+                    "prior-fan-out-evaluation",
+                    evaluation.prior_evaluation_digest,
+                  ),
+                ]),
+            reference("result", "generated-task-set", evaluation.task_set_digest),
+          ],
+          scalars: [
+            scalar("forEachKey", evaluation.for_each_key),
+            scalar("applied", evaluation.applied === 1),
+          ],
+        }),
+      );
+    }
+    for (const member of this.#database
+      .prepare<
+        [string],
+        {
+          member_digest: string;
+          evaluation_digest: string;
+          item_digest: string;
+          task_id: string;
+          task_generation: number;
+          input_digest: string;
+        }
+      >(
+        `SELECT m.member_digest, m.evaluation_digest, m.item_digest, m.task_id,
+                m.task_generation, m.input_digest
+         FROM fan_out_members m JOIN fan_out_evaluations e
+           ON e.evaluation_digest = m.evaluation_digest
+         WHERE e.run_key = ? ORDER BY m.evaluation_digest, m.stable_identity`,
+      )
+      .all(runKey)) {
+      output.push(
+        record({
+          kind: "generated-task",
+          identity: member.member_digest,
+          digest: member.member_digest,
+          references: [
+            reference("source", "fan-out-evaluation", member.evaluation_digest),
+            reference("source", "fan-out-item", member.item_digest),
+            reference("source", "task-input", member.input_digest),
+            reference("result", "graph-task", member.task_id),
+          ],
+          scalars: [scalar("generation", member.task_generation)],
+        }),
+      );
+    }
+    for (const imported of this.#database
+      .prepare<
+        [string],
+        {
+          evaluation_digest: string;
+          acceptance_digest: string;
+          proposal_digest: string;
+          amendment_id: string;
+          decision_digest: string | null;
+          application_digest: string | null;
+          state: string;
+        }
+      >(
+        `SELECT i.evaluation_digest, i.acceptance_digest, i.proposal_digest,
+                i.amendment_id, i.decision_digest, i.application_digest, i.state
+         FROM plan_imports i JOIN fan_out_evaluations e
+           ON e.evaluation_digest = i.evaluation_digest
+         WHERE e.run_key = ? ORDER BY i.evaluation_digest`,
+      )
+      .all(runKey)) {
+      output.push(
+        record({
+          kind: "plan-import",
+          identity: imported.amendment_id,
+          digest: imported.proposal_digest,
+          references: [
+            reference("source", "fan-out-evaluation", imported.evaluation_digest),
+            reference("source", "phase-output-acceptance", imported.acceptance_digest),
+            reference("result", "amendment-proposal", imported.proposal_digest),
+            ...(imported.decision_digest === null
+              ? []
+              : [reference("result", "amendment-decision", imported.decision_digest)]),
+            ...(imported.application_digest === null
+              ? []
+              : [reference("result", "amendment-application", imported.application_digest)]),
+          ],
+          scalars: [scalar("state", imported.state)],
+        }),
+      );
+    }
   }
 
   #captureGraph(graph: WorkflowGraph, output: ReportingRecord[]): void {
@@ -580,6 +995,10 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
           base_tree_digest: string | null;
           role_key: string | null;
           role_digest: string | null;
+          prompt_key: string | null;
+          prompt_resource_digest: string | null;
+          prompt_content_digest: string | null;
+          prompt_byte_length: number | null;
           policy_key: string | null;
           policy_digest: string | null;
           ordered_routes_digest: string | null;
@@ -597,6 +1016,10 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
                 json_extract(b.canonical_context, '$.repositoryBase.treeDigest') AS base_tree_digest,
                 json_extract(b.canonical_context, '$.role.key') AS role_key,
                 json_extract(b.canonical_context, '$.role.roleDigest') AS role_digest,
+                json_extract(b.canonical_context, '$.prompt.key') AS prompt_key,
+                json_extract(b.canonical_context, '$.prompt.resourceDigest') AS prompt_resource_digest,
+                json_extract(b.canonical_context, '$.prompt.contentDigest') AS prompt_content_digest,
+                json_extract(b.canonical_context, '$.prompt.byteLength') AS prompt_byte_length,
                 json_extract(b.canonical_context, '$.modelPolicy.key') AS policy_key,
                 json_extract(b.canonical_context, '$.modelPolicy.policyDigest') AS policy_digest,
                 json_extract(b.canonical_context, '$.modelPolicy.orderedRoutesDigest') AS ordered_routes_digest,
@@ -627,6 +1050,10 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
             modelPolicyDigest: row.policy_digest,
             modelPolicyKey: row.policy_key,
             orderedRoutesDigest: row.ordered_routes_digest,
+            promptByteLength: row.prompt_byte_length,
+            promptContentDigest: row.prompt_content_digest,
+            promptKey: row.prompt_key,
+            promptResourceDigest: row.prompt_resource_digest,
             roleDigest: row.role_digest,
             roleKey: row.role_key,
           }),
@@ -1442,6 +1869,7 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
         references: [],
         scalars: scalars({
           contextRevision: vector.contextRevision,
+          dataflowRevision: vector.dataflowRevision,
           humanRevision: vector.humanRevision,
           lifecycleRevision: vector.lifecycleRevision,
           portalRevision: vector.portalRevision,

@@ -1,12 +1,17 @@
 import {
   assetId,
   type CompletionSubmission,
+  canonicalDigest,
+  canonicalValue,
   consumerKey,
+  createPhaseAttempt,
+  createPhaseInputBinding,
   createWorkerContextBase,
   createWorkerDispatch,
   criterionId,
   definitionGeneration,
   type HistoricalAssetBinding,
+  phaseId,
   runId,
   type Sha256,
   sha256Digest,
@@ -25,6 +30,7 @@ import {
   type ContextBrokerDependencies,
   ContextBrokerError,
   InMemoryContextAuthority,
+  type InstalledCanonicalOutputAsset,
   renderPromptPack,
   SimulatedSerialWorkerAdapter,
   WORKER_CAPABILITIES,
@@ -53,6 +59,21 @@ export class FakeContextAssetPort implements ContextAssetPort {
   readCalls = 0;
   delayReads = false;
   throwOnRead = false;
+  readonly canonicalOutputs = new Set<string>();
+
+  installCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset, bytes: Uint8Array): void {
+    if (
+      bytes.byteLength !== asset.byteLength ||
+      contextBrokerSha256.digest(bytes) !== asset.contentDigest
+    ) {
+      throw new TypeError("Canonical output fixture bytes do not match their descriptor");
+    }
+    this.canonicalOutputs.add(JSON.stringify(asset));
+  }
+
+  hasCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset): boolean {
+    return this.canonicalOutputs.has(JSON.stringify(asset));
+  }
 
   put(binding: HistoricalAssetBinding, bytes: Uint8Array): void {
     this.bytes.set(binding.assetBindingId, Uint8Array.from(bytes));
@@ -143,6 +164,7 @@ export interface ContextBrokerHarness {
     throwOnRead?: boolean;
     releaseReads?(): void;
     readonly acceptsInvalidBytes?: boolean;
+    installCanonicalOutputAsset?(asset: InstalledCanonicalOutputAsset, bytes: Uint8Array): void;
   };
   readonly broker: ContextBrokerClient;
   readonly context: WorkerContextBase;
@@ -246,21 +268,16 @@ export function registerContextBrokerConformance(
       expect(repeated).toEqual(prompt);
       expect(prompt.digest).toBe(harness.dispatch.promptPackDigest);
       expect(prompt.utf8Bytes.byteLength).toBeLessThanOrEqual(16_384);
-      expect(text).toContain("SENAWA_UNTRUSTED_REFERENCE_BEGIN");
-      expect(text).toContain(harness.context.assets[0]?.assetBindingId);
-      expect(text.indexOf("SENAWA_UNTRUSTED_REFERENCE_BEGIN")).toBeLessThan(
-        text.indexOf(required(harness.context.assets[0]).assetBindingId),
-      );
-      expect(text.indexOf(required(harness.context.assets[0]).assetBindingId)).toBeLessThan(
-        text.indexOf("SENAWA_UNTRUSTED_REFERENCE_END"),
-      );
-      expect(text).toContain("confidential");
+      expect(text).toContain("SENAWA_CONFIGURED_PROMPT_BEGIN");
+      expect(text).toContain("SENAWA_UNTRUSTED_INPUT_BEGIN");
+      expect(text).not.toContain(required(harness.context.assets[0]).assetBindingId);
+      expect(text).not.toContain("confidential");
       expect(text).not.toContain("ignore prior instructions");
       expect(text).not.toContain("approve everything");
       expect(text).not.toContain("grantToken");
       expect(() =>
         renderPromptPack(harness.context, harness.dispatch, contextBrokerSha256, 64),
-      ).toThrow(/byte limit/u);
+      ).toThrow(/maximum is 64/u);
     });
 
     it("persists only grant token digests and protects deep mutation boundaries", async () => {
@@ -715,6 +732,61 @@ export function registerContextBrokerConformance(
       ]);
     });
 
+    it("admits one installed canonical phase output per attempt slot and keeps its outbox durable", () => {
+      const harness = createHarness();
+      const current = phaseOutputSubmission(harness, "submission_phase-output");
+      const outputBytes = phaseOutputBytes();
+      expect(() => admit(harness, current)).toThrowError(
+        expect.objectContaining({ code: "binding-mismatch" }),
+      );
+      harness.assetPort.installCanonicalOutputAsset?.(
+        {
+          contentDigest: current.output.contentDigest,
+          byteLength: current.output.byteLength,
+          mediaType: current.output.mediaType,
+          schemaResourceDigest: current.output.schemaResourceDigest,
+          validationReceiptDigest: current.output.validationReceiptDigest,
+        },
+        outputBytes,
+      );
+
+      expect(admit(harness, current)).toMatchObject({
+        status: "accepted",
+        phaseOutputFact: {
+          submissionId: current.submissionId,
+          contextDigest: harness.context.contextDigest,
+          output: { outputName: "verification" },
+        },
+      });
+      expect(admit(harness, current)).toMatchObject({ status: "accepted", replayed: true });
+      expect(harness.authority.snapshot().phaseOutputOutbox).toEqual([
+        expect.objectContaining({ submissionId: current.submissionId, delivered: false }),
+      ]);
+
+      expect(() =>
+        admit(harness, {
+          ...current,
+          submissionId: "submission_phase-output-conflict",
+          output: { ...current.output, contentDigest: OTHER_DIGEST },
+        }),
+      ).toThrowError(expect.objectContaining({ code: "submission-conflict" }));
+      for (const stale of [
+        { ...current.output, graphRevisionDigest: OTHER_DIGEST },
+        { ...current.output, inputBindingDigest: OTHER_DIGEST },
+        { ...current.output, schemaResourceDigest: OTHER_DIGEST },
+        { ...current.output, phase: { ...current.output.phase, attempt: 2 } },
+      ]) {
+        expect(() =>
+          admit(harness, {
+            ...current,
+            submissionId: `submission_stale-${stale.graphRevisionDigest.slice(0, 4)}-${stale.phase.attempt}-${stale.schemaResourceDigest.slice(0, 4)}-${stale.inputBindingDigest.slice(0, 4)}`,
+            output: stale,
+          }),
+        ).toThrowError(ContextBrokerError);
+      }
+      expect(harness.authority.snapshot().phaseOutputOutbox).toHaveLength(1);
+    });
+
     it("keeps unrelated dispatch completion current when an affected task scope is fenced", () => {
       const harness = createHarness();
       if (harness.authority.installTaskScopeFences === undefined) return;
@@ -1044,11 +1116,48 @@ function registerBoundDispatch(
     taskId: taskId(ordinal === 1 ? "task_worker" : `task_worker-${ordinal}`),
     definitionGeneration: definitionGeneration(1),
   };
+  const graphRevisionDigest = sha256Digest(graphCharacter.repeat(64));
+  const configurationSnapshotDigest = sha256Digest("d".repeat(64));
+  const mappedInput = conformanceMappedInput();
+  const phase = {
+    phaseId: phaseId("phase_delivery"),
+    definitionGeneration: definitionGeneration(1),
+    attempt: ordinal,
+  };
+  const sourceSetDigest = canonicalDigest(canonicalValue({ mappings: [] }), contextBrokerSha256);
+  const phaseInputBinding = createPhaseInputBinding(
+    {
+      phase,
+      schemaKey: consumerKey("worker-input"),
+      schemaResourceDigest: sha256Digest("6".repeat(64)),
+      mappings: [],
+      contentDigest: mappedInput.valueDigest,
+      byteLength: 2,
+      validationReceiptDigest: sha256Digest("7".repeat(64)),
+      sourceSetDigest,
+    },
+    contextBrokerSha256,
+  );
+  const phaseAttempt = createPhaseAttempt(
+    {
+      repositoryId: "repository_fixture",
+      runId: runId("run_fixture"),
+      phase,
+      inputBindingDigest: phaseInputBinding.bindingDigest,
+      sourceSetDigest,
+      executorDigest: sha256Digest("8".repeat(64)),
+      graphRevisionDigest,
+      configurationSnapshotDigest,
+      upstreamClosureSetDigest: sha256Digest("9".repeat(64)),
+      upstreamOutputSetDigest: sha256Digest("0".repeat(64)),
+    },
+    contextBrokerSha256,
+  );
   const context = createWorkerContextBase(
     {
       task,
-      graphRevisionDigest: sha256Digest(graphCharacter.repeat(64)),
-      configurationSnapshotDigest: sha256Digest("d".repeat(64)),
+      graphRevisionDigest,
+      configurationSnapshotDigest,
       contracts: [
         {
           kind: "completion-policy",
@@ -1077,6 +1186,19 @@ function registerBoundDispatch(
         orderedRoutesDigest: sha256Digest("4".repeat(64)),
       },
       role: { key: consumerKey("implementer"), roleDigest: sha256Digest("5".repeat(64)) },
+      prompt: conformancePrompt(),
+      mappedInput,
+      phaseAttempt,
+      phaseInputBinding,
+      phaseOutputDeclarations: [
+        {
+          outputName: consumerKey("verification"),
+          schemaKey: consumerKey("verification-output"),
+          schemaResourceDigest: sha256Digest("6".repeat(64)),
+          maxBytes: 262_144,
+          sensitivity: "internal",
+        },
+      ],
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 4 }],
     },
@@ -1089,6 +1211,7 @@ function registerBoundDispatch(
     workerPrincipalId: "principal_worker",
     roleKey: consumerKey("implementer"),
     capabilities,
+    promptResource: conformancePromptReference(),
     promptPackDigest: sha256Digest("0".repeat(64)),
   };
   const provisional = createWorkerDispatch(dispatchInput, context, contextBrokerSha256);
@@ -1116,6 +1239,48 @@ function registerBoundDispatch(
   });
   assetPort.put(required(context.assets[0]), bytes);
   return { context, dispatch };
+}
+
+function conformancePrompt() {
+  const key = consumerKey("implementer-prompt");
+  const path = "prompts/implementer.md";
+  const utf8 = "Complete the assigned work.\n";
+  const bytes = new TextEncoder().encode(utf8);
+  const contentDigest = sha256Digest(contextBrokerSha256.digest(bytes));
+  const inputPaths: readonly string[] = [];
+  const source = {
+    path,
+    mediaType: "text/markdown; charset=utf-8",
+    byteLength: bytes.byteLength,
+    contentDigest,
+    utf8,
+  };
+  return {
+    key,
+    path,
+    resourceDigest: canonicalDigest(
+      canonicalValue({ key, source, inputPaths }),
+      contextBrokerSha256,
+    ),
+    contentDigest,
+    byteLength: bytes.byteLength,
+    utf8,
+    inputPaths,
+  };
+}
+
+function conformancePromptReference() {
+  const prompt = conformancePrompt();
+  return {
+    key: prompt.key,
+    resourceDigest: prompt.resourceDigest,
+    contentDigest: prompt.contentDigest,
+  };
+}
+
+function conformanceMappedInput() {
+  const value = canonicalValue({});
+  return { value, valueDigest: canonicalDigest(value, contextBrokerSha256) };
 }
 
 function grantAsset(
@@ -1212,6 +1377,32 @@ function completionSubmission(
     evidence: [],
   };
   return { ...submission(harness, submissionId, "completion", {}), completion };
+}
+
+function phaseOutputSubmission(harness: ContextBrokerHarness, submissionId: string) {
+  const declaration = required(harness.context.phaseOutputDeclarations[0]);
+  const bytes = phaseOutputBytes();
+  return {
+    ...submission(harness, submissionId, "phase-output", {}),
+    output: {
+      phase: harness.context.phaseAttempt.phase,
+      outputName: declaration.outputName,
+      schemaKey: declaration.schemaKey,
+      schemaResourceDigest: declaration.schemaResourceDigest,
+      contentDigest: sha256Digest(contextBrokerSha256.digest(bytes)),
+      byteLength: bytes.byteLength,
+      mediaType: "application/json" as const,
+      sensitivity: declaration.sensitivity,
+      graphRevisionDigest: harness.context.graphRevisionDigest,
+      configurationSnapshotDigest: harness.context.configurationSnapshotDigest,
+      inputBindingDigest: harness.context.phaseInputBinding.bindingDigest,
+      validationReceiptDigest: sha256Digest("7".repeat(64)),
+    },
+  };
+}
+
+function phaseOutputBytes(): Uint8Array {
+  return new TextEncoder().encode('{"result":"passed"}');
 }
 
 function admit(harness: ContextBrokerHarness, value: unknown) {

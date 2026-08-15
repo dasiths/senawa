@@ -1,3 +1,4 @@
+export * from "./configuration-resource-files.js";
 export * from "./copilot-sdk-port.js";
 export * from "./copilot-sdk-production.js";
 export * from "./copilot-session-store.js";

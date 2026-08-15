@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Sha256, sha256Digest } from "./canonical.js";
+import { canonicalDigest, canonicalValue, type Sha256, sha256Digest } from "./canonical.js";
 import {
   ContextError,
   createWorkerContextBase,
@@ -15,7 +15,8 @@ import {
   type WorkerDispatchInput,
   workerSessionIdentity,
 } from "./context.js";
-import { assetId, consumerKey, definitionGeneration, runId, taskId } from "./identity.js";
+import { createPhaseAttempt, createPhaseInputBinding } from "./dataflow.js";
+import { assetId, consumerKey, definitionGeneration, phaseId, runId, taskId } from "./identity.js";
 
 const deterministicSha256: Sha256 = {
   digest(bytes) {
@@ -52,18 +53,6 @@ describe("worker context bases", () => {
   });
 
   it.each([
-    [
-      "graph",
-      (input: MutableContextInput) => {
-        input.graphRevisionDigest = digest("1");
-      },
-    ],
-    [
-      "configuration",
-      (input: MutableContextInput) => {
-        input.configurationSnapshotDigest = digest("2");
-      },
-    ],
     [
       "contracts",
       (input: MutableContextInput) => {
@@ -106,6 +95,18 @@ describe("worker context bases", () => {
         input.role.roleDigest = digest("9");
       },
     ],
+    [
+      "prompt bytes",
+      (input: MutableContextInput) => {
+        input.prompt = promptFixture("Changed ${{ input.request }}\n");
+      },
+    ],
+    [
+      "mapped input",
+      (input: MutableContextInput) => {
+        input.mappedInput = mappedInputFixture({ request: "changed" });
+      },
+    ],
     ["capabilities", (input: MutableContextInput) => input.capabilities.push("asset.annotate")],
     [
       "budgets",
@@ -122,6 +123,17 @@ describe("worker context bases", () => {
     expect(changed.contextDigest).not.toBe(baseline.contextDigest);
     expect(changed.contextId).not.toBe(baseline.contextId);
   });
+
+  it.each(["graphRevisionDigest", "configurationSnapshotDigest"] as const)(
+    "rejects a stale %s that no longer matches the phase attempt",
+    (field) => {
+      const input = contextInput("software");
+      input[field] = digest("e");
+      expect(() => createWorkerContextBase(input, deterministicSha256)).toThrowError(
+        expect.objectContaining({ code: "context-mismatch" }),
+      );
+    },
+  );
 
   it("isolates caller mutation and recursively freezes the accepted context", () => {
     const input = contextInput("software");
@@ -375,7 +387,7 @@ describe("worker dispatches", () => {
     const first = createWorkerDispatch(dispatchInput(), firstContext, deterministicSha256);
     const resumed = resumeWorkerDispatch(dispatchInput(), firstContext, deterministicSha256);
     const changedInput = contextInput("software");
-    changedInput.configurationSnapshotDigest = digest("e");
+    changedInput.role = { ...changedInput.role, roleDigest: digest("e") };
     const changedContext = createWorkerContextBase(changedInput, deterministicSha256);
     const changed = resumeWorkerDispatch(dispatchInput(), changedContext, deterministicSha256);
 
@@ -401,7 +413,7 @@ describe("worker dispatches", () => {
     ).toThrow(ContextError);
 
     const changedInput = contextInput("software");
-    changedInput.graphRevisionDigest = digest("d");
+    changedInput.role = { ...changedInput.role, roleDigest: digest("e") };
     const changedContext = createWorkerContextBase(changedInput, deterministicSha256);
     expect(() => validateWorkerDispatch(dispatch, changedContext, deterministicSha256)).toThrow(
       ContextError,
@@ -416,10 +428,47 @@ function contextInput(kind: "software" | "non-software") {
     taskId: taskId(kind === "software" ? "task_implement" : "task_curate-exhibit"),
     definitionGeneration: definitionGeneration(2),
   };
+  const graphRevisionDigest = digest("a");
+  const configurationSnapshotDigest = digest("b");
+  const mappedInput = mappedInputFixture({ request: kind });
+  const phase = {
+    phaseId: phaseId("phase_delivery"),
+    definitionGeneration: definitionGeneration(1),
+    attempt: 1,
+  };
+  const sourceSetDigest = canonicalDigest(canonicalValue({ mappings: [] }), deterministicSha256);
+  const phaseInputBinding = createPhaseInputBinding(
+    {
+      phase,
+      schemaKey: consumerKey("phase-input"),
+      schemaResourceDigest: digest("e"),
+      mappings: [],
+      contentDigest: mappedInput.valueDigest,
+      byteLength: 22,
+      validationReceiptDigest: digest("f"),
+      sourceSetDigest,
+    },
+    deterministicSha256,
+  );
+  const phaseAttempt = createPhaseAttempt(
+    {
+      repositoryId: "repository_fixture",
+      runId: runId("run_fixture"),
+      phase,
+      inputBindingDigest: phaseInputBinding.bindingDigest,
+      sourceSetDigest,
+      executorDigest: digest("0"),
+      graphRevisionDigest,
+      configurationSnapshotDigest,
+      upstreamClosureSetDigest: digest("1"),
+      upstreamOutputSetDigest: digest("2"),
+    },
+    deterministicSha256,
+  );
   return {
     task,
-    graphRevisionDigest: digest("a"),
-    configurationSnapshotDigest: digest("b"),
+    graphRevisionDigest,
+    configurationSnapshotDigest,
     contracts: [
       {
         kind: "task-definition" as const,
@@ -482,6 +531,11 @@ function contextInput(kind: "software" | "non-software") {
       orderedRoutesDigest: digest("c"),
     },
     role: { key: consumerKey("implementer"), roleDigest: digest("d") },
+    prompt: promptFixture(),
+    mappedInput,
+    phaseAttempt,
+    phaseInputBinding,
+    phaseOutputDeclarations: [],
     capabilities: ["asset.read", "completion.submit"],
     budgets: [
       { unit: "work-attempt" as const, limit: 3 },
@@ -498,8 +552,45 @@ function dispatchInput() {
     workerPrincipalId: "principal_worker-1",
     roleKey: consumerKey("implementer"),
     capabilities: ["completion.submit"],
+    promptResource: {
+      key: promptFixture().key,
+      resourceDigest: promptFixture().resourceDigest,
+      contentDigest: promptFixture().contentDigest,
+    },
     promptPackDigest: digest("f"),
   };
+}
+
+function promptFixture(utf8 = "Work on ${{ input.request }}\n") {
+  const key = consumerKey("implementer-prompt");
+  const path = "prompts/implementer.md";
+  const inputPaths = ["/request"];
+  const bytes = new TextEncoder().encode(utf8);
+  const contentDigest = sha256Digest(deterministicSha256.digest(bytes));
+  const source = {
+    path,
+    mediaType: "text/markdown; charset=utf-8",
+    byteLength: bytes.byteLength,
+    contentDigest,
+    utf8,
+  };
+  return {
+    key,
+    path,
+    resourceDigest: canonicalDigest(
+      canonicalValue({ key, source, inputPaths }),
+      deterministicSha256,
+    ),
+    contentDigest,
+    byteLength: bytes.byteLength,
+    utf8,
+    inputPaths,
+  };
+}
+
+function mappedInputFixture(value: unknown) {
+  const canonical = canonicalValue(value);
+  return { value: canonical, valueDigest: canonicalDigest(canonical, deterministicSha256) };
 }
 
 function routeSelectionInput() {

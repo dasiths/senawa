@@ -16,8 +16,8 @@ import type {
 } from "@senawa/runtime";
 import { REPORTING_LIMITS, REPORTING_SNAPSHOT_VERSION } from "@senawa/runtime";
 
-export const DETERMINISTIC_REPORT_VERSION = "senawa.dev/deterministic-report/v1alpha1" as const;
-export const REPORT_EXPORT_VERSION = "senawa.dev/report-export/v1alpha1" as const;
+export const DETERMINISTIC_REPORT_VERSION = "senawa.dev/deterministic-report/v1alpha2" as const;
+export const REPORT_EXPORT_VERSION = "senawa.dev/report-export/v1alpha2" as const;
 
 export const REPORT_EXPORT_LIMITS = Object.freeze({
   maxFiles: 20,
@@ -33,6 +33,7 @@ const SECTION_ORDER: readonly ReportingSectionName[] = Object.freeze([
   "models",
   "assets",
   "context",
+  "dataflow",
   "amendments",
   "escalations",
   "gates",
@@ -435,6 +436,7 @@ function validateSourceVector(vector: ReportingSourceVector): void {
     "workflowCursor",
     "lifecycleRevision",
     "contextRevision",
+    "dataflowRevision",
     "runnerRevision",
     "workspaceRevision",
     "humanRevision",

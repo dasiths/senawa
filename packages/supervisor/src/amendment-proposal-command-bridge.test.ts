@@ -122,7 +122,7 @@ function receipt(status: "queued" | "terminal"): SupervisorReceipt {
     ...(status === "terminal"
       ? {
           terminalReceipt: {
-            apiVersion: "senawa.dev/protocol/v1alpha2",
+            apiVersion: "senawa.dev/protocol/v1alpha3",
             commandId: `command_worker-amendment-${digest("f").slice(0, 32)}`,
             repositoryId: "repository_bridge",
             runId: "run_bridge",

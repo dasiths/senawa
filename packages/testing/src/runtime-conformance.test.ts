@@ -11,6 +11,7 @@ import {
   defineGate,
   definitionGeneration,
   digestAccountingAssessment,
+  digestPhaseOutputSet,
   digestSelectedTaskSet,
   phaseId,
   sha256Digest,
@@ -47,6 +48,9 @@ const ALLOWED_INTENTS = [
   "evaluate-gate",
   "record-authority-decision",
   "close-phase",
+  "record-phase-attempt-transition",
+  "import-plan",
+  "record-fan-out-diff-decision",
   "submit-amendment-proposal",
   "withdraw-amendment-proposal",
   "record-amendment-decision",
@@ -188,7 +192,11 @@ function acceptedCandidate(
   const candidate = createPhaseCandidate(
     {
       phase: runtimeFixture.phase,
+      phaseAttempt: { ...runtimeFixture.phase, attempt: 1 },
       graphRevisionDigest: graph.revisionDigest,
+      inputBindingDigest: runtimeFixture.configurationSnapshotDigest,
+      requiredOutputPublications: [],
+      outputSetDigest: digestPhaseOutputSet([], deterministicSha256),
       selectedTaskSetDigest: digestSelectedTaskSet(tasks, deterministicSha256),
       tasks,
       acceptedAccountingAssessments: [
@@ -215,7 +223,66 @@ function acceptedCandidate(
   return { candidate, gateDefinition, reading };
 }
 
+function candidateGateBindings(candidate: ReturnType<typeof acceptedCandidate>["candidate"]) {
+  return {
+    phaseAttempt: candidate.phaseAttempt,
+    inputBindingDigest: candidate.inputBindingDigest,
+    requiredOutputPublications: candidate.requiredOutputPublications,
+    outputSetDigest: candidate.outputSetDigest,
+  };
+}
+
 describe("transport-independent runtime command conformance", () => {
+  it("records task-frontier metadata commands without mutating graph authority", () => {
+    const service = createService();
+    const instantiated = instantiate(service, "command_frontier-instantiate");
+    const graphRevision = instantiated.graph.revisionDigest;
+    const commands = [
+      {
+        commandId: "command_frontier-transition",
+        intent: "record-phase-attempt-transition" as const,
+        payload: {
+          attemptDigest: "1".repeat(64),
+          transitionDigest: "2".repeat(64),
+          triggerDigest: "3".repeat(64),
+          disposition: "iterate",
+        },
+      },
+      {
+        commandId: "command_frontier-import",
+        intent: "import-plan" as const,
+        payload: {
+          attemptDigest: "1".repeat(64),
+          acceptanceDigest: "2".repeat(64),
+          closureDigest: "3".repeat(64),
+          forEachKey: "plan-tasks",
+          definitionDigest: "4".repeat(64),
+          evaluationDigest: "5".repeat(64),
+          taskSetDigest: "6".repeat(64),
+        },
+      },
+      {
+        commandId: "command_frontier-diff",
+        intent: "record-fan-out-diff-decision" as const,
+        payload: {
+          evaluationDigest: "5".repeat(64),
+          priorEvaluationDigest: "4".repeat(64),
+          diffDigest: "6".repeat(64),
+          authorityDigest: "7".repeat(64),
+          changed: "supersede-changed",
+          removed: "retain-removed",
+        },
+      },
+    ];
+    for (const command of commands) {
+      const receipt = service.submit(
+        runtimeCommand({ ...command, expectedGraphRevision: graphRevision }),
+        instantiated.admission.at(),
+      );
+      expect(receipt).toMatchObject({ status: "completed", result: command.payload });
+    }
+  });
+
   it("binds trusted integration barriers to worktree policy and exact gate authority", () => {
     const repositoryService = createService();
     const repository = instantiate(repositoryService, "command_repository-instantiate");
@@ -318,7 +385,11 @@ describe("transport-independent runtime command conformance", () => {
     const candidate = createPhaseCandidate(
       {
         phase: runtimeFixture.phase,
+        phaseAttempt: { ...runtimeFixture.phase, attempt: 1 },
         graphRevisionDigest: graph.revisionDigest,
+        inputBindingDigest: runtimeFixture.configurationSnapshotDigest,
+        requiredOutputPublications: [],
+        outputSetDigest: digestPhaseOutputSet([], deterministicSha256),
         selectedTaskSetDigest: digestSelectedTaskSet([runtimeFixture.task], deterministicSha256),
         tasks: [runtimeFixture.task],
         acceptedAccountingAssessments: [
@@ -341,6 +412,7 @@ describe("transport-independent runtime command conformance", () => {
           intent: "evaluate-gate",
           payload: {
             phase: runtimeFixture.phase,
+            ...candidateGateBindings(candidate),
             dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
             integrationBarrierDigest: "f".repeat(64),
             gateDefinition,
@@ -359,6 +431,7 @@ describe("transport-independent runtime command conformance", () => {
           intent: "evaluate-gate",
           payload: {
             phase: runtimeFixture.phase,
+            ...candidateGateBindings(candidate),
             dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
             integrationBarrierDigest: barrier.barrierDigest,
             gateDefinition,
@@ -397,6 +470,7 @@ describe("transport-independent runtime command conformance", () => {
         intent: "evaluate-gate",
         payload: {
           phase: runtimeFixture.phase,
+          ...candidateGateBindings(candidate),
           dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
           gateDefinition,
           readings: [reading],
@@ -692,13 +766,14 @@ describe("transport-independent runtime command conformance", () => {
     );
     const assessment = (completion.result as unknown as { assessment: AccountingAssessment })
       .assessment;
-    const { gateDefinition, reading } = acceptedCandidate(graph, assessment);
+    const { candidate, gateDefinition, reading } = acceptedCandidate(graph, assessment);
     const staleCandidate = service.submit(
       runtimeCommand({
         commandId: "command_stale-candidate",
         intent: "evaluate-gate",
         payload: {
           phase: runtimeFixture.phase,
+          ...candidateGateBindings(candidate),
           dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
           gateDefinition,
           readings: [reading],
@@ -1150,6 +1225,7 @@ describe("transport-independent runtime command conformance", () => {
           intent: "evaluate-gate",
           payload: {
             phase: runtimeFixture.phase,
+            ...candidateGateBindings(candidate),
             dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
             gateDefinition,
             readings: [reading],

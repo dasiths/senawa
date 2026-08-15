@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 import {
   compileWorkflowConfiguration,
   createExampleWorkflowConfiguration,
+  createExampleWorkflowResources,
+  createStandardWorkflowResources,
 } from "@senawa/configuration";
 import { describe, expect, it } from "vitest";
 import {
@@ -25,8 +27,8 @@ const EXPECTED_HELP = `Senawa ${SENAWA_VERSION}
 Usage: senawa <command> [arguments]
 
 Commands:
-  doctor [path]                         Validate workflow configuration (default: .senawa/workflow.json)
-  init [path]                           Create example workflow configuration (default: .senawa/workflow.json)
+  doctor [path|directory]               Validate a workflow tree (default: .senawa)
+  init [directory]                      Create the standard workflow tree (default: .senawa)
   service start|run|status|drain|stop   Manage the local supervisor
   service logs [after]                  Read bounded supervisor logs
   service recover <repository> <run>    Recover a run under the service fence
@@ -143,8 +145,8 @@ describe("runCli", () => {
       output: `${join(alias, "workflow.json")}: unable to read workflow configuration (ELOOP)`,
       exitCode: 1,
     });
-    expect(await runCli(["init", join(alias, "new.json")], dependencies)).toEqual({
-      output: `${join(alias, "new.json")}: unable to create workflow configuration (ELOOP)`,
+    expect(await runCli(["init", alias], dependencies)).toEqual({
+      output: `${join(alias, ".senawa")}: unable to durably publish standard workflow (ELOOP)`,
       exitCode: 1,
     });
     await expect(readFile(join(target, "new.json"), "utf8")).rejects.toMatchObject({
@@ -212,10 +214,17 @@ describe("runCli", () => {
     const content = memory.files.get(DEFAULT_WORKFLOW_PATH);
     expect(content).toBeDefined();
     const document = JSON.parse(content as string);
-    expect(document.apiVersion).toBe("senawa.dev/workflow/v1alpha2");
-    expect(() =>
-      compileWorkflowConfiguration(document, DEFAULT_WORKFLOW_PATH, memory.sha256),
-    ).not.toThrow();
+    expect(document.apiVersion).toBe("senawa.dev/workflow/v1alpha3");
+    await expect(
+      compileWorkflowConfiguration(
+        {
+          document,
+          locator: DEFAULT_WORKFLOW_PATH,
+          resources: await memory.createResourceReader(DEFAULT_WORKFLOW_PATH),
+        },
+        memory.sha256,
+      ),
+    ).resolves.toBeDefined();
   });
 
   it("allows exactly one concurrent init and never overwrites an existing destination", async () => {
@@ -351,9 +360,9 @@ describe("built executable", () => {
     const initialized = await execute(process.execPath, [executable.pathname, "init"], {
       cwd: root,
     });
-    expect(initialized.stdout.trim()).toBe(".senawa/workflow.json: created");
+    expect(initialized.stdout.trim()).toBe(".senawa: created");
     const content = await readFile(join(root, DEFAULT_WORKFLOW_PATH), "utf8");
-    expect(JSON.parse(content).apiVersion).toBe("senawa.dev/workflow/v1alpha2");
+    expect(JSON.parse(content).apiVersion).toBe("senawa.dev/workflow/v1alpha3");
 
     const valid = await execute(process.execPath, [executable.pathname, "doctor"], { cwd: root });
     expect(valid.stdout.trim()).toBe(".senawa/workflow.json: valid");
@@ -361,27 +370,26 @@ describe("built executable", () => {
       execute(process.execPath, [executable.pathname, "init"], { cwd: root }),
     ).rejects.toMatchObject({ code: 1, stdout: expect.stringContaining("already exists") });
 
-    const partialPath = join(root, "partial.json");
-    await writeFile(partialPath, "partial existing content", "utf8");
+    const partialPath = join(root, "partial");
+    await mkdir(partialPath);
+    await writeFile(join(partialPath, ".senawa"), "partial existing content", "utf8");
     await expect(
-      execute(process.execPath, [executable.pathname, "init", "partial.json"], { cwd: root }),
+      execute(process.execPath, [executable.pathname, "init", "partial"], { cwd: root }),
     ).rejects.toMatchObject({ code: 1 });
-    expect(await readFile(partialPath, "utf8")).toBe("partial existing content");
+    expect(await readFile(join(partialPath, ".senawa"), "utf8")).toBe("partial existing content");
 
     await mkdir(join(root, "custom"));
-    const explicit = await execute(
-      process.execPath,
-      [executable.pathname, "init", "custom/workflow.json"],
-      { cwd: root },
-    );
-    expect(explicit.stdout.trim()).toBe("custom/workflow.json: created");
+    const explicit = await execute(process.execPath, [executable.pathname, "init", "custom"], {
+      cwd: root,
+    });
+    expect(explicit.stdout.trim()).toBe("custom/.senawa: created");
     expect(
       (
-        await execute(process.execPath, [executable.pathname, "doctor", "custom/workflow.json"], {
+        await execute(process.execPath, [executable.pathname, "doctor", "custom"], {
           cwd: root,
         })
       ).stdout.trim(),
-    ).toBe("custom/workflow.json: valid");
+    ).toBe("custom/.senawa/workflow.json: valid");
 
     await writeFile(join(root, "invalid.json"), '{"kind":"Job","authority":true}', "utf8");
     await expect(
@@ -393,6 +401,11 @@ describe("built executable", () => {
 
     const migrationRoot = await mkdtemp(join(tmpdir(), "senawa-migration-"));
     await writeFile(join(migrationRoot, "senawa.json"), content, "utf8");
+    for (const [path, resource] of Object.entries(createStandardWorkflowResources())) {
+      const destination = join(migrationRoot, path);
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(destination, resource, "utf8");
+    }
     await expect(
       execute(process.execPath, [executable.pathname, "doctor"], { cwd: migrationRoot }),
     ).rejects.toMatchObject({
@@ -423,7 +436,7 @@ describe("built executable", () => {
     await writeFile(join(fileParentRoot, ".senawa"), "existing", "utf8");
     await expect(
       execute(process.execPath, [executable.pathname, "init"], { cwd: fileParentRoot }),
-    ).rejects.toMatchObject({ code: 1, stdout: expect.stringContaining("(ENOTDIR)") });
+    ).rejects.toMatchObject({ code: 1, stdout: expect.stringContaining("already exists") });
     expect(await readFile(join(fileParentRoot, ".senawa"), "utf8")).toBe("existing");
 
     const symlinkParentRoot = await mkdtemp(join(tmpdir(), "senawa-link-parent-"));
@@ -431,7 +444,7 @@ describe("built executable", () => {
     await symlink(symlinkTarget, join(symlinkParentRoot, ".senawa"), "dir");
     await expect(
       execute(process.execPath, [executable.pathname, "init"], { cwd: symlinkParentRoot }),
-    ).rejects.toMatchObject({ code: 1, stdout: expect.stringContaining("(ELOOP)") });
+    ).rejects.toMatchObject({ code: 1, stdout: expect.stringContaining("already exists") });
     expect(
       await lstat(join(symlinkTarget, "workflow.json")).catch(() => undefined),
     ).toBeUndefined();
@@ -457,7 +470,7 @@ describe("built executable", () => {
     expect(JSON.parse(await readFile(join(concurrentRoot, DEFAULT_WORKFLOW_PATH), "utf8"))).toEqual(
       JSON.parse(content),
     );
-  });
+  }, 15_000);
 });
 
 class MemoryCliDependencies implements CliDependencies {
@@ -481,6 +494,19 @@ class MemoryCliDependencies implements CliDependencies {
   replaceDuringSync = false;
   failAt: string | undefined;
   failureCode = "FILESYSTEM_ERROR";
+
+  createResourceReader(_workflowPath: string) {
+    const resources = createExampleWorkflowResources();
+    return Promise.resolve({
+      read: async ({ path, maxBytes }: { path: string; maxBytes: number }) => {
+        const content = resources[path];
+        if (content === undefined) throw objectError("ENOENT");
+        const bytes = new TextEncoder().encode(content);
+        if (bytes.byteLength > maxBytes) throw objectError("EFBIG");
+        return bytes;
+      },
+    });
+  }
 
   async readText(path: string, maxBytes: number): Promise<string> {
     this.readCalls += 1;

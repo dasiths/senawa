@@ -6,10 +6,15 @@ import { promisify } from "node:util";
 import {
   compileWorkflowConfiguration,
   createExampleWorkflowConfiguration,
+  createExampleWorkflowResources,
 } from "@senawa/configuration";
 import {
   type CompletionRequirements,
+  canonicalDigest,
+  canonicalValue,
   consumerKey,
+  createPhaseAttempt,
+  createPhaseInputBinding,
   createWorkerContextBase,
   createWorkerDispatch,
   deriveCompletionRequirements,
@@ -39,6 +44,17 @@ const execute = promisify(execFile);
 const roots = new Set<string>();
 const children = new Set<ChildProcess>();
 
+function exampleResourceReader() {
+  const resources = createExampleWorkflowResources();
+  return {
+    async read({ path }: { readonly path: string }) {
+      const text = resources[path];
+      if (text === undefined) throw new Error("Missing example resource");
+      return new TextEncoder().encode(text);
+    },
+  };
+}
+
 afterEach(async () => {
   for (const child of children) {
     if (child.exitCode === null) child.kill("SIGKILL");
@@ -62,35 +78,50 @@ describe("built supervisor service and thin CLI", () => {
     const databasePath = join(root, "state", "senawa", "authority.db");
     const assetDirectory = join(root, "state", "senawa", "assets");
     const example = createExampleWorkflowConfiguration();
-    const workBudgets = example.phases[0]?.work[0]?.budgets;
+    const examplePhase = example.phases[0];
+    const workBudgets =
+      examplePhase?.executor.kind === "task-set"
+        ? examplePhase.executor.work[0]?.budgets
+        : undefined;
     if (workBudgets === undefined) throw new Error("Example workflow budgets are missing");
-    const baseSnapshot = compileWorkflowConfiguration(
+    const baseSnapshot = await compileWorkflowConfiguration(
       {
-        ...example,
-        phases: [
-          ...example.phases,
-          {
-            key: "unrelated",
-            generation: 1,
-            dependsOn: [],
-            work: [
-              {
-                key: "side-task",
-                generation: 1,
-                role: "worker",
-                budgets: workBudgets,
-                dependsOn: [],
-                input: { instruction: "Continue unrelated work" },
-                completionPolicy: {
-                  criteria: [],
-                  evidencePolicy: { mode: "none", requirements: [] },
-                },
+        document: {
+          ...example,
+          phases: [
+            ...example.phases,
+            {
+              key: "unrelated",
+              generation: 1,
+              dependsOn: [],
+              input: required(examplePhase).input,
+              executor: {
+                kind: "task-set",
+                work: [
+                  {
+                    key: "side-task",
+                    generation: 1,
+                    role: "worker",
+                    budgets: workBudgets,
+                    dependsOn: [],
+                    input: { instruction: "Continue unrelated work" },
+                    completionPolicy: {
+                      criteria: [],
+                      evidencePolicy: { mode: "none", requirements: [] },
+                    },
+                  },
+                ],
               },
-            ],
-          },
-        ],
+              outputs: [],
+              iteration: required(examplePhase).iteration,
+              exit: { requiredOutputs: [], approval: { policy: "none" } },
+              actions: [],
+            },
+          ],
+        },
+        locator: "fixture://blackbox-amendment-base",
+        resources: exampleResourceReader(),
       },
-      "fixture://blackbox-amendment-base",
       runtimeDependencies.sha256,
     );
     const phase = baseSnapshot.graph.nodes.find(
@@ -140,6 +171,15 @@ describe("built supervisor service and thin CLI", () => {
     ).toBe("completed");
     authority.close();
 
+    const promptBinding = contextPromptFromSnapshot(
+      baseSnapshot,
+      (task.definition.input as unknown as { readonly value: unknown }).value,
+    );
+    const unrelatedPromptBinding = contextPromptFromSnapshot(
+      baseSnapshot,
+      (unrelatedTask.definition.input as unknown as { readonly value: unknown }).value,
+    );
+
     const context = createWorkerContextBase(
       {
         task: { taskId: task.definition.id, definitionGeneration: task.definition.generation },
@@ -161,6 +201,15 @@ describe("built supervisor service and thin CLI", () => {
           orderedRoutesDigest: sha256Digest("4".repeat(64)),
         },
         role: { key: consumerKey("worker"), roleDigest: sha256Digest("5".repeat(64)) },
+        prompt: unrelatedPromptBinding.prompt,
+        mappedInput: unrelatedPromptBinding.mappedInput,
+        ...contextDataflow(
+          baseSnapshot,
+          phase.definition.id,
+          phase.definition.generation,
+          unrelatedPromptBinding.mappedInput,
+          1,
+        ),
         capabilities: ["worker.submit.amendment-proposal", "worker.submit.completion"],
         budgets: [{ unit: "work-attempt", limit: 1 }],
       },
@@ -193,6 +242,15 @@ describe("built supervisor service and thin CLI", () => {
           orderedRoutesDigest: sha256Digest("4".repeat(64)),
         },
         role: { key: consumerKey("worker"), roleDigest: sha256Digest("5".repeat(64)) },
+        prompt: promptBinding.prompt,
+        mappedInput: promptBinding.mappedInput,
+        ...contextDataflow(
+          baseSnapshot,
+          unrelatedTask.definition.parentId,
+          1,
+          promptBinding.mappedInput,
+          1,
+        ),
         capabilities: ["worker.submit.discovery"],
         budgets: [{ unit: "work-attempt", limit: 1 }],
       },
@@ -205,6 +263,7 @@ describe("built supervisor service and thin CLI", () => {
       workerPrincipalId: "principal_amendment-blackbox",
       roleKey: consumerKey("worker"),
       capabilities: ["worker.submit.amendment-proposal", "worker.submit.completion"],
+      promptResource: promptBinding.reference,
       promptPackDigest: sha256Digest("6".repeat(64)),
     } as const;
     const provisionalDispatch = createWorkerDispatch(
@@ -770,6 +829,85 @@ async function ready(executable: string, environment: NodeJS.ProcessEnv): Promis
       return undefined;
     }
   });
+}
+
+function contextPromptFromSnapshot(
+  snapshot: Awaited<ReturnType<typeof compileWorkflowConfiguration>>,
+  mappedValue: unknown,
+) {
+  const resource = snapshot.prompts[0];
+  if (resource === undefined) throw new Error("Example prompt resource is missing");
+  const prompt = {
+    key: resource.key,
+    path: resource.source.path,
+    resourceDigest: resource.digest,
+    contentDigest: resource.source.contentDigest,
+    byteLength: resource.source.byteLength,
+    utf8: resource.source.utf8,
+    inputPaths: resource.inputPaths,
+  };
+  const value = canonicalValue(mappedValue);
+  return {
+    prompt,
+    mappedInput: { value, valueDigest: canonicalDigest(value, runtimeDependencies.sha256) },
+    reference: {
+      key: prompt.key,
+      resourceDigest: prompt.resourceDigest,
+      contentDigest: prompt.contentDigest,
+    },
+  };
+}
+
+function contextDataflow(
+  snapshot: Awaited<ReturnType<typeof compileWorkflowConfiguration>>,
+  phaseIdentity: string,
+  phaseGeneration: number,
+  mappedInput: { readonly value: ReturnType<typeof canonicalValue>; readonly valueDigest: string },
+  attemptOrdinal: number,
+) {
+  const phase = {
+    phaseId: phaseIdentity as never,
+    definitionGeneration: phaseGeneration as never,
+    attempt: attemptOrdinal,
+  };
+  const sourceSetDigest = canonicalDigest(
+    canonicalValue({ mappings: [] }),
+    runtimeDependencies.sha256,
+  );
+  const phaseInputBinding = createPhaseInputBinding(
+    {
+      phase,
+      schemaKey: consumerKey("work-input"),
+      schemaResourceDigest: required(snapshot.schemas[0]).source.contentDigest,
+      mappings: [],
+      contentDigest: mappedInput.valueDigest as never,
+      byteLength: canonicalBytes(mappedInput.value).byteLength,
+      validationReceiptDigest: sha256Digest("7".repeat(64)),
+      sourceSetDigest,
+    },
+    runtimeDependencies.sha256,
+  );
+  const phaseAttempt = createPhaseAttempt(
+    {
+      repositoryId: runtimeFixture.repositoryId,
+      runId: kernelRunId(runtimeFixture.runId),
+      phase,
+      inputBindingDigest: phaseInputBinding.bindingDigest,
+      sourceSetDigest,
+      executorDigest: sha256Digest("8".repeat(64)),
+      graphRevisionDigest: snapshot.graph.revisionDigest,
+      configurationSnapshotDigest: snapshot.snapshotDigest,
+      upstreamClosureSetDigest: sha256Digest("9".repeat(64)),
+      upstreamOutputSetDigest: sha256Digest("0".repeat(64)),
+    },
+    runtimeDependencies.sha256,
+  );
+  return { phaseAttempt, phaseInputBinding, phaseOutputDeclarations: [] };
+}
+
+function required<Value>(value: Value | undefined): Value {
+  if (value === undefined) throw new Error("Expected fixture value");
+  return value;
 }
 
 function blackboxEffectCommand(

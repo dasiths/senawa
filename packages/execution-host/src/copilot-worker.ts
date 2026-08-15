@@ -1,5 +1,6 @@
 import {
   type CompletionSubmission,
+  decideAgentSessionResume,
   type Sha256,
   validateWorkerContextBase,
   validateWorkerDispatch,
@@ -64,6 +65,10 @@ export interface CopilotWorkerRunInput {
   readonly workingDirectory: string;
   readonly workspaceFiles?: WorkspaceFilePort;
   readonly sessionBaseDirectory?: string;
+  readonly sessionResume?: Readonly<{
+    readonly requestedBinding: unknown;
+    readonly authorizedBinding?: unknown;
+  }>;
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
 }
@@ -105,6 +110,7 @@ export class CopilotSerialWorkerAdapter {
     const scope: RunScope = {
       active: true,
       dispatchId: validated.dispatch.dispatchId,
+      sessionId: validated.dispatch.dispatchId,
       pending: new Set(),
     };
     let session: CopilotSdkSessionPort | undefined;
@@ -119,18 +125,45 @@ export class CopilotSerialWorkerAdapter {
         state,
         scope,
       );
-      const config = sessionConfig(input.workingDirectory, validated.selection, tools);
-      session = await this.sdk.resumeSession(validated.dispatch.dispatchId, {
-        ...config,
-        continuePendingWork: false,
-      });
+      const resumeDecision =
+        input.sessionResume === undefined
+          ? undefined
+          : decideAgentSessionResume(
+              input.sessionResume.requestedBinding,
+              input.sessionResume.authorizedBinding,
+              this.sha256,
+            );
+      const resumableSessionId =
+        resumeDecision?.action === "resume"
+          ? String(
+              (input.sessionResume?.requestedBinding as Readonly<Record<string, unknown>>)
+                .predecessorSessionId,
+            )
+          : validated.dispatch.dispatchId;
+      scope.sessionId = resumableSessionId;
+      const config = sessionConfig(
+        input.workingDirectory,
+        validated.selection,
+        tools,
+        resumableSessionId,
+      );
+      session =
+        resumeDecision?.action === "new-session"
+          ? undefined
+          : await this.sdk.resumeSession(resumableSessionId, {
+              ...config,
+              continuePendingWork: false,
+            });
       session ??= await this.sdk.createSession({
         ...config,
         sessionId: validated.dispatch.dispatchId,
       });
-      if (session.sessionId !== validated.dispatch.dispatchId) {
-        throw new TypeError("Copilot SDK returned a session with the wrong dispatch identity");
+      const expectedSessionId =
+        resumeDecision?.action === "resume" ? resumableSessionId : validated.dispatch.dispatchId;
+      if (session.sessionId !== expectedSessionId) {
+        throw new TypeError("Copilot SDK returned a session outside exact resume authority");
       }
+      scope.sessionId = session.sessionId;
       const outcome = await sendWithCancellation(
         session,
         validated.prompt,
@@ -242,6 +275,7 @@ interface RunState {
 interface RunScope {
   active: boolean;
   readonly dispatchId: string;
+  sessionId: string;
   readonly pending: Set<Promise<void>>;
 }
 
@@ -249,6 +283,7 @@ function sessionConfig(
   workingDirectory: string,
   selection: WorkerModelRouteSelection,
   tools: readonly CopilotSdkTool[],
+  authorizedSessionId: string,
 ): CopilotSdkSessionConfig {
   const availableTools = Object.freeze(tools.map(({ name }) => name));
   const knownTools = new Set(availableTools);
@@ -280,7 +315,7 @@ function sessionConfig(
     onPermissionRequest: () =>
       Object.freeze({ kind: "reject" as const, feedback: GENERIC_PERMISSION_FEEDBACK }),
     onPreToolUse: ({ sessionId, toolName }): CopilotSdkPreToolUseResult =>
-      sessionId === selection.dispatchId && knownTools.has(toolName)
+      sessionId === authorizedSessionId && knownTools.has(toolName)
         ? Object.freeze({ permissionDecision: "allow" })
         : Object.freeze({
             permissionDecision: "deny",
@@ -737,7 +772,7 @@ function tool(
     handler(args: unknown, invocation: CopilotSdkToolInvocation) {
       if (
         !scope.active ||
-        invocation.sessionId !== scope.dispatchId ||
+        invocation.sessionId !== scope.sessionId ||
         invocation.toolName !== name
       ) {
         return Promise.resolve(failure("invocation-refused"));

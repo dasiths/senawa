@@ -78,6 +78,9 @@ importers:
 
   packages/execution-host:
     dependencies:
+      '@senawa/configuration':
+        specifier: workspace:*
+        version: link:../configuration
       '@senawa/kernel':
         specifier: workspace:*
         version: link:../kernel
@@ -129,6 +132,9 @@ importers:
 
   packages/storage-sqlite:
     dependencies:
+      '@senawa/configuration':
+        specifier: workspace:*
+        version: link:../configuration
       '@senawa/kernel':
         specifier: workspace:*
         version: link:../kernel

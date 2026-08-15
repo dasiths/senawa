@@ -40,6 +40,12 @@ describe("supervisor HTTP route matching", () => {
 
   it("matches bounded portal discovery, graph, activity, and artifact routes", () => {
     expect(
+      matchSupervisorHttpRoute(
+        "GET",
+        "/api/v1alpha1/repositories/repository_a/runs/run_a/delivery?after=2&limit=256",
+      ),
+    ).toMatchObject({ kind: "portal-delivery-list", afterCursor: 2, limit: 256 });
+    expect(
       matchSupervisorHttpRoute("GET", "/api/v1alpha1/repositories?after=repository_a&limit=10"),
     ).toEqual({ kind: "portal-repository-list", after: "repository_a", limit: 10 });
     expect(
@@ -133,6 +139,7 @@ describe("supervisor HTTP route matching", () => {
     "/api/v1alpha1/repositories/repository_a/runs/run_a/activity/events?after=1&before=2",
     "/api/v1alpha1/repositories/repository_a/runs/run_a/activity/events?limit=101",
     `/api/v1alpha1/repositories/repository_a/runs/run_a/graph/nodes?revision=${"a".repeat(64)}&limit=201`,
+    "/api/v1alpha1/repositories/repository_a/runs/run_a/delivery?limit=257",
     "/api/v1alpha1/repositories/repository_a/runs/run_a/artifacts/asset_a/content?offset=0&length=65537",
   ])("rejects ambiguous or unknown query %s", (target) => {
     expectRouteError(400, () => matchSupervisorHttpRoute("GET", target));

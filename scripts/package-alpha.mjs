@@ -185,6 +185,9 @@ function inspectTarball(tarball, expectedName) {
       if (!files.includes("dist/portal/manifest.json")) {
         throw new Error("senawa tarball is missing the packaged portal manifest");
       }
+      if (!files.includes("dist/template/.senawa/workflow.json")) {
+        throw new Error("senawa tarball is missing the packaged standard workflow template");
+      }
     }
     if (expectedName === "@senawa/execution-host") {
       for (const name of ["senawa-process-supervisor", "senawa-workspace-files"]) {

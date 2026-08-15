@@ -65,6 +65,7 @@ describe("SQLite reporting snapshot authority", () => {
       "models",
       "assets",
       "context",
+      "dataflow",
       "amendments",
       "escalations",
       "gates",

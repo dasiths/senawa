@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:senawa:standard-delivery:plan-input",
+  "type": "object",
+  "required": [
+    "definition",
+    "research"
+  ],
+  "properties": {
+    "definition": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32768
+    },
+    "research": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536
+    }
+  },
+  "additionalProperties": false
+}

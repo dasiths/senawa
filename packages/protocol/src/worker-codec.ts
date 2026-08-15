@@ -22,6 +22,7 @@ import type {
   WorkerCriterionOutcome,
   WorkerDiscoverySubmission,
   WorkerEvidenceAttachment,
+  WorkerPhaseOutputSubmission,
   WorkerQuestionSubmission,
   WorkerSubmission,
   WorkerTaskGenerationReference,
@@ -369,7 +370,7 @@ export function decodeWorkerSubmission(input: string | unknown): WorkerSubmissio
       "principalId",
       "type",
     ],
-    ["completion", "question", "asset", "discovery", "amendment"],
+    ["completion", "question", "asset", "discovery", "amendment", "output"],
   );
   const binding = submissionBinding(base);
   switch (base.type) {
@@ -470,6 +471,49 @@ export function decodeWorkerSubmission(input: string | unknown): WorkerSubmissio
         type: "amendment-proposal",
         amendment: Object.freeze(amendment),
       } as unknown as WorkerAmendmentProposalSubmission);
+    }
+    case "phase-output": {
+      const object = exactObject(value, "$", [...submissionKeys(), "output"]);
+      const output = exactObject(object.output, "$.output", [
+        "phase",
+        "outputName",
+        "schemaKey",
+        "schemaResourceDigest",
+        "contentDigest",
+        "byteLength",
+        "mediaType",
+        "sensitivity",
+        "graphRevisionDigest",
+        "configurationSnapshotDigest",
+        "inputBindingDigest",
+        "validationReceiptDigest",
+      ]);
+      const phase = exactObject(output.phase, "$.output.phase", [
+        "phaseId",
+        "definitionGeneration",
+        "attempt",
+      ]);
+      identity(phase.phaseId, "$.output.phase.phaseId", "phase_");
+      positiveInteger(phase.definitionGeneration, "$.output.phase.definitionGeneration");
+      positiveInteger(phase.attempt, "$.output.phase.attempt");
+      boundedString(output.outputName, "$.output.outputName", 1, 63);
+      boundedString(output.schemaKey, "$.output.schemaKey", 1, 63);
+      digest(output.schemaResourceDigest, "$.output.schemaResourceDigest");
+      digest(output.contentDigest, "$.output.contentDigest");
+      nonNegativeInteger(output.byteLength, "$.output.byteLength");
+      if (output.mediaType !== "application/json") {
+        fail("invalid-value", "$.output.mediaType", "must be application/json");
+      }
+      enumValue(output.sensitivity, "$.output.sensitivity", SENSITIVITIES);
+      digest(output.graphRevisionDigest, "$.output.graphRevisionDigest");
+      digest(output.configurationSnapshotDigest, "$.output.configurationSnapshotDigest");
+      digest(output.inputBindingDigest, "$.output.inputBindingDigest");
+      digest(output.validationReceiptDigest, "$.output.validationReceiptDigest");
+      return Object.freeze({
+        ...binding,
+        type: "phase-output",
+        output: Object.freeze({ ...output, phase: Object.freeze(phase) }),
+      } as unknown as WorkerPhaseOutputSubmission);
     }
     default:
       return fail("invalid-value", "$.type", "must be a recognized worker submission variant");

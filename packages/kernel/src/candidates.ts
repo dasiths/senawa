@@ -21,6 +21,13 @@ import {
   reassessCompletionAccounting,
   validateCompletionRequirements,
 } from "./completion.js";
+import {
+  createPhaseOutputAcceptance,
+  type PhaseAttemptReference,
+  type PhaseOutputAcceptance,
+  type PhaseOutputPublication,
+  validatePhaseOutputPublication,
+} from "./dataflow.js";
 import { type GateEvidence, validateGateEvidence } from "./gates.js";
 import {
   GraphValidationError,
@@ -53,7 +60,11 @@ export interface AcceptedAccountingAssessment {
 
 export interface PhaseCandidateInput {
   readonly phase: PhaseGenerationReference;
+  readonly phaseAttempt: PhaseAttemptReference;
   readonly graphRevisionDigest: Sha256Digest;
+  readonly inputBindingDigest: Sha256Digest;
+  readonly requiredOutputPublications: readonly PhaseOutputPublication[];
+  readonly outputSetDigest: Sha256Digest;
   readonly selectedTaskSetDigest: Sha256Digest;
   readonly tasks: readonly TaskGenerationReference[];
   readonly acceptedAccountingAssessments: readonly AcceptedAccountingAssessment[];
@@ -123,11 +134,14 @@ export type ClosureApprovalReference = NoApprovalReference | ApprovalDecisionRef
 
 export interface PhaseClosure {
   readonly phase: PhaseGenerationReference;
+  readonly phaseAttempt: PhaseAttemptReference;
   readonly graphRevisionDigest: Sha256Digest;
+  readonly outputSetDigest: Sha256Digest;
   readonly candidateDigest: Sha256Digest;
   readonly gateEvaluationDigest: Sha256Digest;
   readonly approval: ClosureApprovalReference;
   readonly closureDigest: Sha256Digest;
+  readonly outputAcceptances: readonly PhaseOutputAcceptance[];
 }
 
 export type CandidateErrorCode =
@@ -137,6 +151,9 @@ export type CandidateErrorCode =
   | "task-definition-mismatch"
   | "task-set-mismatch"
   | "invalid-task-set-digest"
+  | "invalid-output-set-digest"
+  | "output-attempt-mismatch"
+  | "duplicate-output-slot"
   | "duplicate-task"
   | "invalid-accounting-assessment"
   | "unaccepted-accounting-assessment"
@@ -176,6 +193,14 @@ export function digestSelectedTaskSet(
   }
   const validated = validateAndSortTaskReferences(snapshot, "selected task set");
   return canonicalDigest(canonicalValue({ tasks: validated }), sha256);
+}
+
+export function digestPhaseOutputSet(
+  publications: readonly PhaseOutputPublication[],
+  sha256: Sha256,
+): Sha256Digest {
+  const validated = validateAndSortOutputPublications(publications, sha256);
+  return canonicalDigest(canonicalValue({ publications: validated }), sha256);
 }
 
 export function digestAccountingAssessment(
@@ -307,13 +332,25 @@ export function closePhase(input: PhaseClosureInput, sha256: Sha256): PhaseClosu
   const approval = closureApproval(snapshot.approval, candidate.candidateDigest, sha256);
   const content = {
     phase: candidate.phase,
+    phaseAttempt: candidate.phaseAttempt,
     graphRevisionDigest: candidate.graphRevisionDigest,
+    outputSetDigest: candidate.outputSetDigest,
     candidateDigest: candidate.candidateDigest,
     gateEvaluationDigest: gateEvidence.evaluation.evaluationDigest,
     approval,
   } as const;
   const closureDigest = canonicalDigest(canonicalValue(content), sha256);
-  return canonicalValue({ ...content, closureDigest }) as unknown as PhaseClosure;
+  const outputAcceptances = candidate.requiredOutputPublications.map((publication) =>
+    createPhaseOutputAcceptance(
+      { publication, candidateDigest: candidate.candidateDigest, closureDigest },
+      sha256,
+    ),
+  );
+  return canonicalValue({
+    ...content,
+    closureDigest,
+    outputAcceptances,
+  }) as unknown as PhaseClosure;
 }
 
 export function validatePhaseClosure(
@@ -340,7 +377,11 @@ function phaseCandidateContent(
     "phase candidate",
     [
       "phase",
+      "phaseAttempt",
       "graphRevisionDigest",
+      "inputBindingDigest",
+      "requiredOutputPublications",
+      "outputSetDigest",
       "selectedTaskSetDigest",
       "tasks",
       "acceptedAccountingAssessments",
@@ -353,8 +394,11 @@ function phaseCandidateContent(
     "invalid-candidate",
   );
   const phase = phaseReference(value.phase);
+  const phaseAttempt = candidatePhaseAttempt(value.phaseAttempt, phase);
   assertDigests(value, [
     "graphRevisionDigest",
+    "inputBindingDigest",
+    "outputSetDigest",
     "selectedTaskSetDigest",
     "dependencyBarrierDigest",
     "gatePolicyDigest",
@@ -400,9 +444,44 @@ function phaseCandidateContent(
       "evidencePolicyDigest does not match the sorted exact completion requirements",
     );
   }
+  if (!Array.isArray(value.requiredOutputPublications)) {
+    fail("invalid-candidate", "requiredOutputPublications must be an array");
+  }
+  const requiredOutputPublications = validateAndSortOutputPublications(
+    value.requiredOutputPublications as unknown as readonly PhaseOutputPublication[],
+    sha256,
+  );
+  for (const publication of requiredOutputPublications) {
+    if (
+      publication.phase.phaseId !== phaseAttempt.phaseId ||
+      publication.phase.definitionGeneration !== phaseAttempt.definitionGeneration ||
+      publication.phase.attempt !== phaseAttempt.attempt ||
+      publication.graphRevisionDigest !== value.graphRevisionDigest ||
+      publication.inputBindingDigest !== value.inputBindingDigest
+    ) {
+      fail(
+        "output-attempt-mismatch",
+        "Required output publications must bind the candidate attempt, input, and graph",
+      );
+    }
+  }
+  const computedOutputSetDigest = canonicalDigest(
+    canonicalValue({ publications: requiredOutputPublications }),
+    sha256,
+  );
+  if (computedOutputSetDigest !== value.outputSetDigest) {
+    fail(
+      "invalid-output-set-digest",
+      "outputSetDigest does not match the sorted required output publications",
+    );
+  }
   const common = {
     phase,
+    phaseAttempt,
     graphRevisionDigest: value.graphRevisionDigest as Sha256Digest,
+    inputBindingDigest: value.inputBindingDigest as Sha256Digest,
+    requiredOutputPublications,
+    outputSetDigest: computedOutputSetDigest,
     selectedTaskSetDigest: computedTaskSetDigest,
     tasks,
     acceptedAccountingAssessments,
@@ -413,6 +492,50 @@ function phaseCandidateContent(
   return Object.hasOwn(value, "integrationBarrierDigest")
     ? { ...common, integrationBarrierDigest: value.integrationBarrierDigest as Sha256Digest }
     : common;
+}
+
+function candidatePhaseAttempt(
+  value: unknown,
+  phase: PhaseGenerationReference,
+): PhaseAttemptReference {
+  assertExactKeys(
+    value,
+    "candidate phase attempt",
+    ["phaseId", "definitionGeneration", "attempt"],
+    "invalid-candidate",
+  );
+  if (
+    !isPhaseId(value.phaseId) ||
+    !isDefinitionGeneration(value.definitionGeneration) ||
+    typeof value.attempt !== "number" ||
+    !Number.isSafeInteger(value.attempt) ||
+    value.attempt < 1
+  ) {
+    fail("invalid-candidate", "Candidate phase attempts require a positive finite ordinal");
+  }
+  if (
+    value.phaseId !== phase.phaseId ||
+    value.definitionGeneration !== phase.definitionGeneration
+  ) {
+    fail("phase-definition-mismatch", "Candidate phase attempt does not match its phase");
+  }
+  return value as unknown as PhaseAttemptReference;
+}
+
+function validateAndSortOutputPublications(
+  publications: readonly PhaseOutputPublication[],
+  sha256: Sha256,
+): readonly PhaseOutputPublication[] {
+  const validated = publications.map((publication) =>
+    validatePhaseOutputPublication(publication, sha256),
+  );
+  validated.sort((left, right) => compareText(left.outputName, right.outputName));
+  for (let index = 1; index < validated.length; index += 1) {
+    if (validated[index - 1]?.outputName === validated[index]?.outputName) {
+      fail("duplicate-output-slot", `Output slot ${validated[index]?.outputName} is duplicated`);
+    }
+  }
+  return validated;
 }
 
 function phaseReference(value: unknown): PhaseGenerationReference {

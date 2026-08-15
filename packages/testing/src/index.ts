@@ -1,6 +1,10 @@
 import {
+  canonicalDigest,
+  canonicalValue,
   compileWorkflowGraph,
   consumerKey,
+  createPhaseAttempt,
+  createPhaseInputBinding,
   createWorkerContextBase,
   createWorkerDispatch,
   createWorkerModelRouteSelection,
@@ -141,6 +145,37 @@ export function createWorkerExecutionFixture(
     taskId: runtimeFixture.task.taskId,
     definitionGeneration: runtimeFixture.task.definitionGeneration,
   };
+  const mappedInput = testingMappedInput(deterministicSha256);
+  const phaseAttemptReference = { ...runtimeFixture.phase, attempt: 1 };
+  const sourceSetDigest = canonicalDigest(canonicalValue({ mappings: [] }), deterministicSha256);
+  const phaseInputBinding = createPhaseInputBinding(
+    {
+      phase: phaseAttemptReference,
+      schemaKey: consumerKey("worker-input"),
+      schemaResourceDigest: sha256Digest("6".repeat(64)),
+      mappings: [],
+      contentDigest: mappedInput.valueDigest,
+      byteLength: new TextEncoder().encode(JSON.stringify(mappedInput.value)).byteLength,
+      validationReceiptDigest: sha256Digest("7".repeat(64)),
+      sourceSetDigest,
+    },
+    deterministicSha256,
+  );
+  const phaseAttempt = createPhaseAttempt(
+    {
+      repositoryId: runtimeFixture.repositoryId,
+      runId: kernelRunId(runtimeFixture.runId),
+      phase: phaseAttemptReference,
+      inputBindingDigest: phaseInputBinding.bindingDigest,
+      sourceSetDigest,
+      executorDigest: sha256Digest("8".repeat(64)),
+      graphRevisionDigest: graph.revisionDigest,
+      configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+      upstreamClosureSetDigest: sha256Digest("9".repeat(64)),
+      upstreamOutputSetDigest: sha256Digest("0".repeat(64)),
+    },
+    deterministicSha256,
+  );
   const context = createWorkerContextBase(
     {
       task: contextTask,
@@ -159,6 +194,19 @@ export function createWorkerExecutionFixture(
         orderedRoutesDigest: sha256Digest("4".repeat(64)),
       },
       role: { key: consumerKey("implementer"), roleDigest: sha256Digest("5".repeat(64)) },
+      prompt: testingPrompt(deterministicSha256),
+      mappedInput,
+      phaseAttempt,
+      phaseInputBinding,
+      phaseOutputDeclarations: [
+        {
+          outputName: consumerKey("verification"),
+          schemaKey: consumerKey("verification-output"),
+          schemaResourceDigest: sha256Digest("6".repeat(64)),
+          maxBytes: 262_144,
+          sensitivity: "internal",
+        },
+      ],
       capabilities,
       budgets: [{ unit: "spend-nano", limit: 2_000 }],
     },
@@ -171,6 +219,7 @@ export function createWorkerExecutionFixture(
     workerPrincipalId: "principal_worker",
     roleKey: consumerKey("implementer"),
     capabilities,
+    promptResource: testingPromptReference(deterministicSha256),
     promptPackDigest: sha256Digest("0".repeat(64)),
   };
   const provisional = createWorkerDispatch(dispatchInput, context, deterministicSha256);
@@ -202,6 +251,45 @@ export function createWorkerExecutionFixture(
   if (completionRequirements === undefined)
     throw new Error("Missing fixture completion requirements");
   return Object.freeze({ context, dispatch, routeSelection, completionRequirements });
+}
+
+function testingPrompt(sha256: Sha256) {
+  const key = consumerKey("implementer-prompt");
+  const path = "prompts/implementer.md";
+  const utf8 = "Complete the assigned work.\n";
+  const bytes = new TextEncoder().encode(utf8);
+  const contentDigest = sha256Digest(sha256.digest(bytes));
+  const inputPaths: readonly string[] = [];
+  const source = {
+    path,
+    mediaType: "text/markdown; charset=utf-8",
+    byteLength: bytes.byteLength,
+    contentDigest,
+    utf8,
+  };
+  return {
+    key,
+    path,
+    resourceDigest: canonicalDigest(canonicalValue({ key, source, inputPaths }), sha256),
+    contentDigest,
+    byteLength: bytes.byteLength,
+    utf8,
+    inputPaths,
+  };
+}
+
+function testingPromptReference(sha256: Sha256) {
+  const prompt = testingPrompt(sha256);
+  return {
+    key: prompt.key,
+    resourceDigest: prompt.resourceDigest,
+    contentDigest: prompt.contentDigest,
+  };
+}
+
+function testingMappedInput(sha256: Sha256) {
+  const value = canonicalValue({});
+  return { value, valueDigest: canonicalDigest(value, sha256) };
 }
 
 export function createAdmissionFixture(): {

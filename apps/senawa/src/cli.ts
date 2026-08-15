@@ -1,4 +1,7 @@
+import { join } from "node:path";
 import {
+  type ConfigurationResourceReader,
+  createStandardTemplateFiles,
   doctorWorkflowConfiguration,
   renderExampleWorkflowConfiguration,
 } from "@senawa/configuration";
@@ -17,8 +20,8 @@ const HELP = `Senawa ${SENAWA_VERSION}
 Usage: senawa <command> [arguments]
 
 Commands:
-  doctor [path]                         Validate workflow configuration (default: .senawa/workflow.json)
-  init [path]                           Create example workflow configuration (default: .senawa/workflow.json)
+  doctor [path|directory]               Validate a workflow tree (default: .senawa)
+  init [directory]                      Create the standard workflow tree (default: .senawa)
   service start|run|status|drain|stop   Manage the local supervisor
   service logs [after]                  Read bounded supervisor logs
   service recover <repository> <run>    Recover a run under the service fence
@@ -55,9 +58,11 @@ export interface CliWritableFile {
 export interface CliDependencies {
   readonly sha256: { digest(bytes: Uint8Array): string };
   readText(path: string, maxBytes: number): Promise<string>;
+  createResourceReader(workflowPath: string): Promise<ConfigurationResourceReader>;
   createExclusive(path: string): Promise<CliWritableFile>;
   ensureDirectory(path: string): Promise<"created" | "existing">;
   syncDirectory(path: string): Promise<void>;
+  publishTemplate?(projectRoot: string, files: Readonly<Record<string, string>>): Promise<void>;
 }
 
 export interface CliResult {
@@ -95,7 +100,10 @@ export async function runCli(
   if (extra.length > 0) {
     return { output: `${command ?? "Command"} accepts at most one path\n\n${HELP}`, exitCode: 1 };
   }
-  const path = suppliedPath ?? DEFAULT_WORKFLOW_PATH;
+  const path =
+    command === "doctor" && suppliedPath !== undefined && !suppliedPath.endsWith(".json")
+      ? join(suppliedPath, DEFAULT_WORKFLOW_PATH)
+      : (suppliedPath ?? DEFAULT_WORKFLOW_PATH);
   const isDefaultPath = suppliedPath === undefined;
   if (command === "doctor") return doctor(path, dependencies, isDefaultPath);
   if (command === "init") return initialize(path, dependencies, isDefaultPath);
@@ -127,7 +135,19 @@ async function doctor(
   } catch (error) {
     return { output: `${path}: ${jsonSyntaxDescription(error, content)}`, exitCode: 1 };
   }
-  const result = doctorWorkflowConfiguration(document, path, dependencies.sha256);
+  let resources: ConfigurationResourceReader;
+  try {
+    resources = await dependencies.createResourceReader(path);
+  } catch (error) {
+    return {
+      output: `${path}: unable to bind workflow resources (${safeFilesystemCode(error)})`,
+      exitCode: 1,
+    };
+  }
+  const result = await doctorWorkflowConfiguration(
+    { document, locator: path, resources },
+    dependencies.sha256,
+  );
   if (result.snapshot !== undefined) return { output: `${path}: valid`, exitCode: 0 };
   const diagnostics = result.diagnostics.map(
     ({ code, locator, pointer, message }) =>
@@ -144,6 +164,28 @@ async function initialize(
   dependencies: CliDependencies,
   isDefaultPath: boolean,
 ): Promise<CliResult> {
+  if (dependencies.publishTemplate !== undefined) {
+    const projectRoot = isDefaultPath ? PROJECT_ROOT : path;
+    const displayedPath = isDefaultPath ? DEFAULT_CONFIGURATION_DIRECTORY : join(path, ".senawa");
+    const files = createStandardTemplateFiles();
+    for (const [resourcePath, content] of Object.entries(files)) {
+      assertSecretSafePositiveProjection(content, `Generated standard template ${resourcePath}`);
+    }
+    try {
+      await dependencies.publishTemplate(projectRoot, files);
+      return { output: `${displayedPath}: created`, exitCode: 0 };
+    } catch (error) {
+      const code = safeFilesystemCode(error);
+      return {
+        output:
+          code === "EEXIST"
+            ? `${displayedPath}: already exists`
+            : `${displayedPath}: unable to durably publish standard workflow (${code})`,
+        exitCode: 1,
+      };
+    }
+  }
+
   let createdConfigurationDirectory = false;
   if (isDefaultPath) {
     try {

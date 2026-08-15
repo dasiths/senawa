@@ -170,9 +170,32 @@ export interface WorkerAmendmentProposalSubmission extends WorkerSubmissionBase 
   }>;
 }
 
+export interface WorkerPhaseOutputSubmission extends WorkerSubmissionBase {
+  readonly type: "phase-output";
+  readonly output: Readonly<{
+    readonly phase: Readonly<{
+      readonly phaseId: OpaqueIdentity;
+      readonly definitionGeneration: number;
+      readonly attempt: number;
+    }>;
+    readonly outputName: string;
+    readonly schemaKey: string;
+    readonly schemaResourceDigest: string;
+    readonly contentDigest: string;
+    readonly byteLength: number;
+    readonly mediaType: "application/json";
+    readonly sensitivity: AssetSensitivity;
+    readonly graphRevisionDigest: string;
+    readonly configurationSnapshotDigest: string;
+    readonly inputBindingDigest: string;
+    readonly validationReceiptDigest: string;
+  }>;
+}
+
 export type WorkerSubmission =
   | WorkerCompletionSubmission
   | WorkerQuestionSubmission
   | WorkerAssetSubmission
   | WorkerDiscoverySubmission
-  | WorkerAmendmentProposalSubmission;
+  | WorkerAmendmentProposalSubmission
+  | WorkerPhaseOutputSubmission;

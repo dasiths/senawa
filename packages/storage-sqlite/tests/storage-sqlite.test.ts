@@ -26,6 +26,7 @@ import {
   canonicalValue,
   consumerKey,
   createAmendmentProposal,
+  createBudgetLedger,
   createIntegrationBarrier,
   createPhaseCandidate,
   createSensorReading,
@@ -33,8 +34,10 @@ import {
   defineGate,
   definitionGeneration,
   digestAccountingAssessment,
+  digestPhaseOutputSet,
   digestSelectedTaskSet,
   phaseId,
+  planPhaseAttemptTransition,
   sha256Digest,
   taskId,
 } from "@senawa/kernel";
@@ -43,6 +46,7 @@ import {
   createRoleAuthorizationPolicy,
   FencedRunner,
   type PageQueryError,
+  RuntimeDataflowAuthority,
   type RuntimeDependencies,
 } from "@senawa/runtime";
 import {
@@ -84,6 +88,7 @@ import {
   restoreSqliteAuthority,
   SqliteAuthority,
   type SqliteAuthorityOptions,
+  SqliteCanonicalJsonAssetStore,
   SqliteContextBroker,
   type SqliteFaultPoint,
   SqlitePortalQueryAuthority,
@@ -2245,12 +2250,17 @@ describe("SQLite amendment authority", () => {
     sandbox.dispose();
   });
 
-  it("accepts only exact normalized execution policy in configuration snapshots", () => {
+  it("persists exact v1alpha3 resources and rejects corruption or v1alpha2 history", () => {
     const sandbox = createSandbox();
     const authority = new SqliteAuthority(sandbox.options);
     try {
       const snapshot = amendmentConfigurationSnapshot(createRuntimeGraph());
       expect(authority.putConfigurationSnapshot(snapshot)).toBe(snapshot.snapshotDigest);
+      expect(authority.getConfigurationSnapshot(snapshot.snapshotDigest)).toEqual(snapshot);
+
+      const corruptedPrompt = JSON.parse(JSON.stringify(snapshot)) as typeof snapshot;
+      (corruptedPrompt.prompts[0]?.source as { utf8: string }).utf8 += "changed";
+      expect(() => authority.putConfigurationSnapshot(corruptedPrompt)).toThrow(/prompt source/u);
 
       const forged = JSON.parse(JSON.stringify(snapshot)) as Record<string, unknown>;
       forged.execution = {
@@ -2258,11 +2268,15 @@ describe("SQLite amendment authority", () => {
         maxWriterConcurrency: 2,
         failurePolicy: "continue",
       };
-      expect(() => authority.putConfigurationSnapshot(forged)).toThrow(/writer concurrency/);
+      expect(() => authority.putConfigurationSnapshot(forged)).toThrow(
+        /execution policy is invalid/u,
+      );
 
       const legacy = JSON.parse(JSON.stringify(snapshot)) as Record<string, unknown>;
-      delete legacy.execution;
-      expect(() => authority.putConfigurationSnapshot(legacy)).toThrow(/exact canonical shape/);
+      legacy.apiVersion = "senawa.dev/configuration-snapshot/v1alpha2";
+      expect(() => authority.putConfigurationSnapshot(legacy)).toThrow(
+        /has no external prompt bytes.*fresh state root or the earlier alpha binary/u,
+      );
     } finally {
       authority.close();
       sandbox.dispose();
@@ -2271,6 +2285,131 @@ describe("SQLite amendment authority", () => {
 });
 
 describe("SQLite authority durability", () => {
+  it("single-assigns workflow input and append-only mapped attempts across reopen", () => {
+    const sandbox = createSandbox();
+    let authority = new SqliteAuthority(sandbox.options);
+    try {
+      const graph = createRuntimeGraph();
+      expect(
+        authority.submit(
+          instantiateCommand("command_dataflow-instantiate"),
+          createAdmissionFixture().at(),
+        ).status,
+      ).toBe("completed");
+      const configuration = amendmentConfigurationSnapshot(graph);
+      authority.putConfigurationSnapshot(configuration);
+      const schema = {
+        key: "request",
+        schemaResourceDigest: sha256Digest("6".repeat(64)),
+        validatorProfileDigest: sha256Digest("7".repeat(64)),
+        schema: canonicalValue({ type: "object" }),
+        externalSchemas: [],
+      };
+      const validator = {
+        validate(_contract: unknown, instance: ReturnType<typeof canonicalValue>) {
+          return typeof (instance as { readonly request?: unknown }).request === "string"
+            ? []
+            : [
+                {
+                  instancePointer: "/request",
+                  schemaPointer: "/properties/request/type",
+                  keyword: "type",
+                },
+              ];
+        },
+      };
+      const service = new RuntimeDataflowAuthority(
+        deterministicSha256,
+        validator,
+        new SqliteCanonicalJsonAssetStore(authority),
+        authority,
+      );
+      const workflowRequest = {
+        repositoryId: runtimeFixture.repositoryId,
+        runId: runtimeFixture.runId,
+        workflowId: runtimeFixture.workflowId,
+        graphRevisionDigest: graph.revisionDigest,
+        configurationSnapshotDigest: configuration.snapshotDigest,
+        schema,
+        value: { request: "build" },
+      };
+      const workflowInput = service.bindWorkflowInput(workflowRequest);
+      const attemptRequest = {
+        repositoryId: runtimeFixture.repositoryId,
+        runId: runtimeFixture.runId,
+        phase: { ...runtimeFixture.phase, attempt: 1 },
+        graphRevisionDigest: graph.revisionDigest,
+        configurationSnapshotDigest: configuration.snapshotDigest,
+        executorDigest: sha256Digest("8".repeat(64)),
+        upstreamClosureSetDigest: sha256Digest("9".repeat(64)),
+        upstreamOutputSetDigest: sha256Digest("0".repeat(64)),
+        schema,
+        mappings: [
+          {
+            key: consumerKey("request"),
+            source: { kind: "workflow-input" as const, pointer: "/request" },
+            destinationPointer: "/request",
+          },
+        ],
+        sourceBindings: [
+          {
+            source: { kind: "workflow-input" as const },
+            sourceBindingDigest: workflowInput.bindingDigest,
+            value: canonicalValue({ request: "build" }),
+          },
+        ],
+        mappingPolicy: {
+          dependencyPhases: [],
+          declaredPhaseOutputs: [],
+          implementationEvidenceViews: [],
+          allowCurrentItem: false,
+        },
+      };
+      const started = service.startPhaseAttempt(attemptRequest);
+      const iterationPolicy = {
+        maxAttempts: 2,
+        upstreamChange: "refuse" as const,
+        exhaustion: "escalate" as const,
+      };
+      const transition = planPhaseAttemptTransition(
+        {
+          repositoryId: runtimeFixture.repositoryId,
+          runId: runtimeFixture.runId,
+          phase: started.attempt.phase,
+          attemptDigest: started.attempt.attemptDigest,
+          trigger: "gate-rejected",
+          triggerDigest: sha256Digest("a".repeat(64)),
+          policyDigest: canonicalDigest(canonicalValue(iterationPolicy), deterministicSha256),
+          policy: iterationPolicy,
+          budgetLedger: createBudgetLedger({
+            counters: [{ unit: "review-iteration", limit: 2, used: 0 }],
+            appliedAllowanceDecisionDigests: [],
+          }),
+        },
+        deterministicSha256,
+      ).transition;
+      expect(authority.appendPhaseAttemptTransition(transition)).toBe("created");
+      authority.close();
+
+      authority = new SqliteAuthority(sandbox.options);
+      const reopened = new RuntimeDataflowAuthority(
+        deterministicSha256,
+        validator,
+        new SqliteCanonicalJsonAssetStore(authority),
+        authority,
+      );
+      expect(reopened.bindWorkflowInput(workflowRequest)).toEqual(workflowInput);
+      expect(reopened.startPhaseAttempt(attemptRequest).attempt).toEqual(started.attempt);
+      expect(authority.appendPhaseAttemptTransition(transition)).toBe("replayed");
+      expect(() =>
+        reopened.bindWorkflowInput({ ...workflowRequest, value: { request: "changed" } }),
+      ).toThrowError(expect.objectContaining({ code: "workflow-input-conflict" }));
+    } finally {
+      authority.close();
+      sandbox.dispose();
+    }
+  });
+
   it("allows page reads inside an existing transaction on the same connection", () => {
     const sandbox = createSandbox();
     let receiptPage: ReturnType<SqliteAuthority["queryReceiptPage"]> | undefined;
@@ -2549,6 +2688,10 @@ describe("SQLite authority durability", () => {
             intent: "evaluate-gate",
             payload: {
               phase: runtimeFixture.phase,
+              phaseAttempt: gate.phaseAttempt,
+              inputBindingDigest: gate.inputBindingDigest,
+              requiredOutputPublications: [],
+              outputSetDigest: gate.outputSetDigest,
               dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
               gateDefinition: gate.definition,
               readings: [gate.reading],
@@ -3540,30 +3683,52 @@ function amendmentProposalInput(
 function amendmentConfigurationSnapshot(graph: ReturnType<typeof createRuntimeGraph>) {
   const empty = Object.freeze([]);
   const emptyDigest = canonicalDigest(canonicalValue(empty), deterministicSha256);
+  const promptKey = consumerKey("storage-prompt");
+  const promptUtf8 = "Persist this historical prompt.\n";
+  const promptBytes = new TextEncoder().encode(promptUtf8);
+  const promptSource = canonicalValue({
+    path: "prompts/storage.md",
+    mediaType: "text/markdown; charset=utf-8",
+    byteLength: promptBytes.byteLength,
+    contentDigest: sha256Digest(deterministicSha256.digest(promptBytes)),
+    utf8: promptUtf8,
+  });
+  const promptContent = canonicalValue({ key: promptKey, source: promptSource, inputPaths: [] });
+  const prompts = canonicalValue([
+    { ...promptContent, digest: canonicalDigest(promptContent, deterministicSha256) },
+  ]);
   const execution = Object.freeze({
     workspaceMode: "repository",
     maxWriterConcurrency: 1,
     failurePolicy: "continue",
   });
   const content = {
-    apiVersion: "senawa.dev/configuration-snapshot/v1alpha2",
+    apiVersion: "senawa.dev/configuration-snapshot/v1alpha3",
     execution,
     graph,
+    prompts,
     schemas: empty,
     roles: empty,
     modelPolicies: empty,
     sensors: empty,
     gates: empty,
-    projections: empty,
+    implementationEvidenceViews: empty,
+    phaseDataflow: empty,
+    forEach: empty,
+    taskTemplates: empty,
     componentDigests: {
       execution: canonicalDigest(canonicalValue(execution), deterministicSha256),
       graph: canonicalDigest(canonicalValue(graph), deterministicSha256),
+      prompts: canonicalDigest(prompts, deterministicSha256),
       schemas: emptyDigest,
       roles: emptyDigest,
       modelPolicies: emptyDigest,
       sensors: emptyDigest,
       gates: emptyDigest,
-      projections: emptyDigest,
+      implementationEvidenceViews: emptyDigest,
+      phaseDataflow: emptyDigest,
+      forEach: emptyDigest,
+      taskTemplates: emptyDigest,
     },
   };
   return canonicalValue({
@@ -4201,7 +4366,11 @@ function acceptedGate(
   const candidate = createPhaseCandidate(
     {
       phase: runtimeFixture.phase,
+      phaseAttempt: { ...runtimeFixture.phase, attempt: 1 },
       graphRevisionDigest: graph.revisionDigest,
+      inputBindingDigest: runtimeFixture.configurationSnapshotDigest,
+      requiredOutputPublications: [],
+      outputSetDigest: digestPhaseOutputSet([], deterministicSha256),
       selectedTaskSetDigest: digestSelectedTaskSet([runtimeFixture.task], deterministicSha256),
       tasks: [runtimeFixture.task],
       acceptedAccountingAssessments: [
@@ -4225,5 +4394,12 @@ function acceptedGate(
     },
     deterministicSha256,
   );
-  return { definition, reading, candidateDigest: candidate.candidateDigest };
+  return {
+    definition,
+    reading,
+    candidateDigest: candidate.candidateDigest,
+    phaseAttempt: candidate.phaseAttempt,
+    inputBindingDigest: candidate.inputBindingDigest,
+    outputSetDigest: candidate.outputSetDigest,
+  };
 }

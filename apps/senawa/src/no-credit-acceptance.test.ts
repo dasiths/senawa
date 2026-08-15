@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import {
   compileWorkflowAmendment,
   compileWorkflowConfiguration,
+  createExampleWorkflowConfiguration,
+  createExampleWorkflowResources,
   WORKFLOW_AMENDMENT_API_VERSION,
   type WorkflowConfigurationDocument,
 } from "@senawa/configuration";
@@ -23,21 +25,27 @@ import {
   DurableWorkspaceEffectHost,
   GitIntegrationAdapter,
   GitWorkspaceAdapter,
+  RootScopedConfigurationResources,
   RootScopedWorkspaceFiles,
   verifyGitRepository,
 } from "@senawa/execution-host";
 import {
   type AccountingAssessment,
   bindGitRevision,
+  canonicalDigest,
   canonicalValue,
   consumerKey,
+  createPhaseAttempt,
   createPhaseCandidate,
+  createPhaseInputBinding,
   createSensorReading,
   createWorkerContextBase,
   createWorkerDispatch,
   defineGate,
+  definitionGeneration,
   deriveCompletionRequirements,
   digestAccountingAssessment,
+  digestPhaseOutputSet,
   digestSelectedTaskSet,
   type GitRevisionDescriptor,
   runId as kernelRunId,
@@ -113,7 +121,7 @@ afterEach(async () => {
   roots.clear();
 });
 
-describe("Phase 13F no-credit acceptance", () => {
+describe("Phase 14F no-credit acceptance", () => {
   it("accepts detached and multi-worktree checkout baselines without branch assumptions", () => {
     expect(
       parseWorktreeRecords(
@@ -127,10 +135,9 @@ describe("Phase 13F no-credit acceptance", () => {
     const fixture = await temporaryRepository();
     try {
       const workflowPath = join(fixture.repositoryRoot, ".senawa", "workflow.json");
-      await mkdir(join(fixture.repositoryRoot, ".senawa"));
 
-      expect(await runCli(["init", workflowPath], createNodeCliDependencies())).toEqual({
-        output: `${workflowPath}: created`,
+      expect(await runCli(["init", fixture.repositoryRoot], createNodeCliDependencies())).toEqual({
+        output: `${join(fixture.repositoryRoot, ".senawa")}: created`,
         exitCode: 0,
       });
       expect(await runCli(["doctor", workflowPath], createNodeCliDependencies())).toEqual({
@@ -138,14 +145,12 @@ describe("Phase 13F no-credit acceptance", () => {
         exitCode: 0,
       });
       expect(JSON.parse(await readFile(workflowPath, "utf8"))).toMatchObject({
-        apiVersion: "senawa.dev/workflow/v1alpha2",
+        apiVersion: "senawa.dev/workflow/v1alpha3",
         kind: "Workflow",
       });
 
-      const workflow = configuredWorkflow(
-        JSON.parse(await readFile(workflowPath, "utf8")) as WorkflowConfigurationDocument,
-        fixture.targetRef,
-      );
+      const workflow = configuredWorkflow(createExampleWorkflowConfiguration(), fixture.targetRef);
+      await writeExampleResources(fixture.repositoryRoot);
       await writeFile(workflowPath, `${JSON.stringify(workflow, null, 2)}\n`, { mode: 0o600 });
       expect(await runCli(["doctor", workflowPath], createNodeCliDependencies())).toEqual({
         output: `${workflowPath}: valid`,
@@ -154,9 +159,15 @@ describe("Phase 13F no-credit acceptance", () => {
       await fixture.git(["add", "--all", "--", "."]);
       await fixture.git(["commit", "-m", "configure acceptance workflow"]);
       const baseRevision = await fixture.bindCurrentRevision();
-      const baseSnapshot = compileWorkflowConfiguration(
-        workflow,
-        workflowPath,
+      const baseSnapshot = await compileWorkflowConfiguration(
+        {
+          document: workflow,
+          locator: workflowPath,
+          resources: await RootScopedConfigurationResources.create(
+            fixture.repositoryRoot,
+            ".senawa",
+          ),
+        },
         deterministicSha256,
       );
       const amendment = compileWorkflowAmendment(
@@ -173,7 +184,26 @@ describe("Phase 13F no-credit acceptance", () => {
                   key: "audit",
                   generation: 1,
                   dependsOn: ["work"],
-                  input: { purpose: "Review acceptance provenance" },
+                  input: {
+                    schema: "work-input",
+                    mappings: [
+                      {
+                        key: "workflow-input",
+                        source: { kind: "workflow-input", pointer: "" },
+                        destinationPointer: "",
+                      },
+                    ],
+                  },
+                  executor: { kind: "task-set", work: [] },
+                  outputs: [],
+                  iteration: {
+                    maximumAttempts: 1,
+                    onGateRejected: "fail",
+                    onApprovalRejected: "fail",
+                    onExhausted: "fail",
+                  },
+                  exit: { requiredOutputs: [], approval: { policy: "none" } },
+                  actions: [],
                 },
               },
             ],
@@ -553,6 +583,9 @@ const dependencies: RuntimeDependencies = Object.freeze({
     { intent: "evaluate-gate", roles: ["engine", "release-manager"] },
     { intent: "record-authority-decision", roles: ["release-manager"] },
     { intent: "close-phase", roles: ["engine", "release-manager"] },
+    { intent: "record-phase-attempt-transition", roles: ["engine", "release-manager"] },
+    { intent: "import-plan", roles: ["engine", "release-manager"] },
+    { intent: "record-fan-out-diff-decision", roles: ["engine", "release-manager"] },
     { intent: "submit-amendment-proposal", roles: ["engine", "release-manager"] },
     { intent: "record-amendment-decision", roles: ["release-manager"] },
     { intent: "apply-approved-amendment", roles: ["trusted-supervisor"] },
@@ -567,7 +600,8 @@ function configuredWorkflow(
   integrationRef: string,
 ): WorkflowConfigurationDocument {
   const phase = required(input.phases[0]);
-  const original = required(phase.work[0]);
+  if (phase.executor.kind !== "task-set") throw new Error("Acceptance requires task-set executor");
+  const original = required(phase.executor.work[0]);
   const completionPolicy = {
     ...original.completionPolicy,
     evidencePolicy: {
@@ -586,20 +620,23 @@ function configuredWorkflow(
     phases: [
       {
         ...phase,
-        work: [
-          {
-            ...original,
-            key: "alpha",
-            input: { instruction: "Write alpha.txt" },
-            completionPolicy,
-          },
-          {
-            ...original,
-            key: "beta",
-            input: { instruction: "Write beta.txt" },
-            completionPolicy,
-          },
-        ],
+        executor: {
+          kind: "task-set",
+          work: [
+            {
+              ...original,
+              key: "alpha",
+              input: { instruction: "Write alpha.txt" },
+              completionPolicy,
+            },
+            {
+              ...original,
+              key: "beta",
+              input: { instruction: "Write beta.txt" },
+              completionPolicy,
+            },
+          ],
+        },
       },
     ],
   };
@@ -635,7 +672,7 @@ function fixedClock(timestamp: string) {
 
 async function createProductionJourney(
   fixture: TemporaryRepository,
-  snapshot: ReturnType<typeof compileWorkflowConfiguration>,
+  snapshot: Awaited<ReturnType<typeof compileWorkflowConfiguration>>,
   baseRevision: GitRevisionDescriptor,
 ) {
   const supervisor = new SqliteSupervisorAuthority({
@@ -676,6 +713,13 @@ async function createProductionJourney(
   });
   const seeds = createAcceptanceSeeds(snapshot, baseRevision);
   for (const seed of seeds) {
+    supervisor.commandAuthority.putAsset(
+      canonicalBytes(seed.mappedInput.value),
+      "application/json",
+    );
+    expect(
+      supervisor.commandAuthority.appendPhaseAttempt(seed.phaseAttempt, seed.phaseInputBinding),
+    ).toBe("created");
     broker.registerDispatch({
       context: seed.context,
       dispatch: seed.dispatch,
@@ -942,7 +986,7 @@ function settleBudgetProbe(
 }
 
 function createAcceptanceSeeds(
-  snapshot: ReturnType<typeof compileWorkflowConfiguration>,
+  snapshot: Awaited<ReturnType<typeof compileWorkflowConfiguration>>,
   baseRevision: GitRevisionDescriptor,
 ) {
   const tasks = snapshot.graph.nodes.filter(
@@ -959,6 +1003,47 @@ function createAcceptanceSeeds(
       taskId: node.definition.id,
       definitionGeneration: node.definition.generation,
     };
+    const mappedInput = acceptanceMappedInput(
+      (node.definition.input as unknown as { readonly value: unknown }).value,
+    );
+    const phaseReference = {
+      phaseId: node.definition.parentId,
+      definitionGeneration:
+        snapshot.graph.nodes.find(
+          (candidate) =>
+            candidate.kind === "phase" && candidate.definition.id === node.definition.parentId,
+        )?.definition.generation ?? definitionGeneration(1),
+      attempt: index + 1,
+    };
+    const sourceSetDigest = canonicalDigest(canonicalValue({ mappings: [] }), deterministicSha256);
+    const phaseInputBinding = createPhaseInputBinding(
+      {
+        phase: phaseReference,
+        schemaKey: consumerKey("work-input"),
+        schemaResourceDigest: required(snapshot.schemas[0]).source.contentDigest,
+        mappings: [],
+        contentDigest: mappedInput.valueDigest,
+        byteLength: canonicalBytes(mappedInput.value).byteLength,
+        validationReceiptDigest: sha256Digest("7".repeat(64)),
+        sourceSetDigest,
+      },
+      deterministicSha256,
+    );
+    const phaseAttempt = createPhaseAttempt(
+      {
+        repositoryId: ACCEPTANCE_REPOSITORY_ID,
+        runId: kernelRunId(ACCEPTANCE_RUN_ID),
+        phase: phaseReference,
+        inputBindingDigest: phaseInputBinding.bindingDigest,
+        sourceSetDigest,
+        executorDigest: sha256Digest("8".repeat(64)),
+        graphRevisionDigest: snapshot.graph.revisionDigest,
+        configurationSnapshotDigest: snapshot.snapshotDigest,
+        upstreamClosureSetDigest: sha256Digest("9".repeat(64)),
+        upstreamOutputSetDigest: sha256Digest("0".repeat(64)),
+      },
+      deterministicSha256,
+    );
     const context = createWorkerContextBase(
       {
         task,
@@ -980,6 +1065,11 @@ function createAcceptanceSeeds(
           key: consumerKey("deterministic-writer"),
           roleDigest: sha256Digest("4".repeat(64)),
         },
+        prompt: acceptancePrompt(snapshot),
+        mappedInput,
+        phaseAttempt,
+        phaseInputBinding,
+        phaseOutputDeclarations: [],
         capabilities: ["worker.submit.asset", "worker.submit.completion"],
         budgets: [{ unit: "dispatch-failure", limit: 1 }],
       },
@@ -992,6 +1082,7 @@ function createAcceptanceSeeds(
       workerPrincipalId: `principal_acceptance-${index + 1}`,
       roleKey: consumerKey("deterministic-writer"),
       capabilities: ["worker.submit.asset", "worker.submit.completion"],
+      promptResource: acceptancePromptReference(snapshot),
       promptPackDigest: sha256Digest("0".repeat(64)),
     };
     const provisional = createWorkerDispatch(dispatchInput, context, deterministicSha256);
@@ -1011,6 +1102,9 @@ function createAcceptanceSeeds(
       content: `${key}\n`,
       context,
       dispatch,
+      mappedInput,
+      phaseAttempt,
+      phaseInputBinding,
       completionRequirements,
       taskScope: {
         runId: ACCEPTANCE_RUN_ID,
@@ -1021,6 +1115,45 @@ function createAcceptanceSeeds(
       },
     });
   });
+}
+
+function acceptancePrompt(snapshot: Awaited<ReturnType<typeof compileWorkflowConfiguration>>) {
+  const resource = snapshot.prompts[0];
+  if (resource === undefined) throw new Error("Acceptance prompt resource is missing");
+  return {
+    key: resource.key,
+    path: resource.source.path,
+    resourceDigest: resource.digest,
+    contentDigest: resource.source.contentDigest,
+    byteLength: resource.source.byteLength,
+    utf8: resource.source.utf8,
+    inputPaths: resource.inputPaths,
+  };
+}
+
+function acceptancePromptReference(
+  snapshot: Awaited<ReturnType<typeof compileWorkflowConfiguration>>,
+) {
+  const prompt = acceptancePrompt(snapshot);
+  return {
+    key: prompt.key,
+    resourceDigest: prompt.resourceDigest,
+    contentDigest: prompt.contentDigest,
+  };
+}
+
+function acceptanceMappedInput(value: unknown) {
+  const mapped = canonicalValue(value);
+  return { value: mapped, valueDigest: canonicalDigest(mapped, deterministicSha256) };
+}
+
+async function writeExampleResources(repositoryRoot: string): Promise<void> {
+  const resources = createExampleWorkflowResources();
+  for (const [path, content] of Object.entries(resources)) {
+    const destination = join(repositoryRoot, ".senawa", path);
+    await mkdir(destination.slice(0, destination.lastIndexOf("/")), { recursive: true });
+    await writeFile(destination, content, { mode: 0o600 });
+  }
 }
 
 type AcceptanceSeed = ReturnType<typeof createAcceptanceSeeds>[number];
@@ -1139,7 +1272,7 @@ class DeterministicAcceptanceWorkers {
 
 function closeAcceptedPhase(
   supervisor: SqliteSupervisorAuthority,
-  graph: ReturnType<typeof compileWorkflowConfiguration>["graph"],
+  graph: Awaited<ReturnType<typeof compileWorkflowConfiguration>>["graph"],
 ) {
   const barrier = required(
     supervisor.commandAuthority.queryIntegrationBarrier(
@@ -1185,7 +1318,11 @@ function closeAcceptedPhase(
   const candidate = createPhaseCandidate(
     {
       phase: scheduling.phase,
+      phaseAttempt: { ...scheduling.phase, attempt: 1 },
       graphRevisionDigest: graph.revisionDigest,
+      inputBindingDigest: graph.revisionDigest,
+      requiredOutputPublications: [],
+      outputSetDigest: digestPhaseOutputSet([], deterministicSha256),
       selectedTaskSetDigest: digestSelectedTaskSet(tasks, deterministicSha256),
       tasks,
       acceptedAccountingAssessments: assessments,
@@ -1213,6 +1350,10 @@ function closeAcceptedPhase(
         intent: "evaluate-gate",
         payload: {
           phase: scheduling.phase,
+          phaseAttempt: candidate.phaseAttempt,
+          inputBindingDigest: candidate.inputBindingDigest,
+          requiredOutputPublications: candidate.requiredOutputPublications,
+          outputSetDigest: candidate.outputSetDigest,
           dependencyBarrierDigest: sha256Digest("b".repeat(64)),
           integrationBarrierDigest: barrier.barrierDigest,
           gateDefinition,
@@ -1468,6 +1609,7 @@ async function observePortal(
       counts: { phases: 2, tasks: 2, activeEffects: 0 },
     });
     expect((await loopbackClient.listPortalArtifacts(identity)).artifacts).toHaveLength(2);
+    expect((await loopbackClient.listPortalDelivery(identity)).records.length).toBeGreaterThan(0);
     expect((await loopbackClient.listPortalWorkspaces(identity)).workspaces).toHaveLength(2);
     expect(
       (await loopbackClient.listPortalIntegrations(identity)).integrations.length,

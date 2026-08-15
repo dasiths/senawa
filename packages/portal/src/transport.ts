@@ -6,6 +6,7 @@ import {
   decodePortalAllowanceReview,
   decodePortalArtifactContent,
   decodePortalArtifactPage,
+  decodePortalDeliveryPage,
   decodePortalEventWindow,
   decodePortalGraphEdgePage,
   decodePortalGraphNodePage,
@@ -26,6 +27,7 @@ import {
   type PortalAllowanceReview,
   type PortalArtifactContent,
   type PortalArtifactPage,
+  type PortalDeliveryPage,
   type PortalEventWindow,
   type PortalGraphEdgePage,
   type PortalGraphNodePage,
@@ -123,6 +125,13 @@ export class PortalHttpClient {
 
   graph(repositoryId: string, runId: string): Promise<PortalGraphSummary> {
     return this.#get(`${runBase(repositoryId, runId)}/graph`, decodePortalGraphSummary);
+  }
+
+  delivery(repositoryId: string, runId: string, after = 0): Promise<PortalDeliveryPage> {
+    return this.#get(
+      `${runBase(repositoryId, runId)}/delivery?after=${after}&limit=256`,
+      decodePortalDeliveryPage,
+    );
   }
 
   graphNodes(

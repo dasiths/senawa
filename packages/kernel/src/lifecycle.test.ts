@@ -6,6 +6,7 @@ import {
   createPhaseCandidate as createPhaseCandidateWithGraph,
   deriveCompletionRequirements,
   digestAccountingAssessment,
+  digestPhaseOutputSet,
   digestSelectedTaskSet,
   type PhaseCandidate,
 } from "./candidates.js";
@@ -671,7 +672,11 @@ function createCandidate(gatePolicyDigest: ReturnType<typeof sha256Digest>): Pha
   return createPhaseCandidate(
     {
       phase: PHASE,
+      phaseAttempt: { ...PHASE, attempt: 1 },
       graphRevisionDigest: GRAPH_DIGEST,
+      inputBindingDigest: DEPENDENCY_DIGEST,
+      requiredOutputPublications: [],
+      outputSetDigest: digestPhaseOutputSet([], deterministicSha256),
       selectedTaskSetDigest: digestSelectedTaskSet([TASK], deterministicSha256),
       tasks: [TASK],
       acceptedAccountingAssessments: [accepted],

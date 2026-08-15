@@ -1,7 +1,7 @@
 ---
 title: Redesign Implementation Log
 description: Decisions, validation, and review outcomes for the Senawa alpha redesign
-ms.date: 2026-08-14
+ms.date: 2026-08-15
 ms.topic: reference
 ---
 
@@ -55,7 +55,7 @@ Each phase records:
 | 11. Local portal | Complete | `5fdd242` | Pushed |
 | 12. Remote control-plane protocol | Complete | `48b2ce4` | Pushed |
 | 13. Reporting, packaging, and hardening | Complete | `017b1eb` | Pushed |
-| 14. Standard delivery workflow authoring | Not started | Pending | Pending |
+| 14. Standard delivery workflow authoring | In progress | Pending | Pending |
 | 15. Consumer documentation and adoption journeys | Not started | Pending | Pending |
 
 ## Decision D-001: Clean alpha implementation reset
@@ -7414,6 +7414,515 @@ review reported no remaining critical, high, or medium findings.
 * Implementation commit: `017b1eb` (`feat: complete senawa alpha`)
 * Push: `origin/redesign/workflow-state-machine` advanced from `f888037` to
   `017b1eb` on 2026-08-14.
+
+## Decision D-083: Snapshot external configuration resources for replay
+
+* Date: 2026-08-14
+* Status: Accepted and implemented for Phase 14A
+* Phase: Phase 14A
+* Decision: Advance workflow and configuration snapshot authoring to breaking
+  `v1alpha3`. Require external prompt and schema declarations, load exact bytes
+  through an async configuration-owned reader port, and embed round-trippable
+  UTF-8 text, paths, lengths, content digests, semantic schema digests, prompt
+  input paths, and complete resource digests in the immutable snapshot. Advance
+  worker context, dispatch, and prompt pack contracts to `v1alpha2` so replay
+  binds exact historical prompt bytes and mapped input without filesystem I/O.
+* Alternatives: Retain inline schemas or prompts; accept `v1alpha2` as a partial
+  `v1alpha3`; store configuration resources in the worker asset store; reload
+  current files during resume; use a general expression engine; expose prompt
+  bodies through reporting.
+* Rationale: One self-contained configuration snapshot avoids a storage and
+  filesystem atomicity gap and makes historical validation independent of
+  mutable project files. A fixed `${{ input.* }}` grammar and separately quoted
+  configured and untrusted sections keep model text outside authority. The
+  byte-only reader port leaves path and content semantics in pure configuration
+  code while the Linux adapter owns descriptor-relative filesystem security.
+* Consequence: Current authoring accepts only
+  `senawa.dev/workflow/v1alpha3`; snapshots use
+  `senawa.dev/configuration-snapshot/v1alpha3`; worker contexts, dispatches, and
+  prompt packs use their `v1alpha2` contracts. Workflow amendments remain
+  filesystem-free and inherit accepted resources. Persisted configuration
+  snapshot `v1alpha2` history receives a fixed incompatibility diagnostic and
+  is never upgraded from current files.
+
+## Phase 14A log
+
+### Decisions
+
+* Prompt declarations are required, agent roles require exact prompt and model
+  policy references, and human or authority roles reject both execution policy
+  fields.
+* Prompt paths are confined to `prompts/*.md`; schema paths are confined to
+  `schemas/*.schema.json`. Lexical path, count, per-resource, aggregate, strict
+  UTF-8, NUL, duplicate path, and duplicate JSON member checks run before
+  snapshot authority is created.
+* The Linux reader uses the existing native helper with `openat2` beneath,
+  no-symlink, no-magic-link, and no-cross-device resolution. It requires one
+  regular link, reads one descriptor within the requested bound, compares
+  before and after metadata, and reopens the path to reject replacement,
+  mutation, truncation, and growth.
+* JSON Schema remains consumer-defined draft 2020-12. Compilation resolves only
+  local fragments and declared in-memory absolute `$id` references, rejects
+  file, relative, dynamic, and undeclared references, bounds schema and instance
+  structure, and applies conservative regex length, count, syntax, and nested
+  repetition checks.
+* Prompt rendering parses only `${{ input.foo.bar }}` tokens that exactly match
+  declared canonical input pointers. Runtime performs own-property lookup,
+  rejects array traversal and missing values, renders structured data as
+  canonical JSON, quotes every configured and mapped line, and enforces 16 KiB
+  per value, 32 KiB aggregate substitution, and 64 KiB final pack limits.
+* SQLite delegates exact configuration snapshot reconstruction to the
+  configuration package. Reporting selects prompt key, resource digest, content
+  digest, byte length, and prompt-pack digest only.
+
+### Deviations
+
+* Final atomic multi-file standard init, the tracked `.senawa` tree, packaging
+  template staging, portal changes, phase output runtime, fan-out, and import
+  remain assigned to later Phase 14 subphases as requested. The existing
+  single-file init emits v1alpha3 workflow metadata, and doctor correctly
+  refuses until the declared external files exist.
+* Storage and execution-host now depend directly on configuration for the exact
+  snapshot validator and reader port. The architecture boundary allowlist was
+  updated for these two directed dependencies; configuration remains pure and
+  imports only kernel plus schema libraries.
+* No compatibility authoring fallback was added. Additive amendments preserve
+  accepted v1alpha3 resources and cannot add or replace resources in Phase 14A.
+
+### Validation
+
+Passed on 2026-08-14:
+
+* First-edit prompt template check: 11 tests
+* Focused configuration resource, compiler, schema, drift, migration, snapshot,
+  and prompt checks: 43 tests
+* Focused kernel context and dispatch replay checks: 47 tests
+* Focused runtime renderer checks: 7 tests
+* Hardened execution-host resource adapter and worker checks: 30 tests
+* Complete SQLite persistence and reporting suites: 121 tests
+* Built CLI suite: 28 tests
+* Complete workspace suite: 84 files and 1,155 tests passed; one opt-in live SDK
+  file and test skipped
+* Root build, including portal assets and strict native helper compilation
+* Full TypeScript project-reference typecheck
+* Biome check completed with only intentional `${{ input.* }}` literal warnings
+* Architecture boundaries across 397 source files
+* `git diff --check`
+
+### Review
+
+No independent final Phase 14 review was requested for this bounded subphase.
+The hardened adapter regressions cover final and parent symlinks, configuration
+root symlinks, hardlinks, non-files, oversize, replacement after descriptor
+read, and post-read growth. Phase 14G retains independent resource/security and
+authority/replay review.
+
+### Commit and push
+
+No commit or push was performed, as required for Phase 14A.
+
+### Remaining risks
+
+* Phase 14B must add accepted phase outputs, mappings, and schema validation
+  authority before mapped inputs are produced by runtime rather than fixtures.
+* Phase 14E must replace interim single-file init with one atomic verified
+  multi-file template and update the tracked example, packaging inventory, and
+  packed-install journey.
+* The native stable reader detects metadata and pathname identity changes. As
+  documented in research, no pathname protocol proves absence of every hostile
+  in-place write without stronger filesystem support; the exact digest remains
+  the identity of bytes actually admitted.
+
+## Decision D-084: Bind phase dataflow through immutable attempts and accepted outputs
+
+* Date: 2026-08-14
+* Status: Accepted and implemented for Phase 14B
+* Phase: Phase 14B
+* Decision: Bind one schema-valid canonical workflow input to each run. Assemble
+  phase input through bounded RFC 6901 mappings over exact immutable source
+  bindings. Record append-only phase attempts, schema-valid output
+  publications, candidate output sets, closure-created output acceptances, and
+  durable output-fact delivery. Permit downstream phase mappings to consume
+  accepted output bindings only.
+* Alternatives: Treat definition input as runtime input; map current workspace
+  files; accept published but unclosed output; add JSONPath or expressions;
+  overwrite a phase attempt or output slot; infer graph dependencies from
+  mappings; expose output bodies in reports.
+* Rationale: Exact source, schema, attempt, context, graph, snapshot, and content
+  digests make replay and stale refusal deterministic. Closure acceptance keeps
+  worker output outside workflow authority until gate and optional human review
+  approve the exact candidate output set.
+* Consequence: Protocol commands and worker submissions use v1alpha3. Worker
+  contexts and dispatches use v1alpha3. Reporting snapshot, deterministic
+  report, and report export use v1alpha2. SQLite schema 010 owns normalized
+  dataflow records and revisions. Fan-out, plan import, iteration scheduling,
+  final init, and portal journeys remain later Phase 14 work.
+
+## Phase 14B log
+
+### Decisions
+
+* The kernel owns a bounded pure JSON Pointer evaluator and object-only
+  assembler. Empty destination selects the complete root and must be exclusive.
+  Non-root destinations are collision-free object paths. Source arrays may be
+  read by canonical indices, but destination arrays are never constructed.
+* Mapping sources are workflow input, accepted dependency output, current item,
+  or an allowlisted implementation evidence view. Current item is represented
+  in the contract but is refused outside the later task-frontier evaluator.
+  Mappings never create graph dependencies.
+* Runtime schema receipts bind schema resource digest, validator profile digest,
+  boundary, and canonical content digest. Workflow input, mapped phase input,
+  and phase output are revalidated at their trust boundaries.
+* Agent phases lower to one visible deterministic `phase-executor` task sourced
+  at the phase executor pointer. Static compatibility remains only through the
+  exact v1alpha3 `task-set` executor shape. Fan-out executors are not accepted.
+* Worker output submissions carry metadata only. The context broker verifies the
+  declared slot, attempt, task, dispatch, context, graph, snapshot, input,
+  schema, validation receipt, canonical installed bytes, and capability before
+  creating a durable output outbox fact.
+* Phase candidates bind the exact attempt, mapped input, required publications,
+  and output-set digest. Closure emits one acceptance for each required
+  publication. Reports expose dataflow identities, digests, names, lengths,
+  sensitivity, attempts, and references, but never input or output bodies.
+* Migration 010 adds workflow input, phase attempt, mapped source, publication,
+  acceptance, canonical output validation, and output outbox tables plus
+  `dataflow_revision`. Startup, backup, restore, and integrity checks revalidate
+  canonical rows and stored output bytes.
+
+### Deviations
+
+* Phase 14B added the agent and task-set declaration contract and deterministic
+  agent lowering needed to make attempts and outputs executable. Bounded
+  rejection-driven iteration transitions and session lineage remain Phase 14C.
+* Implementation evidence views are configuration allowlists and mapping
+  contracts in this subphase. Runtime materialization of the accepted positive
+  evidence manifest remains tied to later standard workflow composition.
+* Portal pages and final protocol presentation remain Phase 14E. This subphase
+  adds reporting metadata and revision fencing only.
+* The existing interim single-file init and doctor migration remain unchanged.
+  Final atomic multi-file init remains Phase 14E.
+
+### Validation
+
+Passed on 2026-08-14:
+
+* First-edit kernel dataflow check: 8 tests
+* Focused kernel dataflow, context, candidate, and lifecycle checks: 92 tests
+* Focused configuration, protocol, runtime, broker, reporting, execution-host,
+  app composition, and storage checks
+* Complete workspace suite: 86 files and 1,174 tests passed; one opt-in live SDK
+  file and test skipped
+* Full TypeScript project-reference typecheck
+* Root build, including portal assets and strict native helper compilation
+* Biome check completed with only intentional prompt-template literal warnings
+* Architecture boundaries across 411 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+### Commit and push
+
+No commit or push was performed, as required for Phase 14B.
+
+### Remaining risks
+
+* Phase 14C must schedule finite next attempts, exhaustion, and resume lineage
+  over the append-only attempt records introduced here.
+* Phase 14D must materialize current-item mappings, fan-out, and plan import
+  without widening this subphase's accepted-output source boundary.
+* Phase 14E must add final portal journeys and replace interim init while keeping
+  report and portal overview records body-free.
+
+## Decision D-085: Make phase iteration and session resume explicit authority
+
+* Date: 2026-08-15
+* Status: Accepted and implemented for Phase 14C
+* Phase: Phase 14C
+* Decision: Represent gate rejection, approval rejection, upstream change, and
+  closure as append-only phase-attempt transitions. Consume the existing
+  `review-iteration` budget before scheduling a next attempt, apply finite
+  maximum-attempt and exhaustion policy, and make closure terminal. Permit an
+  agent session resume only when an explicit binding exactly matches predecessor
+  dispatch and session, prompt resource and content, prompt pack, mapped input,
+  context, graph, configuration snapshot, task generation, selected model route,
+  and repository base digests.
+* Alternatives: Mutate one attempt row; infer retries from rejected lifecycle
+  projections; trust SDK session existence or hidden memory; resume after partial
+  context comparison; create a new iteration-specific budget unit.
+* Rationale: Append-only transitions preserve replay evidence and use the budget
+  units already accepted by the kernel. Exact resume binding makes mutable SDK
+  memory a cache rather than authority and deterministically selects a new
+  session whenever any immutable input differs.
+* Consequence: Runtime and SQLite persist one terminal transition per attempt.
+  Execution host cross-dispatch resume requires an exact authorized binding;
+  missing or mismatched authority creates a fresh session. Protocol and receipts
+  expose transition identities, triggers, and dispositions without prompt or
+  output bodies.
+
+## Decision D-086: Import deterministic fan-out through additive amendments
+
+* Date: 2026-08-15
+* Status: Accepted and implemented for Phase 14D
+* Phase: Phase 14D
+* Decision: Replace `projectedWork` in v1alpha3 with top-level `forEach` and task
+  template registries plus exact `task-frontier` executors and `import-plan`
+  actions. Evaluate one accepted output or current phase input through bounded
+  JSON Pointer selection, schema validation, NFC and control-free stable
+  identities, UTF-8 identity ordering, dependency resolution, current-item
+  mapping, task input validation, and collision-checked task identities. Persist
+  each evaluation before creating a canonical additive amendment proposal.
+* Alternatives: Keep materialized projected work; derive task identity from array
+  position; mutate the graph during selection; replace accepted generated tasks;
+  enqueue before persisting evaluation; let removed items disappear silently.
+* Rationale: Identity-sorted immutable evaluations are independent of source
+  array order and survive restart. Existing amendment review, stale graph checks,
+  quiescence, decision, and application remain the only graph authority. Changed
+  members create additive successors with supersession after an explicit diff
+  decision; removals preserve accepted history.
+* Consequence: Fan-out is bounded to 256 selected items, 1,024 total generated
+  tasks, and 32 active tasks. Migration 011 stores evaluations, members, diff
+  decisions, plan-import linkage, attempt transitions, and resume bindings as
+  canonical metadata. The scheduler admits generated work only after amendment
+  application and computes completion from the effective non-superseded set.
+
+## Phase 14C and 14D log
+
+### Decisions
+
+* The kernel owns pure phase transition planning, fan-out evaluation and diffing,
+  persisted evaluation validation, and exact session resume decisions.
+* Upstream change defaults to refusal unless the phase policy explicitly permits
+  another bounded iteration. Gate and approval rejection can iterate or fail;
+  exhaustion escalates or fails without exceeding the ledger.
+* Stable fan-out identities must be strings already normalized to NFC, contain no
+  C0 or C1 control characters, and encode to at most 256 UTF-8 bytes. Duplicate,
+  missing, malformed, and collision-derived identities fail closed.
+* Fan-out collection, item, generated input, source acceptance, definition,
+  template, graph, snapshot, attempt, member, task-set, and evaluation digests
+  are independent of source array order. Generated dependency cycles and unknown
+  identities are rejected before proposal creation.
+* Exact and reordered reevaluation is idempotent. Additions create `add-task`
+  operations. Changed or removed members require an exact diff decision; changed
+  members receive new task and criterion identities, higher generations, and
+  `supersedes` links while generated dependencies target successor identities.
+* Plan import validates the accepted publication and closure, records evaluation
+  through run, attempt, `forEach`, and prior-evaluation CAS, then creates and
+  submits one deterministic amendment proposal. Retry after persistence or queue
+  interruption reuses evaluation, proposal, command, and receipt identities.
+* Applied task-frontier scheduling respects generated dependencies, fan-out
+  concurrency, repository writer policy, dispatch-failure and rework budgets,
+  exhaustion policy, supersession, and the effective applied task set.
+* Protocol task-frontier status and commands are metadata-only. Prompt bodies,
+  selected item values, mapped task inputs, and phase output bodies remain absent
+  from portal, receipt, event, and reporting DTOs.
+
+### Deviations
+
+* Final multi-file init resources, the tracked standard workflow, and portal UI
+  journeys remain Phase 14E work as requested. This implementation did not add
+  or modify those resources.
+* The supervisor plan-import bridge requires the caller to provide the exact
+  result configuration snapshot before submitting the generated amendment. This
+  matches the existing amendment bridge boundary and prevents the supervisor
+  from synthesizing configuration authority.
+* Reporting behavior remains metadata-only. The reporting snapshot reader was
+  advanced to schema version 11, but no new report or portal body-bearing view
+  was added.
+
+### Validation
+
+Passed on 2026-08-15:
+
+* First-edit kernel iteration check: 3 tests
+* Focused kernel iteration, fan-out, resume, dataflow, and context checks
+* Focused configuration v1alpha3 task-frontier and projected-work-removal checks
+* Focused protocol metadata command and task-frontier status checks
+* Focused runtime transition, import crash/review, scheduler rework/exhaustion,
+  and effective task-set completion checks
+* Focused execution-host exact resume and mismatch checks
+* Focused supervisor plan-import command bridge and runtime command conformance
+* SQLite migration 011, append-only transition reopen, complete storage suite,
+  backup, restore, and integrity checks
+* No-credit application acceptance and production composition checks
+* Complete workspace suite: 91 files and 1,209 tests passed; one opt-in live SDK
+  file and test skipped
+* Full TypeScript project-reference typecheck
+* Root build, including portal assets and strict native helper compilation
+* Biome check completed with only intentional `${{ input.* }}` literal warnings
+* Architecture boundaries across 431 source files
+* Documentation links across 19 Markdown files
+* `git diff --check`
+
+### Commit and push
+
+No commit or push was performed, as required for the combined Phase 14C and 14D
+implementation.
+
+### Remaining risks
+
+* Phase 14E must provide the final atomic standard resources and portal journeys
+  without exposing prompt, selected item, mapped input, or output bodies.
+* Phase 14G retains independent authority, replay, migration, and secret-exposure
+  review across the complete Phase 14 implementation.
+
+## Decision D-087: Publish the standard tree as one atomic directory
+
+* Date: 2026-08-15
+* Status: Accepted and implemented for Phase 14E
+* Phase: Phase 14E
+* Decision: Treat `senawa init [directory]` as project-directory
+  initialization. Generate the tracked tree and packaged assets from one
+  configuration-owned template inventory. Publish the complete `.senawa` tree
+  through private staging, exclusive files, file and directory syncs, one
+  exclusive final rename, project-root sync, and device/inode-checked cleanup.
+* Alternatives: Preserve explicit single-file output; create final directories
+  incrementally; overwrite an existing v1alpha2 tree; maintain separate source,
+  tracked, and packaged template copies.
+* Rationale: A workflow file without its declared resources is not a truthful
+  initialization result. One directory publication prevents doctor or runtime
+  from observing a partial standard tree, while one inventory makes packed and
+  source behavior byte-testable.
+* Consequence: Any existing `.senawa` object is refused without mutation.
+  Repository migration regenerates the tracked tree explicitly. Doctor accepts
+  either a workflow JSON path or a project directory and validates every
+  external resource through the hardened reader.
+
+## Decision D-088: Present standard delivery as bounded metadata
+
+* Date: 2026-08-15
+* Status: Accepted and implemented for Phase 14E and Phase 14F
+* Phase: Phase 14E and Phase 14F
+* Decision: Add one revision-bearing Delivery portal page over normalized phase
+  attempts, transitions, output publications and acceptances, fan-out
+  evaluations, generated task members, and plan imports. Extend deterministic
+  report dataflow records with transition, resume, fan-out, generated-task, and
+  import metadata. Keep prompt text, mapped values, selected items, output
+  bytes, and canonical body columns outside both projections.
+* Alternatives: Add body-bearing output detail pages; fold delivery facts into
+  graph node input; derive fan-out state from current files; expose canonical
+  storage rows through generic JSON viewers.
+* Rationale: Operators need attempt, approval, staleness, rework, import, and
+  effective-set explanations without turning the portal or report into a second
+  authority or a secret-bearing artifact channel.
+* Consequence: The portal decoder rejects unknown body fields and caps each page
+  at 256 records. SQLite selects allowlisted normalized columns only. Reports
+  cite source and result references for each transition and remain deterministic
+  secret-safe exports.
+
+## Phase 14E and 14F log
+
+### Decisions
+
+* The standard template declares define, research, plan, implement, and verify
+  phases; five external prompts; twelve external schemas; human approvals;
+  finite attempts; an import-plan action; one `/tasks` fan-out with `/id`
+  identity; dependency mapping; repository concurrency one; bounded dispatch,
+  rework, and exhaustion policy; implementation evidence; and exact final
+  verification closure requirements.
+* The repository `.senawa` tree is generated from the same inventory staged in
+  the `senawa` package. Packaging compares every tracked, staged, default-init,
+  and explicit-init file byte for byte.
+* Portal Delivery uses the existing freshness assembly and human-needs queue.
+  Desktop and mobile views expose dataflow and task-frontier revisions, a
+  bounded metadata table when records exist, and an explicit empty state.
+* The no-credit journey uses a fresh OS-temporary Git repository and verifies
+  that the mounted checkout worktree inventory is unchanged. It validates the
+  generated standard tree before installing deterministic fixture agents and
+  then exercises two tasks, human approval, a crash after authority commit,
+  restart replay, amendment application, integration, final closure, portal
+  metadata, deterministic report export, backup and restore, and zero SDK or
+  model calls.
+
+### Deviations
+
+* The long production journey validates standard init and then installs a
+  deterministic task-set fixture to exercise process, worktree, integration,
+  portal, reporting, and recovery composition. Define-to-verify dataflow,
+  output validation, import crash replay, source reorder idempotence, and
+  bounded rework remain covered by focused kernel, runtime, supervisor, and
+  SQLite suites rather than duplicating those authorities inside one test.
+* Browser screenshots use a body-free seeded run with an explicit empty
+  Delivery ledger. The no-credit HTTP observation separately proves non-empty
+  authority-backed delivery records.
+
+### Validation
+
+Passed on 2026-08-15:
+
+* Standard tracked template doctor and compiler checks: 1 test
+* Atomic default and explicit init, byte equality, concurrency, non-overwrite,
+  migration, and built CLI checks: 31 tests
+* Portal delivery codec, route, state, and transport checks: 50 tests
+* Reporting snapshot and deterministic export checks: 11 tests
+* Complete no-credit acceptance: 2 tests
+* Desktop portal visual journeys: 3 tests
+* Mobile portal visual journeys: 3 tests
+* Complete installed alpha packaging journey, including two deterministic packs
+* Root build, including staged standard template, portal assets, and strict
+  native helper compilation
+* Complete workspace suite: 93 files and 1,214 tests passed; one opt-in live SDK
+  file and test skipped
+* Complete browser suite: 15 desktop, mobile, bootstrap, visual, stale-resync,
+  approval, and run-control journeys
+* Full TypeScript project-reference typecheck
+* Biome check completed with 30 intentional prompt-template literal warnings
+  and no errors
+* Architecture boundaries across 437 source files
+* Documentation links across 24 Markdown files
+* `git diff --check`
+
+### Review
+
+Independent resource/security and authority/replay review remains Phase 14G.
+No critical or high issue was discovered during the bounded implementation and
+focused validation.
+
+### Commit and push
+
+No commit or push was performed, as required for Phase 14E and Phase 14F.
+
+### Remaining risks
+
+* Phase 14J must independently review resource publication, migration,
+  projection secrecy, plan-import replay, structured-output correction, and
+  standard workflow closure authority.
+* The earlier no-credit production journey composes its deep operational path
+  with a deterministic task-set fixture after standard-tree validation. The new
+  consolidated standard-delivery journey now drives every phase but currently
+  fails while constructing a generated implementation context because its phase
+  attempt and input binding do not match. That blocker and its temporary lint
+  diagnostics must be repaired before the SDK output probe starts.
+
+## Decision D-089: Make structured output a validated agent feedback loop
+
+* Date: 2026-08-15
+* Status: Accepted for Phase 14G through Phase 14J
+* Phase: Phase 14
+* Decision: Give each agent dispatch a generated `submit_phase_output` custom
+  tool derived from the exact accepted output schema. Senawa validates the tool
+  payload independently, stages accepted canonical JSON as a content-addressed
+  asset, records the validation receipt, and submits the existing metadata-only
+  phase-output fact. Invalid submissions return bounded JSON Pointer and schema
+  findings to the same agent session for finite correction and resubmission.
+  Repository changes remain host-observed workspace and Git evidence; agent
+  change notes are metadata only.
+* Alternatives: Require the model to write `output.json` and poll the mutable
+  path; parse the final natural-language response; trust SDK-side schema
+  validation; silently coerce malformed output; treat a model-authored change
+  list as repository evidence; defer the feedback loop as production hardening.
+* Rationale: The pinned Copilot SDK supports custom tools with JSON Schema
+  parameters and returns tool-handler results to the model. A custom tool gives
+  Senawa a bounded correction channel without making a temporary file or model
+  prose authoritative. Independent runtime validation, canonical asset staging,
+  and the existing broker outbox preserve replay and phase authority.
+* Consequence: Phase 14G must first prove invalid-first correction with the
+  pinned SDK and a deterministic fake. Phase 14H implements the coordinator,
+  generated schema, feedback, bounded output attempts, staging, publication,
+  and crash recovery. Phase 14I proves the no-credit and optional live paths and
+  creates `docs/design/production-enhancements.md` for evidence-backed deferred
+  hardening. Phase 14J performs final review. No production-ready claim is
+  allowed before the proof gate passes. Validated checkpoints are committed and
+  pushed as work progresses; implementation continues through all unchecked
+  Phase 14 items before Phase 15 begins.
 
 ## Entry template
 

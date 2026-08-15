@@ -300,6 +300,25 @@ describe("worker submission codec", () => {
           operations: [{ type: "add-task", key: "follow-up" }],
         },
       },
+      {
+        ...binding,
+        submissionId: "submission_06",
+        type: "phase-output",
+        output: {
+          phase: { phaseId: "phase_verify", definitionGeneration: 1, attempt: 2 },
+          outputName: "verification",
+          schemaKey: "verification-output",
+          schemaResourceDigest: DIGEST,
+          contentDigest: OTHER_DIGEST,
+          byteLength: 42,
+          mediaType: "application/json",
+          sensitivity: "internal",
+          graphRevisionDigest: DIGEST,
+          configurationSnapshotDigest: OTHER_DIGEST,
+          inputBindingDigest: DIGEST,
+          validationReceiptDigest: OTHER_DIGEST,
+        },
+      },
     ] as const;
 
     for (const variant of variants) {
@@ -339,6 +358,39 @@ describe("worker submission codec", () => {
       decodeWorkerSubmission({
         ...completion,
         completion: { ...completion.completion, criteria: sparse },
+      }),
+    );
+  });
+
+  it("rejects phase output bodies, paths, stale context fields, and invalid ordinals", () => {
+    const output = {
+      ...binding,
+      type: "phase-output",
+      output: {
+        phase: { phaseId: "phase_verify", definitionGeneration: 1, attempt: 1 },
+        outputName: "verification",
+        schemaKey: "verification-output",
+        schemaResourceDigest: DIGEST,
+        contentDigest: OTHER_DIGEST,
+        byteLength: 42,
+        mediaType: "application/json",
+        sensitivity: "internal",
+        graphRevisionDigest: DIGEST,
+        configurationSnapshotDigest: OTHER_DIGEST,
+        inputBindingDigest: DIGEST,
+        validationReceiptDigest: OTHER_DIGEST,
+      },
+    } as const;
+    expectProtocolError("unknown-field", "$.output.body", () =>
+      decodeWorkerSubmission({ ...output, output: { ...output.output, body: {} } }),
+    );
+    expectProtocolError("unknown-field", "$.output.path", () =>
+      decodeWorkerSubmission({ ...output, output: { ...output.output, path: "result.json" } }),
+    );
+    expectProtocolError("invalid-value", "$.output.phase.attempt", () =>
+      decodeWorkerSubmission({
+        ...output,
+        output: { ...output.output, phase: { ...output.output.phase, attempt: 0 } },
       }),
     );
   });

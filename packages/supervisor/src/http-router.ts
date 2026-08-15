@@ -50,6 +50,13 @@ export type SupervisorHttpRoute =
       readonly limit?: number;
     }
   | {
+      readonly kind: "portal-delivery-list";
+      readonly repositoryId: string;
+      readonly runId: string;
+      readonly afterCursor?: number;
+      readonly limit?: number;
+    }
+  | {
       readonly kind: "portal-graph-nodes" | "portal-graph-edges";
       readonly repositoryId: string;
       readonly runId: string;
@@ -286,6 +293,18 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
     if (samePath(suffix, ["graph"])) {
       requireQuery(query, []);
       return { kind: "portal-graph-summary", repositoryId, runId };
+    }
+    if (samePath(suffix, ["delivery"])) {
+      requireQuery(query, ["after", "limit"]);
+      const afterCursor = optionalInteger(query, "after", 0, Number.MAX_SAFE_INTEGER);
+      const limit = optionalInteger(query, "limit", 1, PORTAL_LIMITS.maxDeliveryItems);
+      return {
+        kind: "portal-delivery-list",
+        repositoryId,
+        runId,
+        ...(afterCursor === undefined ? {} : { afterCursor }),
+        ...(limit === undefined ? {} : { limit }),
+      };
     }
     if (samePath(suffix, ["graph", "nodes"]) || samePath(suffix, ["graph", "edges"])) {
       requireQuery(query, ["revision", "after", "limit"], ["revision"]);

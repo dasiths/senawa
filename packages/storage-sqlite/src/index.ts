@@ -23,7 +23,9 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateConfigurationSnapshot as validateConfigurationSnapshotContract } from "@senawa/configuration";
 import {
+  type AgentSessionResumeBinding,
   type AmendmentApplication,
   type AmendmentDecision,
   type AmendmentProposal,
@@ -34,13 +36,28 @@ import {
   canonicalSerialize,
   canonicalValue,
   createAmendmentQuiescenceFact,
+  type FanOutEvaluation,
   type HistoricalAssetBinding,
   type IntegrationBarrier,
   type IntegrationMember,
   isSha256Digest,
+  type PhaseAttempt,
+  type PhaseAttemptTransition,
   type PhaseGenerationReference,
+  type PhaseInputBinding,
+  type PhaseOutputAcceptance,
+  type PhaseOutputPublication,
+  validateAgentSessionResumeBinding,
+  validateFanOutEvaluation,
   validateIntegrationBarrier,
-  validateWorkflowGraph,
+  validatePhaseAttempt,
+  validatePhaseAttemptTransition,
+  validatePhaseInputBinding,
+  validatePhaseOutputAcceptance,
+  validatePhaseOutputPublication,
+  type validateWorkflowGraph,
+  validateWorkflowInputBinding,
+  type WorkflowInputBinding,
 } from "@senawa/kernel";
 import {
   type CommandEnvelope,
@@ -58,6 +75,7 @@ import {
   decodePortalAllowanceReview,
   decodePortalArtifactContent,
   decodePortalArtifactPage,
+  decodePortalDeliveryPage,
   decodePortalEventWindow,
   decodePortalGraphEdgePage,
   decodePortalGraphNodePage,
@@ -92,6 +110,8 @@ import {
   type PortalArtifactContent,
   type PortalArtifactMetadata,
   type PortalArtifactPage,
+  type PortalDeliveryPage,
+  type PortalDeliveryRecord,
   type PortalEventWindow,
   type PortalGraphEdgePage,
   type PortalGraphNodePage,
@@ -129,6 +149,8 @@ import {
   type AssetReadInput,
   type AssetReadResult,
   assetReadWorstCaseBytes,
+  type CanonicalJsonAssetDescriptor,
+  type CanonicalJsonAssetPort,
   type ClaimEffectAttemptRequest,
   type ClaimEffectAttemptResult,
   type CommandServicePort,
@@ -153,6 +175,7 @@ import {
   InMemoryAuthority,
   InMemoryContextAuthority,
   type InMemoryRunnerRunInput,
+  type InstalledCanonicalOutputAsset,
   type InstallTaskScopeFencesInput,
   type IntegrationAttemptInput,
   type IntegrationAttemptRecord,
@@ -164,6 +187,7 @@ import {
   type ParallelExecutionPolicy,
   type PersistIntentRequest,
   type PersistIntentResult,
+  type PhaseOutputFactPort,
   type QueuedEffectCommand,
   type RegisterWorkerDispatchInput,
   type RunExecutionBinding,
@@ -180,6 +204,7 @@ import {
   type RunOnceInput,
   type RuntimeAuthorityRun,
   RuntimeCommandService,
+  type RuntimeDataflowPersistencePort,
   type RuntimeDependencies,
   type RuntimeQueryPort,
   readCanonicalJsonPointer,
@@ -200,7 +225,7 @@ import {
 } from "@senawa/runtime";
 import Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 11;
 export const ASSET_SECURITY_LIMITS = Object.freeze({
   maxObjectBytes: 256 * 1024 * 1024,
   defaultMaxObjects: 10_000,
@@ -317,6 +342,7 @@ export interface SqliteContextBrokerOptions {
   readonly databasePath: string;
   readonly dependencies: ContextBrokerDependencies;
   readonly completionFacts?: CompletionFactPort;
+  readonly phaseOutputFacts?: PhaseOutputFactPort;
   readonly busyTimeoutMs?: number;
   readonly faultInjector?: (point: SqliteContextBrokerFaultPoint) => void;
 }
@@ -504,7 +530,9 @@ interface AssetRow {
 interface PortalRevisionRow {
   readonly workflow_revision: number;
   readonly context_revision: number;
+  readonly dataflow_revision: number;
   readonly runner_revision: number;
+  readonly task_frontier_revision: number;
   readonly workspace_revision: number;
   readonly human_revision: number;
   readonly portal_revision: number;
@@ -776,7 +804,11 @@ export class StaleRemoteReportClaimError extends Error {
 }
 
 export class SqliteAuthority
-  implements CommandServicePort, RuntimeQueryPort, SerializableAuthorityPort
+  implements
+    CommandServicePort,
+    RuntimeQueryPort,
+    SerializableAuthorityPort,
+    RuntimeDataflowPersistencePort
 {
   readonly databasePath: string;
   readonly assetDirectory: string;
@@ -1436,6 +1468,638 @@ export class SqliteAuthority
     return Uint8Array.from(verifyAssetBytes(path, descriptor, this.dependencies));
   }
 
+  bindWorkflowInput(value: WorkflowInputBinding): "created" | "replayed" {
+    const binding = validateWorkflowInputBinding(value, this.dependencies.sha256);
+    const canonical = canonicalStringify(binding);
+    const runKey = this.#requiredRunKey(binding.repositoryId, binding.runId);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const prior = this.#database
+        .prepare<[string], { canonical_binding: string }>(
+          "SELECT canonical_binding FROM workflow_input_bindings WHERE run_key = ?",
+        )
+        .get(runKey);
+      if (prior !== undefined) {
+        if (prior.canonical_binding !== canonical) {
+          throw new TypeError("Workflow input is already assigned to different content");
+        }
+        this.#database.exec("COMMIT");
+        return "replayed";
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO workflow_input_bindings(
+             run_key, repository_id, run_id, graph_revision_digest,
+             configuration_snapshot_digest, schema_key, schema_resource_digest,
+             content_digest, byte_length, validation_receipt_digest, binding_digest,
+             canonical_binding
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          runKey,
+          binding.repositoryId,
+          binding.runId,
+          binding.graphRevisionDigest,
+          binding.configurationSnapshotDigest,
+          binding.schemaKey,
+          binding.schemaResourceDigest,
+          binding.contentDigest,
+          binding.byteLength,
+          binding.validationReceiptDigest,
+          binding.bindingDigest,
+          canonical,
+        );
+      this.#database.exec("COMMIT");
+      return "created";
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  appendPhaseAttempt(
+    attemptValue: PhaseAttempt,
+    inputValue: PhaseInputBinding,
+  ): "created" | "replayed" {
+    const attempt = validatePhaseAttempt(attemptValue, this.dependencies.sha256);
+    const input = validatePhaseInputBinding(inputValue, this.dependencies.sha256);
+    if (
+      input.bindingDigest !== attempt.inputBindingDigest ||
+      input.sourceSetDigest !== attempt.sourceSetDigest ||
+      canonicalStringify(input.phase) !== canonicalStringify(attempt.phase)
+    ) {
+      throw new TypeError("Phase attempt and input binding do not match");
+    }
+    const canonicalAttempt = canonicalStringify(attempt);
+    const canonicalInput = canonicalStringify(input);
+    const runKey = this.#requiredRunKey(attempt.repositoryId, attempt.runId);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const prior = this.#database
+        .prepare<[string, string, number, number], { canonical_attempt: string }>(
+          `SELECT canonical_attempt FROM phase_attempts
+           WHERE run_key = ? AND phase_id = ? AND definition_generation = ?
+             AND attempt_ordinal = ?`,
+        )
+        .get(
+          runKey,
+          attempt.phase.phaseId,
+          attempt.phase.definitionGeneration,
+          attempt.phase.attempt,
+        );
+      if (prior !== undefined) {
+        const priorInput = this.#database
+          .prepare<[string], { canonical_binding: string }>(
+            "SELECT canonical_binding FROM phase_input_bindings WHERE attempt_digest = ?",
+          )
+          .get(attempt.attemptDigest);
+        if (
+          prior.canonical_attempt !== canonicalAttempt ||
+          priorInput?.canonical_binding !== canonicalInput
+        ) {
+          throw new TypeError("Phase attempt ordinal is already assigned to different content");
+        }
+        this.#database.exec("COMMIT");
+        return "replayed";
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO phase_attempts(
+             attempt_digest, run_key, phase_id, definition_generation, attempt_ordinal,
+             input_binding_digest, source_set_digest, executor_digest,
+             graph_revision_digest, configuration_snapshot_digest,
+             upstream_closure_set_digest, upstream_output_set_digest, canonical_attempt
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          attempt.attemptDigest,
+          runKey,
+          attempt.phase.phaseId,
+          attempt.phase.definitionGeneration,
+          attempt.phase.attempt,
+          attempt.inputBindingDigest,
+          attempt.sourceSetDigest,
+          attempt.executorDigest,
+          attempt.graphRevisionDigest,
+          attempt.configurationSnapshotDigest,
+          attempt.upstreamClosureSetDigest,
+          attempt.upstreamOutputSetDigest,
+          canonicalAttempt,
+        );
+      this.#database
+        .prepare(
+          `INSERT INTO phase_input_bindings(
+             binding_digest, attempt_digest, schema_key, schema_resource_digest,
+             content_digest, byte_length, validation_receipt_digest, source_set_digest,
+             canonical_binding
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.bindingDigest,
+          attempt.attemptDigest,
+          input.schemaKey,
+          input.schemaResourceDigest,
+          input.contentDigest,
+          input.byteLength,
+          input.validationReceiptDigest,
+          input.sourceSetDigest,
+          canonicalInput,
+        );
+      for (const mapping of input.mappings) {
+        this.#database
+          .prepare(
+            `INSERT INTO phase_input_sources(
+               binding_digest, mapping_key, source_kind, source_binding_digest,
+               selected_value_digest, destination_pointer, canonical_source
+             ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            input.bindingDigest,
+            mapping.mappingKey,
+            mapping.source.kind,
+            mapping.sourceBindingDigest,
+            mapping.selectedValueDigest,
+            mapping.destinationPointer,
+            canonicalStringify(mapping),
+          );
+      }
+      this.#database.exec("COMMIT");
+      return "created";
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  appendPhaseAttemptTransition(value: PhaseAttemptTransition): "created" | "replayed" {
+    const transition = validatePhaseAttemptTransition(value, this.dependencies.sha256);
+    const canonical = canonicalStringify(transition);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const attempt = this.#database
+        .prepare<[string], { attempt_digest: string }>(
+          "SELECT attempt_digest FROM phase_attempts WHERE attempt_digest = ?",
+        )
+        .get(transition.attemptDigest);
+      if (attempt === undefined)
+        throw new TypeError("Phase transition references an unknown attempt");
+      const prior = this.#database
+        .prepare<[string], { canonical_transition: string }>(
+          "SELECT canonical_transition FROM phase_attempt_transitions WHERE attempt_digest = ?",
+        )
+        .get(transition.attemptDigest);
+      if (prior !== undefined) {
+        if (prior.canonical_transition !== canonical) {
+          throw new TypeError("Phase attempt already has a different terminal transition");
+        }
+        this.#database.exec("COMMIT");
+        return "replayed";
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO phase_attempt_transitions(
+             transition_digest, attempt_digest, predecessor_transition_digest,
+             trigger_kind, disposition, next_attempt_ordinal, canonical_transition
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          transition.transitionDigest,
+          transition.attemptDigest,
+          transition.predecessorTransitionDigest ?? null,
+          transition.trigger,
+          transition.disposition,
+          transition.nextAttempt?.attempt ?? null,
+          canonical,
+        );
+      this.#database.exec("COMMIT");
+      return "created";
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  putAgentSessionResumeBinding(value: AgentSessionResumeBinding): "created" | "replayed" {
+    const binding = validateAgentSessionResumeBinding(value, this.dependencies.sha256);
+    const canonical = canonicalStringify(binding);
+    const prior = this.#database
+      .prepare<[string], { canonical_binding: string }>(
+        "SELECT canonical_binding FROM agent_session_resume_bindings WHERE binding_digest = ?",
+      )
+      .get(binding.bindingDigest);
+    if (prior !== undefined) {
+      if (prior.canonical_binding !== canonical) {
+        throw new TypeError("Agent session resume binding digest has different content");
+      }
+      return "replayed";
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO agent_session_resume_bindings(
+           binding_digest, predecessor_dispatch_id, predecessor_session_id,
+           task_id, task_generation, context_id, context_digest, graph_revision_digest,
+           configuration_snapshot_digest, prompt_resource_digest, prompt_content_digest,
+           prompt_pack_digest, mapped_input_digest, model_selection_digest,
+           repository_commit_digest, repository_tree_digest, canonical_binding
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        binding.bindingDigest,
+        binding.predecessorDispatchId,
+        binding.predecessorSessionId,
+        binding.taskId,
+        binding.taskGeneration,
+        binding.contextId,
+        binding.contextDigest,
+        binding.graphRevisionDigest,
+        binding.configurationSnapshotDigest,
+        binding.promptResourceDigest,
+        binding.promptContentDigest,
+        binding.promptPackDigest,
+        binding.mappedInputDigest,
+        binding.modelSelectionDigest,
+        binding.repositoryCommitDigest,
+        binding.repositoryTreeDigest,
+        canonical,
+      );
+    return "created";
+  }
+
+  appliedEvaluation(key: {
+    readonly repositoryId: string;
+    readonly runId: string;
+    readonly attemptDigest: string;
+    readonly forEachKey: string;
+  }): FanOutEvaluation | undefined {
+    const runKey = this.#requiredRunKey(key.repositoryId, key.runId);
+    const row = this.#database
+      .prepare<[string, string, string], { canonical_evaluation: string }>(
+        `SELECT canonical_evaluation FROM fan_out_evaluations
+         WHERE run_key = ? AND attempt_digest = ? AND for_each_key = ? AND applied = 1
+         ORDER BY rowid DESC LIMIT 1`,
+      )
+      .get(runKey, key.attemptDigest, key.forEachKey);
+    return row === undefined
+      ? undefined
+      : validateFanOutEvaluation(
+          decodeCanonicalJsonValue(row.canonical_evaluation),
+          this.dependencies.sha256,
+        );
+  }
+
+  recordEvaluation(
+    key: {
+      readonly repositoryId: string;
+      readonly runId: string;
+      readonly attemptDigest: string;
+      readonly forEachKey: string;
+    },
+    value: FanOutEvaluation,
+    expectedPriorEvaluationDigest: string | undefined,
+  ): "created" | "replayed" | "conflict" {
+    const evaluation = validateFanOutEvaluation(value, this.dependencies.sha256);
+    if (
+      evaluation.repositoryId !== key.repositoryId ||
+      evaluation.runId !== key.runId ||
+      evaluation.attemptDigest !== key.attemptDigest ||
+      evaluation.forEachKey !== key.forEachKey
+    )
+      throw new TypeError("Fan-out evaluation does not match its CAS key");
+    const canonical = canonicalStringify(evaluation);
+    const runKey = this.#requiredRunKey(key.repositoryId, key.runId);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.#database
+        .prepare<[string], { canonical_evaluation: string }>(
+          "SELECT canonical_evaluation FROM fan_out_evaluations WHERE evaluation_digest = ?",
+        )
+        .get(evaluation.evaluationDigest);
+      if (existing !== undefined) {
+        if (existing.canonical_evaluation !== canonical) {
+          throw new TypeError("Fan-out evaluation digest has different content");
+        }
+        this.#database.exec("COMMIT");
+        return "replayed";
+      }
+      const applied = this.#database
+        .prepare<[string, string, string], { evaluation_digest: string }>(
+          `SELECT evaluation_digest FROM fan_out_evaluations
+           WHERE run_key = ? AND attempt_digest = ? AND for_each_key = ? AND applied = 1
+           ORDER BY rowid DESC LIMIT 1`,
+        )
+        .get(runKey, key.attemptDigest, key.forEachKey)?.evaluation_digest;
+      if (applied !== expectedPriorEvaluationDigest) {
+        this.#database.exec("COMMIT");
+        return "conflict";
+      }
+      const pending = this.#database
+        .prepare<[string, string, string], { evaluation_digest: string }>(
+          `SELECT evaluation_digest FROM fan_out_evaluations
+           WHERE run_key = ? AND attempt_digest = ? AND for_each_key = ? AND applied = 0
+           LIMIT 1`,
+        )
+        .get(runKey, key.attemptDigest, key.forEachKey);
+      if (pending !== undefined) {
+        this.#database.exec("COMMIT");
+        return "conflict";
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO fan_out_evaluations(
+             evaluation_digest, run_key, attempt_digest, for_each_key,
+             prior_evaluation_digest, definition_digest, source_binding_digest,
+             collection_digest, task_set_digest, graph_revision_digest,
+             configuration_snapshot_digest, canonical_evaluation
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          evaluation.evaluationDigest,
+          runKey,
+          evaluation.attemptDigest,
+          evaluation.forEachKey,
+          expectedPriorEvaluationDigest ?? null,
+          evaluation.definitionDigest,
+          evaluation.sourceBindingDigest,
+          evaluation.collectionDigest,
+          evaluation.taskSetDigest,
+          evaluation.graphRevisionDigest,
+          evaluation.configurationSnapshotDigest,
+          canonical,
+        );
+      for (const member of evaluation.members) {
+        this.#database
+          .prepare(
+            `INSERT INTO fan_out_members(
+               evaluation_digest, stable_identity, item_digest, task_key, task_id,
+               task_generation, input_digest, member_digest, canonical_member
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            evaluation.evaluationDigest,
+            member.identity,
+            member.itemDigest,
+            member.taskKey,
+            member.taskId,
+            member.generation,
+            member.inputDigest,
+            member.memberDigest,
+            canonicalStringify(member),
+          );
+      }
+      this.#database.exec("COMMIT");
+      return "created";
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  enqueueProposal(
+    _key: {
+      readonly repositoryId: string;
+      readonly runId: string;
+      readonly attemptDigest: string;
+      readonly forEachKey: string;
+    },
+    proposal: AmendmentProposal,
+  ): "created" | "replayed" {
+    const source = proposal.source as Readonly<Record<string, unknown>>;
+    const evaluationDigest = String(source.evaluationDigest ?? "");
+    const acceptanceDigest = String(source.acceptanceDigest ?? "");
+    const canonicalImport = canonicalStringify({
+      evaluationDigest,
+      acceptanceDigest,
+      proposalDigest: proposal.proposalDigest,
+      amendmentId: proposal.amendmentId,
+      state: "proposed",
+    });
+    const prior = this.#database
+      .prepare<[string], { canonical_import: string }>(
+        "SELECT canonical_import FROM plan_imports WHERE evaluation_digest = ?",
+      )
+      .get(evaluationDigest);
+    if (prior !== undefined) {
+      if (prior.canonical_import !== canonicalImport) {
+        throw new TypeError("Plan import evaluation is already linked to another proposal");
+      }
+      return "replayed";
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO plan_imports(
+           evaluation_digest, acceptance_digest, proposal_digest, amendment_id,
+           state, canonical_import
+         ) VALUES (?, ?, ?, ?, 'proposed', ?)`,
+      )
+      .run(
+        evaluationDigest,
+        acceptanceDigest,
+        proposal.proposalDigest,
+        proposal.amendmentId,
+        canonicalImport,
+      );
+    return "created";
+  }
+
+  markFanOutEvaluationApplied(
+    evaluationDigest: string,
+    decisionDigest: string,
+    applicationDigest: string,
+  ): void {
+    if (![evaluationDigest, decisionDigest, applicationDigest].every(isSha256Digest)) {
+      throw new TypeError("Applied fan-out linkage requires SHA-256 digests");
+    }
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const importRow = this.#database
+        .prepare<
+          [string],
+          {
+            acceptance_digest: string;
+            proposal_digest: string;
+            amendment_id: string;
+            state: string;
+          }
+        >(
+          `SELECT acceptance_digest, proposal_digest, amendment_id, state
+           FROM plan_imports WHERE evaluation_digest = ?`,
+        )
+        .get(evaluationDigest);
+      if (importRow === undefined || !["proposed", "approved"].includes(importRow.state)) {
+        throw new TypeError("Plan import is not ready for applied linkage");
+      }
+      const canonicalImport = canonicalStringify({
+        evaluationDigest,
+        acceptanceDigest: importRow.acceptance_digest,
+        proposalDigest: importRow.proposal_digest,
+        amendmentId: importRow.amendment_id,
+        decisionDigest,
+        applicationDigest,
+        state: "applied",
+      });
+      const changed = this.#database
+        .prepare(
+          `UPDATE plan_imports
+           SET state = 'applied', decision_digest = ?, application_digest = ?, canonical_import = ?
+           WHERE evaluation_digest = ? AND state IN ('proposed', 'approved')`,
+        )
+        .run(decisionDigest, applicationDigest, canonicalImport, evaluationDigest).changes;
+      if (changed !== 1) throw new TypeError("Plan import is not ready for applied linkage");
+      this.#database
+        .prepare("UPDATE fan_out_evaluations SET applied = 1 WHERE evaluation_digest = ?")
+        .run(evaluationDigest);
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  publishPhaseOutput(value: PhaseOutputPublication): "created" | "replayed" {
+    const publication = validatePhaseOutputPublication(value, this.dependencies.sha256);
+    const canonical = canonicalStringify(publication);
+    const runKey = this.#requiredRunKey(publication.repositoryId, publication.runId);
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const attempt = this.#database
+        .prepare<[string, string, number, number], { attempt_digest: string }>(
+          `SELECT attempt_digest FROM phase_attempts
+           WHERE run_key = ? AND phase_id = ? AND definition_generation = ?
+             AND attempt_ordinal = ?`,
+        )
+        .get(
+          runKey,
+          publication.phase.phaseId,
+          publication.phase.definitionGeneration,
+          publication.phase.attempt,
+        );
+      if (attempt === undefined) throw new TypeError("Phase output references an unknown attempt");
+      const prior = this.#database
+        .prepare<[string, string], { canonical_publication: string }>(
+          `SELECT canonical_publication FROM phase_output_publications
+           WHERE attempt_digest = ? AND output_name = ?`,
+        )
+        .get(attempt.attempt_digest, publication.outputName);
+      if (prior !== undefined) {
+        if (prior.canonical_publication !== canonical) {
+          throw new TypeError("Phase output slot is already assigned to different content");
+        }
+        this.#database.exec("COMMIT");
+        return "replayed";
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO phase_output_publications(
+             publication_id, publication_digest, run_key, attempt_digest, output_name,
+             schema_key, schema_resource_digest, content_digest, byte_length, sensitivity,
+             producing_task_id, producing_task_generation, dispatch_id, context_id,
+             context_digest, graph_revision_digest, configuration_snapshot_digest,
+             input_binding_digest, validation_receipt_digest, canonical_publication
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          publication.publicationId,
+          publication.publicationDigest,
+          runKey,
+          attempt.attempt_digest,
+          publication.outputName,
+          publication.schemaKey,
+          publication.schemaResourceDigest,
+          publication.contentDigest,
+          publication.byteLength,
+          publication.sensitivity,
+          publication.producingTask.taskId,
+          publication.producingTask.definitionGeneration,
+          publication.dispatchId,
+          publication.contextId,
+          publication.contextDigest,
+          publication.graphRevisionDigest,
+          publication.configurationSnapshotDigest,
+          publication.inputBindingDigest,
+          publication.validationReceiptDigest,
+          canonical,
+        );
+      this.#database.exec("COMMIT");
+      return "created";
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  acceptPhaseOutputs(values: readonly PhaseOutputAcceptance[]): "created" | "replayed" {
+    this.#database.exec("BEGIN IMMEDIATE");
+    let created = false;
+    try {
+      for (const value of values) {
+        const publicationRow = this.#database
+          .prepare<[string], { canonical_publication: string }>(
+            `SELECT canonical_publication FROM phase_output_publications
+             WHERE publication_id = ?`,
+          )
+          .get(value.publicationId);
+        if (publicationRow === undefined) {
+          throw new TypeError("Phase output acceptance references an unknown publication");
+        }
+        const publication = validatePhaseOutputPublication(
+          decodeCanonicalJsonValue(publicationRow.canonical_publication),
+          this.dependencies.sha256,
+        );
+        const acceptance = validatePhaseOutputAcceptance(
+          value,
+          publication,
+          this.dependencies.sha256,
+        );
+        const canonical = canonicalStringify(acceptance);
+        const prior = this.#database
+          .prepare<[string], { canonical_acceptance: string }>(
+            `SELECT canonical_acceptance FROM phase_output_acceptances
+             WHERE publication_id = ?`,
+          )
+          .get(acceptance.publicationId);
+        if (prior !== undefined) {
+          if (prior.canonical_acceptance !== canonical) {
+            throw new TypeError(
+              "Phase output publication is already accepted by a different closure",
+            );
+          }
+          continue;
+        }
+        this.#database
+          .prepare(
+            `INSERT INTO phase_output_acceptances(
+               acceptance_digest, publication_id, publication_digest,
+               candidate_digest, closure_digest, canonical_acceptance
+             ) VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            acceptance.acceptanceDigest,
+            acceptance.publicationId,
+            acceptance.publicationDigest,
+            acceptance.candidateDigest,
+            acceptance.closureDigest,
+            canonical,
+          );
+        created = true;
+      }
+      this.#database.exec("COMMIT");
+      return created ? "created" : "replayed";
+    } catch (error) {
+      if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  #requiredRunKey(repositoryId: string, runIdValue: string): string {
+    const row = this.#database
+      .prepare<[string, string], { run_key: string }>(
+        "SELECT run_key FROM runs WHERE repository_id = ? AND run_id = ?",
+      )
+      .get(repositoryId, runIdValue);
+    if (row === undefined) throw new TypeError("Dataflow record references an unknown run");
+    return row.run_key;
+  }
+
   async backup(destinationPath: string): Promise<void> {
     const destination = resolve(destinationPath);
     assertSafeBackupDestination(destination, this.databasePath, this.assetDirectory);
@@ -1499,6 +2163,30 @@ export class SqliteAuthority
 
   #fault(point: SqliteFaultPoint): void {
     this.#faultInjector?.(point);
+  }
+}
+
+export class SqliteCanonicalJsonAssetStore implements CanonicalJsonAssetPort {
+  readonly authority: SqliteAuthority;
+
+  constructor(authority: SqliteAuthority) {
+    this.authority = authority;
+  }
+
+  install(value: import("@senawa/kernel").CanonicalValue): CanonicalJsonAssetDescriptor {
+    const canonical = canonicalValue(value);
+    const descriptor = this.authority.putAsset(canonicalBytes(canonical), "application/json");
+    return Object.freeze({
+      contentDigest: descriptor.digest as import("@senawa/kernel").Sha256Digest,
+      byteLength: descriptor.byteLength,
+    });
+  }
+
+  load(contentDigest: import("@senawa/kernel").Sha256Digest) {
+    const bytes = this.authority.getAsset(contentDigest);
+    return bytes === undefined
+      ? undefined
+      : canonicalValue(decodeCanonicalJsonValue(new TextDecoder().decode(bytes)));
   }
 }
 
@@ -2927,6 +3615,227 @@ export class SqlitePortalQueryAuthority {
     });
   }
 
+  listDeliveryRecords(
+    repositoryId: string,
+    runId: string,
+    after = 0,
+    limit = PORTAL_LIMITS.maxDeliveryItems,
+  ): PortalDeliveryPage {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    validatePortalOffset(after);
+    validatePortalLimit(limit, PORTAL_LIMITS.maxDeliveryItems);
+    const run = this.#database
+      .prepare<[string, string], { run_key: string }>(
+        "SELECT run_key FROM runs WHERE repository_id = ? AND run_id = ?",
+      )
+      .get(repositoryId, runId);
+    if (run === undefined) throw new PageQueryError("cursor-ahead", "Portal run does not exist");
+    const graph = this.#graph(repositoryId, runId);
+    if (graph === undefined)
+      throw new PageQueryError("cursor-ahead", "Portal graph does not exist");
+    const records: PortalDeliveryRecord[] = [];
+
+    for (const row of this.#database
+      .prepare<
+        [string],
+        {
+          attempt_digest: string;
+          phase_id: string;
+          definition_generation: number;
+          attempt_ordinal: number;
+        }
+      >(
+        `SELECT attempt_digest, phase_id, definition_generation, attempt_ordinal
+         FROM phase_attempts WHERE run_key = ? ORDER BY phase_id, attempt_ordinal`,
+      )
+      .all(run.run_key)) {
+      records.push({
+        identity: row.attempt_digest,
+        kind: "phase-attempt",
+        phaseId: row.phase_id,
+        definitionGeneration: row.definition_generation,
+        attempt: row.attempt_ordinal,
+      });
+    }
+    for (const row of this.#database
+      .prepare<
+        [string],
+        {
+          transition_digest: string;
+          phase_id: string;
+          definition_generation: number;
+          attempt_ordinal: number;
+          trigger_kind: string;
+          disposition: string;
+          next_attempt_ordinal: number | null;
+        }
+      >(
+        `SELECT t.transition_digest, a.phase_id, a.definition_generation,
+                a.attempt_ordinal, t.trigger_kind, t.disposition, t.next_attempt_ordinal
+         FROM phase_attempt_transitions t
+         JOIN phase_attempts a ON a.attempt_digest = t.attempt_digest
+         WHERE a.run_key = ? ORDER BY a.phase_id, a.attempt_ordinal`,
+      )
+      .all(run.run_key)) {
+      records.push({
+        identity: row.transition_digest,
+        kind: "phase-transition",
+        phaseId: row.phase_id,
+        definitionGeneration: row.definition_generation,
+        attempt: row.attempt_ordinal,
+        trigger: row.trigger_kind,
+        disposition: row.disposition,
+        ...(row.next_attempt_ordinal === null ? {} : { nextAttempt: row.next_attempt_ordinal }),
+      });
+    }
+    for (const row of this.#database
+      .prepare<
+        [string],
+        {
+          publication_digest: string;
+          phase_id: string;
+          definition_generation: number;
+          attempt_ordinal: number;
+          output_name: string;
+          schema_key: string;
+          content_digest: string;
+          byte_length: number;
+          sensitivity: NonNullable<PortalDeliveryRecord["sensitivity"]>;
+          acceptance_digest: string | null;
+        }
+      >(
+        `SELECT p.publication_digest, a.phase_id, a.definition_generation,
+                a.attempt_ordinal, p.output_name, p.schema_key, p.content_digest,
+                p.byte_length, p.sensitivity, x.acceptance_digest
+         FROM phase_output_publications p
+         JOIN phase_attempts a ON a.attempt_digest = p.attempt_digest
+         LEFT JOIN phase_output_acceptances x ON x.publication_id = p.publication_id
+         WHERE p.run_key = ? ORDER BY a.phase_id, a.attempt_ordinal, p.output_name`,
+      )
+      .all(run.run_key)) {
+      records.push({
+        identity: row.publication_digest,
+        kind: "phase-output",
+        phaseId: row.phase_id,
+        definitionGeneration: row.definition_generation,
+        attempt: row.attempt_ordinal,
+        outputName: row.output_name,
+        schemaKey: row.schema_key,
+        contentDigest: row.content_digest,
+        byteLength: row.byte_length,
+        sensitivity: row.sensitivity,
+        accepted: row.acceptance_digest !== null,
+      });
+    }
+    for (const row of this.#database
+      .prepare<
+        [string],
+        {
+          evaluation_digest: string;
+          for_each_key: string;
+          task_set_digest: string;
+          applied: number;
+          attempt_ordinal: number;
+          phase_id: string;
+        }
+      >(
+        `SELECT e.evaluation_digest, e.for_each_key, e.task_set_digest, e.applied,
+                a.attempt_ordinal, a.phase_id
+         FROM fan_out_evaluations e
+         JOIN phase_attempts a ON a.attempt_digest = e.attempt_digest
+         WHERE e.run_key = ? ORDER BY e.for_each_key, e.evaluation_digest`,
+      )
+      .all(run.run_key)) {
+      records.push({
+        identity: row.evaluation_digest,
+        kind: "fan-out-evaluation",
+        phaseId: row.phase_id,
+        attempt: row.attempt_ordinal,
+        forEachKey: row.for_each_key,
+        evaluationDigest: row.evaluation_digest,
+        taskSetDigest: row.task_set_digest,
+        applied: row.applied === 1,
+      });
+    }
+    for (const row of this.#database
+      .prepare<
+        [string],
+        {
+          member_digest: string;
+          evaluation_digest: string;
+          task_id: string;
+          task_generation: number;
+          input_digest: string;
+          applied: number;
+        }
+      >(
+        `SELECT m.member_digest, m.evaluation_digest, m.task_id,
+                m.task_generation, m.input_digest, e.applied
+         FROM fan_out_members m JOIN fan_out_evaluations e
+           ON e.evaluation_digest = m.evaluation_digest
+         WHERE e.run_key = ? ORDER BY m.evaluation_digest, m.stable_identity`,
+      )
+      .all(run.run_key)) {
+      records.push({
+        identity: row.member_digest,
+        kind: "generated-task",
+        evaluationDigest: row.evaluation_digest,
+        taskId: row.task_id,
+        definitionGeneration: row.task_generation,
+        inputDigest: row.input_digest,
+        state:
+          row.applied !== 1
+            ? "proposed"
+            : graph.edges.some((edge) => edge.kind === "supersedes" && edge.to === row.task_id)
+              ? "superseded"
+              : "effective",
+      });
+    }
+    for (const row of this.#database
+      .prepare<
+        [string],
+        {
+          evaluation_digest: string;
+          proposal_digest: string;
+          decision_digest: string | null;
+          application_digest: string | null;
+          state: string;
+        }
+      >(
+        `SELECT i.evaluation_digest, i.proposal_digest, i.decision_digest,
+                i.application_digest, i.state
+         FROM plan_imports i JOIN fan_out_evaluations e
+           ON e.evaluation_digest = i.evaluation_digest
+         WHERE e.run_key = ? ORDER BY i.evaluation_digest`,
+      )
+      .all(run.run_key)) {
+      records.push({
+        identity: row.proposal_digest,
+        kind: "plan-import",
+        evaluationDigest: row.evaluation_digest,
+        proposalDigest: row.proposal_digest,
+        state: row.state,
+        ...(row.decision_digest === null ? {} : { decisionDigest: row.decision_digest }),
+        ...(row.application_digest === null ? {} : { applicationDigest: row.application_digest }),
+      });
+    }
+
+    const selected = records.slice(after, after + limit);
+    const revision = this.#portalRevision(repositoryId, runId);
+    return decodePortalDeliveryPage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      dataflowRevision: revision.dataflow_revision,
+      taskFrontierRevision: revision.task_frontier_revision,
+      after,
+      nextAfter: after + selected.length,
+      hasMore: after + selected.length < records.length,
+      records: selected,
+    });
+  }
+
   getImmutableRecord(
     repositoryId: string,
     runId: string,
@@ -3561,8 +4470,8 @@ export class SqlitePortalQueryAuthority {
   #portalRevision(repositoryId: string, runId: string): PortalRevisionRow {
     const row = this.#database
       .prepare<[string, string], PortalRevisionRow>(
-        `SELECT workflow_revision, context_revision, runner_revision,
-                workspace_revision, human_revision, portal_revision
+        `SELECT workflow_revision, context_revision, dataflow_revision, runner_revision,
+          task_frontier_revision, workspace_revision, human_revision, portal_revision
          FROM portal_run_revisions WHERE repository_id = ? AND run_id = ?`,
       )
       .get(repositoryId, runId);
@@ -7612,6 +8521,14 @@ export class SqliteContextAssetAuthority {
     this.broker = broker;
   }
 
+  installCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset, bytes: Uint8Array): void {
+    this.broker.installCanonicalOutputAsset(asset, bytes);
+  }
+
+  hasCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset): boolean {
+    return this.broker.hasCanonicalOutputAsset(asset);
+  }
+
   put(binding: HistoricalAssetBinding, bytes: Uint8Array): void {
     this.broker.putContextAsset(binding, bytes);
   }
@@ -7645,8 +8562,68 @@ export class SqliteContextBroker {
   };
   readonly #database: Database.Database;
   readonly #completionFacts: CompletionFactPort | undefined;
+  readonly #phaseOutputFacts: PhaseOutputFactPort | undefined;
   readonly #faultInjector: ((point: SqliteContextBrokerFaultPoint) => void) | undefined;
   readonly #deliveringSubmissionIds = new Set<string>();
+
+  installCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset, bytes: Uint8Array): void {
+    if (
+      bytes.byteLength !== asset.byteLength ||
+      this.dependencies.sha256.digest(bytes) !== asset.contentDigest
+    ) {
+      throw new TypeError("Canonical phase output asset is not installed with exact bytes");
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO phase_output_assets(
+           validation_receipt_digest, content_digest, byte_length, media_type,
+           schema_resource_digest, canonical_bytes, canonical_descriptor
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(validation_receipt_digest) DO NOTHING`,
+      )
+      .run(
+        asset.validationReceiptDigest,
+        asset.contentDigest,
+        asset.byteLength,
+        asset.mediaType,
+        asset.schemaResourceDigest,
+        bytes,
+        canonicalStringify(asset),
+      );
+    if (!this.hasCanonicalOutputAsset(asset)) {
+      throw new TypeError("Canonical phase output validation receipt conflicts with prior content");
+    }
+  }
+
+  hasCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset): boolean {
+    const row = this.#database
+      .prepare<
+        [string],
+        {
+          content_digest: string;
+          byte_length: number;
+          media_type: string;
+          schema_resource_digest: string;
+          canonical_bytes: Uint8Array;
+          canonical_descriptor: string;
+        }
+      >(
+        `SELECT content_digest, byte_length, media_type, schema_resource_digest, canonical_bytes,
+                canonical_descriptor
+         FROM phase_output_assets WHERE validation_receipt_digest = ?`,
+      )
+      .get(asset.validationReceiptDigest);
+    return (
+      row !== undefined &&
+      row.content_digest === asset.contentDigest &&
+      row.byte_length === asset.byteLength &&
+      row.media_type === asset.mediaType &&
+      row.schema_resource_digest === asset.schemaResourceDigest &&
+      row.canonical_descriptor === canonicalStringify(asset) &&
+      row.canonical_bytes.byteLength === asset.byteLength &&
+      this.dependencies.sha256.digest(row.canonical_bytes) === asset.contentDigest
+    );
+  }
   #readQueue: Promise<void> = Promise.resolve();
 
   constructor(options: SqliteContextBrokerOptions) {
@@ -7657,6 +8634,7 @@ export class SqliteContextBroker {
       issueGrantToken: options.dependencies.issueGrantToken,
     });
     this.#completionFacts = options.completionFacts;
+    this.#phaseOutputFacts = options.phaseOutputFacts;
     this.#faultInjector = options.faultInjector;
     ensureSafeDirectoryPath(dirname(this.databasePath));
     this.#database = new Database(this.databasePath, {
@@ -7742,7 +8720,43 @@ export class SqliteContextBroker {
   admitSubmission(input: SubmissionAdmissionInput): SubmissionAdmissionResult {
     const result = this.#transact((broker) => broker.admitSubmission(input));
     this.deliverCompletionFact(result.submissionId);
+    this.deliverPhaseOutputFact(result.submissionId);
     return result;
+  }
+
+  deliverPhaseOutputFact(submissionId: string): boolean {
+    if (this.#phaseOutputFacts === undefined || this.#deliveringSubmissionIds.has(submissionId)) {
+      return false;
+    }
+    this.#deliveringSubmissionIds.add(submissionId);
+    try {
+      const pending = this.#loadAuthority().phaseOutputOutbox.get(submissionId);
+      if (pending === undefined || pending.delivered) return false;
+      if (this.#phaseOutputFacts.admitPhaseOutputFact(pending.fact) === "deferred") return false;
+      this.#database.exec("BEGIN IMMEDIATE");
+      let committed = false;
+      try {
+        const current = this.#loadAuthority();
+        const currentPending = current.phaseOutputOutbox.get(submissionId);
+        if (currentPending === undefined || currentPending.delivered) {
+          this.#database.exec("COMMIT");
+          committed = true;
+          return false;
+        }
+        currentPending.delivered = true;
+        this.#persistContextAuthority(current);
+        this.#fault("before-outbox-ack");
+        this.#database.exec("COMMIT");
+        committed = true;
+        this.#fault("after-outbox-ack-before-return");
+        return true;
+      } catch (error) {
+        if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
+        throw error;
+      }
+    } finally {
+      this.#deliveringSubmissionIds.delete(submissionId);
+    }
   }
 
   deliverCompletionFact(submissionId: string): boolean {
@@ -8305,6 +9319,7 @@ export class SqliteContextBroker {
        DELETE FROM context_events;
        DELETE FROM context_questions;
        DELETE FROM context_terminal_completions;
+        DELETE FROM context_phase_output_outbox;
        DELETE FROM context_completion_outbox;
        DELETE FROM context_read_attempts;
        DELETE FROM context_grants;
@@ -8410,6 +9425,14 @@ export class SqliteContextBroker {
       this.#database
         .prepare(
           `INSERT INTO context_completion_outbox(
+             submission_id, dispatch_id, canonical_fact, delivered
+           ) VALUES (?, ?, ?, ?)`,
+        )
+        .run(row.submission_id, row.dispatch_id, row.canonical_fact, row.delivered);
+    for (const row of normalized.phaseOutputOutbox)
+      this.#database
+        .prepare(
+          `INSERT INTO context_phase_output_outbox(
              submission_id, dispatch_id, canonical_fact, delivered
            ) VALUES (?, ?, ?, ?)`,
         )
@@ -8705,240 +9728,20 @@ function validateConfigurationSnapshot(
 ): ConfigurationSnapshotValue {
   const canonical = canonicalValue(input) as unknown;
   if (!isPlainRecord(canonical)) throw new TypeError("Configuration snapshot must be an object");
-  const requiredKeys = [
-    "apiVersion",
-    "execution",
-    "graph",
-    "schemas",
-    "roles",
-    "modelPolicies",
-    "sensors",
-    "gates",
-    "projections",
-    "componentDigests",
-    "snapshotDigest",
-  ];
-  const snapshotKeys = Object.hasOwn(canonical, "remote")
-    ? [...requiredKeys, "remote"]
-    : requiredKeys;
-  if (
-    Object.keys(canonical).length !== snapshotKeys.length ||
-    snapshotKeys.some((key) => !Object.hasOwn(canonical, key))
-  ) {
-    throw new TypeError("Configuration snapshot must have the exact canonical shape");
+  if (canonical.apiVersion === "senawa.dev/configuration-snapshot/v1alpha2") {
+    throw new TypeError(
+      "Historical configuration snapshot uses unsupported senawa.dev/configuration-snapshot/v1alpha2 and has no external prompt bytes. Phase 14 cannot resume it from current files; use a fresh state root or the earlier alpha binary.",
+    );
   }
-  if (canonical.apiVersion !== "senawa.dev/configuration-snapshot/v1alpha2") {
+  if (canonical.apiVersion !== "senawa.dev/configuration-snapshot/v1alpha3") {
     throw new TypeError("Configuration snapshot apiVersion is unsupported");
   }
-  validateSnapshotExecution(canonical.execution);
-  if (Object.hasOwn(canonical, "remote")) validateSnapshotRemotePolicy(canonical.remote);
-  const graph = validateWorkflowGraph(canonical.graph, dependencies.sha256);
-  const registryKeys = [
-    "schemas",
-    "roles",
-    "modelPolicies",
-    "sensors",
-    "gates",
-    "projections",
-  ] as const;
-  for (const key of registryKeys) {
-    const entries = canonical[key];
-    if (!Array.isArray(entries))
-      throw new TypeError(`Configuration snapshot ${key} must be an array`);
-    let priorKey: string | undefined;
-    for (const entry of entries) {
-      if (!isPlainRecord(entry) || typeof entry.key !== "string" || !isSha256Digest(entry.digest)) {
-        throw new TypeError(`Configuration snapshot ${key} entry is invalid`);
-      }
-      if (priorKey !== undefined && priorKey >= entry.key) {
-        throw new TypeError(`Configuration snapshot ${key} entries must be uniquely sorted`);
-      }
-      if (canonicalDigest(canonicalValue(entry.value), dependencies.sha256) !== entry.digest) {
-        throw new TypeError(`Configuration snapshot ${key} entry digest is invalid`);
-      }
-      priorKey = entry.key;
-    }
-  }
-  if (!isPlainRecord(canonical.componentDigests)) {
-    throw new TypeError("Configuration snapshot componentDigests must be an object");
-  }
-  const componentDigests = canonical.componentDigests;
-  const componentKeys = Object.hasOwn(canonical, "remote")
-    ? (["execution", "remote", "graph", ...registryKeys] as const)
-    : (["execution", "graph", ...registryKeys] as const);
-  if (
-    Object.keys(canonical.componentDigests).length !== componentKeys.length ||
-    componentKeys.some((key) => !isSha256Digest(componentDigests[key]))
-  ) {
-    throw new TypeError("Configuration snapshot componentDigests are invalid");
-  }
-  for (const key of componentKeys) {
-    const value = key === "graph" ? graph : canonical[key];
-    if (canonicalDigest(canonicalValue(value), dependencies.sha256) !== componentDigests[key]) {
-      throw new TypeError(`Configuration snapshot ${key} component digest is invalid`);
-    }
-  }
-  if (!isSha256Digest(canonical.snapshotDigest)) {
-    throw new TypeError("Configuration snapshot digest is invalid");
-  }
-  const { snapshotDigest, ...content } = canonical;
-  if (canonicalDigest(canonicalValue(content), dependencies.sha256) !== snapshotDigest) {
-    throw new TypeError("Configuration snapshot digest does not match canonical content");
-  }
-  return { snapshotDigest, graph, canonical };
-}
-
-function validateSnapshotRemotePolicy(value: unknown): void {
-  if (!isPlainRecord(value)) {
-    throw new TypeError("Configuration snapshot remote policy must be an object");
-  }
-  const keys = [
-    "disconnectedMode",
-    "roleMappings",
-    "maximumRemoteAuthorizationLeaseSeconds",
-    "synchronization",
-  ];
-  if (Object.keys(value).length !== keys.length || keys.some((key) => !Object.hasOwn(value, key))) {
-    throw new TypeError("Configuration snapshot remote policy has invalid fields");
-  }
-  if (
-    value.disconnectedMode !== "continue-authorized-local" &&
-    value.disconnectedMode !== "pause-new-local-work"
-  ) {
-    throw new TypeError("Configuration snapshot remote disconnected mode is invalid");
-  }
-  if (
-    !Number.isSafeInteger(value.maximumRemoteAuthorizationLeaseSeconds) ||
-    (value.maximumRemoteAuthorizationLeaseSeconds as number) < 1
-  ) {
-    throw new TypeError("Configuration snapshot remote authorization lease is invalid");
-  }
-  if (
-    !Array.isArray(value.roleMappings) ||
-    value.roleMappings.length > PROTOCOL_LIMITS.maxPageItems
-  ) {
-    throw new TypeError("Configuration snapshot remote role mappings are invalid");
-  }
-  let priorMapping: string | undefined;
-  for (const mapping of value.roleMappings) {
-    if (!isPlainRecord(mapping)) {
-      throw new TypeError("Configuration snapshot remote role mapping is invalid");
-    }
-    const mappingKeys = ["issuer", "tenant", "upstreamRole", "localRoles"];
-    if (
-      Object.keys(mapping).length !== mappingKeys.length ||
-      mappingKeys.some((key) => !Object.hasOwn(mapping, key)) ||
-      typeof mapping.issuer !== "string" ||
-      mapping.issuer.length === 0 ||
-      typeof mapping.tenant !== "string" ||
-      mapping.tenant.length === 0 ||
-      typeof mapping.upstreamRole !== "string" ||
-      mapping.upstreamRole.length === 0 ||
-      !Array.isArray(mapping.localRoles) ||
-      mapping.localRoles.length === 0 ||
-      mapping.localRoles.some((role) => typeof role !== "string" || role.length === 0)
-    ) {
-      throw new TypeError("Configuration snapshot remote role mapping is invalid");
-    }
-    const localRoles = mapping.localRoles as string[];
-    if (
-      localRoles.some((role, index) => {
-        const prior = localRoles[index - 1];
-        return prior !== undefined && prior >= role;
-      })
-    ) {
-      throw new TypeError("Configuration snapshot remote local roles must be uniquely sorted");
-    }
-    const mappingOrder = canonicalStringify([mapping.issuer, mapping.tenant, mapping.upstreamRole]);
-    if (priorMapping !== undefined && priorMapping >= mappingOrder) {
-      throw new TypeError("Configuration snapshot remote role mappings must be uniquely sorted");
-    }
-    priorMapping = mappingOrder;
-  }
-  const synchronization = value.synchronization;
-  if (!isPlainRecord(synchronization)) {
-    throw new TypeError("Configuration snapshot remote synchronization policy is invalid");
-  }
-  const synchronizationKeys = [
-    "classificationCeiling",
-    "receiptChain",
-    "events",
-    "projections",
-    "synchronizationState",
-  ];
-  if (
-    Object.keys(synchronization).length !== synchronizationKeys.length ||
-    synchronizationKeys.some((key) => !Object.hasOwn(synchronization, key)) ||
-    (synchronization.classificationCeiling !== "public" &&
-      synchronization.classificationCeiling !== "internal") ||
-    synchronizationKeys.slice(1).some((key) => typeof synchronization[key] !== "boolean")
-  ) {
-    throw new TypeError("Configuration snapshot remote synchronization policy is invalid");
-  }
-}
-
-function validateSnapshotExecution(value: unknown): void {
-  if (!isPlainRecord(value)) {
-    throw new TypeError("Configuration snapshot execution policy must be an object");
-  }
-  const commonKeys = ["workspaceMode", "maxWriterConcurrency", "failurePolicy"];
-  const expectedKeys =
-    value.workspaceMode === "worktree" ? [...commonKeys, "integrationRef"] : commonKeys;
-  if (
-    Object.keys(value).length !== expectedKeys.length ||
-    expectedKeys.some((key) => !Object.hasOwn(value, key))
-  ) {
-    throw new TypeError("Configuration snapshot execution policy has an invalid shape");
-  }
-  if (value.workspaceMode !== "repository" && value.workspaceMode !== "worktree") {
-    throw new TypeError("Configuration snapshot workspace mode is invalid");
-  }
-  if (
-    typeof value.maxWriterConcurrency !== "number" ||
-    !Number.isSafeInteger(value.maxWriterConcurrency) ||
-    value.maxWriterConcurrency < 1 ||
-    (value.workspaceMode === "repository" && value.maxWriterConcurrency !== 1)
-  ) {
-    throw new TypeError("Configuration snapshot writer concurrency is invalid");
-  }
-  if (value.failurePolicy !== "continue" && value.failurePolicy !== "fail-fast") {
-    throw new TypeError("Configuration snapshot failure policy is invalid");
-  }
-  if (
-    value.workspaceMode === "worktree" &&
-    (typeof value.integrationRef !== "string" || !isFullLocalBranchRef(value.integrationRef))
-  ) {
-    throw new TypeError("Configuration snapshot integration ref is invalid");
-  }
-}
-
-function isFullLocalBranchRef(value: string): boolean {
-  if (!value.startsWith("refs/heads/") || value.length > 1_024 || value.includes(".."))
-    return false;
-  if (
-    value.includes("@{") ||
-    [...value].some((character) => {
-      const code = character.charCodeAt(0);
-      return code < 0x21 || code === 0x7f;
-    })
-  ) {
-    return false;
-  }
-  if (["~", "^", ":", "?", "*", "[", "\\"].some((character) => value.includes(character))) {
-    return false;
-  }
-  return value
-    .slice("refs/heads/".length)
-    .split("/")
-    .every(
-      (component) =>
-        component.length > 0 &&
-        component !== "." &&
-        component !== ".." &&
-        !component.startsWith(".") &&
-        !component.endsWith(".") &&
-        !component.endsWith(".lock"),
-    );
+  const snapshot = validateConfigurationSnapshotContract(canonical, dependencies.sha256);
+  return {
+    snapshotDigest: snapshot.snapshotDigest,
+    graph: snapshot.graph,
+    canonical: snapshot as unknown as Record<string, unknown>,
+  };
 }
 
 function normalizeAmendmentRows(snapshot: AuthoritySnapshot): NormalizedAmendmentRows {
@@ -10554,6 +11357,8 @@ function verifyDatabase(
   InMemoryAuthority.fromCanonicalJson(state.canonical_json, dependencies);
   verifyNormalizedSnapshot(database, parseSnapshot(state.canonical_json), dependencies);
   verifyContextTables(database, dependencies);
+  verifyPhaseDataflowTables(database, dependencies);
+  verifyTaskFrontierTables(database, dependencies);
   verifyAmendmentTables(database, dependencies);
   verifyParallelWorkspaceTables(database, dependencies);
   verifyHumanAuthorityTables(database, dependencies);
@@ -10567,6 +11372,216 @@ function verifyDatabase(
       descriptor,
       dependencies,
     );
+  }
+}
+
+function verifyPhaseDataflowTables(
+  database: Database.Database,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): void {
+  for (const row of database
+    .prepare<[], { canonical_binding: string }>(
+      "SELECT canonical_binding FROM workflow_input_bindings ORDER BY run_key",
+    )
+    .all()) {
+    validateWorkflowInputBinding(
+      decodeCanonicalJsonValue(row.canonical_binding),
+      dependencies.sha256,
+    );
+  }
+  const attempts = new Map<string, PhaseAttempt>();
+  for (const row of database
+    .prepare<[], { attempt_digest: string; canonical_attempt: string }>(
+      "SELECT attempt_digest, canonical_attempt FROM phase_attempts ORDER BY attempt_digest",
+    )
+    .all()) {
+    const attempt = validatePhaseAttempt(
+      decodeCanonicalJsonValue(row.canonical_attempt),
+      dependencies.sha256,
+    );
+    if (attempt.attemptDigest !== row.attempt_digest) {
+      throw new Error("SQLite phase attempt digest diverges from canonical content");
+    }
+    attempts.set(row.attempt_digest, attempt);
+  }
+  for (const row of database
+    .prepare<[], { attempt_digest: string; canonical_binding: string }>(
+      `SELECT attempt_digest, canonical_binding
+       FROM phase_input_bindings ORDER BY attempt_digest`,
+    )
+    .all()) {
+    const input = validatePhaseInputBinding(
+      decodeCanonicalJsonValue(row.canonical_binding),
+      dependencies.sha256,
+    );
+    const attempt = attempts.get(row.attempt_digest);
+    if (
+      attempt === undefined ||
+      attempt.inputBindingDigest !== input.bindingDigest ||
+      attempt.sourceSetDigest !== input.sourceSetDigest
+    ) {
+      throw new Error("SQLite phase input binding diverges from its attempt");
+    }
+  }
+  const publications = new Map<string, PhaseOutputPublication>();
+  for (const row of database
+    .prepare<[], { publication_id: string; canonical_publication: string }>(
+      `SELECT publication_id, canonical_publication
+       FROM phase_output_publications ORDER BY publication_id`,
+    )
+    .all()) {
+    const publication = validatePhaseOutputPublication(
+      decodeCanonicalJsonValue(row.canonical_publication),
+      dependencies.sha256,
+    );
+    if (publication.publicationId !== row.publication_id) {
+      throw new Error("SQLite phase output publication identity diverges from canonical content");
+    }
+    publications.set(row.publication_id, publication);
+  }
+  for (const row of database
+    .prepare<[], { publication_id: string; canonical_acceptance: string }>(
+      `SELECT publication_id, canonical_acceptance
+       FROM phase_output_acceptances ORDER BY publication_id`,
+    )
+    .all()) {
+    const publication = publications.get(row.publication_id);
+    if (publication === undefined) {
+      throw new Error("SQLite phase output acceptance lacks its publication");
+    }
+    validatePhaseOutputAcceptance(
+      decodeCanonicalJsonValue(row.canonical_acceptance),
+      publication,
+      dependencies.sha256,
+    );
+  }
+  for (const row of database
+    .prepare<
+      [],
+      {
+        content_digest: string;
+        byte_length: number;
+        canonical_bytes: Uint8Array;
+        canonical_descriptor: string;
+      }
+    >(
+      `SELECT content_digest, byte_length, canonical_bytes, canonical_descriptor
+       FROM phase_output_assets ORDER BY validation_receipt_digest`,
+    )
+    .all()) {
+    const descriptor = decodeCanonicalJsonValue(row.canonical_descriptor);
+    if (descriptor === null || typeof descriptor !== "object" || Array.isArray(descriptor)) {
+      throw new Error("SQLite canonical phase output asset descriptor is invalid");
+    }
+    const descriptorRecord = descriptor as Readonly<Record<string, unknown>>;
+    if (
+      descriptorRecord.contentDigest !== row.content_digest ||
+      descriptorRecord.byteLength !== row.byte_length ||
+      row.canonical_bytes.byteLength !== row.byte_length ||
+      dependencies.sha256.digest(row.canonical_bytes) !== row.content_digest
+    ) {
+      throw new Error("SQLite canonical phase output asset diverges from its exact bytes");
+    }
+  }
+}
+
+function verifyTaskFrontierTables(
+  database: Database.Database,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): void {
+  for (const row of database
+    .prepare<
+      [],
+      { transition_digest: string; attempt_digest: string; canonical_transition: string }
+    >(
+      `SELECT transition_digest, attempt_digest, canonical_transition
+       FROM phase_attempt_transitions ORDER BY transition_digest`,
+    )
+    .all()) {
+    const transition = validatePhaseAttemptTransition(
+      decodeCanonicalJsonValue(row.canonical_transition),
+      dependencies.sha256,
+    );
+    if (
+      transition.transitionDigest !== row.transition_digest ||
+      transition.attemptDigest !== row.attempt_digest
+    )
+      throw new Error("SQLite phase transition columns diverge from canonical authority");
+  }
+  for (const row of database
+    .prepare<[], { binding_digest: string; canonical_binding: string }>(
+      `SELECT binding_digest, canonical_binding
+       FROM agent_session_resume_bindings ORDER BY binding_digest`,
+    )
+    .all()) {
+    const binding = validateAgentSessionResumeBinding(
+      decodeCanonicalJsonValue(row.canonical_binding),
+      dependencies.sha256,
+    );
+    if (binding.bindingDigest !== row.binding_digest) {
+      throw new Error("SQLite resume binding columns diverge from canonical authority");
+    }
+  }
+  for (const row of database
+    .prepare<[], { evaluation_digest: string; canonical_evaluation: string }>(
+      `SELECT evaluation_digest, canonical_evaluation
+       FROM fan_out_evaluations ORDER BY evaluation_digest`,
+    )
+    .all()) {
+    const evaluation = validateFanOutEvaluation(
+      decodeCanonicalJsonValue(row.canonical_evaluation),
+      dependencies.sha256,
+    );
+    if (evaluation.evaluationDigest !== row.evaluation_digest) {
+      throw new Error("SQLite fan-out evaluation columns diverge from canonical authority");
+    }
+    const members = database
+      .prepare<[string], { stable_identity: string; canonical_member: string }>(
+        `SELECT stable_identity, canonical_member FROM fan_out_members
+         WHERE evaluation_digest = ? ORDER BY stable_identity`,
+      )
+      .all(evaluation.evaluationDigest);
+    if (
+      members.length !== evaluation.members.length ||
+      members.some(
+        (member, index) =>
+          member.stable_identity !== evaluation.members[index]?.identity ||
+          member.canonical_member !== canonicalStringify(evaluation.members[index]),
+      )
+    )
+      throw new Error("SQLite fan-out members diverge from canonical evaluation authority");
+  }
+  for (const row of database
+    .prepare<
+      [],
+      {
+        evaluation_digest: string;
+        acceptance_digest: string;
+        proposal_digest: string;
+        amendment_id: string;
+        decision_digest: string | null;
+        application_digest: string | null;
+        state: string;
+        canonical_import: string;
+      }
+    >(
+      `SELECT evaluation_digest, acceptance_digest, proposal_digest, amendment_id,
+              decision_digest, application_digest, state, canonical_import
+       FROM plan_imports ORDER BY evaluation_digest`,
+    )
+    .all()) {
+    const expected = {
+      evaluationDigest: row.evaluation_digest,
+      acceptanceDigest: row.acceptance_digest,
+      proposalDigest: row.proposal_digest,
+      amendmentId: row.amendment_id,
+      ...(row.decision_digest === null ? {} : { decisionDigest: row.decision_digest }),
+      ...(row.application_digest === null ? {} : { applicationDigest: row.application_digest }),
+      state: row.state,
+    };
+    if (canonicalStringify(expected) !== row.canonical_import) {
+      throw new Error("SQLite plan import columns diverge from canonical metadata authority");
+    }
   }
 }
 
@@ -12695,6 +13710,12 @@ function normalizeContextAuthority(
       canonical_fact: canonicalStringify(pending.fact),
       delivered: pending.delivered ? 1 : 0,
     })),
+    phaseOutputOutbox: snapshot.phaseOutputOutbox.map((pending) => ({
+      submission_id: pending.submissionId,
+      dispatch_id: pending.fact.dispatchId,
+      canonical_fact: canonicalStringify(pending.fact),
+      delivered: pending.delivered ? 1 : 0,
+    })),
     amendmentOutbox: snapshot.submissions.flatMap(({ submission, result }) => {
       if (submission.type !== "amendment-proposal" || result.status !== "accepted") return [];
       const context = snapshot.contexts.find(
@@ -12870,6 +13891,16 @@ function verifyNormalizedContextAuthority(
       )
       .all(),
     expected.completionOutbox,
+  );
+  verifyNormalizedContextRows(
+    "context_phase_output_outbox",
+    database
+      .prepare(
+        `SELECT submission_id, dispatch_id, canonical_fact, delivered
+         FROM context_phase_output_outbox ORDER BY submission_id`,
+      )
+      .all(),
+    expected.phaseOutputOutbox,
   );
 }
 

@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = "senawa.dev/protocol/v1alpha2" as const;
+export const PROTOCOL_VERSION = "senawa.dev/protocol/v1alpha3" as const;
 
 export type ProtocolVersion = typeof PROTOCOL_VERSION;
 
@@ -40,11 +40,16 @@ export interface RunIdentity {
 
 export type CommandIntent =
   | { readonly type: "instantiate-run" }
+  | { readonly type: "start-phase-attempt" }
+  | { readonly type: "publish-phase-output" }
   | { readonly type: "accept-graph-revision" }
   | { readonly type: "submit-completion" }
   | { readonly type: "evaluate-gate" }
   | { readonly type: "record-authority-decision" }
   | { readonly type: "close-phase" }
+  | { readonly type: "record-phase-attempt-transition" }
+  | { readonly type: "import-plan" }
+  | { readonly type: "record-fan-out-diff-decision" }
   | { readonly type: "submit-amendment-proposal" }
   | { readonly type: "withdraw-amendment-proposal" }
   | { readonly type: "record-amendment-decision" }
@@ -83,6 +88,51 @@ export interface RunControlPayload {
 
 export interface SubmitAmendmentProposalPayload {
   readonly proposal: JsonValue;
+}
+
+export interface RecordPhaseAttemptTransitionPayload {
+  readonly attemptDigest: string;
+  readonly transitionDigest: string;
+  readonly triggerDigest: string;
+  readonly disposition: "iterate" | "escalate" | "fail" | "closed" | "refused";
+}
+
+export interface ImportPlanPayload {
+  readonly attemptDigest: string;
+  readonly acceptanceDigest: string;
+  readonly closureDigest: string;
+  readonly forEachKey: string;
+  readonly definitionDigest: string;
+  readonly evaluationDigest: string;
+  readonly taskSetDigest: string;
+  readonly expectedPriorEvaluationDigest?: string;
+}
+
+export interface RecordFanOutDiffDecisionPayload {
+  readonly evaluationDigest: string;
+  readonly priorEvaluationDigest: string;
+  readonly diffDigest: string;
+  readonly authorityDigest: string;
+  readonly changed: "supersede-changed";
+  readonly removed: "retain-removed";
+}
+
+export interface TaskFrontierStatus {
+  readonly apiVersion: ProtocolVersion;
+  readonly repositoryId: RepositoryId;
+  readonly runId: RunId;
+  readonly attemptDigest: string;
+  readonly forEachKey: string;
+  readonly evaluationDigest: string;
+  readonly taskSetDigest: string;
+  readonly graphRevisionDigest: string;
+  readonly configurationSnapshotDigest: string;
+  readonly state: "evaluated" | "review-required" | "proposed" | "applied" | "complete" | "failed";
+  readonly selectedCount: number;
+  readonly effectiveCount: number;
+  readonly activeCount: number;
+  readonly completedCount: number;
+  readonly maxActive: number;
 }
 
 export interface WithdrawAmendmentProposalPayload {

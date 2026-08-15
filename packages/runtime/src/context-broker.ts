@@ -47,9 +47,20 @@ export const WORKER_CAPABILITIES = Object.freeze({
   asset: "worker.submit.asset",
   discovery: "worker.submit.discovery",
   amendmentProposal: "worker.submit.amendment-proposal",
+  phaseOutput: "worker.submit.phase-output",
 });
 
+export interface InstalledCanonicalOutputAsset {
+  readonly contentDigest: string;
+  readonly byteLength: number;
+  readonly mediaType: "application/json";
+  readonly schemaResourceDigest: string;
+  readonly validationReceiptDigest: string;
+}
+
 export interface ContextAssetPort {
+  installCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset, bytes: Uint8Array): void;
+  hasCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset): boolean;
   readAssetRange(
     binding: HistoricalAssetBinding,
     offset: number,
@@ -85,6 +96,22 @@ export interface CompletionFactPort {
 }
 
 export type CompletionFactAdmission = "accepted" | "deferred";
+
+export interface PhaseOutputFact {
+  readonly submissionId: string;
+  readonly repositoryId: string;
+  readonly runId: string;
+  readonly dispatchId: string;
+  readonly contextId: string;
+  readonly contextDigest: string;
+  readonly producingTask: TaskGenerationReference;
+  readonly output: Extract<WorkerSubmission, { readonly type: "phase-output" }>["output"];
+}
+
+export interface PhaseOutputFactPort {
+  /** Must be idempotent for an exact submissionId and reject conflicting content. */
+  admitPhaseOutputFact(fact: PhaseOutputFact): CompletionFactAdmission;
+}
 
 export interface ContextBrokerDependencies {
   readonly sha256: Sha256;
@@ -146,6 +173,7 @@ export interface SubmissionAdmissionResult {
   readonly status: "accepted" | "stale" | "duplicate";
   readonly replayed: boolean;
   readonly completionFact?: CompletionFact;
+  readonly phaseOutputFact?: PhaseOutputFact;
 }
 
 export interface ContextBrokerClient {
@@ -158,6 +186,7 @@ export interface ContextBrokerClient {
   readAsset(input: AssetReadInput): Promise<AssetReadResult>;
   admitSubmission(input: SubmissionAdmissionInput): SubmissionAdmissionResult;
   deliverCompletionFact(submissionId: string): boolean;
+  deliverPhaseOutputFact?(submissionId: string): boolean;
 }
 
 export interface ContextBrokerEvent {
@@ -239,6 +268,12 @@ interface StoredCompletionFact {
   delivering: boolean;
 }
 
+interface StoredPhaseOutputFact {
+  readonly fact: PhaseOutputFact;
+  delivered: boolean;
+  delivering: boolean;
+}
+
 export interface ContextAuthoritySnapshot {
   readonly version: "senawa.dev/context-authority-memory/v1alpha1";
   readonly contexts: readonly WorkerContextBase[];
@@ -262,6 +297,11 @@ export interface ContextAuthoritySnapshot {
   readonly completionOutbox: readonly {
     readonly submissionId: string;
     readonly fact: CompletionFact;
+    readonly delivered: boolean;
+  }[];
+  readonly phaseOutputOutbox: readonly {
+    readonly submissionId: string;
+    readonly fact: PhaseOutputFact;
     readonly delivered: boolean;
   }[];
   readonly questions: readonly WorkerSubmission[];
@@ -297,6 +337,11 @@ export interface DurableContextAuthoritySnapshot {
   readonly completionOutbox: readonly {
     readonly submissionId: string;
     readonly fact: CompletionFact;
+    readonly delivered: boolean;
+  }[];
+  readonly phaseOutputOutbox: readonly {
+    readonly submissionId: string;
+    readonly fact: PhaseOutputFact;
     readonly delivered: boolean;
   }[];
   readonly questions: readonly WorkerSubmission[];
@@ -341,6 +386,7 @@ export interface ContextAuthorityPort {
   readonly submissions: Map<string, StoredSubmission>;
   readonly terminalCompletions: Map<string, string>;
   readonly completionOutbox: Map<string, StoredCompletionFact>;
+  readonly phaseOutputOutbox: Map<string, StoredPhaseOutputFact>;
   readonly questions: WorkerSubmission[];
   readonly events: ContextBrokerEvent[];
   cursor: number;
@@ -361,6 +407,7 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
   readonly submissions = new Map<string, StoredSubmission>();
   readonly terminalCompletions = new Map<string, string>();
   readonly completionOutbox = new Map<string, StoredCompletionFact>();
+  readonly phaseOutputOutbox = new Map<string, StoredPhaseOutputFact>();
   readonly questions: WorkerSubmission[] = [];
   readonly events: ContextBrokerEvent[] = [];
   cursor = 0;
@@ -399,6 +446,11 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
         .map(([dispatchId, submissionId]) => deepFreeze({ dispatchId, submissionId }))
         .sort((left, right) => compareText(left.dispatchId, right.dispatchId)),
       completionOutbox: [...this.completionOutbox]
+        .map(([submissionId, pending]) =>
+          deepFreeze({ submissionId, fact: pending.fact, delivered: pending.delivered }),
+        )
+        .sort((left, right) => compareText(left.submissionId, right.submissionId)),
+      phaseOutputOutbox: [...this.phaseOutputOutbox]
         .map(([submissionId, pending]) =>
           deepFreeze({ submissionId, fact: pending.fact, delivered: pending.delivered }),
         )
@@ -506,6 +558,11 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
         fact: pending.fact,
         delivered: pending.delivered,
       })),
+      phaseOutputOutbox: [...this.phaseOutputOutbox].map(([submissionId, pending]) => ({
+        submissionId,
+        fact: pending.fact,
+        delivered: pending.delivered,
+      })),
       questions: this.questions,
       events: this.events,
       cursor: this.cursor,
@@ -530,6 +587,7 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
       "submissions",
       "terminalCompletions",
       "completionOutbox",
+      "phaseOutputOutbox",
       "questions",
       "events",
       "cursor",
@@ -548,6 +606,7 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
     const submissionRecords = durableArray(parsed.submissions, "submissions");
     const terminalRecords = durableArray(parsed.terminalCompletions, "terminalCompletions");
     const outboxRecords = durableArray(parsed.completionOutbox, "completionOutbox");
+    const phaseOutputOutboxRecords = durableArray(parsed.phaseOutputOutbox, "phaseOutputOutbox");
     const questionRecords = durableArray(parsed.questions, "questions");
     const eventRecords = durableArray(parsed.events, "events");
     const cursor = nonNegativeSafeInteger(parsed.cursor, "cursor");
@@ -945,6 +1004,48 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
       )
         durableFailure(`submission ${stored.submission.submissionId} lacks its completion outbox`);
     }
+    for (const [index, value] of phaseOutputOutboxRecords.entries()) {
+      const pending = exactDurableObject(value, `phaseOutputOutbox[${index}]`, [
+        "submissionId",
+        "fact",
+        "delivered",
+      ]);
+      const submissionId = durableString(
+        pending.submissionId,
+        `phaseOutputOutbox[${index}].submissionId`,
+      );
+      if (typeof pending.delivered !== "boolean") {
+        durableFailure(`phaseOutputOutbox[${index}].delivered must be a boolean`);
+      }
+      const stored = authority.submissions.get(submissionId);
+      if (
+        stored?.result.phaseOutputFact === undefined ||
+        canonicalStringify(pending.fact) !== canonicalStringify(stored.result.phaseOutputFact)
+      ) {
+        durableFailure(`phaseOutputOutbox[${index}] does not match its output result`);
+      }
+      if (authority.phaseOutputOutbox.has(submissionId)) {
+        durableFailure(`phaseOutputOutbox[${index}] duplicates a submission`);
+      }
+      authority.phaseOutputOutbox.set(
+        submissionId,
+        Object.seal({
+          fact: stored.result.phaseOutputFact,
+          delivered: pending.delivered,
+          delivering: false,
+        }),
+      );
+    }
+    for (const stored of authority.submissions.values()) {
+      if (
+        stored.result.phaseOutputFact !== undefined &&
+        !authority.phaseOutputOutbox.has(stored.submission.submissionId)
+      ) {
+        durableFailure(
+          `submission ${stored.submission.submissionId} lacks its phase output outbox`,
+        );
+      }
+    }
     const questionIds = new Set<string>();
     for (const [index, value] of questionRecords.entries()) {
       const question = decodeWorkerSubmission(value);
@@ -976,6 +1077,26 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
 
 export class InMemoryContextAssetAuthority implements ContextAssetPort {
   readonly assets = new Map<string, Uint8Array>();
+  readonly canonicalOutputs = new Map<string, InstalledCanonicalOutputAsset>();
+  readonly sha256: Sha256;
+
+  constructor(sha256: Sha256) {
+    this.sha256 = sha256;
+  }
+
+  installCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset, bytes: Uint8Array): void {
+    if (
+      bytes.byteLength !== asset.byteLength ||
+      this.sha256.digest(bytes) !== asset.contentDigest
+    ) {
+      throw new TypeError("Canonical phase output bytes do not match their descriptor");
+    }
+    this.canonicalOutputs.set(canonicalStringify(asset), deepFreeze(asset));
+  }
+
+  hasCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset): boolean {
+    return this.canonicalOutputs.has(canonicalStringify(asset));
+  }
 
   put(binding: HistoricalAssetBinding, bytes: Uint8Array): void {
     this.assets.set(binding.assetBindingId, Uint8Array.from(bytes));
@@ -1002,6 +1123,7 @@ export class ContextBroker implements ContextBrokerClient {
   readonly authority: ContextAuthorityPort;
   readonly assets: ContextAssetPort;
   readonly completionFacts: CompletionFactPort | undefined;
+  readonly phaseOutputFacts: PhaseOutputFactPort | undefined;
   readonly dependencies: ContextBrokerDependencies;
 
   constructor(
@@ -1009,6 +1131,7 @@ export class ContextBroker implements ContextBrokerClient {
     dependencies: ContextBrokerDependencies,
     authority: ContextAuthorityPort = new InMemoryContextAuthority(),
     completionFacts?: CompletionFactPort,
+    phaseOutputFacts?: PhaseOutputFactPort,
   ) {
     this.assets = assets;
     this.dependencies = Object.freeze({
@@ -1018,6 +1141,7 @@ export class ContextBroker implements ContextBrokerClient {
     });
     this.authority = authority;
     this.completionFacts = completionFacts;
+    this.phaseOutputFacts = phaseOutputFacts;
   }
 
   registerDispatch(input: RegisterWorkerDispatchInput): WorkerDispatch {
@@ -1402,6 +1526,7 @@ export class ContextBroker implements ContextBrokerClient {
     if (prior !== undefined) {
       if (prior.canonicalSubmission === canonicalSubmission) {
         this.deliverCompletionFact(submission.submissionId);
+        this.deliverPhaseOutputFact(submission.submissionId);
         return Object.freeze({ ...prior.result, replayed: true });
       }
       throw new ContextBrokerError(
@@ -1418,6 +1543,7 @@ export class ContextBroker implements ContextBrokerClient {
       !currentness.claimsAccepted ||
       !sameTaskScopeFence(stored.taskScope, currentness);
     let completionFact: CompletionFact | undefined;
+    let phaseOutputFact: PhaseOutputFact | undefined;
     const duplicateCompletion =
       !stale &&
       submission.type === "completion" &&
@@ -1436,12 +1562,52 @@ export class ContextBroker implements ContextBrokerClient {
       });
       this.authority.terminalCompletions.set(submission.dispatchId, submission.submissionId);
     }
+    const priorOutput =
+      submission.type === "phase-output" ? this.acceptedPhaseOutputForSlot(submission) : undefined;
+    const duplicateOutput =
+      !stale &&
+      submission.type === "phase-output" &&
+      priorOutput !== undefined &&
+      canonicalStringify(
+        (priorOutput.submission as Extract<WorkerSubmission, { readonly type: "phase-output" }>)
+          .output,
+      ) === canonicalStringify(submission.output);
+    if (
+      !stale &&
+      submission.type === "phase-output" &&
+      priorOutput !== undefined &&
+      !duplicateOutput
+    ) {
+      throw new ContextBrokerError(
+        "submission-conflict",
+        "Phase output slot is already bound to different canonical content",
+      );
+    }
+    if (!stale && !duplicateOutput && submission.type === "phase-output") {
+      this.assertPhaseOutputSubmission(submission, stored);
+      phaseOutputFact = deepFreeze({
+        submissionId: submission.submissionId,
+        repositoryId: submission.repositoryId,
+        runId: submission.runId,
+        dispatchId: submission.dispatchId,
+        contextId: submission.contextId,
+        contextDigest: submission.contextDigest,
+        producingTask: submission.task as TaskGenerationReference,
+        output: submission.output,
+      });
+    }
     const result = deepFreeze({
       submissionId: submission.submissionId,
       type: submission.type,
-      status: stale ? "stale" : duplicateCompletion ? "duplicate" : "accepted",
+      status:
+        stale || false
+          ? "stale"
+          : duplicateCompletion || duplicateOutput
+            ? "duplicate"
+            : "accepted",
       replayed: false,
       ...(completionFact === undefined ? {} : { completionFact }),
+      ...(phaseOutputFact === undefined ? {} : { phaseOutputFact }),
     }) as SubmissionAdmissionResult;
     this.authority.submissions.set(
       submission.submissionId,
@@ -1465,7 +1631,90 @@ export class ContextBroker implements ContextBrokerClient {
       );
       this.deliverCompletionFact(submission.submissionId);
     }
+    if (phaseOutputFact !== undefined) {
+      this.authority.phaseOutputOutbox.set(
+        submission.submissionId,
+        Object.seal({ fact: phaseOutputFact, delivered: false, delivering: false }),
+      );
+      this.deliverPhaseOutputFact(submission.submissionId);
+    }
     return result;
+  }
+
+  deliverPhaseOutputFact(submissionId: string): boolean {
+    const pending = this.authority.phaseOutputOutbox.get(submissionId);
+    if (pending === undefined || pending.delivered || pending.delivering) return false;
+    if (this.phaseOutputFacts === undefined) return false;
+    pending.delivering = true;
+    try {
+      if (this.phaseOutputFacts.admitPhaseOutputFact(pending.fact) === "deferred") return false;
+      pending.delivered = true;
+      return true;
+    } finally {
+      pending.delivering = false;
+    }
+  }
+
+  private acceptedPhaseOutputForSlot(
+    submission: Extract<WorkerSubmission, { readonly type: "phase-output" }>,
+  ): StoredSubmission | undefined {
+    return [...this.authority.submissions.values()].find(
+      (stored) =>
+        stored.submission.type === "phase-output" &&
+        stored.result.status === "accepted" &&
+        stored.submission.runId === submission.runId &&
+        (stored.submission as Extract<WorkerSubmission, { readonly type: "phase-output" }>).output
+          .phase.phaseId === submission.output.phase.phaseId &&
+        (stored.submission as Extract<WorkerSubmission, { readonly type: "phase-output" }>).output
+          .phase.definitionGeneration === submission.output.phase.definitionGeneration &&
+        (stored.submission as Extract<WorkerSubmission, { readonly type: "phase-output" }>).output
+          .phase.attempt === submission.output.phase.attempt &&
+        (stored.submission as Extract<WorkerSubmission, { readonly type: "phase-output" }>).output
+          .outputName === submission.output.outputName,
+    );
+  }
+
+  private assertPhaseOutputSubmission(
+    submission: Extract<WorkerSubmission, { readonly type: "phase-output" }>,
+    stored: StoredDispatch,
+  ): void {
+    const { context } = stored;
+    const declaration = context.phaseOutputDeclarations.find(
+      ({ outputName }) => outputName === submission.output.outputName,
+    );
+    if (
+      declaration === undefined ||
+      submission.output.phase.phaseId !== context.phaseAttempt.phase.phaseId ||
+      submission.output.phase.definitionGeneration !==
+        context.phaseAttempt.phase.definitionGeneration ||
+      submission.output.phase.attempt !== context.phaseAttempt.phase.attempt ||
+      submission.output.schemaKey !== declaration.schemaKey ||
+      submission.output.schemaResourceDigest !== declaration.schemaResourceDigest ||
+      submission.output.byteLength > declaration.maxBytes ||
+      submission.output.sensitivity !== declaration.sensitivity ||
+      submission.output.graphRevisionDigest !== context.graphRevisionDigest ||
+      submission.output.configurationSnapshotDigest !== context.configurationSnapshotDigest ||
+      submission.output.inputBindingDigest !== context.phaseInputBinding.bindingDigest
+    ) {
+      throw new ContextBrokerError(
+        "binding-mismatch",
+        "Phase output does not match its declared slot, attempt, input, graph, or snapshot",
+      );
+    }
+    if (
+      !this.assets.hasCanonicalOutputAsset({
+        contentDigest: submission.output.contentDigest,
+        byteLength: submission.output.byteLength,
+        mediaType: submission.output.mediaType,
+        schemaResourceDigest: submission.output.schemaResourceDigest,
+        validationReceiptDigest: submission.output.validationReceiptDigest,
+      })
+    ) {
+      throw new ContextBrokerError(
+        "binding-mismatch",
+        "Phase output canonical asset and validation receipt are not installed",
+      );
+    }
   }
 
   deliverCompletionFact(submissionId: string): boolean {
@@ -1740,6 +1989,8 @@ function capabilityForSubmission(type: WorkerSubmission["type"]): string {
       return WORKER_CAPABILITIES.discovery;
     case "amendment-proposal":
       return WORKER_CAPABILITIES.amendmentProposal;
+    case "phase-output":
+      return WORKER_CAPABILITIES.phaseOutput;
   }
 }
 
@@ -2239,12 +2490,18 @@ function decodeSubmissionAdmissionResult(
     typeof value === "object" &&
     !Array.isArray(value) &&
     Object.hasOwn(value, "completionFact");
+  const hasPhaseOutputFact =
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.hasOwn(value, "phaseOutputFact");
   const result = exactDurableObject(value, `${label}.result`, [
     "submissionId",
     "type",
     "status",
     "replayed",
     ...(hasFact ? ["completionFact"] : []),
+    ...(hasPhaseOutputFact ? ["phaseOutputFact"] : []),
   ]);
   if (
     result.submissionId !== submission.submissionId ||
@@ -2253,8 +2510,13 @@ function decodeSubmissionAdmissionResult(
     result.replayed !== false
   )
     durableFailure(`${label}.result does not match its submission`);
-  if (result.status === "duplicate" && submission.type !== "completion")
-    durableFailure(`${label}.result marks a non-completion as duplicate`);
+  if (
+    result.status === "duplicate" &&
+    submission.type !== "completion" &&
+    submission.type !== "phase-output"
+  ) {
+    durableFailure(`${label}.result marks a non-terminal submission as duplicate`);
+  }
   let completionFact: CompletionFact | undefined;
   if (hasFact) {
     if (submission.type !== "completion" || result.status !== "accepted")
@@ -2288,12 +2550,53 @@ function decodeSubmissionAdmissionResult(
   } else if (submission.type === "completion" && result.status === "accepted") {
     durableFailure(`${label}.result accepted completion is missing its completion fact`);
   }
+  let phaseOutputFact: PhaseOutputFact | undefined;
+  if (hasPhaseOutputFact) {
+    if (submission.type !== "phase-output" || result.status !== "accepted") {
+      durableFailure(`${label}.result has a phase output fact for a non-output result`);
+    }
+    const fact = exactDurableObject(result.phaseOutputFact, `${label}.result.phaseOutputFact`, [
+      "submissionId",
+      "repositoryId",
+      "runId",
+      "dispatchId",
+      "contextId",
+      "contextDigest",
+      "producingTask",
+      "output",
+    ]);
+    if (
+      fact.submissionId !== submission.submissionId ||
+      fact.repositoryId !== submission.repositoryId ||
+      fact.runId !== submission.runId ||
+      fact.dispatchId !== submission.dispatchId ||
+      fact.contextId !== submission.contextId ||
+      fact.contextDigest !== submission.contextDigest ||
+      canonicalStringify(fact.producingTask) !== canonicalStringify(submission.task) ||
+      canonicalStringify(fact.output) !== canonicalStringify(submission.output)
+    ) {
+      durableFailure(`${label}.result phase output fact does not match its submission`);
+    }
+    phaseOutputFact = deepFreeze({
+      submissionId: submission.submissionId,
+      repositoryId: submission.repositoryId,
+      runId: submission.runId,
+      dispatchId: submission.dispatchId,
+      contextId: submission.contextId,
+      contextDigest: submission.contextDigest,
+      producingTask: submission.task as TaskGenerationReference,
+      output: submission.output,
+    });
+  } else if (submission.type === "phase-output" && result.status === "accepted") {
+    durableFailure(`${label}.result accepted phase output is missing its output fact`);
+  }
   return deepFreeze({
     submissionId: submission.submissionId,
     type: submission.type,
     status: result.status as SubmissionAdmissionResult["status"],
     replayed: false,
     ...(completionFact === undefined ? {} : { completionFact }),
+    ...(phaseOutputFact === undefined ? {} : { phaseOutputFact }),
   });
 }
 

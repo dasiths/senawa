@@ -92,6 +92,17 @@ try {
   }
   run(bin, ["init"], repository, environment);
   assert(run(bin, ["doctor"], repository, environment).includes("valid"), "default doctor failed");
+  const initializedTree = relativeFiles(join(repository, ".senawa"));
+  const packagedTree = relativeFiles(join(modules, "senawa", "dist", "template", ".senawa"));
+  const trackedTree = relativeFiles(join(root, ".senawa"));
+  assert(
+    JSON.stringify(initializedTree) === JSON.stringify(packagedTree),
+    "installed init bytes differ from packaged template",
+  );
+  assert(
+    JSON.stringify(initializedTree) === JSON.stringify(trackedTree),
+    "installed init bytes differ from tracked template",
+  );
   const original = readFileSync(join(repository, ".senawa", "workflow.json"), "utf8");
   const overwrite = runResult(bin, ["init"], repository, environment);
   assert(overwrite.status === 1 && overwrite.stdout.includes("already exists"), "init overwrote");
@@ -99,10 +110,16 @@ try {
     readFileSync(join(repository, ".senawa", "workflow.json"), "utf8") === original,
     "init changed existing file",
   );
-  run(bin, ["init", "explicit.json"], repository, environment);
+  mkdirSync(join(repository, "explicit"));
+  run(bin, ["init", "explicit"], repository, environment);
   assert(
-    run(bin, ["doctor", "explicit.json"], repository, environment).includes("valid"),
+    run(bin, ["doctor", "explicit"], repository, environment).includes("valid"),
     "explicit doctor failed",
+  );
+  assert(
+    JSON.stringify(relativeFiles(join(repository, "explicit", ".senawa"))) ===
+      JSON.stringify(initializedTree),
+    "explicit init bytes differ from default init",
   );
   assert(
     run(bin, ["--version"], repository, environment).trim() === "0.1.0-alpha.0",
@@ -260,6 +277,20 @@ function walk(directory) {
     if (lstatSync(path).isDirectory()) values.push(...walk(path));
   }
   return values;
+}
+
+function relativeFiles(directory, prefix = "") {
+  const records = [];
+  for (const name of readdirSync(directory).sort()) {
+    const path = join(directory, name);
+    const relativePath = prefix.length === 0 ? name : `${prefix}/${name}`;
+    const status = lstatSync(path);
+    if (status.isDirectory()) records.push(...relativeFiles(path, relativePath));
+    else if (status.isFile())
+      records.push({ path: relativePath, bytes: readFileSync(path).toString("base64") });
+    else throw new Error(`Template contains special file ${relativePath}`);
+  }
+  return records;
 }
 
 async function waitForService(bin, cwd, environment) {

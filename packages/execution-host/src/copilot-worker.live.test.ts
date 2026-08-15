@@ -3,11 +3,16 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  canonicalDigest,
+  canonicalValue,
   consumerKey,
+  createPhaseAttempt,
+  createPhaseInputBinding,
   createWorkerContextBase,
   createWorkerDispatch,
   createWorkerModelRouteSelection,
   definitionGeneration,
+  phaseId,
   runId,
   type Sha256,
   sha256Digest,
@@ -58,11 +63,48 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
           taskId: taskId("task_submit-completion"),
           definitionGeneration: definitionGeneration(1),
         };
+        const graphRevisionDigest = sha256Digest("1".repeat(64));
+        const configurationSnapshotDigest = sha256Digest("2".repeat(64));
+        const mappedInput = liveMappedInput();
+        const phase = {
+          phaseId: phaseId("phase_live-probe"),
+          definitionGeneration: definitionGeneration(1),
+          attempt: 1,
+        };
+        const sourceSetDigest = canonicalDigest(canonicalValue({ mappings: [] }), sha256);
+        const phaseInputBinding = createPhaseInputBinding(
+          {
+            phase,
+            schemaKey: consumerKey("live-input"),
+            schemaResourceDigest: sha256Digest("8".repeat(64)),
+            mappings: [],
+            contentDigest: mappedInput.valueDigest,
+            byteLength: 2,
+            validationReceiptDigest: sha256Digest("9".repeat(64)),
+            sourceSetDigest,
+          },
+          sha256,
+        );
+        const phaseAttempt = createPhaseAttempt(
+          {
+            repositoryId: "repository_live-probe",
+            runId: runId("run_live-probe"),
+            phase,
+            inputBindingDigest: phaseInputBinding.bindingDigest,
+            sourceSetDigest,
+            executorDigest: sha256Digest("a".repeat(64)),
+            graphRevisionDigest,
+            configurationSnapshotDigest,
+            upstreamClosureSetDigest: sha256Digest("b".repeat(64)),
+            upstreamOutputSetDigest: sha256Digest("c".repeat(64)),
+          },
+          sha256,
+        );
         const context = createWorkerContextBase(
           {
             task,
-            graphRevisionDigest: sha256Digest("1".repeat(64)),
-            configurationSnapshotDigest: sha256Digest("2".repeat(64)),
+            graphRevisionDigest,
+            configurationSnapshotDigest,
             contracts: [],
             dependencyBarrier: { task, dependencies: [] },
             assets: [],
@@ -76,6 +118,11 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
               orderedRoutesDigest: sha256Digest("6".repeat(64)),
             },
             role: { key: consumerKey("completion-only"), roleDigest: sha256Digest("7".repeat(64)) },
+            prompt: livePrompt(),
+            mappedInput,
+            phaseAttempt,
+            phaseInputBinding,
+            phaseOutputDeclarations: [],
             capabilities: [WORKER_CAPABILITIES.completion],
             budgets: [{ unit: "work-attempt", limit: 1 }],
           },
@@ -88,6 +135,7 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
           workerPrincipalId: "principal_live-probe",
           roleKey: consumerKey("completion-only"),
           capabilities: [WORKER_CAPABILITIES.completion],
+          promptResource: livePromptReference(),
           promptPackDigest: sha256Digest("0".repeat(64)),
         };
         const provisional = createWorkerDispatch(dispatchInput, context, sha256);
@@ -111,7 +159,7 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
           dispatch,
           sha256,
         );
-        const broker = new ContextBroker(new InMemoryContextAssetAuthority(), {
+        const broker = new ContextBroker(new InMemoryContextAssetAuthority(sha256), {
           sha256,
           currentTime: () => "2026-08-13T00:00:00.000Z",
           issueGrantToken: () => randomBytes(32),
@@ -159,6 +207,45 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
     liveTestTimeoutMs,
   );
 });
+
+function livePrompt() {
+  const key = consumerKey("completion-only-prompt");
+  const path = "prompts/completion-only.md";
+  const utf8 = "Submit the completion result.\n";
+  const bytes = new TextEncoder().encode(utf8);
+  const contentDigest = sha256Digest(sha256.digest(bytes));
+  const inputPaths: readonly string[] = [];
+  const source = {
+    path,
+    mediaType: "text/markdown; charset=utf-8",
+    byteLength: bytes.byteLength,
+    contentDigest,
+    utf8,
+  };
+  return {
+    key,
+    path,
+    resourceDigest: canonicalDigest(canonicalValue({ key, source, inputPaths }), sha256),
+    contentDigest,
+    byteLength: bytes.byteLength,
+    utf8,
+    inputPaths,
+  };
+}
+
+function livePromptReference() {
+  const prompt = livePrompt();
+  return {
+    key: prompt.key,
+    resourceDigest: prompt.resourceDigest,
+    contentDigest: prompt.contentDigest,
+  };
+}
+
+function liveMappedInput() {
+  const value = canonicalValue({});
+  return { value, valueDigest: canonicalDigest(value, sha256) };
+}
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name];

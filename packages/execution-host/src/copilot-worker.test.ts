@@ -3,11 +3,17 @@ import {
   assessCompletionAccounting,
   assetId,
   type CompletionSubmission,
+  canonicalDigest,
+  canonicalValue,
   consumerKey,
+  createAgentSessionResumeBinding,
+  createPhaseAttempt,
+  createPhaseInputBinding,
   createWorkerContextBase,
   createWorkerDispatch,
   createWorkerModelRouteSelection,
   definitionGeneration,
+  phaseId,
   runId,
   type Sha256,
   sha256Digest,
@@ -110,6 +116,31 @@ describe("CopilotSerialWorkerAdapter", () => {
       requestExtensions: false,
       requestCanvasRenderer: false,
     });
+  });
+
+  it("resumes only an exact authority binding and creates a new session on mismatch", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk);
+    sdk.onSend = complete("completed");
+    await fixture.adapter.run(fixture.input);
+    const authorized = resumeBinding(fixture);
+
+    await fixture.adapter.run({
+      ...fixture.input,
+      sessionResume: { requestedBinding: authorized, authorizedBinding: authorized },
+    });
+    const resumeCount = sdk.resumeCalls.length;
+    const mismatched = createAgentSessionResumeBinding(
+      { ...resumeBindingInput(fixture), repositoryTreeDigest: sha256Digest("f".repeat(64)) },
+      sha256,
+    );
+    await fixture.adapter.run({
+      ...fixture.input,
+      sessionResume: { requestedBinding: mismatched, authorizedBinding: authorized },
+    });
+
+    expect(sdk.resumeCalls).toHaveLength(resumeCount);
+    expect(required(sdk.createCalls.at(-1)).sessionId).toBe(fixture.dispatch.dispatchId);
   });
 
   it("exposes only six capability and grant filtered tools with closed schemas", async () => {
@@ -539,6 +570,7 @@ describe("CopilotSerialWorkerAdapter", () => {
         workerPrincipalId: fixture.dispatch.worker.principalId,
         roleKey: fixture.dispatch.worker.roleKey,
         capabilities: fixture.dispatch.capabilities,
+        promptResource: fixture.dispatch.promptResource,
         promptPackDigest: sha256Digest("f".repeat(64)),
       },
       fixture.context,
@@ -784,11 +816,48 @@ function harness(
 ) {
   const capabilities = options.capabilities ?? ALL_CAPABILITIES;
   const task = { taskId: taskId("task_worker"), definitionGeneration: definitionGeneration(1) };
+  const graphRevisionDigest = sha256Digest((options.graph ?? "1").repeat(64));
+  const configurationSnapshotDigest = sha256Digest("2".repeat(64));
+  const mappedInput = workerMappedInput();
+  const phase = {
+    phaseId: phaseId("phase_worker"),
+    definitionGeneration: definitionGeneration(1),
+    attempt: options.ordinal ?? 1,
+  };
+  const sourceSetDigest = canonicalDigest(canonicalValue({ mappings: [] }), sha256);
+  const phaseInputBinding = createPhaseInputBinding(
+    {
+      phase,
+      schemaKey: consumerKey("worker-input"),
+      schemaResourceDigest: sha256Digest("a".repeat(64)),
+      mappings: [],
+      contentDigest: mappedInput.valueDigest,
+      byteLength: 2,
+      validationReceiptDigest: sha256Digest("b".repeat(64)),
+      sourceSetDigest,
+    },
+    sha256,
+  );
+  const phaseAttempt = createPhaseAttempt(
+    {
+      repositoryId: "repository_fixture",
+      runId: runId("run_fixture"),
+      phase,
+      inputBindingDigest: phaseInputBinding.bindingDigest,
+      sourceSetDigest,
+      executorDigest: sha256Digest("c".repeat(64)),
+      graphRevisionDigest,
+      configurationSnapshotDigest,
+      upstreamClosureSetDigest: sha256Digest("d".repeat(64)),
+      upstreamOutputSetDigest: sha256Digest("e".repeat(64)),
+    },
+    sha256,
+  );
   const context = createWorkerContextBase(
     {
       task,
-      graphRevisionDigest: sha256Digest((options.graph ?? "1").repeat(64)),
-      configurationSnapshotDigest: sha256Digest("2".repeat(64)),
+      graphRevisionDigest,
+      configurationSnapshotDigest,
       contracts: [],
       dependencyBarrier: { task, dependencies: [] },
       assets: [
@@ -811,6 +880,11 @@ function harness(
         orderedRoutesDigest: sha256Digest("8".repeat(64)),
       },
       role: { key: consumerKey("implementer"), roleDigest: sha256Digest("9".repeat(64)) },
+      prompt: workerPrompt(),
+      mappedInput,
+      phaseAttempt,
+      phaseInputBinding,
+      phaseOutputDeclarations: [],
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 4 }],
     },
@@ -823,6 +897,7 @@ function harness(
     workerPrincipalId: "principal_worker",
     roleKey: consumerKey("implementer"),
     capabilities,
+    promptResource: workerPromptReference(),
     promptPackDigest: sha256Digest("0".repeat(64)),
   };
   const provisional = createWorkerDispatch(dispatchInput, context, sha256);
@@ -869,6 +944,69 @@ function harness(
     selection,
     input,
   };
+}
+
+function resumeBinding(fixture: ReturnType<typeof harness>) {
+  return createAgentSessionResumeBinding(resumeBindingInput(fixture), sha256);
+}
+
+function resumeBindingInput(fixture: ReturnType<typeof harness>) {
+  return {
+    predecessorDispatchId: fixture.dispatch.dispatchId,
+    predecessorSessionId: fixture.dispatch.dispatchId,
+    promptResourceDigest: fixture.context.prompt.resourceDigest,
+    promptContentDigest: fixture.context.prompt.contentDigest,
+    promptPackDigest: fixture.dispatch.promptPackDigest,
+    mappedInputDigest: fixture.context.mappedInput.valueDigest,
+    contextId: fixture.context.contextId,
+    contextDigest: fixture.context.contextDigest,
+    graphRevisionDigest: fixture.context.graphRevisionDigest,
+    configurationSnapshotDigest: fixture.context.configurationSnapshotDigest,
+    taskId: fixture.context.task.taskId,
+    taskGeneration: fixture.context.task.definitionGeneration,
+    modelSelectionDigest: fixture.selection.selectionDigest,
+    repositoryCommitDigest: fixture.context.repositoryBase.commitDigest,
+    repositoryTreeDigest: fixture.context.repositoryBase.treeDigest,
+  };
+}
+
+function workerPrompt() {
+  const key = consumerKey("implementer-prompt");
+  const path = "prompts/implementer.md";
+  const utf8 = "Complete the assigned work.\n";
+  const bytes = new TextEncoder().encode(utf8);
+  const contentDigest = sha256Digest(sha256.digest(bytes));
+  const inputPaths: readonly string[] = [];
+  const source = {
+    path,
+    mediaType: "text/markdown; charset=utf-8",
+    byteLength: bytes.byteLength,
+    contentDigest,
+    utf8,
+  };
+  return {
+    key,
+    path,
+    resourceDigest: canonicalDigest(canonicalValue({ key, source, inputPaths }), sha256),
+    contentDigest,
+    byteLength: bytes.byteLength,
+    utf8,
+    inputPaths,
+  };
+}
+
+function workerPromptReference() {
+  const prompt = workerPrompt();
+  return {
+    key: prompt.key,
+    resourceDigest: prompt.resourceDigest,
+    contentDigest: prompt.contentDigest,
+  };
+}
+
+function workerMappedInput() {
+  const value = canonicalValue({});
+  return { value, valueDigest: canonicalDigest(value, sha256) };
 }
 
 function complete(disposition: "completed" | "blocked") {

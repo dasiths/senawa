@@ -2,7 +2,6 @@ import { canonicalSerialize, canonicalValue } from "@senawa/kernel";
 import type {
   ConfigurationComponentCategory,
   ConfigurationDrift,
-  ConfigurationRegistryEntry,
   ConfigurationSnapshot,
 } from "./contracts.js";
 
@@ -10,12 +9,16 @@ const CATEGORIES: readonly ConfigurationComponentCategory[] = Object.freeze([
   "execution",
   "remote",
   "graph",
+  "prompts",
   "schemas",
   "roles",
   "modelPolicies",
   "sensors",
   "gates",
-  "projections",
+  "implementationEvidenceViews",
+  "phaseDataflow",
+  "forEach",
+  "taskTemplates",
 ]);
 
 export function detectConfigurationDrift(
@@ -32,7 +35,7 @@ export function detectConfigurationDrift(
         ? ["/remote"]
         : category === "graph"
           ? changedGraphKeys(accepted, current)
-          : changedRegistryKeys(accepted[category], current[category]),
+          : changedRegistryKeys(category, accepted[category], current[category]),
   );
   return Object.freeze({
     hasDrift: accepted.snapshotDigest !== current.snapshotDigest,
@@ -73,14 +76,19 @@ function changedGraphKeys(
 }
 
 function changedRegistryKeys(
-  accepted: readonly ConfigurationRegistryEntry[],
-  current: readonly ConfigurationRegistryEntry[],
+  category: Exclude<ConfigurationComponentCategory, "execution" | "remote" | "graph">,
+  accepted: readonly { readonly key: string; readonly digest: string }[],
+  current: readonly { readonly key: string; readonly digest: string }[],
 ): readonly string[] {
   const acceptedEntries = new Map(accepted.map((entry) => [entry.key, entry.digest]));
   const currentEntries = new Map(current.map((entry) => [entry.key, entry.digest]));
-  return [...new Set([...acceptedEntries.keys(), ...currentEntries.keys()])].filter(
-    (key) => acceptedEntries.get(key) !== currentEntries.get(key),
-  );
+  return [...new Set([...acceptedEntries.keys(), ...currentEntries.keys()])]
+    .filter((key) => acceptedEntries.get(key) !== currentEntries.get(key))
+    .map((key) => `/${category}/${escapePointer(key)}`);
+}
+
+function escapePointer(value: string): string {
+  return value.replaceAll("~", "~0").replaceAll("/", "~1");
 }
 
 function compareText(left: string, right: string): number {

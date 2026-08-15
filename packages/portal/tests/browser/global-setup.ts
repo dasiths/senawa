@@ -12,13 +12,16 @@ import {
   consumerKey,
   createAmendmentProposal,
   createIntegrationBarrier,
+  createPhaseAttempt,
   createPhaseCandidate,
+  createPhaseInputBinding,
   createWorkerContextBase,
   createWorkerDispatch,
   defineGate,
   definitionGeneration,
   deriveCompletionRequirements,
   digestAccountingAssessment,
+  digestPhaseOutputSet,
   digestSelectedTaskSet,
   runId as kernelRunId,
   sha256Digest,
@@ -210,7 +213,11 @@ function seedHumanRun(
   const candidate = createPhaseCandidate(
     {
       phase: runtimeFixture.phase,
+      phaseAttempt: worker.context.phaseAttempt.phase,
       graphRevisionDigest: graph.revisionDigest,
+      inputBindingDigest: worker.context.phaseInputBinding.bindingDigest,
+      requiredOutputPublications: [],
+      outputSetDigest: digestPhaseOutputSet([], productionSha256),
       selectedTaskSetDigest: digestSelectedTaskSet([worker.dispatch.task], productionSha256),
       tasks: [worker.dispatch.task],
       acceptedAccountingAssessments: [
@@ -233,6 +240,10 @@ function seedHumanRun(
         intent: "evaluate-gate",
         payload: {
           phase: runtimeFixture.phase,
+          phaseAttempt: worker.context.phaseAttempt.phase,
+          inputBindingDigest: worker.context.phaseInputBinding.bindingDigest,
+          requiredOutputPublications: [],
+          outputSetDigest: digestPhaseOutputSet([], productionSha256),
           dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
           gateDefinition,
           readings: [],
@@ -622,6 +633,64 @@ function workerForRun(
     taskId: runtimeFixture.task.taskId,
     definitionGeneration: runtimeFixture.task.definitionGeneration,
   };
+  const mappedValue = canonicalValue({ request: `portal fixture ${suffix}` });
+  const mappedInput = {
+    value: mappedValue,
+    valueDigest: canonicalDigest(mappedValue, productionSha256),
+  };
+  const phase = { ...runtimeFixture.phase, attempt: 1 };
+  const sourceSetDigest = canonicalDigest(canonicalValue({ mappings: [] }), productionSha256);
+  const phaseInputBinding = createPhaseInputBinding(
+    {
+      phase,
+      schemaKey: consumerKey("portal-input"),
+      schemaResourceDigest: sha256Digest("6".repeat(64)),
+      mappings: [],
+      contentDigest: mappedInput.valueDigest,
+      byteLength: canonicalBytes(mappedValue).byteLength,
+      validationReceiptDigest: sha256Digest("7".repeat(64)),
+      sourceSetDigest,
+    },
+    productionSha256,
+  );
+  const phaseAttempt = createPhaseAttempt(
+    {
+      repositoryId: repositoryForRun(runId),
+      runId: kernelRunId(runId),
+      phase,
+      inputBindingDigest: phaseInputBinding.bindingDigest,
+      sourceSetDigest,
+      executorDigest: sha256Digest("8".repeat(64)),
+      graphRevisionDigest: graph.revisionDigest,
+      configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+      upstreamClosureSetDigest: sha256Digest("9".repeat(64)),
+      upstreamOutputSetDigest: sha256Digest("0".repeat(64)),
+    },
+    productionSha256,
+  );
+  const promptText = "Review request $" + "{{ input.request }}\n";
+  const promptBytes = new TextEncoder().encode(promptText);
+  const promptContentDigest = sha256Digest(productionSha256.digest(promptBytes));
+  const promptKey = consumerKey("portal-prompt");
+  const promptSource = {
+    path: "prompts/portal.md",
+    mediaType: "text/markdown; charset=utf-8",
+    byteLength: promptBytes.byteLength,
+    contentDigest: promptContentDigest,
+    utf8: promptText,
+  } as const;
+  const configuredPrompt = {
+    key: promptKey,
+    path: promptSource.path,
+    resourceDigest: canonicalDigest(
+      canonicalValue({ key: promptKey, source: promptSource, inputPaths: ["/request"] }),
+      productionSha256,
+    ),
+    contentDigest: promptContentDigest,
+    byteLength: promptBytes.byteLength,
+    utf8: promptText,
+    inputPaths: ["/request"],
+  };
   const context = createWorkerContextBase(
     {
       task,
@@ -643,6 +712,11 @@ function workerForRun(
         key: consumerKey("implementer"),
         roleDigest: "5".repeat(64) as ReturnType<typeof sha256Digest>,
       },
+      prompt: configuredPrompt,
+      mappedInput,
+      phaseAttempt,
+      phaseInputBinding,
+      phaseOutputDeclarations: [],
       capabilities,
       budgets: [{ unit: "spend-nano", limit: 2_000 }],
     },
@@ -655,6 +729,11 @@ function workerForRun(
     workerPrincipalId: `principal_${suffix}`,
     roleKey: consumerKey("implementer"),
     capabilities,
+    promptResource: {
+      key: configuredPrompt.key,
+      resourceDigest: configuredPrompt.resourceDigest,
+      contentDigest: configuredPrompt.contentDigest,
+    },
     promptPackDigest: "0".repeat(64) as ReturnType<typeof sha256Digest>,
   };
   const provisional = createWorkerDispatch(input, context, productionSha256);
@@ -786,30 +865,52 @@ function amendmentInput(
 function configurationSnapshot(graph: ReturnType<typeof portalGraph>) {
   const empty = Object.freeze([]);
   const emptyDigest = canonicalDigest(canonicalValue(empty), productionSha256);
+  const promptKey = consumerKey("portal-prompt");
+  const promptUtf8 = "Review portal fixture metadata.\n";
+  const promptBytes = new TextEncoder().encode(promptUtf8);
+  const promptSource = canonicalValue({
+    path: "prompts/portal.md",
+    mediaType: "text/markdown; charset=utf-8",
+    byteLength: promptBytes.byteLength,
+    contentDigest: sha256Digest(productionSha256.digest(promptBytes)),
+    utf8: promptUtf8,
+  });
+  const promptContent = canonicalValue({ key: promptKey, source: promptSource, inputPaths: [] });
+  const prompts = canonicalValue([
+    { ...promptContent, digest: canonicalDigest(promptContent, productionSha256) },
+  ]);
   const execution = Object.freeze({
     workspaceMode: "repository",
     maxWriterConcurrency: 1,
     failurePolicy: "continue",
   });
   const content = {
-    apiVersion: "senawa.dev/configuration-snapshot/v1alpha2",
+    apiVersion: "senawa.dev/configuration-snapshot/v1alpha3",
     execution,
     graph,
+    prompts,
     schemas: empty,
     roles: empty,
     modelPolicies: empty,
     sensors: empty,
     gates: empty,
-    projections: empty,
+    implementationEvidenceViews: empty,
+    phaseDataflow: empty,
+    forEach: empty,
+    taskTemplates: empty,
     componentDigests: {
       execution: canonicalDigest(canonicalValue(execution), productionSha256),
       graph: canonicalDigest(canonicalValue(graph), productionSha256),
+      prompts: canonicalDigest(prompts, productionSha256),
       schemas: emptyDigest,
       roles: emptyDigest,
       modelPolicies: emptyDigest,
       sensors: emptyDigest,
       gates: emptyDigest,
-      projections: emptyDigest,
+      implementationEvidenceViews: emptyDigest,
+      phaseDataflow: emptyDigest,
+      forEach: emptyDigest,
+      taskTemplates: emptyDigest,
     },
   };
   return canonicalValue({

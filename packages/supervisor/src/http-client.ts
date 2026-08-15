@@ -9,6 +9,7 @@ import {
   decodePortalAllowanceReview,
   decodePortalArtifactContent,
   decodePortalArtifactPage,
+  decodePortalDeliveryPage,
   decodePortalEventWindow,
   decodePortalGraphEdgePage,
   decodePortalGraphNodePage,
@@ -31,6 +32,7 @@ import {
   type PortalAllowanceReview,
   type PortalArtifactContent,
   type PortalArtifactPage,
+  type PortalDeliveryPage,
   type PortalEventWindow,
   type PortalGraphEdgePage,
   type PortalGraphNodePage,
@@ -227,6 +229,17 @@ export class HttpSupervisorClient {
   async getPortalGraph(input: string | unknown): Promise<PortalGraphSummary> {
     const request = exactClientObject(input, ["repositoryId", "runId"]);
     return decodePortalGraphSummary(await this.#json("GET", `${portalRunPath(request)}/graph`));
+  }
+
+  async listPortalDelivery(input: string | unknown): Promise<PortalDeliveryPage> {
+    const request = exactClientObject(input, ["repositoryId", "runId"], ["after", "limit"]);
+    const query = new URLSearchParams({
+      after: String(request.after ?? 0),
+      limit: String(request.limit ?? 256),
+    });
+    return decodePortalDeliveryPage(
+      await this.#json("GET", `${portalRunPath(request)}/delivery?${query}`),
+    );
   }
 
   async listPortalGraphNodes(input: string | unknown): Promise<PortalGraphNodePage> {

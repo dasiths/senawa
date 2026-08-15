@@ -1,4 +1,10 @@
-import type { CanonicalValue } from "@senawa/kernel";
+import {
+  type CanonicalValue,
+  canonicalDigest,
+  canonicalValue,
+  type Sha256,
+  type Sha256Digest,
+} from "@senawa/kernel";
 import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
 import traverse from "json-schema-traverse";
 import type { ConfigurationDiagnosticCode } from "./contracts.js";
@@ -11,7 +17,24 @@ export interface SchemaValidationFinding {
     "invalid-schema" | "network-schema-reference" | "undefined-schema-reference"
   >;
   readonly pointer: string;
+  readonly schemaPointer?: string;
+  readonly keyword?: string;
   readonly message: string;
+}
+
+export const SCHEMA_VALIDATOR_PROFILE = canonicalValue({
+  engine: "ajv",
+  draft: JSON_SCHEMA_2020_12,
+  allErrors: true,
+  coerceTypes: false,
+  useDefaults: false,
+  removeAdditional: false,
+  validateSchema: true,
+  strict: true,
+});
+
+export function schemaValidatorProfileDigest(sha256: Sha256): Sha256Digest {
+  return canonicalDigest(SCHEMA_VALIDATOR_PROFILE, sha256);
 }
 
 export interface SchemaResourceIdentifier {
@@ -24,8 +47,15 @@ export interface SchemaDefinitionAnalysis {
   readonly resources: readonly SchemaResourceIdentifier[];
 }
 
+export interface ExternalSchemaDefinition {
+  readonly id: string;
+  readonly schema: CanonicalValue;
+}
+
 const MAX_SCHEMA_DEPTH = 128;
 const MAX_SCHEMA_NODES = 10_000;
+const MAX_REGEX_BYTES = 1_024;
+const MAX_REGEX_KEYWORDS = 256;
 
 interface SchemaResourceRecord {
   readonly id: string;
@@ -55,6 +85,7 @@ export function validateSchemaDefinition(
 export function analyzeSchemaDefinition(
   schema: CanonicalValue,
   pointer: string,
+  externalSchemas: readonly ExternalSchemaDefinition[] = [],
 ): SchemaDefinitionAnalysis {
   const findings: SchemaValidationFinding[] = [];
   if (!isRecord(schema)) {
@@ -71,6 +102,7 @@ export function analyzeSchemaDefinition(
   }
   const boundsFinding = validateSchemaBounds(schema, pointer);
   if (boundsFinding !== undefined) return { findings: [boundsFinding], resources: [] };
+  findings.push(...validateSchemaRegexes(schema, pointer));
   let rootResourceId: string | undefined;
   if (schema.$schema !== JSON_SCHEMA_2020_12) {
     findings.push({
@@ -111,7 +143,14 @@ export function analyzeSchemaDefinition(
   );
   const resolvedReferences = new Map<string, string>();
   for (const location of index.locations) {
-    inspectReferences(location, index.resources, pointer, findings, resolvedReferences);
+    inspectReferences(
+      location,
+      index.resources,
+      new Set(externalSchemas.map(({ id }) => id)),
+      pointer,
+      findings,
+      resolvedReferences,
+    );
   }
   const resources = index.resources
     .filter(({ id }) => id.length > 0)
@@ -133,6 +172,7 @@ export function analyzeSchemaDefinition(
     };
   }
   try {
+    for (const external of externalSchemas) ajv.addSchema(external.schema, external.id);
     ajv.compile(buildAjvStructuralSchema(schema, index.locations, resolvedReferences));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Schema compilation failed";
@@ -150,6 +190,42 @@ export function analyzeSchemaDefinition(
     };
   }
   return { findings, resources };
+}
+
+export function validateSchemaInstance(
+  schema: CanonicalValue,
+  instance: unknown,
+  externalSchemas: readonly ExternalSchemaDefinition[] = [],
+): readonly SchemaValidationFinding[] {
+  let canonicalInstance: CanonicalValue;
+  try {
+    canonicalInstance = canonicalValue(instance);
+  } catch {
+    return [
+      { code: "invalid-schema", pointer: "", message: "Schema instance is not canonical JSON" },
+    ];
+  }
+  const bounds = validateInstanceBounds(canonicalInstance);
+  if (bounds !== undefined) return [bounds];
+  const analysis = analyzeSchemaDefinition(schema, "", externalSchemas);
+  if (analysis.findings.length > 0) return analysis.findings;
+  const ajv = new Ajv2020({ allErrors: true, strict: true, validateSchema: true });
+  try {
+    for (const external of externalSchemas) ajv.addSchema(external.schema, external.id);
+    const validate = ajv.compile(schema);
+    if (validate(canonicalInstance)) return Object.freeze([]);
+    return Object.freeze(
+      (validate.errors ?? []).map((error) => ({
+        code: "invalid-schema" as const,
+        pointer: error.instancePath,
+        schemaPointer: error.schemaPath,
+        keyword: error.keyword,
+        message: error.message ?? "Schema instance is invalid",
+      })),
+    );
+  } catch {
+    return [{ code: "invalid-schema", pointer: "", message: "Schema instance validation failed" }];
+  }
 }
 
 function validateSchemaBounds(
@@ -346,6 +422,7 @@ function visitDraft202012Locations(
 function inspectReferences(
   location: SchemaLocationRecord,
   resources: readonly SchemaResourceRecord[],
+  externalResourceIds: ReadonlySet<string>,
   diagnosticPointer: string,
   findings: SchemaValidationFinding[],
   resolvedReferences: Map<string, string>,
@@ -362,12 +439,29 @@ function inspectReferences(
     const child = location.schema[key];
     const relativeChildPointer = `${location.pointer}/${escapePointer(key)}`;
     const childPointer = `${diagnosticPointer}${relativeChildPointer}`;
-    if (typeof child !== "string" || !child.startsWith("#")) {
+    if (typeof child !== "string") {
       findings.push({
         code: "network-schema-reference",
         pointer: childPointer,
-        message: `${key} must be a local fragment reference`,
+        message: `${key} must be a local fragment or declared absolute resource reference`,
       });
+      continue;
+    }
+    if (!child.startsWith("#")) {
+      const target = normalizeExternalReference(child);
+      if (target === undefined) {
+        findings.push({
+          code: "network-schema-reference",
+          pointer: childPointer,
+          message: `${key} must not use relative, file, or network resolution`,
+        });
+      } else if (!externalResourceIds.has(target)) {
+        findings.push({
+          code: "undefined-schema-reference",
+          pointer: childPointer,
+          message: `${key} references an undeclared schema resource`,
+        });
+      }
       continue;
     }
     let fragment: string;
@@ -416,6 +510,112 @@ function inspectReferences(
       resolvedReferences.set(relativeChildPointer, encodeDocumentFragment(targetPointer));
     }
   }
+}
+
+function normalizeExternalReference(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol === "file:") return undefined;
+    url.hash = "";
+    return normalizeSchemaResourceId(url.href);
+  } catch {
+    return undefined;
+  }
+}
+
+function validateSchemaRegexes(
+  schema: Readonly<Record<string, unknown>>,
+  pointer: string,
+): readonly SchemaValidationFinding[] {
+  const findings: SchemaValidationFinding[] = [];
+  let count = 0;
+  const pending: Array<{ readonly value: unknown; readonly pointer: string }> = [
+    { value: schema, pointer },
+  ];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    if (Array.isArray(current.value)) {
+      current.value.forEach((value, index) => {
+        pending.push({ value, pointer: `${current.pointer}/${index}` });
+      });
+      continue;
+    }
+    if (!isRecord(current.value)) continue;
+    for (const [key, value] of Object.entries(current.value)) {
+      const childPointer = `${current.pointer}/${escapePointer(key)}`;
+      if (key === "pattern" && typeof value === "string") {
+        count += 1;
+        inspectRegex(value, childPointer, findings);
+      }
+      if (key === "patternProperties" && isRecord(value)) {
+        for (const pattern of Object.keys(value)) {
+          count += 1;
+          inspectRegex(pattern, `${childPointer}/${escapePointer(pattern)}`, findings);
+        }
+      }
+      pending.push({ value, pointer: childPointer });
+    }
+  }
+  if (count > MAX_REGEX_KEYWORDS) {
+    findings.push({
+      code: "invalid-schema",
+      pointer,
+      message: `Schema cannot contain more than ${MAX_REGEX_KEYWORDS} regular expressions`,
+    });
+  }
+  return findings;
+}
+
+function inspectRegex(pattern: string, pointer: string, findings: SchemaValidationFinding[]): void {
+  if (new TextEncoder().encode(pattern).byteLength > MAX_REGEX_BYTES) {
+    findings.push({
+      code: "invalid-schema",
+      pointer,
+      message: `Schema regular expressions cannot exceed ${MAX_REGEX_BYTES} UTF-8 bytes`,
+    });
+    return;
+  }
+  try {
+    new RegExp(pattern, "u");
+  } catch {
+    findings.push({
+      code: "invalid-schema",
+      pointer,
+      message: "Schema regular expression is invalid",
+    });
+    return;
+  }
+  if (/\([^)]*(?:[*+]\??|\{\d+,?\d*\})[^)]*\)(?:[*+]\??|\{\d+,?\d*\})/u.test(pattern)) {
+    findings.push({
+      code: "invalid-schema",
+      pointer,
+      message: "Schema regular expression contains nested repetition",
+    });
+  }
+}
+
+function validateInstanceBounds(instance: CanonicalValue): SchemaValidationFinding | undefined {
+  const pending: Array<{ readonly value: CanonicalValue; readonly depth: number }> = [
+    { value: instance, depth: 1 },
+  ];
+  let nodes = 0;
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    if (!Array.isArray(current.value) && !isRecord(current.value)) continue;
+    nodes += 1;
+    if (current.depth > MAX_SCHEMA_DEPTH || nodes > MAX_SCHEMA_NODES) {
+      return {
+        code: "invalid-schema",
+        pointer: "",
+        message: `Schema instances cannot exceed ${MAX_SCHEMA_DEPTH} levels or ${MAX_SCHEMA_NODES} container nodes`,
+      };
+    }
+    const children = Array.isArray(current.value) ? current.value : Object.values(current.value);
+    for (const child of children) pending.push({ value: child, depth: current.depth + 1 });
+  }
+  return undefined;
 }
 
 function buildAjvStructuralSchema(

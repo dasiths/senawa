@@ -61,7 +61,7 @@ static int open_beneath(int root, const char *path, uint64_t flags, mode_t mode)
     struct open_how how = {
         .flags = flags,
         .mode = mode,
-        .resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+        .resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV,
     };
     return (int)syscall(SYS_openat2, root, path, &how, sizeof(how));
 }
@@ -205,6 +205,61 @@ static void read_operation(int root, const char *path, size_t maximum) {
     close(file);
 }
 
+static bool same_stable_metadata(const struct stat *left, const struct stat *right) {
+    return left->st_dev == right->st_dev &&
+        left->st_ino == right->st_ino &&
+        left->st_mode == right->st_mode &&
+        left->st_nlink == right->st_nlink &&
+        left->st_size == right->st_size &&
+        left->st_ctim.tv_sec == right->st_ctim.tv_sec &&
+        left->st_ctim.tv_nsec == right->st_ctim.tv_nsec &&
+        left->st_mtim.tv_sec == right->st_mtim.tv_sec &&
+        left->st_mtim.tv_nsec == right->st_mtim.tv_nsec;
+}
+
+static void stable_read_operation(int root, const char *path, size_t maximum) {
+    int file = open_beneath(root, path, O_RDONLY | O_CLOEXEC | O_NONBLOCK, 0);
+    if (file < 0) fail("resource open failed");
+    struct stat before;
+    if (fstat(file, &before) != 0) fail("resource metadata failed");
+    if (!S_ISREG(before.st_mode)) {
+        errno = EINVAL;
+        fail("resource is not a regular file");
+    }
+    if (before.st_nlink != 1) {
+        errno = EMLINK;
+        fail("resource has multiple hard links");
+    }
+    if (before.st_size < 0 || (uint64_t)before.st_size > maximum) {
+        errno = EFBIG;
+        fail("resource exceeds bound");
+    }
+    size_t length = 0;
+    unsigned char *bytes = read_bounded(file, maximum, &length);
+    struct stat after;
+    if (fstat(file, &after) != 0 || !same_stable_metadata(&before, &after) ||
+        (uint64_t)after.st_size != length) {
+        errno = ESTALE;
+        fail("resource changed during read");
+    }
+    failpoint();
+    int current = open_beneath(root, path, O_RDONLY | O_CLOEXEC | O_NONBLOCK, 0);
+    if (current < 0) {
+        errno = ESTALE;
+        fail("resource path changed after read");
+    }
+    struct stat current_metadata;
+    if (fstat(current, &current_metadata) != 0 ||
+        !same_stable_metadata(&after, &current_metadata)) {
+        errno = ESTALE;
+        fail("resource path changed after read");
+    }
+    close(current);
+    write_all(STDOUT_FILENO, bytes, length);
+    free(bytes);
+    close(file);
+}
+
 static void print_hex(const unsigned char *bytes, size_t length) {
     static const char digits[] = "0123456789abcdef";
     for (size_t index = 0; index < length; index += 1) {
@@ -300,11 +355,13 @@ int main(int argc, char **argv) {
     }
     int root = open(argv[2], O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (root < 0) fail("workspace root open failed");
-    if (flock(root, strcmp(argv[1], "read") == 0 || strcmp(argv[1], "list") == 0 ? LOCK_SH : LOCK_EX) != 0) {
+    if (flock(root, strcmp(argv[1], "read") == 0 || strcmp(argv[1], "stable-read") == 0 || strcmp(argv[1], "list") == 0 ? LOCK_SH : LOCK_EX) != 0) {
         fail("workspace root lock failed");
     }
     if (strcmp(argv[1], "read") == 0 && argc == 5) {
         read_operation(root, argv[3], parse_bound(argv[4]));
+    } else if (strcmp(argv[1], "stable-read") == 0 && argc == 5) {
+        stable_read_operation(root, argv[3], parse_bound(argv[4]));
     } else if (strcmp(argv[1], "list") == 0 && argc == 5) {
         list_operation(root, argv[3], parse_bound(argv[4]));
     } else if (strcmp(argv[1], "write") == 0 && argc == 4) {

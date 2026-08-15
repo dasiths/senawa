@@ -4,6 +4,7 @@ import type {
   BudgetUnit,
   CanonicalValue,
   ConsumerKey,
+  DataflowErrorCode,
   GraphCompilationErrorCode,
   NormalizedAmendmentOperation,
   PhaseGenerationReference,
@@ -11,8 +12,8 @@ import type {
   WorkflowGraph,
 } from "@senawa/kernel";
 
-export const WORKFLOW_CONFIGURATION_API_VERSION = "senawa.dev/workflow/v1alpha2";
-export const CONFIGURATION_SNAPSHOT_API_VERSION = "senawa.dev/configuration-snapshot/v1alpha2";
+export const WORKFLOW_CONFIGURATION_API_VERSION = "senawa.dev/workflow/v1alpha3";
+export const CONFIGURATION_SNAPSHOT_API_VERSION = "senawa.dev/configuration-snapshot/v1alpha3";
 export const WORKFLOW_AMENDMENT_API_VERSION = "senawa.dev/workflow-amendment/v1alpha1";
 
 export type WorkspaceMode = "repository" | "worktree";
@@ -70,13 +71,16 @@ export interface WorkflowConfigurationDocument {
   readonly execution?: ExecutionDeclaration;
   readonly remote?: RemotePolicyDeclaration;
   readonly workflow: WorkflowDeclaration;
+  readonly prompts: readonly PromptResourceDeclaration[];
   readonly schemas: readonly SchemaDeclaration[];
   readonly roles: readonly RoleDeclaration[];
   readonly modelPolicies: readonly ModelPolicyDeclaration[];
   readonly sensors: readonly SensorDeclaration[];
   readonly gates: readonly GateDeclaration[];
+  readonly implementationEvidenceViews: readonly ImplementationEvidenceViewDeclaration[];
+  readonly forEach: readonly ForEachDeclaration[];
+  readonly taskTemplates: readonly TaskTemplateDeclaration[];
   readonly phases: readonly PhaseDeclaration[];
-  readonly projectedWork: readonly ProjectedWorkDeclaration[];
 }
 
 export interface WorkflowAmendmentDocument {
@@ -101,15 +105,145 @@ export type WorkflowAmendmentOperationDeclaration =
 export interface WorkflowDeclaration {
   readonly key: string;
   readonly generation: number;
-  readonly input?: unknown;
+  readonly input: WorkflowInputDeclaration;
+}
+
+export interface WorkflowInputDeclaration {
+  readonly schema: string;
 }
 
 export interface PhaseDeclaration {
   readonly key: string;
   readonly generation: number;
   readonly dependsOn?: readonly string[];
-  readonly input?: unknown;
+  readonly input: PhaseInputDeclaration;
+  readonly executor: PhaseExecutorDeclaration;
+  readonly outputs: readonly PhaseOutputDeclaration[];
+  readonly iteration: PhaseIterationDeclaration;
+  readonly exit: PhaseExitDeclaration;
+  readonly actions: readonly PhaseActionDeclaration[];
+}
+
+export interface PhaseInputDeclaration {
+  readonly schema: string;
+  readonly mappings: readonly DataMappingDeclaration[];
+}
+
+export type MappingSourceDeclaration =
+  | { readonly kind: "workflow-input"; readonly pointer: string }
+  | {
+      readonly kind: "phase-output";
+      readonly phase: string;
+      readonly output: string;
+      readonly pointer: string;
+    }
+  | { readonly kind: "current-item"; readonly pointer: string }
+  | {
+      readonly kind: "implementation-evidence";
+      readonly phase: string;
+      readonly view: string;
+      readonly pointer: string;
+    };
+
+export interface DataMappingDeclaration {
+  readonly key: string;
+  readonly source: MappingSourceDeclaration;
+  readonly destinationPointer: string;
+}
+
+export type PhaseExecutorDeclaration =
+  | AgentPhaseExecutorDeclaration
+  | TaskSetPhaseExecutorDeclaration
+  | TaskFrontierPhaseExecutorDeclaration;
+
+export interface AgentPhaseExecutorDeclaration {
+  readonly kind: "agent";
+  readonly role: string;
+  readonly budgets: readonly BudgetLimitDeclaration[];
+  readonly completionPolicy: CompletionPolicyDeclaration;
+  readonly resumeAcrossAttempts: boolean;
+}
+
+export interface TaskSetPhaseExecutorDeclaration {
+  readonly kind: "task-set";
   readonly work: readonly ExecutableWorkDeclaration[];
+}
+
+export interface TaskFrontierPhaseExecutorDeclaration {
+  readonly kind: "task-frontier";
+  readonly forEach: string;
+  readonly template: string;
+}
+
+export type ForEachSourceDeclaration =
+  | { readonly kind: "phase-output"; readonly phase: string; readonly output: string }
+  | { readonly kind: "phase-input"; readonly phase: string };
+
+export interface ForEachDeclaration {
+  readonly key: string;
+  readonly source: ForEachSourceDeclaration;
+  readonly pointer: string;
+  readonly collectionSchema: string;
+  readonly itemSchema: string;
+  readonly identityPointer: string;
+  readonly limits: Readonly<{
+    readonly maxSelectedItems: number;
+    readonly maxTotalTasks: number;
+    readonly maxConcurrency: number;
+    readonly exhaustion: "escalate" | "fail";
+  }>;
+}
+
+export interface TaskTemplateDeclaration {
+  readonly key: string;
+  readonly generation: number;
+  readonly role: string;
+  readonly budgets: readonly BudgetLimitDeclaration[];
+  readonly inputSchema: string;
+  readonly inputMappings: readonly DataMappingDeclaration[];
+  readonly dependencyIdentityPointer?: string;
+  readonly repositoryChanges: "required" | "allowed" | "forbidden";
+  readonly completionPolicy: CompletionPolicyDeclaration;
+}
+
+export interface ImportPlanActionDeclaration {
+  readonly kind: "import-plan";
+  readonly forEach: string;
+}
+
+export type PhaseActionDeclaration = ImportPlanActionDeclaration;
+
+export interface PhaseOutputDeclaration {
+  readonly key: string;
+  readonly schema: string;
+  readonly path: string;
+  readonly maxBytes: number;
+  readonly sensitivity: "public" | "internal" | "confidential" | "restricted";
+}
+
+export interface PhaseIterationDeclaration {
+  readonly maximumAttempts: number;
+  readonly onGateRejected: "iterate" | "fail";
+  readonly onApprovalRejected: "iterate" | "fail";
+  readonly onUpstreamChanged?: "iterate" | "fail";
+  readonly onExhausted: "escalate" | "fail";
+}
+
+export type PhaseApprovalDeclaration =
+  | { readonly policy: "none" }
+  | { readonly policy: "required"; readonly authority: unknown };
+
+export interface PhaseExitDeclaration {
+  readonly requiredOutputs: readonly string[];
+  readonly gate?: string;
+  readonly approval: PhaseApprovalDeclaration;
+}
+
+export interface ImplementationEvidenceViewDeclaration {
+  readonly key: string;
+  readonly phase: string;
+  readonly evidenceKinds: readonly unknown[];
+  readonly sensitivityCeiling: "public" | "internal" | "confidential" | "restricted";
 }
 
 export interface ExecutableWorkDeclaration {
@@ -128,22 +262,30 @@ export interface BudgetLimitDeclaration {
   readonly limit: number;
 }
 
-export interface ProjectedWorkDeclaration {
-  readonly phase: string;
-  readonly work: ExecutableWorkDeclaration;
-}
-
 export interface SchemaDeclaration {
   readonly key: string;
-  readonly schema: CanonicalValue;
+  readonly path: string;
 }
 
-export interface RoleDeclaration {
+export interface PromptResourceDeclaration {
   readonly key: string;
-  readonly kind: "agent" | "human" | "authority";
-  readonly capabilities: readonly string[];
-  readonly modelPolicy?: string;
+  readonly path: string;
+  readonly inputPaths: readonly string[];
 }
+
+export type RoleDeclaration =
+  | {
+      readonly key: string;
+      readonly kind: "agent";
+      readonly capabilities: readonly string[];
+      readonly prompt: string;
+      readonly modelPolicy: string;
+    }
+  | {
+      readonly key: string;
+      readonly kind: "human" | "authority";
+      readonly capabilities: readonly string[];
+    };
 
 export interface ModelPolicyDeclaration {
   readonly key: string;
@@ -228,10 +370,13 @@ export interface EvidenceRequirementDeclaration {
 
 export type ConfigurationDiagnosticCode =
   | AmendmentErrorCode
+  | DataflowErrorCode
   | GraphCompilationErrorCode
   | "authority-widening"
   | "duplicate-schema-id"
   | "duplicate-key"
+  | "duplicate-json-member"
+  | "forbidden-role-prompt"
   | "invalid-api-version"
   | "invalid-budget"
   | "invalid-canonical-value"
@@ -240,12 +385,24 @@ export type ConfigurationDiagnosticCode =
   | "invalid-gate"
   | "invalid-kind"
   | "invalid-locator"
+  | "invalid-prompt-template"
+  | "invalid-resource-path"
+  | "invalid-resource-utf8"
   | "invalid-model-policy"
   | "invalid-role"
   | "invalid-schema"
   | "invalid-sensor"
   | "missing-field"
+  | "missing-agent-prompt"
+  | "missing-prompt-resources"
+  | "missing-resource-path"
   | "network-schema-reference"
+  | "resource-read-failed"
+  | "resource-set-too-large"
+  | "undeclared-prompt-input"
+  | "unknown-prompt-reference"
+  | "unsupported-workflow-version"
+  | "unused-prompt-input"
   | "undefined-schema-reference"
   | "unknown-field"
   | "unknown-reference";
@@ -263,16 +420,82 @@ export interface ConfigurationRegistryEntry {
   readonly digest: Sha256Digest;
 }
 
+export type ConfigurationResourceKind = "prompt" | "schema";
+
+export interface ConfigurationResourceReadRequest {
+  readonly kind: ConfigurationResourceKind;
+  readonly path: string;
+  readonly maxBytes: number;
+}
+
+export interface ConfigurationResourceReader {
+  read(request: ConfigurationResourceReadRequest): Promise<Uint8Array>;
+}
+
+export type ConfigurationResourceReadErrorCode =
+  | "not-found"
+  | "path-escape"
+  | "symlink"
+  | "hardlink"
+  | "not-regular-file"
+  | "too-large"
+  | "changed-during-read"
+  | "permission-denied"
+  | "read-failed";
+
+export class ConfigurationResourceReadError extends Error {
+  readonly code: ConfigurationResourceReadErrorCode;
+
+  constructor(code: ConfigurationResourceReadErrorCode, message: string = code) {
+    super(message);
+    this.name = "ConfigurationResourceReadError";
+    this.code = code;
+  }
+}
+
+export interface WorkflowConfigurationCompilationInput {
+  readonly document: unknown;
+  readonly locator: string;
+  readonly resources: ConfigurationResourceReader;
+}
+
+export interface ConfigurationTextResourceSource {
+  readonly path: string;
+  readonly mediaType: "text/markdown; charset=utf-8" | "application/schema+json; charset=utf-8";
+  readonly byteLength: number;
+  readonly contentDigest: Sha256Digest;
+  readonly utf8: string;
+}
+
+export interface ConfigurationPromptResource {
+  readonly key: ConsumerKey;
+  readonly source: ConfigurationTextResourceSource;
+  readonly inputPaths: readonly string[];
+  readonly digest: Sha256Digest;
+}
+
+export interface ConfigurationSchemaResource {
+  readonly key: ConsumerKey;
+  readonly source: ConfigurationTextResourceSource;
+  readonly schema: CanonicalValue;
+  readonly schemaDigest: Sha256Digest;
+  readonly digest: Sha256Digest;
+}
+
 export type ConfigurationComponentCategory =
   | "execution"
   | "remote"
   | "graph"
+  | "prompts"
   | "schemas"
   | "roles"
   | "modelPolicies"
   | "sensors"
   | "gates"
-  | "projections";
+  | "implementationEvidenceViews"
+  | "phaseDataflow"
+  | "forEach"
+  | "taskTemplates";
 
 export type ConfigurationComponentDigests = Readonly<
   Record<Exclude<ConfigurationComponentCategory, "remote">, Sha256Digest> & {
@@ -285,12 +508,16 @@ export interface ConfigurationSnapshot {
   readonly execution: ExecutionPolicy;
   readonly remote?: RemotePolicy;
   readonly graph: WorkflowGraph;
-  readonly schemas: readonly ConfigurationRegistryEntry[];
+  readonly prompts: readonly ConfigurationPromptResource[];
+  readonly schemas: readonly ConfigurationSchemaResource[];
   readonly roles: readonly ConfigurationRegistryEntry[];
   readonly modelPolicies: readonly ConfigurationRegistryEntry[];
   readonly sensors: readonly ConfigurationRegistryEntry[];
   readonly gates: readonly ConfigurationRegistryEntry[];
-  readonly projections: readonly ConfigurationRegistryEntry[];
+  readonly implementationEvidenceViews: readonly ConfigurationRegistryEntry[];
+  readonly phaseDataflow: readonly ConfigurationRegistryEntry[];
+  readonly forEach: readonly ConfigurationRegistryEntry[];
+  readonly taskTemplates: readonly ConfigurationRegistryEntry[];
   readonly componentDigests: ConfigurationComponentDigests;
   readonly snapshotDigest: Sha256Digest;
 }

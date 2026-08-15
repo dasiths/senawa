@@ -5,6 +5,7 @@ import {
   compileWorkflowAmendment,
   compileWorkflowConfiguration,
   createExampleWorkflowConfiguration,
+  createExampleWorkflowResources,
   WORKFLOW_AMENDMENT_API_VERSION,
 } from "@senawa/configuration";
 import {
@@ -43,6 +44,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ProductionScheduler, selectCurrentDispatches } from "./production-scheduler.js";
 
 const roots = new Set<string>();
+
+function exampleResourceReader() {
+  const resources = createExampleWorkflowResources();
+  return {
+    async read({ path }: { readonly path: string }) {
+      const text = resources[path];
+      if (text === undefined) throw new Error("Missing example resource");
+      return new TextEncoder().encode(text);
+    },
+  };
+}
 const dependencies: RuntimeDependencies = {
   sha256: deterministicSha256,
   authorization: createRoleAuthorizationPolicy([
@@ -130,9 +142,12 @@ describe("production worker composition", () => {
       assetDirectory: join(root, "assets"),
       dependencies: amendmentDependencies,
     });
-    const baseSnapshot = compileWorkflowConfiguration(
-      createExampleWorkflowConfiguration(),
-      "fixture://amendment-recovery-base",
+    const baseSnapshot = await compileWorkflowConfiguration(
+      {
+        document: createExampleWorkflowConfiguration(),
+        locator: "fixture://amendment-recovery-base",
+        resources: exampleResourceReader(),
+      },
       deterministicSha256,
     );
     const baseContextDigest = "a".repeat(64);
@@ -150,7 +165,26 @@ describe("production worker composition", () => {
                 key: "audit",
                 generation: 1,
                 dependsOn: ["work"],
-                input: { purpose: "Review the release" },
+                input: {
+                  schema: "work-input",
+                  mappings: [
+                    {
+                      key: "workflow-input",
+                      source: { kind: "workflow-input", pointer: "" },
+                      destinationPointer: "",
+                    },
+                  ],
+                },
+                executor: { kind: "task-set", work: [] },
+                outputs: [],
+                iteration: {
+                  maximumAttempts: 1,
+                  onGateRejected: "fail",
+                  onApprovalRejected: "fail",
+                  onExhausted: "fail",
+                },
+                exit: { requiredOutputs: [], approval: { policy: "none" } },
+                actions: [],
               },
             },
           ],
@@ -175,7 +209,26 @@ describe("production worker composition", () => {
                 key: "package",
                 generation: 1,
                 dependsOn: ["work"],
-                input: { purpose: "Package the release" },
+                input: {
+                  schema: "work-input",
+                  mappings: [
+                    {
+                      key: "workflow-input",
+                      source: { kind: "workflow-input", pointer: "" },
+                      destinationPointer: "",
+                    },
+                  ],
+                },
+                executor: { kind: "task-set", work: [] },
+                outputs: [],
+                iteration: {
+                  maximumAttempts: 1,
+                  onGateRejected: "fail",
+                  onApprovalRejected: "fail",
+                  onExhausted: "fail",
+                },
+                exit: { requiredOutputs: [], approval: { policy: "none" } },
+                actions: [],
               },
             },
           ],
@@ -318,7 +371,7 @@ describe("production worker composition", () => {
     });
     await service.drain();
     await service.stop();
-  });
+  }, 15_000);
 
   it("rejects cross-authority worker intents before broker or SDK mutation", async () => {
     const root = mkdtempSync(join(tmpdir(), "senawa-worker-binding-"));

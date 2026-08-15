@@ -16,6 +16,9 @@ import {
   type PortalArtifactMetadata,
   type PortalArtifactPage,
   type PortalArtifactSource,
+  type PortalDeliveryPage,
+  type PortalDeliveryRecord,
+  type PortalDeliveryRecordKind,
   type PortalEventWindow,
   type PortalFreshDispatchRequirement,
   type PortalGraphEdge,
@@ -89,6 +92,14 @@ const SENSITIVITIES = new Set<AssetSensitivity>([
   "restricted",
 ]);
 const ACTIVITY_DIRECTIONS = new Set<PortalActivityDirection>(["tail", "after", "before"]);
+const DELIVERY_KINDS = new Set<PortalDeliveryRecordKind>([
+  "phase-attempt",
+  "phase-transition",
+  "phase-output",
+  "fan-out-evaluation",
+  "generated-task",
+  "plan-import",
+]);
 
 export function decodePortalSessionDescriptor(input: string | unknown): PortalSessionDescriptor {
   const object = exact(wire(input), "$", ["apiVersion", "expiresAt", "csrfMode", "capabilities"]);
@@ -237,6 +248,105 @@ export function decodePortalGraphEdgePage(input: string | unknown): PortalGraphE
 
 export function encodePortalGraphEdgePage(input: unknown): string {
   return canonicalStringify(decodePortalGraphEdgePage(input));
+}
+
+export function decodePortalDeliveryPage(input: string | unknown): PortalDeliveryPage {
+  const object = exact(wire(input), "$", [
+    "apiVersion",
+    "repositoryId",
+    "runId",
+    "dataflowRevision",
+    "taskFrontierRevision",
+    "after",
+    "nextAfter",
+    "hasMore",
+    "records",
+  ]);
+  version(object.apiVersion, "$.apiVersion");
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  integer(object.dataflowRevision, "$.dataflowRevision");
+  integer(object.taskFrontierRevision, "$.taskFrontierRevision");
+  integer(object.after, "$.after");
+  integer(object.nextAfter, "$.nextAfter");
+  bool(object.hasMore, "$.hasMore");
+  const records = page(
+    object.records,
+    "$.records",
+    PORTAL_LIMITS.maxDeliveryItems,
+    portalDeliveryRecord,
+  );
+  if ((object.nextAfter as number) !== (object.after as number) + records.length) {
+    fail("invalid-value", "$.nextAfter", "must equal after plus the record count");
+  }
+  return Object.freeze({ ...object, records }) as unknown as PortalDeliveryPage;
+}
+
+export function encodePortalDeliveryPage(input: unknown): string {
+  return canonicalStringify(decodePortalDeliveryPage(input));
+}
+
+function portalDeliveryRecord(value: unknown, path: string): PortalDeliveryRecord {
+  const optionalKeys = [
+    "phaseId",
+    "definitionGeneration",
+    "attempt",
+    "state",
+    "outputName",
+    "schemaKey",
+    "contentDigest",
+    "byteLength",
+    "sensitivity",
+    "accepted",
+    "trigger",
+    "disposition",
+    "nextAttempt",
+    "forEachKey",
+    "evaluationDigest",
+    "taskSetDigest",
+    "applied",
+    "taskId",
+    "inputDigest",
+    "proposalDigest",
+    "decisionDigest",
+    "applicationDigest",
+  ];
+  const object = exact(value, path, ["identity", "kind"], optionalKeys);
+  boundedString(object.identity, `${path}.identity`, 1, 256);
+  oneOf(object.kind, `${path}.kind`, DELIVERY_KINDS);
+  for (const key of ["phaseId", "taskId"] as const) optional(object, key, identity, path);
+  for (const key of ["definitionGeneration", "attempt", "byteLength", "nextAttempt"] as const) {
+    if (Object.hasOwn(object, key))
+      integer(object[key], `${path}.${key}`, key === "byteLength" ? 0 : 1);
+  }
+  for (const key of [
+    "contentDigest",
+    "evaluationDigest",
+    "taskSetDigest",
+    "inputDigest",
+    "proposalDigest",
+    "decisionDigest",
+    "applicationDigest",
+  ] as const) {
+    if (Object.hasOwn(object, key)) digest(object[key], `${path}.${key}`);
+  }
+  for (const key of ["accepted", "applied"] as const) {
+    if (Object.hasOwn(object, key)) bool(object[key], `${path}.${key}`);
+  }
+  if (Object.hasOwn(object, "sensitivity")) {
+    oneOf(object.sensitivity, `${path}.sensitivity`, SENSITIVITIES);
+  }
+  for (const key of [
+    "state",
+    "outputName",
+    "schemaKey",
+    "trigger",
+    "disposition",
+    "forEachKey",
+  ] as const) {
+    if (Object.hasOwn(object, key)) boundedString(object[key], `${path}.${key}`, 1, 256);
+  }
+  return Object.freeze(object) as unknown as PortalDeliveryRecord;
 }
 
 export function decodePortalImmutableRecord(input: string | unknown): PortalImmutableRecord {

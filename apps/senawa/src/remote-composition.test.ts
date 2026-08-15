@@ -13,6 +13,7 @@ import { join } from "node:path";
 import {
   compileWorkflowConfiguration,
   createExampleWorkflowConfiguration,
+  createExampleWorkflowResources,
 } from "@senawa/configuration";
 import {
   canonicalStringify,
@@ -32,6 +33,17 @@ import {
 } from "./remote-composition.js";
 
 const roots = new Set<string>();
+
+function exampleResourceReader() {
+  const resources = createExampleWorkflowResources();
+  return {
+    async read({ path }: { readonly path: string }) {
+      const text = resources[path];
+      if (text === undefined) throw new Error("Missing example resource");
+      return new TextEncoder().encode(text);
+    },
+  };
+}
 
 afterEach(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
@@ -58,7 +70,7 @@ describe("production remote connector composition", () => {
   });
 
   it("requires paired daemon-local inputs and a private bounded key file", async () => {
-    const fixture = createFixture();
+    const fixture = await createFixture();
     await expect(
       createOptionalDaemonRemoteConnector({
         ...fixture.factoryInput,
@@ -103,7 +115,7 @@ describe("production remote connector composition", () => {
   });
 
   it("derives policy from the persisted snapshot and exposes only sanitized status", async () => {
-    const fixture = createFixture();
+    const fixture = await createFixture();
     const connector = await createOptionalDaemonRemoteConnector({
       ...fixture.factoryInput,
       environment: {
@@ -122,7 +134,7 @@ describe("production remote connector composition", () => {
   });
 
   it("rejects symlink, non-regular, and non-Ed25519 enrollment inputs", async () => {
-    const fixture = createFixture();
+    const fixture = await createFixture();
     const environment = (keyFile: string) => ({
       SENAWA_REMOTE_ENDPOINT: "https://control.example.test",
       SENAWA_REMOTE_KEY_FILE: keyFile,
@@ -160,7 +172,7 @@ describe("production remote connector composition", () => {
   });
 
   it("performs production hello before polling and sends the selected session", async () => {
-    const fixture = createFixture();
+    const fixture = await createFixture();
     const enrollment = JSON.parse(readFileSync(fixture.keyFile, "utf8")) as {
       binding: RemoteRepositoryBinding;
     };
@@ -225,7 +237,7 @@ describe("production remote connector composition", () => {
   });
 
   it("refuses redirects, content encoding, length mismatch, oversize, drip, and cancellation", async () => {
-    const fixture = createFixture();
+    const fixture = await createFixture();
     const enrollment = JSON.parse(readFileSync(fixture.keyFile, "utf8")) as {
       binding: RemoteRepositoryBinding;
     };
@@ -311,7 +323,7 @@ describe("production remote connector composition", () => {
   });
 });
 
-function createFixture() {
+async function createFixture() {
   const root = mkdtempSync(join(tmpdir(), "senawa-remote-composition-"));
   roots.add(root);
   const databasePath = join(root, "authority.db");
@@ -322,29 +334,32 @@ function createFixture() {
     dependencies,
   });
   const document = createExampleWorkflowConfiguration();
-  const snapshot = compileWorkflowConfiguration(
+  const snapshot = await compileWorkflowConfiguration(
     {
-      ...document,
-      remote: {
-        roleMappings: [
-          {
-            issuer: "https://identity.example.test",
-            tenant: "tenant-alpha",
-            upstreamRole: "operator",
-            localRoles: ["worker"],
+      document: {
+        ...document,
+        remote: {
+          roleMappings: [
+            {
+              issuer: "https://identity.example.test",
+              tenant: "tenant-alpha",
+              upstreamRole: "operator",
+              localRoles: ["worker"],
+            },
+          ],
+          maximumRemoteAuthorizationLeaseSeconds: 900,
+          synchronization: {
+            classificationCeiling: "internal",
+            receiptChain: true,
+            events: true,
+            projections: true,
+            synchronizationState: true,
           },
-        ],
-        maximumRemoteAuthorizationLeaseSeconds: 900,
-        synchronization: {
-          classificationCeiling: "internal",
-          receiptChain: true,
-          events: true,
-          projections: true,
-          synchronizationState: true,
         },
       },
+      locator: "fixture://remote-composition",
+      resources: exampleResourceReader(),
     },
-    "fixture://remote-composition",
     deterministicSha256,
   );
   authority.commandAuthority.putConfigurationSnapshot(snapshot);

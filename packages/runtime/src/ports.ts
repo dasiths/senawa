@@ -74,7 +74,7 @@ export interface SerializableAuthorityPort {
   toCanonicalJson(): string;
 }
 
-export const REPORTING_SNAPSHOT_VERSION = "senawa.dev/reporting-snapshot/v1alpha1" as const;
+export const REPORTING_SNAPSHOT_VERSION = "senawa.dev/reporting-snapshot/v1alpha2" as const;
 
 export const REPORTING_LIMITS = Object.freeze({
   maxRecordsPerSection: 10_000,
@@ -93,6 +93,7 @@ export type ReportingSectionName =
   | "models"
   | "assets"
   | "context"
+  | "dataflow"
   | "amendments"
   | "escalations"
   | "gates"
@@ -108,6 +109,7 @@ export interface ReportingSourceVector {
   readonly workflowCursor: number;
   readonly lifecycleRevision: number;
   readonly contextRevision: number;
+  readonly dataflowRevision: number;
   readonly runnerRevision: number;
   readonly workspaceRevision: number;
   readonly humanRevision: number;

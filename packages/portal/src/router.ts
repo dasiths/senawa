@@ -1,6 +1,7 @@
 export const PORTAL_ROUTES = Object.freeze([
   "overview",
   "graph",
+  "delivery",
   "activity",
   "artifacts",
   "needs",

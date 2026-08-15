@@ -1,3 +1,5 @@
+import { type BudgetLedger, consumeBudget, createBudgetLedger } from "@senawa/kernel";
+
 export type RuntimeWorkspaceMode = "repository" | "worktree";
 export type RuntimeFailurePolicy = "continue" | "fail-fast";
 
@@ -39,6 +41,44 @@ export interface SiblingExecutionFact {
   readonly taskId: string;
   readonly operationId: string;
   readonly status: ReadyEffectFact["status"];
+}
+
+export interface TaskFrontierMemberFact {
+  readonly taskId: string;
+  readonly definitionGeneration: number;
+  readonly dependencyTaskIds: readonly string[];
+  readonly state: "pending" | "active" | "completed" | "failed" | "superseded";
+  readonly repositoryChanges: "required" | "allowed" | "forbidden";
+}
+
+export interface AppliedTaskFrontierInput {
+  readonly applicationStatus: "pending" | "applied";
+  readonly maxActive: number;
+  readonly executionPolicy: RuntimeExecutionPolicy;
+  readonly schedulerLimits: SchedulerLimits;
+  readonly members: readonly TaskFrontierMemberFact[];
+}
+
+export interface AppliedTaskFrontierPlan {
+  readonly effectiveTaskSet: readonly Readonly<{
+    readonly taskId: string;
+    readonly definitionGeneration: number;
+  }>[];
+  readonly admitted: readonly Readonly<{
+    readonly taskId: string;
+    readonly definitionGeneration: number;
+  }>[];
+  readonly blockedByApplication: boolean;
+  readonly complete: boolean;
+}
+
+export interface TaskRetryPolicy {
+  readonly exhaustion: "escalate" | "fail";
+}
+
+export interface TaskRetryPlan {
+  readonly action: "retry" | "escalate" | "fail";
+  readonly budgetLedger: BudgetLedger;
 }
 
 export type FailurePolicyAction =
@@ -127,6 +167,82 @@ export function planFailurePolicyActions(
   ]);
 }
 
+export function planAppliedTaskFrontier(input: AppliedTaskFrontierInput): AppliedTaskFrontierPlan {
+  validateLimit(input.maxActive, "task-frontier max active");
+  if (input.maxActive > 32) throw new TypeError("Task-frontier max active cannot exceed 32");
+  const members = [...input.members].sort(compareFrontierMember);
+  const byTask = new Map<string, TaskFrontierMemberFact>();
+  for (const member of members) {
+    validateIdentity(member.taskId, "task-frontier task identity");
+    if (byTask.has(member.taskId)) throw new TypeError("Task-frontier members must be unique");
+    if (!Number.isSafeInteger(member.definitionGeneration) || member.definitionGeneration < 1) {
+      throw new TypeError("Task-frontier generation must be a positive safe integer");
+    }
+    byTask.set(member.taskId, member);
+  }
+  for (const member of members) {
+    for (const dependency of member.dependencyTaskIds) {
+      if (!byTask.has(dependency)) throw new TypeError("Task-frontier dependency is not effective");
+    }
+  }
+  const effectiveMembers = members.filter(({ state }) => state !== "superseded");
+  const effectiveTaskSet = effectiveMembers.map(({ taskId, definitionGeneration }) => ({
+    taskId,
+    definitionGeneration,
+  }));
+  if (input.applicationStatus !== "applied") {
+    return Object.freeze({
+      effectiveTaskSet: Object.freeze(effectiveTaskSet),
+      admitted: Object.freeze([]),
+      blockedByApplication: true,
+      complete: false,
+    });
+  }
+  const active = members.filter(({ state }) => state === "active").length;
+  let capacity = Math.max(0, input.maxActive - active);
+  let writerCapacity = effectiveWriterLimit(input.executionPolicy, input.schedulerLimits);
+  const admitted = members.flatMap((member) => {
+    if (member.state !== "pending" || capacity === 0) return [];
+    if (
+      member.dependencyTaskIds.some(
+        (dependency) =>
+          !["completed", "superseded"].includes(byTask.get(dependency)?.state ?? "pending"),
+      )
+    )
+      return [];
+    if (member.repositoryChanges !== "forbidden") {
+      if (writerCapacity === 0) return [];
+      writerCapacity -= 1;
+    }
+    capacity -= 1;
+    return [{ taskId: member.taskId, definitionGeneration: member.definitionGeneration }];
+  });
+  return Object.freeze({
+    effectiveTaskSet: Object.freeze(effectiveTaskSet),
+    admitted: Object.freeze(admitted),
+    blockedByApplication: false,
+    complete:
+      effectiveMembers.length > 0 && effectiveMembers.every(({ state }) => state === "completed"),
+  });
+}
+
+export function planTaskRetry(
+  kind: "dispatch-failure" | "rework",
+  ledgerValue: BudgetLedger,
+  policy: TaskRetryPolicy,
+): TaskRetryPlan {
+  const ledger = createBudgetLedger(ledgerValue);
+  const consumption = consumeBudget(ledger, {
+    unit: kind === "dispatch-failure" ? "dispatch-failure" : "review-iteration",
+    amount: 1,
+  });
+  return Object.freeze(
+    consumption.outcome === "consumed"
+      ? { action: "retry" as const, budgetLedger: consumption.ledger }
+      : { action: policy.exhaustion, budgetLedger: ledger },
+  );
+}
+
 function validateExecutionPolicy(policy: RuntimeExecutionPolicy): void {
   if (policy.workspaceMode !== "repository" && policy.workspaceMode !== "worktree") {
     throw new TypeError("Workspace mode must be repository or worktree");
@@ -158,6 +274,13 @@ function compareBatchMember(left: ReadySiblingBatchMember, right: ReadySiblingBa
 
 function compareSiblingFact(left: SiblingExecutionFact, right: SiblingExecutionFact): number {
   return compareText(left.taskId, right.taskId) || compareText(left.operationId, right.operationId);
+}
+
+function compareFrontierMember(
+  left: TaskFrontierMemberFact,
+  right: TaskFrontierMemberFact,
+): number {
+  return compareText(left.taskId, right.taskId);
 }
 
 function compareText(left: string, right: string): number {

@@ -828,6 +828,72 @@ alternatives in the implementation log.
   text cannot approve, close, grant allowance, import plans, dispatch effects,
   or mutate graph authority.
 
+### Schema-constrained agent outputs
+
+* Each agent dispatch receives one `submit_phase_output` custom tool for its
+  declared output slot. Senawa derives the tool parameter schema from the exact
+  accepted output schema and immutable phase context. The SDK schema guides the
+  model, but Senawa always performs authoritative runtime validation again.
+* The tool accepts a bounded wrapper containing `output` and optional
+  agent-declared change notes. `output` is arbitrary consumer data governed only
+  by the declared JSON Schema. Change notes are non-authoritative metadata.
+  Actual repository changes remain host-observed workspace and Git evidence.
+* The tool handler canonicalizes the payload, enforces output byte and node
+  limits, validates the accepted schema resource and profile, installs the
+  content-addressed JSON asset, creates the exact validation receipt, and submits
+  the existing metadata-only `phase-output` fact through the context broker.
+* Invalid output is not accepted or published. The tool returns a bounded,
+  machine-readable failure to the same agent session with stable code, instance
+  JSON Pointer, schema pointer, and keyword. It never returns schema bodies,
+  secrets, repository content, or internal exception text.
+* The agent may correct and resubmit within a finite output-attempt budget.
+  Invalid attempts, findings digests, tool-call identities, and the eventual
+  accepted submission are durably attributable without treating rejected bodies
+  as phase authority. Exhaustion follows the phase iteration or escalation
+  policy.
+* Exact accepted replay is idempotent. Reusing an output slot, submission
+  identity, or tool-call identity with different canonical content conflicts.
+  A crash after asset, validation, submission, or outbox commit converges without
+  duplicate publication.
+* A phase cannot submit successful completion while a required output slot is
+  absent. An accepted output still does not close or approve the phase: normal
+  completion assessment, exit gate, human approval, and closure authority remain
+  required.
+* Writing `output.json` in a temporary workspace is only a research fallback if
+  the SDK cannot express the accepted schema as a custom tool. Mutable file
+  polling is not the production contract. Any fallback must use a confined,
+  exclusive path, exact digest, explicit submit action, and the same validation
+  and feedback semantics.
+
+### Structured output research and proof
+
+* Phase 14G first probes the pinned Copilot SDK custom-tool behavior in isolation.
+  The probe uses an accepted consumer schema, an intentionally invalid first
+  tool call, a structured Senawa validation response, a corrected second call,
+  and one accepted canonical output. It records whether the model receives and
+  acts on tool failure feedback in the same session.
+* The deterministic fake SDK probe is mandatory and no-credit. An optional live
+  probe remains separately gated by explicit model, credit ceiling, timeout, and
+  cost/data acknowledgement settings.
+* Phase 14H implements the dispatch-scoped output coordinator, generated tool
+  schema, staged canonical asset, validation receipt, broker submission, outbox
+  delivery, retry ledger, crash recovery, and resume binding only after the
+  probe establishes a viable SDK feedback path.
+* Phase 14I proves the complete standard workflow with fixture agents that fail
+  schema validation once and recover, plus an optional live probe. It covers
+  multiple output schemas, repository edits alongside structured output,
+  restart, replay, stale context, output-slot conflicts, attempt exhaustion,
+  prompt injection, and reporting and portal secrecy.
+* Senawa must not claim the structured-output path is production-ready until the
+  Phase 14I proof gate passes. Passing unit codecs or accepting a manually built
+  phase-output descriptor is insufficient evidence.
+* Create and retain `docs/design/production-enhancements.md`. Every deferred
+  production hardening item records observed evidence, current pragmatic
+  behavior, risk and tradeoff, deferral reason, trigger for revisiting it, and a
+  concrete acceptance test. The log cannot be used to defer correctness,
+  authority, data-loss, secret-exposure, or unbounded-cost defects required by
+  this phase.
+
 ### Schema-selected task loops
 
 * A task-frontier phase may declare a finite `forEach` fan-out over one accepted
@@ -903,6 +969,14 @@ alternatives in the implementation log.
 * Complete no-credit define-to-verify journey with fixture agents, human
   approvals, imported plan tasks, per-task implementation loop, rework,
   implementation evidence, verification, and closure
+* SDK custom-tool probe with invalid-first, feedback, corrected resubmission,
+  exact acceptance, exhaustion, cancellation, and optional live behavior
+* Generated output-tool schema tests for arbitrary consumer schemas, external
+  references, bounds, canonicalization, and SDK adapter conversion
+* Structured output plus repository-change tests proving model claims remain
+  metadata while host-observed changes remain exact workspace authority
+* Output staging and broker crash tests before and after asset, validation,
+  submission, outbox, and phase-publication commits
 * Default and packed-install init/doctor tests for workflow, prompts, and schemas
 * Desktop and mobile portal journeys for outputs, approvals, iterations,
   generated tasks, rework, and verification
@@ -916,10 +990,153 @@ alternatives in the implementation log.
 * Fan-out task identity depends on source array order or current file contents.
 * Plan import bypasses additive amendment or stale checks.
 * Init generates files that doctor accepts but runtime cannot enforce.
+* An invalid agent payload is accepted, silently repaired, or loses validation
+  feedback needed for a bounded retry.
+* A model-authored change list is treated as proof of repository changes.
+* Production readiness is declared before invalid-first correction, restart,
+  replay, and no-credit proof pass.
 
 ### Commit
 
 `feat: add standard delivery workflow authoring`
+
+### Current implementation status and session handoff
+
+Status captured on 2026-08-15 from branch
+`redesign/workflow-state-machine` at delivered baseline `0cd38b5`. Phase 14 is
+uncommitted and the worktree is intentionally dirty. Do not restart the phase or
+discard current changes.
+
+#### Completed implementation
+
+* [x] Phase 14A is implemented. Workflow v1alpha3, confined external prompt and
+  schema resources, immutable resource snapshots, deterministic migration
+  diagnostics, prompt template substitution, and historical prompt binding are
+  present.
+* [x] Phase 14B is implemented. Workflow input binding, JSON Pointer input mapping,
+  append-only phase attempts, schema-validated immutable output publication,
+  output acceptance, and candidate and closure output binding are present.
+  SQLite migration 010 owns durable phase dataflow authority.
+* [x] Phase 14C is implemented. Finite iteration transitions, exhaustion behavior,
+  upstream-change policy, exact resume lineage, and context, prompt, graph,
+  generation, attempt, and input-binding drift refusal are present.
+* [x] Phase 14D is implemented. Schema-selected `forEach` fan-out, stable item
+  identities, current-item mappings, deterministic generated task sets,
+  reviewed plan import through additive amendments, generated dependencies,
+  bounded task-frontier scheduling, dispatch failures, rework, supersession,
+  and restart replay are present. SQLite migration 011 owns durable frontier
+  authority.
+* [x] Phase 14E is implemented. Default and explicit init atomically publish the
+  standard `.senawa` tree from one packaged inventory. The tracked tree contains
+  `workflow.json`, five external prompt files, and twelve external schema files.
+  Default doctor validates the generated tree. Portal Delivery and deterministic
+  reporting expose bounded metadata only.
+* [x] The default standard workflow declares `define`, `research`, `plan`,
+  `implement`, and `verify`; human approvals; finite attempts; `import-plan`;
+  a `/tasks` fan-out with `/id` stable identity; generated dependency mappings;
+  bounded rework and dispatch failure policy; implementation evidence; and
+  verification closure.
+* [x] Focused suites for resources, mappings, phase outputs, iteration, resume,
+  fan-out, plan import, scheduler behavior, portal metadata, reporting, atomic
+  init, packaging, and the earlier operational no-credit journey have passed.
+* [x] The last recorded broad green gate before the consolidated acceptance test was
+  93 files and 1,214 tests passed with one opt-in live SDK test skipped. The last
+  recorded browser gate was 15 Chromium tests passed. These results are stale
+  until rerun after the current failing test is repaired.
+
+#### Current blocker
+
+* [ ] Complete `apps/senawa/src/standard-delivery-acceptance.test.ts`, the required
+  consolidated Phase 14F journey. It drives generated init and doctor, define,
+  research, plan, reviewed plan import, two generated implementation tasks with
+  rework, implementation evidence, verify, final closure, portal Delivery, and
+  secret-safe reporting without model credit.
+* The focused command currently fails:
+
+  ```bash
+  pnpm exec vitest run apps/senawa/src/standard-delivery-acceptance.test.ts
+  ```
+
+* Current failure:
+
+  ```text
+  ContextError: Phase attempt and input binding do not match the worker context
+  apps/senawa/src/standard-delivery-acceptance.test.ts:1146
+  ```
+
+* The failure occurs while `runGeneratedImplementation` constructs a generated
+  implementation worker context. Compare the generated task's phase-attempt and
+  phase-input binding with the implement attempt created before plan import. Fix
+  the fixture or owning composition only after proving which authority identity
+  is incorrect. Do not weaken `createWorkerContextBase` validation.
+* The same test contains unresolved Biome `noExplicitAny` findings and type-only
+  import organization findings. Replace the temporary `any` annotations with
+  actual configuration, dataflow, fan-out, assessment, seed, and effect types;
+  do not suppress the rules.
+
+#### Added structured-output subphases
+
+* [ ] Phase 14G: research and probe the pinned SDK custom-tool feedback loop with
+  arbitrary accepted output schemas and invalid-first correction.
+* [ ] Phase 14H: implement the dispatch-scoped `submit_phase_output` coordinator,
+  authoritative schema validation, canonical staging, structured feedback,
+  bounded retries, broker publication, and crash replay.
+* [ ] Phase 14I: prove schema correction plus repository changes through the
+  complete no-credit workflow, add the optional live probe, and create the
+  retained production-enhancements log.
+* [ ] Phase 14J: run final independent authority, resource, output, replay,
+  secrecy, SDK-feedback, and production-readiness review before delivery.
+
+#### Remaining Phase 14 work
+
+* [ ] Repair the consolidated standard-delivery acceptance journey at the exact
+  phase-attempt/input-binding mismatch and rerun that test until green.
+* [ ] Remove all lint and editor diagnostics from
+  `apps/senawa/src/standard-delivery-acceptance.test.ts` with precise types.
+* [ ] Confirm the test proves two generated tasks execute in stable dependency
+  order, one bounded rework occurs, plan-import crash replay is idempotent,
+  verification closes the run, and SDK adapter/model invocation counts remain
+  zero.
+* [ ] After the existing authoring foundation is green and independently checked,
+  create and push a checkpoint commit before starting the structured-output
+  implementation. Do not leave the complete phase only in one long-lived dirty
+  worktree.
+* [ ] Complete Phase 14G SDK research and persist its evidence and selected
+  implementation path in the implementation log.
+* [ ] Complete and push the Phase 14H structured-output implementation checkpoint.
+* [ ] Complete Phase 14I proof, production-enhancement logging, and any required
+  repairs; push the validated checkpoint.
+* [ ] Run focused Phase 14 suites for configuration resources and templates,
+  kernel dataflow/fan-out/iteration/resume, runtime dataflow/import/prompt,
+  SQLite migrations 010 and 011, supervisor plan import, standard template,
+  atomic init, portal Delivery, reporting, packaging, and both no-credit tests.
+* [ ] Run the full repository gates: build, typecheck, lint, complete offline
+  tests, architecture boundaries, documentation links, package install, `git
+  diff --check`, and the complete inference-free Playwright matrix.
+* [ ] Run independent Phase 14J reviews for resource confinement and migration,
+  output and closure authority, mapping and template injection, resume drift,
+  fan-out identity and replay, amendment import, projection secrecy,
+  schema-feedback correction, output staging, and the complete define-to-verify
+  journey. Repair every critical and high finding and assess all medium findings.
+* [ ] Regenerate or verify the tracked `.senawa` tree and browser screenshots
+  only through their owning deterministic generators. Confirm default `senawa
+  doctor` and packed-install doctor both pass.
+* [ ] Remove temporary Phase 14 tracking artifacts and update the implementation
+  log with final validation and review evidence.
+* [ ] Create the final Phase 14 commit `feat: add standard delivery workflow
+  authoring` if any phase changes remain after the pushed checkpoints, and push
+  it.
+* [ ] Add and push the Phase 14 delivery-record commit.
+* [ ] Start Phase 15 consumer documentation only after Phase 14 is delivered.
+
+#### Workspace constraints
+
+* `/workspaces/senawa` is the only Git worktree. Any worktree-mode test must
+  create and clean a fresh OS-temporary Git repository outside this checkout.
+* No Phase 14 implementation commit or push has occurred.
+* Phase 15 consumer documentation has not started. It remains the final
+  implementation phase after Phase 14 delivery, followed by the single final
+  pull request.
 
 ## Phase 15: Consumer documentation and adoption journeys
 

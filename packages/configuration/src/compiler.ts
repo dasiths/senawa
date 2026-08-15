@@ -4,6 +4,7 @@ import {
   type BudgetUnit,
   type CanonicalValue,
   type ConditionInput,
+  type ConsumerKey,
   canonicalDigest,
   canonicalSerialize,
   canonicalValue,
@@ -11,6 +12,8 @@ import {
   consumerKey,
   createAmendmentProposal,
   criterionId,
+  DataflowError,
+  type DataMappingDeclaration,
   defineGate,
   definitionGeneration,
   diagnoseWorkflowGraph,
@@ -27,6 +30,7 @@ import {
   type Sha256,
   sha256Digest,
   taskId,
+  validateDataMappingDeclarations,
   validateWorkflowGraph,
   workflowId,
 } from "@senawa/kernel";
@@ -37,16 +41,31 @@ import {
   type ConfigurationDiagnostic,
   type ConfigurationDiagnosticCode,
   type ConfigurationDoctorResult,
+  type ConfigurationPromptResource,
   type ConfigurationRegistryEntry,
+  type ConfigurationSchemaResource,
   type ConfigurationSnapshot,
   type ExecutionPolicy,
   type RemotePolicy,
   WORKFLOW_AMENDMENT_API_VERSION,
   WORKFLOW_CONFIGURATION_API_VERSION,
   type WorkflowAmendmentCompilationInput,
+  type WorkflowConfigurationCompilationInput,
 } from "./contracts.js";
 import { ConfigurationCompilationError, sortDiagnostics } from "./diagnostics.js";
-import { analyzeSchemaDefinition } from "./schema.js";
+import {
+  canonicalPromptInputPaths,
+  PromptTemplateError,
+  parsePromptTemplate,
+} from "./prompt-template.js";
+import {
+  CONFIGURATION_RESOURCE_LIMITS,
+  ConfigurationResourceValidationError,
+  parseStrictJsonResource,
+  readConfigurationTextResource,
+  validateConfigurationResourcePath,
+} from "./resources.js";
+import { analyzeSchemaDefinition, normalizeSchemaResourceId } from "./schema.js";
 
 const MAX_SENSOR_TIMEOUT_MILLISECONDS = 2_147_483_647;
 const MAX_SENSOR_OUTPUT_BYTES = 64 * 1024 * 1024;
@@ -59,13 +78,16 @@ interface ParsedWorkflow {
   readonly execution: ExecutionPolicy;
   readonly remote?: ParsedRemotePolicy;
   readonly workflow: ParsedWorkflowDeclaration;
-  readonly schemas: readonly ParsedSchema[];
+  readonly prompts: readonly ParsedPromptDeclaration[];
+  readonly schemas: readonly ParsedSchemaDeclaration[];
   readonly roles: readonly ParsedRole[];
   readonly modelPolicies: readonly ParsedModelPolicy[];
   readonly sensors: readonly ParsedSensor[];
   readonly gates: readonly ParsedGate[];
+  readonly implementationEvidenceViews: readonly ParsedImplementationEvidenceView[];
+  readonly forEach: readonly ParsedForEach[];
+  readonly taskTemplates: readonly ParsedTaskTemplate[];
   readonly phases: readonly ParsedPhase[];
-  readonly projectedWork: readonly ParsedProjection[];
 }
 
 interface ParsedAmendment {
@@ -81,20 +103,37 @@ type ParsedAmendmentOperation =
 interface ParsedWorkflowDeclaration {
   readonly key: string;
   readonly generation: number;
-  readonly input: CanonicalValue;
+  readonly inputSchema: string;
 }
 
-interface ParsedSchema {
+interface ParsedPromptDeclaration {
   readonly pointer: string;
   readonly key: string;
-  readonly schema: CanonicalValue;
+  readonly path: string;
+  readonly inputPaths: readonly string[];
 }
+
+interface ParsedSchemaDeclaration {
+  readonly pointer: string;
+  readonly key: string;
+  readonly path: string;
+}
+
+interface ResolvedWorkflow extends Omit<ParsedWorkflow, "prompts" | "schemas"> {
+  readonly prompts: readonly ResolvedPrompt[];
+  readonly schemas: readonly ResolvedSchema[];
+}
+
+type ResolvedPrompt = Omit<ParsedPromptDeclaration, "key"> & ConfigurationPromptResource;
+
+type ResolvedSchema = Omit<ParsedSchemaDeclaration, "key"> & ConfigurationSchemaResource;
 
 interface ParsedRole {
   readonly pointer: string;
   readonly key: string;
   readonly kind: "agent" | "human" | "authority";
   readonly capabilities: readonly string[];
+  readonly prompt?: string;
   readonly modelPolicy?: string;
 }
 
@@ -133,19 +172,102 @@ interface ParsedGate {
   readonly advisory: readonly GateRuleInput[];
 }
 
+interface ParsedImplementationEvidenceView {
+  readonly pointer: string;
+  readonly key: string;
+  readonly phase: string;
+  readonly evidenceKinds: readonly CanonicalValue[];
+  readonly sensitivityCeiling: "public" | "internal" | "confidential" | "restricted";
+}
+
+interface ParsedForEach {
+  readonly pointer: string;
+  readonly key: string;
+  readonly source:
+    | { readonly kind: "phase-output"; readonly phase: string; readonly output: string }
+    | { readonly kind: "phase-input"; readonly phase: string };
+  readonly collectionPointer: string;
+  readonly collectionSchema: string;
+  readonly itemSchema: string;
+  readonly identityPointer: string;
+  readonly limits: Readonly<{
+    readonly maxSelectedItems: number;
+    readonly maxTotalTasks: number;
+    readonly maxConcurrency: number;
+    readonly exhaustion: "escalate" | "fail";
+  }>;
+}
+
+interface ParsedTaskTemplate {
+  readonly pointer: string;
+  readonly key: string;
+  readonly generation: number;
+  readonly role: string;
+  readonly budgets: readonly ParsedBudget[];
+  readonly inputSchema: string;
+  readonly inputMappings: readonly DataMappingDeclaration[];
+  readonly dependencyIdentityPointer?: string;
+  readonly repositoryChanges: "required" | "allowed" | "forbidden";
+  readonly completionPolicy: ParsedCompletionPolicy;
+}
+
 interface ParsedPhase {
   readonly pointer: string;
   readonly key: string;
   readonly generation: number;
   readonly dependsOn: readonly string[];
-  readonly input: CanonicalValue;
+  readonly input: ParsedPhaseInput;
+  readonly executor: ParsedPhaseExecutor;
+  readonly outputs: readonly ParsedPhaseOutput[];
+  readonly iteration: ParsedPhaseIteration;
+  readonly exit: ParsedPhaseExit;
+  readonly actions: readonly ParsedPhaseAction[];
   readonly work: readonly ParsedWork[];
 }
 
-interface ParsedProjection {
-  readonly pointer: string;
-  readonly phase: string;
-  readonly work: ParsedWork;
+interface ParsedPhaseAction {
+  readonly kind: "import-plan";
+  readonly forEach: string;
+}
+
+interface ParsedPhaseInput {
+  readonly schema: string;
+  readonly mappings: readonly DataMappingDeclaration[];
+}
+
+type ParsedPhaseExecutor =
+  | {
+      readonly kind: "agent";
+      readonly role: string;
+      readonly budgets: readonly ParsedBudget[];
+      readonly completionPolicy: ParsedCompletionPolicy;
+      readonly resumeAcrossAttempts: boolean;
+    }
+  | { readonly kind: "task-set"; readonly work: readonly ParsedWork[] }
+  | { readonly kind: "task-frontier"; readonly forEach: string; readonly template: string };
+
+interface ParsedPhaseOutput {
+  readonly key: string;
+  readonly schema: string;
+  readonly path: string;
+  readonly maxBytes: number;
+  readonly sensitivity: "public" | "internal" | "confidential" | "restricted";
+}
+
+interface ParsedPhaseIteration {
+  readonly maximumAttempts: number;
+  readonly onGateRejected: "iterate" | "fail";
+  readonly onApprovalRejected: "iterate" | "fail";
+  readonly onUpstreamChanged?: "iterate" | "fail";
+  readonly onExhausted: "escalate" | "fail";
+}
+
+interface ParsedPhaseExit {
+  readonly requiredOutputs: readonly string[];
+  readonly gate?: string;
+  readonly approval:
+    | { readonly policy: "none" }
+    | { readonly policy: "required"; readonly authority: CanonicalValue };
 }
 
 interface ParsedWork {
@@ -158,6 +280,7 @@ interface ParsedWork {
   readonly inputSchema?: string;
   readonly input: CanonicalValue;
   readonly completionPolicy: ParsedCompletionPolicy;
+  readonly reservedExecutor?: true;
 }
 
 interface ParsedBudget {
@@ -210,12 +333,16 @@ interface LoweredConfiguration {
 }
 
 interface ValidatedRegistries {
-  readonly schemas: readonly ConfigurationRegistryEntry[];
+  readonly prompts: readonly ConfigurationPromptResource[];
+  readonly schemas: readonly ConfigurationSchemaResource[];
   readonly roles: readonly ConfigurationRegistryEntry[];
   readonly modelPolicies: readonly ConfigurationRegistryEntry[];
   readonly sensors: readonly ConfigurationRegistryEntry[];
   readonly gates: readonly ConfigurationRegistryEntry[];
-  readonly projections: readonly ConfigurationRegistryEntry[];
+  readonly implementationEvidenceViews: readonly ConfigurationRegistryEntry[];
+  readonly phaseDataflow: readonly ConfigurationRegistryEntry[];
+  readonly forEach: readonly ConfigurationRegistryEntry[];
+  readonly taskTemplates: readonly ConfigurationRegistryEntry[];
   readonly gateKeysByPhase: ReadonlyMap<string, readonly string[]>;
 }
 
@@ -231,13 +358,16 @@ const ROOT_FIELDS = [
   "apiVersion",
   "kind",
   "workflow",
+  "prompts",
   "schemas",
   "roles",
   "modelPolicies",
   "sensors",
   "gates",
+  "implementationEvidenceViews",
+  "forEach",
+  "taskTemplates",
   "phases",
-  "projectedWork",
 ];
 const OPTIONAL_ROOT_FIELDS = ["execution", "remote"];
 const MAX_LIST_ITEMS = 256;
@@ -249,11 +379,11 @@ const AMENDMENT_ROOT_FIELDS = [
   "operations",
 ];
 
-export function doctorWorkflowConfiguration(
-  input: unknown,
-  locator: string,
+export async function doctorWorkflowConfiguration(
+  input: WorkflowConfigurationCompilationInput,
   sha256: Sha256,
-): ConfigurationDoctorResult {
+): Promise<ConfigurationDoctorResult> {
+  const locator = input.locator;
   const validLocator = typeof locator === "string" && locator.length > 0;
   const collector: DiagnosticCollector = {
     locator: validLocator ? locator : "invalid://configuration-source",
@@ -265,7 +395,7 @@ export function doctorWorkflowConfiguration(
 
   let snapshot: CanonicalValue;
   try {
-    snapshot = canonicalValue(input);
+    snapshot = canonicalValue(input.document);
   } catch {
     addDiagnostic(
       collector,
@@ -279,8 +409,10 @@ export function doctorWorkflowConfiguration(
   const parsed = parseDocument(snapshot, collector);
   if (parsed === undefined) return { diagnostics: sortDiagnostics(collector.diagnostics) };
 
-  const registries = validateRegistries(parsed, collector, sha256);
-  const lowered = lowerConfiguration(parsed, registries.gateKeysByPhase, collector, sha256);
+  const resolved = await resolveConfigurationResources(parsed, input.resources, collector, sha256);
+  if (resolved === undefined) return { diagnostics: sortDiagnostics(collector.diagnostics) };
+  const registries = validateRegistries(resolved, collector, sha256);
+  const lowered = lowerConfiguration(resolved, registries.gateKeysByPhase, collector, sha256);
   const compiled = diagnoseLoweredConfiguration(lowered, registries, collector, sha256);
   if (compiled === undefined) return { diagnostics: sortDiagnostics(collector.diagnostics) };
   return { diagnostics: Object.freeze([]), snapshot: compiled };
@@ -313,12 +445,11 @@ function diagnoseLoweredConfiguration(
   );
 }
 
-export function compileWorkflowConfiguration(
-  input: unknown,
-  locator: string,
+export async function compileWorkflowConfiguration(
+  input: WorkflowConfigurationCompilationInput,
   sha256: Sha256,
-): ConfigurationSnapshot {
-  const result = doctorWorkflowConfiguration(input, locator, sha256);
+): Promise<ConfigurationSnapshot> {
+  const result = await doctorWorkflowConfiguration(input, sha256);
   if (result.snapshot === undefined) throw new ConfigurationCompilationError(result.diagnostics);
   return result.snapshot;
 }
@@ -504,7 +635,7 @@ function parseAmendmentOperation(
   if (value.kind === "add-phase") {
     const operation = exactObject(value, pointer, ["kind", "phase"], [], collector);
     if (operation === undefined) return undefined;
-    const phase = parsePhase(operation.phase, `${pointer}/phase`, collector, false);
+    const phase = parsePhase(operation.phase, `${pointer}/phase`, collector);
     return phase === undefined ? undefined : { kind: value.kind, phase };
   }
   if (value.kind === "add-task") {
@@ -529,6 +660,15 @@ function parseDocument(
   value: CanonicalValue,
   collector: DiagnosticCollector,
 ): ParsedWorkflow | undefined {
+  if (isRecord(value) && value.apiVersion === "senawa.dev/workflow/v1alpha2") {
+    addDiagnostic(
+      collector,
+      "unsupported-workflow-version",
+      "/apiVersion",
+      "senawa.dev/workflow/v1alpha2 is not supported by Phase 14. Migrate to senawa.dev/workflow/v1alpha3: move inline schema bodies to schemas/<key>.schema.json, declare external prompts, and add one prompt reference to every agent role.",
+    );
+    return undefined;
+  }
   const document = exactObject(value, "", ROOT_FIELDS, OPTIONAL_ROOT_FIELDS, collector);
   if (document === undefined) return undefined;
   if (document.apiVersion !== WORKFLOW_CONFIGURATION_API_VERSION) {
@@ -545,24 +685,36 @@ function parseDocument(
   const execution = parseExecution(document.execution, collector);
   const remote = parseRemotePolicy(document.remote, collector);
   const workflow = parseWorkflow(document.workflow, collector);
+  const prompts = parsePrompts(document.prompts, collector);
   const schemas = parseSchemas(document.schemas, collector);
   const roles = parseRoles(document.roles, collector);
   const modelPolicies = parseModelPolicies(document.modelPolicies, collector);
   const sensors = parseSensors(document.sensors, collector);
   const gates = parseGates(document.gates, collector);
+  const implementationEvidenceViews = parseImplementationEvidenceViews(
+    document.implementationEvidenceViews,
+    collector,
+  );
+  const forEach = parseForEachRegistry(
+    Reflect.get(document, "forEach") as CanonicalValue,
+    collector,
+  );
+  const taskTemplates = parseTaskTemplateRegistry(document.taskTemplates, collector);
   const phases = parsePhases(document.phases, collector);
-  const projectedWork = parseProjectedWork(document.projectedWork, collector);
   if (
     execution === undefined ||
     remote === null ||
     workflow === undefined ||
+    prompts === undefined ||
     schemas === undefined ||
     roles === undefined ||
     modelPolicies === undefined ||
     sensors === undefined ||
     gates === undefined ||
-    phases === undefined ||
-    projectedWork === undefined
+    implementationEvidenceViews === undefined ||
+    forEach === undefined ||
+    taskTemplates === undefined ||
+    phases === undefined
   ) {
     return undefined;
   }
@@ -570,13 +722,16 @@ function parseDocument(
     execution,
     ...(remote === undefined ? {} : { remote }),
     workflow,
+    prompts,
     schemas,
     roles,
     modelPolicies,
     sensors,
     gates,
+    implementationEvidenceViews,
+    forEach,
+    taskTemplates,
     phases,
-    projectedWork,
   };
 }
 
@@ -947,27 +1102,256 @@ function parseWorkflow(
   value: CanonicalValue | undefined,
   collector: DiagnosticCollector,
 ): ParsedWorkflowDeclaration | undefined {
-  const object = exactObject(value, "/workflow", ["key", "generation"], ["input"], collector);
+  const object = exactObject(value, "/workflow", ["key", "generation", "input"], [], collector);
   if (object === undefined) return undefined;
   const key = parseKey(object.key, "/workflow/key", collector);
   const generation = parseGeneration(object.generation, "/workflow/generation", collector);
-  return key === undefined || generation === undefined
+  const input = exactObject(object.input, "/workflow/input", ["schema"], [], collector);
+  const inputSchema =
+    input === undefined
+      ? undefined
+      : parseReference(input.schema, "/workflow/input/schema", collector);
+  return key === undefined || generation === undefined || inputSchema === undefined
     ? undefined
-    : { key, generation, input: object.input ?? canonicalValue(null) };
+    : { key, generation, inputSchema };
 }
 
 function parseSchemas(
   value: CanonicalValue | undefined,
   collector: DiagnosticCollector,
-): readonly ParsedSchema[] | undefined {
+): readonly ParsedSchemaDeclaration[] | undefined {
   return parseArray(value, "/schemas", collector, (item, pointer) => {
-    const object = exactObject(item, pointer, ["key", "schema"], [], collector);
+    if (isRecord(item) && Object.hasOwn(item, "schema")) {
+      addDiagnostic(
+        collector,
+        "invalid-field",
+        `${pointer}/schema`,
+        "Inline schema bodies are not supported in v1alpha3; use path",
+      );
+    }
+    const object = exactObject(item, pointer, ["key", "path"], [], collector);
     if (object === undefined) return undefined;
     const key = parseKey(object.key, `${pointer}/key`, collector);
-    return key === undefined
-      ? undefined
-      : { pointer, key, schema: object.schema as CanonicalValue };
+    const path = parseResourcePath(object.path, "schema", `${pointer}/path`, collector);
+    return key === undefined || path === undefined ? undefined : { pointer, key, path };
   });
+}
+
+function parsePrompts(
+  value: CanonicalValue | undefined,
+  collector: DiagnosticCollector,
+): readonly ParsedPromptDeclaration[] | undefined {
+  if (value === undefined) {
+    addDiagnostic(
+      collector,
+      "missing-prompt-resources",
+      "/prompts",
+      "v1alpha3 requires the prompts resource array",
+    );
+    return undefined;
+  }
+  return parseArray(value, "/prompts", collector, (item, pointer) => {
+    const object = exactObject(item, pointer, ["key", "path", "inputPaths"], [], collector);
+    if (object === undefined) return undefined;
+    const key = parseKey(object.key, `${pointer}/key`, collector);
+    const path = parseResourcePath(object.path, "prompt", `${pointer}/path`, collector);
+    let inputPaths: readonly string[] | undefined;
+    if (
+      !Array.isArray(object.inputPaths) ||
+      object.inputPaths.some((path) => typeof path !== "string")
+    ) {
+      addDiagnostic(
+        collector,
+        "invalid-field",
+        `${pointer}/inputPaths`,
+        "Prompt inputPaths must be an array of canonical JSON Pointers",
+      );
+    } else {
+      try {
+        inputPaths = canonicalPromptInputPaths(object.inputPaths as readonly string[]);
+      } catch (error) {
+        addDiagnostic(
+          collector,
+          "invalid-field",
+          `${pointer}/inputPaths`,
+          error instanceof Error ? error.message : "Prompt inputPaths are invalid",
+        );
+      }
+    }
+    return key === undefined || path === undefined || inputPaths === undefined
+      ? undefined
+      : { pointer, key, path, inputPaths };
+  });
+}
+
+function parseResourcePath(
+  value: CanonicalValue | undefined,
+  kind: "prompt" | "schema",
+  pointer: string,
+  collector: DiagnosticCollector,
+): string | undefined {
+  if (typeof value !== "string") {
+    addDiagnostic(
+      collector,
+      "missing-resource-path",
+      pointer,
+      "External resource declarations require path",
+    );
+    return undefined;
+  }
+  try {
+    return validateConfigurationResourcePath(kind, value);
+  } catch (error) {
+    addDiagnostic(
+      collector,
+      "invalid-resource-path",
+      pointer,
+      error instanceof Error ? error.message : "External resource path is invalid",
+    );
+    return undefined;
+  }
+}
+
+async function resolveConfigurationResources(
+  parsed: ParsedWorkflow,
+  reader: WorkflowConfigurationCompilationInput["resources"],
+  collector: DiagnosticCollector,
+  sha256: Sha256,
+): Promise<ResolvedWorkflow | undefined> {
+  let invalidCount = false;
+  if (parsed.prompts.length > CONFIGURATION_RESOURCE_LIMITS.maxPromptResources) {
+    invalidCount = true;
+    addDiagnostic(
+      collector,
+      "resource-set-too-large",
+      "/prompts",
+      `Prompt resources cannot exceed ${CONFIGURATION_RESOURCE_LIMITS.maxPromptResources} entries`,
+    );
+  }
+  if (parsed.schemas.length > CONFIGURATION_RESOURCE_LIMITS.maxSchemaResources) {
+    invalidCount = true;
+    addDiagnostic(
+      collector,
+      "resource-set-too-large",
+      "/schemas",
+      `Schema resources cannot exceed ${CONFIGURATION_RESOURCE_LIMITS.maxSchemaResources} entries`,
+    );
+  }
+  reportDuplicateKeys(parsed.prompts, collector);
+  reportDuplicateKeys(parsed.schemas, collector);
+  const pathPointers = new Map<string, string>();
+  const duplicatedPaths = new Set<string>();
+  for (const declaration of [...parsed.prompts, ...parsed.schemas]) {
+    const comparisonPath = declaration.path.toLowerCase();
+    const prior = pathPointers.get(comparisonPath);
+    if (prior === undefined) {
+      pathPointers.set(comparisonPath, `${declaration.pointer}/path`);
+    } else {
+      duplicatedPaths.add(comparisonPath);
+      addDiagnostic(
+        collector,
+        "invalid-resource-path",
+        `${declaration.pointer}/path`,
+        `Resource path ${declaration.path} is already declared at ${prior}`,
+      );
+    }
+  }
+  if (invalidCount) return undefined;
+
+  const prompts: ResolvedPrompt[] = [];
+  const schemas: ResolvedSchema[] = [];
+  let aggregateBytes = 0;
+  const declarations = [
+    ...parsed.prompts.map((declaration) => ({ kind: "prompt" as const, declaration })),
+    ...parsed.schemas.map((declaration) => ({ kind: "schema" as const, declaration })),
+  ].sort(
+    (left, right) =>
+      compareText(left.kind, right.kind) ||
+      compareText(left.declaration.key, right.declaration.key),
+  );
+  for (const { kind, declaration } of declarations) {
+    if (duplicatedPaths.has(declaration.path.toLowerCase())) continue;
+    try {
+      const source = await readConfigurationTextResource(reader, kind, declaration.path, sha256);
+      aggregateBytes += source.byteLength;
+      if (aggregateBytes > CONFIGURATION_RESOURCE_LIMITS.maxAggregateBytes) {
+        addDiagnostic(
+          collector,
+          "resource-set-too-large",
+          kind === "prompt" ? "/prompts" : "/schemas",
+          `Configuration resources exceed ${CONFIGURATION_RESOURCE_LIMITS.maxAggregateBytes} bytes`,
+        );
+        break;
+      }
+      if (kind === "prompt") {
+        const promptDeclaration = declaration as ParsedPromptDeclaration;
+        const template = parsePromptTemplate(source.utf8);
+        for (const inputPath of template.inputPaths) {
+          if (!promptDeclaration.inputPaths.includes(inputPath)) {
+            addDiagnostic(
+              collector,
+              "undeclared-prompt-input",
+              `${promptDeclaration.pointer}/inputPaths`,
+              `Prompt template uses undeclared input path ${inputPath}`,
+            );
+          }
+        }
+        promptDeclaration.inputPaths.forEach((inputPath, index) => {
+          if (!template.inputPaths.includes(inputPath)) {
+            addDiagnostic(
+              collector,
+              "unused-prompt-input",
+              `${promptDeclaration.pointer}/inputPaths/${index}`,
+              `Declared prompt input path ${inputPath} is absent from the template`,
+            );
+          }
+        });
+        const content = canonicalValue({
+          key: promptDeclaration.key,
+          source,
+          inputPaths: promptDeclaration.inputPaths,
+        });
+        prompts.push({
+          ...promptDeclaration,
+          source,
+          digest: canonicalDigest(content, sha256),
+        } as ResolvedPrompt);
+      } else {
+        const schemaDeclaration = declaration as ParsedSchemaDeclaration;
+        const schema = parseStrictJsonResource(source.utf8).value;
+        const schemaDigest = canonicalDigest(schema, sha256);
+        const content = canonicalValue({
+          key: schemaDeclaration.key,
+          source,
+          schema,
+          schemaDigest,
+        });
+        schemas.push({
+          ...schemaDeclaration,
+          source,
+          schema,
+          schemaDigest,
+          digest: canonicalDigest(content, sha256),
+        } as ResolvedSchema);
+      }
+    } catch (error) {
+      const pointer = `${declaration.pointer}/path`;
+      if (error instanceof PromptTemplateError) {
+        addDiagnostic(collector, "invalid-prompt-template", pointer, error.message);
+      } else if (error instanceof ConfigurationResourceValidationError) {
+        addDiagnostic(collector, error.code, pointer, error.message);
+      } else {
+        addDiagnostic(
+          collector,
+          "resource-read-failed",
+          pointer,
+          `${kind} resource could not be read`,
+        );
+      }
+    }
+  }
+  if (collector.diagnostics.length > 0) return undefined;
+  return { ...parsed, prompts: Object.freeze(prompts), schemas: Object.freeze(schemas) };
 }
 
 function parseRoles(
@@ -979,7 +1363,7 @@ function parseRoles(
       item,
       pointer,
       ["key", "kind", "capabilities"],
-      ["modelPolicy"],
+      ["prompt", "modelPolicy"],
       collector,
     );
     if (object === undefined) return undefined;
@@ -1000,9 +1384,18 @@ function parseRoles(
     const modelPolicy = Object.hasOwn(object, "modelPolicy")
       ? parseReference(object.modelPolicy, `${pointer}/modelPolicy`, collector)
       : undefined;
+    const prompt = Object.hasOwn(object, "prompt")
+      ? parseReference(object.prompt, `${pointer}/prompt`, collector)
+      : undefined;
     if (key === undefined || kind === undefined || capabilities === undefined) return undefined;
-    const common = { pointer, key, kind, capabilities };
-    return modelPolicy === undefined ? common : { ...common, modelPolicy };
+    return {
+      pointer,
+      key,
+      kind,
+      capabilities,
+      ...(prompt === undefined ? {} : { prompt }),
+      ...(modelPolicy === undefined ? {} : { modelPolicy }),
+    };
   });
 }
 
@@ -1210,12 +1603,67 @@ function parseGateRules(
   return value as unknown as readonly GateRuleInput[];
 }
 
+function parseImplementationEvidenceViews(
+  value: CanonicalValue | undefined,
+  collector: DiagnosticCollector,
+): readonly ParsedImplementationEvidenceView[] | undefined {
+  return parseArray(value, "/implementationEvidenceViews", collector, (item, pointer) => {
+    const object = exactObject(
+      item,
+      pointer,
+      ["key", "phase", "evidenceKinds", "sensitivityCeiling"],
+      [],
+      collector,
+    );
+    if (object === undefined) return undefined;
+    const key = parseKey(object.key, `${pointer}/key`, collector);
+    const phase = parseReference(object.phase, `${pointer}/phase`, collector);
+    const evidenceKinds = Array.isArray(object.evidenceKinds)
+      ? object.evidenceKinds.map((kind) => canonicalValue(kind))
+      : undefined;
+    if (evidenceKinds === undefined || evidenceKinds.length === 0) {
+      addDiagnostic(
+        collector,
+        "invalid-field",
+        `${pointer}/evidenceKinds`,
+        "Evidence views require at least one allowlisted evidence kind",
+      );
+    }
+    const sensitivityCeiling = object.sensitivityCeiling;
+    if (
+      !new Set(["public", "internal", "confidential", "restricted"]).has(String(sensitivityCeiling))
+    ) {
+      addDiagnostic(
+        collector,
+        "invalid-field",
+        `${pointer}/sensitivityCeiling`,
+        "Evidence view sensitivity ceiling is not recognized",
+      );
+    }
+    return key === undefined ||
+      phase === undefined ||
+      evidenceKinds === undefined ||
+      evidenceKinds.length === 0 ||
+      typeof sensitivityCeiling !== "string" ||
+      !new Set(["public", "internal", "confidential", "restricted"]).has(sensitivityCeiling)
+      ? undefined
+      : {
+          pointer,
+          key,
+          phase,
+          evidenceKinds,
+          sensitivityCeiling:
+            sensitivityCeiling as ParsedImplementationEvidenceView["sensitivityCeiling"],
+        };
+  });
+}
+
 function parsePhases(
   value: CanonicalValue | undefined,
   collector: DiagnosticCollector,
 ): readonly ParsedPhase[] | undefined {
   return parseArray(value, "/phases", collector, (item, pointer) =>
-    parsePhase(item, pointer, collector, true),
+    parsePhase(item, pointer, collector),
   );
 }
 
@@ -1223,50 +1671,720 @@ function parsePhase(
   value: CanonicalValue | undefined,
   pointer: string,
   collector: DiagnosticCollector,
-  includesWork: boolean,
 ): ParsedPhase | undefined {
   const object = exactObject(
     value,
     pointer,
-    includesWork ? ["key", "generation", "work"] : ["key", "generation"],
-    ["dependsOn", "input"],
+    ["key", "generation", "input", "executor", "outputs", "iteration", "exit", "actions"],
+    ["dependsOn"],
     collector,
   );
   if (object === undefined) return undefined;
   const key = parseKey(object.key, `${pointer}/key`, collector);
   const generation = parseGeneration(object.generation, `${pointer}/generation`, collector);
   const dependsOn = parseStringArray(object.dependsOn, `${pointer}/dependsOn`, collector);
-  const work = includesWork
-    ? parseArray(object.work, `${pointer}/work`, collector, (declaration, workPointer) =>
-        parseWork(declaration, workPointer, collector),
-      )
-    : Object.freeze([]);
+  const input = parsePhaseInput(object.input, `${pointer}/input`, collector);
+  const executor = parsePhaseExecutor(object.executor, `${pointer}/executor`, collector);
+  const outputs = parsePhaseOutputs(object.outputs, `${pointer}/outputs`, collector);
+  const iteration = parsePhaseIteration(object.iteration, `${pointer}/iteration`, collector);
+  const exit = parsePhaseExit(object.exit, `${pointer}/exit`, collector);
+  const actions = parseArray(
+    object.actions,
+    `${pointer}/actions`,
+    collector,
+    (action, actionPointer) => parsePhaseAction(action, actionPointer, collector),
+  );
+  const work =
+    executor?.kind === "task-set"
+      ? executor.work
+      : executor?.kind === "agent" && key !== undefined && generation !== undefined
+        ? Object.freeze([
+            {
+              pointer: `${pointer}/executor`,
+              key: "phase-executor",
+              generation,
+              role: executor.role,
+              budgets: executor.budgets,
+              dependsOn: Object.freeze([]),
+              inputSchema: input?.schema,
+              input: canonicalValue({ kind: "phase-executor", phase: key }),
+              completionPolicy: executor.completionPolicy,
+              reservedExecutor: true,
+            } as ParsedWork,
+          ])
+        : Object.freeze([]);
   return key === undefined ||
     generation === undefined ||
     dependsOn === undefined ||
-    work === undefined
+    input === undefined ||
+    executor === undefined ||
+    outputs === undefined ||
+    iteration === undefined ||
+    exit === undefined ||
+    actions === undefined
     ? undefined
     : {
         pointer,
         key,
         generation,
         dependsOn,
-        input: object.input ?? canonicalValue(null),
+        input,
+        executor,
+        outputs,
+        iteration,
+        exit,
+        actions,
         work,
       };
 }
 
-function parseProjectedWork(
+function parsePhaseAction(
+  value: CanonicalValue,
+  pointer: string,
+  collector: DiagnosticCollector,
+): ParsedPhaseAction | undefined {
+  const object = exactObject(value, pointer, ["kind", "forEach"], [], collector);
+  if (object === undefined) return undefined;
+  if (object.kind !== "import-plan") {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      `${pointer}/kind`,
+      "Phase action must be import-plan",
+    );
+    return undefined;
+  }
+  const forEach = parseReference(
+    Reflect.get(object, "forEach") as CanonicalValue,
+    `${pointer}/forEach`,
+    collector,
+  );
+  return forEach === undefined ? undefined : { kind: "import-plan", forEach };
+}
+
+function parsePhaseInput(
+  value: CanonicalValue | undefined,
+  pointer: string,
+  collector: DiagnosticCollector,
+): ParsedPhaseInput | undefined {
+  const object = exactObject(value, pointer, ["schema", "mappings"], [], collector);
+  if (object === undefined) return undefined;
+  const schema = parseReference(object.schema, `${pointer}/schema`, collector);
+  const mappings = parseArray(
+    object.mappings,
+    `${pointer}/mappings`,
+    collector,
+    (item, itemPointer) => parseDataMapping(item, itemPointer, collector),
+  );
+  return schema === undefined || mappings === undefined ? undefined : { schema, mappings };
+}
+
+function parseDataMapping(
+  value: CanonicalValue,
+  pointer: string,
+  collector: DiagnosticCollector,
+): DataMappingDeclaration | undefined {
+  const object = exactObject(
+    value,
+    pointer,
+    ["key", "source", "destinationPointer"],
+    [],
+    collector,
+  );
+  if (object === undefined) return undefined;
+  const key = parseKey(object.key, `${pointer}/key`, collector);
+  const destinationPointer =
+    typeof object.destinationPointer === "string" ? object.destinationPointer : undefined;
+  if (destinationPointer === undefined) {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      `${pointer}/destinationPointer`,
+      "Mapping destinationPointer must be an RFC 6901 JSON Pointer",
+    );
+  }
+  const source = parseMappingSource(object.source, `${pointer}/source`, collector);
+  return key === undefined || destinationPointer === undefined || source === undefined
+    ? undefined
+    : { key: consumerKey(key), source, destinationPointer };
+}
+
+function parseMappingSource(
+  value: CanonicalValue | undefined,
+  pointer: string,
+  collector: DiagnosticCollector,
+): DataMappingDeclaration["source"] | undefined {
+  if (!isRecord(value) || typeof value.kind !== "string") {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      pointer,
+      "Mapping source must be an object with a supported kind",
+    );
+    return undefined;
+  }
+  const required =
+    value.kind === "phase-output"
+      ? ["kind", "phase", "output", "pointer"]
+      : value.kind === "implementation-evidence"
+        ? ["kind", "phase", "view", "pointer"]
+        : ["kind", "pointer"];
+  const object = exactObject(value, pointer, required, [], collector);
+  if (object === undefined) return undefined;
+  if (typeof object.pointer !== "string") {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      `${pointer}/pointer`,
+      "Mapping source pointer must be an RFC 6901 JSON Pointer",
+    );
+    return undefined;
+  }
+  if (object.kind === "workflow-input" || object.kind === "current-item") {
+    return {
+      kind: object.kind as "workflow-input" | "current-item",
+      pointer: object.pointer,
+    };
+  }
+  if (object.kind === "phase-output") {
+    const phase = parseReference(object.phase, `${pointer}/phase`, collector);
+    const output = parseReference(object.output, `${pointer}/output`, collector);
+    return phase === undefined || output === undefined
+      ? undefined
+      : {
+          kind: "phase-output",
+          phase: consumerKey(phase),
+          output: consumerKey(output),
+          pointer: object.pointer,
+        };
+  }
+  if (object.kind === "implementation-evidence") {
+    const phase = parseReference(object.phase, `${pointer}/phase`, collector);
+    const view = parseReference(object.view, `${pointer}/view`, collector);
+    return phase === undefined || view === undefined
+      ? undefined
+      : {
+          kind: "implementation-evidence",
+          phase: consumerKey(phase),
+          view: consumerKey(view),
+          pointer: object.pointer,
+        };
+  }
+  addDiagnostic(
+    collector,
+    "invalid-field",
+    `${pointer}/kind`,
+    "Mapping source kind is not supported",
+  );
+  return undefined;
+}
+
+function parsePhaseExecutor(
+  value: CanonicalValue | undefined,
+  pointer: string,
+  collector: DiagnosticCollector,
+): ParsedPhaseExecutor | undefined {
+  if (!isRecord(value) || typeof value.kind !== "string") {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      pointer,
+      "Phase executor must be an exact agent or task-set object",
+    );
+    return undefined;
+  }
+  if (value.kind === "task-set") {
+    const object = exactObject(value, pointer, ["kind", "work"], [], collector);
+    const work =
+      object === undefined
+        ? undefined
+        : parseArray(object.work, `${pointer}/work`, collector, (item, itemPointer) =>
+            parseWork(item, itemPointer, collector),
+          );
+    return work === undefined ? undefined : { kind: "task-set", work };
+  }
+  if (value.kind === "task-frontier") {
+    const object = exactObject(value, pointer, ["kind", "forEach", "template"], [], collector);
+    if (object === undefined) return undefined;
+    const forEach = parseReference(
+      Reflect.get(object, "forEach") as CanonicalValue,
+      `${pointer}/forEach`,
+      collector,
+    );
+    const template = parseReference(object.template, `${pointer}/template`, collector);
+    return forEach === undefined || template === undefined
+      ? undefined
+      : { kind: "task-frontier", forEach, template };
+  }
+  if (value.kind === "agent") {
+    const object = exactObject(
+      value,
+      pointer,
+      ["kind", "role", "budgets", "completionPolicy", "resumeAcrossAttempts"],
+      [],
+      collector,
+    );
+    if (object === undefined) return undefined;
+    const role = parseReference(object.role, `${pointer}/role`, collector);
+    const budgets = parseBudgets(object.budgets, `${pointer}/budgets`, collector);
+    const completionPolicy = parseCompletionPolicy(
+      object.completionPolicy,
+      `${pointer}/completionPolicy`,
+      collector,
+    );
+    if (typeof object.resumeAcrossAttempts !== "boolean") {
+      addDiagnostic(
+        collector,
+        "invalid-field",
+        `${pointer}/resumeAcrossAttempts`,
+        "resumeAcrossAttempts must be a boolean",
+      );
+    }
+    return role === undefined ||
+      budgets === undefined ||
+      completionPolicy === undefined ||
+      typeof object.resumeAcrossAttempts !== "boolean"
+      ? undefined
+      : {
+          kind: "agent",
+          role,
+          budgets,
+          completionPolicy,
+          resumeAcrossAttempts: object.resumeAcrossAttempts,
+        };
+  }
+  addDiagnostic(
+    collector,
+    "invalid-field",
+    `${pointer}/kind`,
+    "Phase executor kind must be agent, task-set, or task-frontier",
+  );
+  return undefined;
+}
+
+function parsePhaseOutputs(
+  value: CanonicalValue | undefined,
+  pointer: string,
+  collector: DiagnosticCollector,
+): readonly ParsedPhaseOutput[] | undefined {
+  return parseArray(value, pointer, collector, (item, itemPointer) => {
+    const object = exactObject(
+      item,
+      itemPointer,
+      ["key", "schema", "path", "maxBytes", "sensitivity"],
+      [],
+      collector,
+    );
+    if (object === undefined) return undefined;
+    const key = parseKey(object.key, `${itemPointer}/key`, collector);
+    const schema = parseReference(object.schema, `${itemPointer}/schema`, collector);
+    const maxBytes = parseBoundedPositiveInteger(
+      object.maxBytes,
+      `${itemPointer}/maxBytes`,
+      16 * 1024 * 1024,
+      collector,
+    );
+    const path =
+      typeof object.path === "string" && isSafeOutputPath(object.path) ? object.path : undefined;
+    if (path === undefined)
+      addDiagnostic(
+        collector,
+        "invalid-field",
+        `${itemPointer}/path`,
+        "Output path must be a normalized relative .json path",
+      );
+    const sensitivity = object.sensitivity;
+    if (!new Set(["public", "internal", "confidential", "restricted"]).has(String(sensitivity))) {
+      addDiagnostic(
+        collector,
+        "invalid-field",
+        `${itemPointer}/sensitivity`,
+        "Output sensitivity is not recognized",
+      );
+    }
+    return key === undefined ||
+      schema === undefined ||
+      maxBytes === undefined ||
+      path === undefined ||
+      typeof sensitivity !== "string" ||
+      !new Set(["public", "internal", "confidential", "restricted"]).has(sensitivity)
+      ? undefined
+      : {
+          key,
+          schema,
+          path,
+          maxBytes,
+          sensitivity: sensitivity as ParsedPhaseOutput["sensitivity"],
+        };
+  });
+}
+
+function isSafeOutputPath(value: string): boolean {
+  if (
+    value.length === 0 ||
+    value.length > 1_024 ||
+    value.startsWith("/") ||
+    !value.endsWith(".json") ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    value.includes("%") ||
+    value.includes(":") ||
+    !/^[\x20-\x7e]+$/u.test(value)
+  ) {
+    return false;
+  }
+  return value
+    .split("/")
+    .every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
+function parsePhaseIteration(
+  value: CanonicalValue | undefined,
+  pointer: string,
+  collector: DiagnosticCollector,
+): ParsedPhaseIteration | undefined {
+  const object = exactObject(
+    value,
+    pointer,
+    ["maximumAttempts", "onGateRejected", "onApprovalRejected", "onExhausted"],
+    ["onUpstreamChanged"],
+    collector,
+  );
+  if (object === undefined) return undefined;
+  const maximumAttempts = parseBoundedPositiveInteger(
+    object.maximumAttempts,
+    `${pointer}/maximumAttempts`,
+    10_000,
+    collector,
+  );
+  const onGateRejected =
+    object.onGateRejected === "iterate" || object.onGateRejected === "fail"
+      ? object.onGateRejected
+      : undefined;
+  const onApprovalRejected =
+    object.onApprovalRejected === "iterate" || object.onApprovalRejected === "fail"
+      ? object.onApprovalRejected
+      : undefined;
+  const onUpstreamChanged = Object.hasOwn(object, "onUpstreamChanged")
+    ? object.onUpstreamChanged === "iterate" || object.onUpstreamChanged === "fail"
+      ? object.onUpstreamChanged
+      : undefined
+    : "fail";
+  const onExhausted =
+    object.onExhausted === "escalate" || object.onExhausted === "fail"
+      ? object.onExhausted
+      : undefined;
+  if (onGateRejected === undefined)
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      `${pointer}/onGateRejected`,
+      "onGateRejected must be iterate or fail",
+    );
+  if (onApprovalRejected === undefined)
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      `${pointer}/onApprovalRejected`,
+      "onApprovalRejected must be iterate or fail",
+    );
+  if (onUpstreamChanged === undefined)
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      `${pointer}/onUpstreamChanged`,
+      "onUpstreamChanged must be iterate or fail",
+    );
+  if (onExhausted === undefined)
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      `${pointer}/onExhausted`,
+      "onExhausted must be escalate or fail",
+    );
+  return maximumAttempts === undefined ||
+    onGateRejected === undefined ||
+    onApprovalRejected === undefined ||
+    onUpstreamChanged === undefined ||
+    onExhausted === undefined
+    ? undefined
+    : {
+        maximumAttempts,
+        onGateRejected: onGateRejected as "iterate" | "fail",
+        onApprovalRejected: onApprovalRejected as "iterate" | "fail",
+        onUpstreamChanged: onUpstreamChanged as "iterate" | "fail",
+        onExhausted: onExhausted as "escalate" | "fail",
+      };
+}
+
+function parsePhaseExit(
+  value: CanonicalValue | undefined,
+  pointer: string,
+  collector: DiagnosticCollector,
+): ParsedPhaseExit | undefined {
+  const object = exactObject(value, pointer, ["requiredOutputs", "approval"], ["gate"], collector);
+  if (object === undefined) return undefined;
+  const requiredOutputs = parseUniqueStrings(
+    object.requiredOutputs,
+    `${pointer}/requiredOutputs`,
+    collector,
+    "Required outputs",
+  );
+  const gate = Object.hasOwn(object, "gate")
+    ? parseReference(object.gate, `${pointer}/gate`, collector)
+    : undefined;
+  const approvalObject = isRecord(object.approval)
+    ? exactObject(
+        object.approval,
+        `${pointer}/approval`,
+        ["policy"],
+        object.approval.policy === "required" ? ["authority"] : [],
+        collector,
+      )
+    : undefined;
+  let approval: ParsedPhaseExit["approval"] | undefined;
+  if (approvalObject?.policy === "none") approval = { policy: "none" };
+  if (approvalObject?.policy === "required" && Object.hasOwn(approvalObject, "authority")) {
+    approval = { policy: "required", authority: approvalObject.authority as CanonicalValue };
+  }
+  if (approval === undefined)
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      `${pointer}/approval`,
+      "Approval must declare none or a required authority",
+    );
+  if (requiredOutputs === undefined || approval === undefined) return undefined;
+  const common = { requiredOutputs, approval };
+  return gate === undefined ? common : { ...common, gate };
+}
+
+function parseForEachRegistry(
   value: CanonicalValue | undefined,
   collector: DiagnosticCollector,
-): readonly ParsedProjection[] | undefined {
-  return parseArray(value, "/projectedWork", collector, (item, pointer) => {
-    const object = exactObject(item, pointer, ["phase", "work"], [], collector);
+): readonly ParsedForEach[] | undefined {
+  return parseArray(value, "/forEach", collector, (item, pointer) => {
+    const object = exactObject(
+      item,
+      pointer,
+      ["key", "source", "pointer", "collectionSchema", "itemSchema", "identityPointer", "limits"],
+      [],
+      collector,
+    );
     if (object === undefined) return undefined;
-    const phase = parseReference(object.phase, `${pointer}/phase`, collector);
-    const work = parseWork(object.work, `${pointer}/work`, collector);
-    return phase === undefined || work === undefined ? undefined : { pointer, phase, work };
+    const key = parseKey(object.key, `${pointer}/key`, collector);
+    const source = parseForEachSource(object.source, `${pointer}/source`, collector);
+    const collectionPointer = parsePointerField(object.pointer, `${pointer}/pointer`, collector);
+    const collectionSchema = parseReference(
+      object.collectionSchema,
+      `${pointer}/collectionSchema`,
+      collector,
+    );
+    const itemSchema = parseReference(object.itemSchema, `${pointer}/itemSchema`, collector);
+    const identityPointer = parsePointerField(
+      object.identityPointer,
+      `${pointer}/identityPointer`,
+      collector,
+    );
+    const limits = parseForEachLimits(object.limits, `${pointer}/limits`, collector);
+    return key === undefined ||
+      source === undefined ||
+      collectionPointer === undefined ||
+      collectionSchema === undefined ||
+      itemSchema === undefined ||
+      identityPointer === undefined ||
+      limits === undefined
+      ? undefined
+      : {
+          pointer,
+          key,
+          source,
+          collectionPointer,
+          collectionSchema,
+          itemSchema,
+          identityPointer,
+          limits,
+        };
   });
+}
+
+function parseForEachSource(
+  value: CanonicalValue | undefined,
+  pointer: string,
+  collector: DiagnosticCollector,
+): ParsedForEach["source"] | undefined {
+  if (!isRecord(value) || (value.kind !== "phase-output" && value.kind !== "phase-input")) {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      pointer,
+      "forEach source must be phase-output or phase-input",
+    );
+    return undefined;
+  }
+  const object = exactObject(
+    value,
+    pointer,
+    value.kind === "phase-output" ? ["kind", "phase", "output"] : ["kind", "phase"],
+    [],
+    collector,
+  );
+  if (object === undefined) return undefined;
+  const phase = parseReference(object.phase, `${pointer}/phase`, collector);
+  if (phase === undefined) return undefined;
+  if (object.kind === "phase-input") return { kind: "phase-input", phase };
+  const output = parseReference(object.output, `${pointer}/output`, collector);
+  return output === undefined ? undefined : { kind: "phase-output", phase, output };
+}
+
+function parseForEachLimits(
+  value: CanonicalValue | undefined,
+  pointer: string,
+  collector: DiagnosticCollector,
+): ParsedForEach["limits"] | undefined {
+  const object = exactObject(
+    value,
+    pointer,
+    ["maxSelectedItems", "maxTotalTasks", "maxConcurrency", "exhaustion"],
+    [],
+    collector,
+  );
+  if (object === undefined) return undefined;
+  const maxSelectedItems = parseBoundedPositiveInteger(
+    object.maxSelectedItems,
+    `${pointer}/maxSelectedItems`,
+    256,
+    collector,
+  );
+  const maxTotalTasks = parseBoundedPositiveInteger(
+    object.maxTotalTasks,
+    `${pointer}/maxTotalTasks`,
+    1024,
+    collector,
+  );
+  const maxConcurrency = parseBoundedPositiveInteger(
+    object.maxConcurrency,
+    `${pointer}/maxConcurrency`,
+    32,
+    collector,
+  );
+  const exhaustion =
+    object.exhaustion === "escalate" || object.exhaustion === "fail"
+      ? object.exhaustion
+      : undefined;
+  if (exhaustion === undefined) {
+    addDiagnostic(
+      collector,
+      "invalid-field",
+      `${pointer}/exhaustion`,
+      "Fan-out exhaustion must escalate or fail",
+    );
+  }
+  return maxSelectedItems === undefined ||
+    maxTotalTasks === undefined ||
+    maxConcurrency === undefined ||
+    exhaustion === undefined
+    ? undefined
+    : {
+        maxSelectedItems,
+        maxTotalTasks,
+        maxConcurrency,
+        exhaustion: exhaustion as "escalate" | "fail",
+      };
+}
+
+function parseTaskTemplateRegistry(
+  value: CanonicalValue | undefined,
+  collector: DiagnosticCollector,
+): readonly ParsedTaskTemplate[] | undefined {
+  return parseArray(value, "/taskTemplates", collector, (item, pointer) => {
+    const object = exactObject(
+      item,
+      pointer,
+      [
+        "key",
+        "generation",
+        "role",
+        "budgets",
+        "inputSchema",
+        "inputMappings",
+        "repositoryChanges",
+        "completionPolicy",
+      ],
+      ["dependencyIdentityPointer"],
+      collector,
+    );
+    if (object === undefined) return undefined;
+    const key = parseKey(object.key, `${pointer}/key`, collector);
+    const generation = parseGeneration(object.generation, `${pointer}/generation`, collector);
+    const role = parseReference(object.role, `${pointer}/role`, collector);
+    const budgets = parseBudgets(object.budgets, `${pointer}/budgets`, collector);
+    const inputSchema = parseReference(object.inputSchema, `${pointer}/inputSchema`, collector);
+    const inputMappings = parseArray(
+      object.inputMappings,
+      `${pointer}/inputMappings`,
+      collector,
+      (mapping, mappingPointer) => parseDataMapping(mapping, mappingPointer, collector),
+    );
+    const dependencyIdentityPointer = Object.hasOwn(object, "dependencyIdentityPointer")
+      ? parsePointerField(
+          object.dependencyIdentityPointer,
+          `${pointer}/dependencyIdentityPointer`,
+          collector,
+        )
+      : undefined;
+    const repositoryChanges = ["required", "allowed", "forbidden"].includes(
+      String(object.repositoryChanges),
+    )
+      ? (object.repositoryChanges as ParsedTaskTemplate["repositoryChanges"])
+      : undefined;
+    if (repositoryChanges === undefined) {
+      addDiagnostic(
+        collector,
+        "invalid-field",
+        `${pointer}/repositoryChanges`,
+        "repositoryChanges must be required, allowed, or forbidden",
+      );
+    }
+    const completionPolicy = parseCompletionPolicy(
+      object.completionPolicy,
+      `${pointer}/completionPolicy`,
+      collector,
+    );
+    return key === undefined ||
+      generation === undefined ||
+      role === undefined ||
+      budgets === undefined ||
+      inputSchema === undefined ||
+      inputMappings === undefined ||
+      repositoryChanges === undefined ||
+      completionPolicy === undefined
+      ? undefined
+      : {
+          pointer,
+          key,
+          generation,
+          role,
+          budgets,
+          inputSchema,
+          inputMappings,
+          ...(dependencyIdentityPointer === undefined ? {} : { dependencyIdentityPointer }),
+          repositoryChanges,
+          completionPolicy,
+        };
+  });
+}
+
+function parsePointerField(
+  value: CanonicalValue | undefined,
+  pointer: string,
+  collector: DiagnosticCollector,
+): string | undefined {
+  if (typeof value !== "string") {
+    addDiagnostic(collector, "invalid-field", pointer, "Value must be an RFC 6901 JSON Pointer");
+    return undefined;
+  }
+  return value;
 }
 
 function parseWork(
@@ -1461,23 +2579,36 @@ function parseEvidencePolicy(
 }
 
 function validateRegistries(
-  parsed: ParsedWorkflow,
+  parsed: ResolvedWorkflow,
   collector: DiagnosticCollector,
   sha256: Sha256,
 ): ValidatedRegistries {
   for (const registry of [
+    parsed.prompts,
     parsed.schemas,
     parsed.roles,
     parsed.modelPolicies,
     parsed.sensors,
     parsed.gates,
+    parsed.implementationEvidenceViews,
   ]) {
     reportDuplicateKeys(registry, collector);
   }
 
   const schemaIds = new Map<string, string>();
+  const externalSchemas = parsed.schemas.flatMap((schema) => {
+    if (!isRecord(schema.schema) || typeof schema.schema.$id !== "string") return [];
+    const id = normalizeSchemaResourceId(schema.schema.$id);
+    return id === undefined ? [] : [{ key: schema.key, id, schema: schema.schema }];
+  });
   for (const schema of parsed.schemas) {
-    const analysis = analyzeSchemaDefinition(schema.schema, `${schema.pointer}/schema`);
+    const analysis = analyzeSchemaDefinition(
+      schema.schema,
+      `${schema.pointer}/path`,
+      externalSchemas
+        .filter(({ key }) => key !== schema.key)
+        .map(({ id, schema: external }) => ({ id, schema: external })),
+    );
     for (const finding of analysis.findings) {
       addDiagnostic(collector, finding.code, finding.pointer, finding.message);
     }
@@ -1511,6 +2642,7 @@ function validateRegistries(
   }
 
   const policyKeys = new Set(parsed.modelPolicies.map(({ key }) => key));
+  const promptKeys = new Set<string>(parsed.prompts.map(({ key }) => key));
   for (const role of parsed.roles) {
     if (role.kind === "agent" && role.modelPolicy === undefined) {
       addDiagnostic(
@@ -1520,12 +2652,36 @@ function validateRegistries(
         "Agent roles require a modelPolicy reference",
       );
     }
+    if (role.kind === "agent" && role.prompt === undefined) {
+      addDiagnostic(
+        collector,
+        "missing-agent-prompt",
+        `${role.pointer}/prompt`,
+        "Agent roles require one prompt resource reference",
+      );
+    }
     if (role.kind !== "agent" && role.modelPolicy !== undefined) {
       addDiagnostic(
         collector,
         "authority-widening",
         `${role.pointer}/modelPolicy`,
         `${role.kind} roles cannot carry model execution policy`,
+      );
+    }
+    if (role.kind !== "agent" && role.prompt !== undefined) {
+      addDiagnostic(
+        collector,
+        "forbidden-role-prompt",
+        `${role.pointer}/prompt`,
+        `${role.kind} roles cannot carry prompt execution policy`,
+      );
+    }
+    if (role.prompt !== undefined && !promptKeys.has(role.prompt)) {
+      addDiagnostic(
+        collector,
+        "unknown-prompt-reference",
+        `${role.pointer}/prompt`,
+        `Prompt resource ${role.prompt} is not declared`,
       );
     }
     if (role.modelPolicy !== undefined && !policyKeys.has(role.modelPolicy)) {
@@ -1585,12 +2741,12 @@ function validateRegistries(
   }
   for (const bindings of gateKeysByPhase.values()) bindings.sort(compareText);
   validateWorkSemantics(parsed, collector);
+  validatePhaseDataflowSemantics(parsed, collector);
+  validateFanOutSemantics(parsed, collector);
 
   return {
-    schemas: registryEntries(
-      parsed.schemas.map(({ key, schema }) => ({ key, value: { key, schema } })),
-      sha256,
-    ),
+    prompts: Object.freeze(parsed.prompts.map(stripResolvedPrompt).sort(byKey)),
+    schemas: Object.freeze(parsed.schemas.map(stripResolvedSchema).sort(byKey)),
     roles: registryEntries(
       parsed.roles.map(({ pointer: _pointer, ...role }) => ({ key: role.key, value: role })),
       sha256,
@@ -1618,15 +2774,309 @@ function validateRegistries(
       }),
       sha256,
     ),
-    projections: registryEntries(
-      parsed.projectedWork.map(({ phase, work }) => ({
-        key: `${phase}/${work.key}`,
-        value: { phase, work: normalizedWorkDefinition(work) },
+    implementationEvidenceViews: registryEntries(
+      parsed.implementationEvidenceViews.map(({ pointer: _pointer, ...view }) => ({
+        key: view.key,
+        value: {
+          ...view,
+          evidenceKinds: [...view.evidenceKinds].sort((left, right) =>
+            compareText(canonicalSerialize(left), canonicalSerialize(right)),
+          ),
+        },
+      })),
+      sha256,
+    ),
+    phaseDataflow: registryEntries(
+      parsed.phases.map((phase) => ({
+        key: phase.key,
+        value: normalizedPhaseDataflow(phase),
+      })),
+      sha256,
+    ),
+    forEach: registryEntries(
+      parsed.forEach.map(({ pointer: _pointer, collectionPointer, ...definition }) => ({
+        key: definition.key,
+        value: { ...definition, pointer: collectionPointer },
+      })),
+      sha256,
+    ),
+    taskTemplates: registryEntries(
+      parsed.taskTemplates.map(({ pointer: _pointer, ...template }) => ({
+        key: template.key,
+        value: template,
       })),
       sha256,
     ),
     gateKeysByPhase,
   };
+}
+
+function validateFanOutSemantics(parsed: ParsedWorkflow, collector: DiagnosticCollector): void {
+  const schemaKeys = new Set(parsed.schemas.map(({ key }) => key));
+  const phaseByKey = new Map(parsed.phases.map((phase) => [phase.key, phase]));
+  const roleByKey = new Map(parsed.roles.map((role) => [role.key, role]));
+  const forEachByKey = new Map(parsed.forEach.map((definition) => [definition.key, definition]));
+  const templateByKey = new Map(parsed.taskTemplates.map((template) => [template.key, template]));
+  for (const definition of parsed.forEach) {
+    const phase = phaseByKey.get(definition.source.phase);
+    if (phase === undefined) {
+      addDiagnostic(
+        collector,
+        "unknown-reference",
+        `${definition.pointer}/source/phase`,
+        `Phase ${definition.source.phase} is not declared`,
+      );
+    } else if (
+      definition.source.kind === "phase-output" &&
+      !phase.outputs.some(
+        (output) =>
+          output.key ===
+          (definition.source as Extract<ParsedForEach["source"], { kind: "phase-output" }>).output,
+      )
+    ) {
+      addDiagnostic(
+        collector,
+        "unknown-reference",
+        `${definition.pointer}/source/output`,
+        `Output ${definition.source.output} is not declared`,
+      );
+    }
+    for (const [field, key] of [
+      ["collectionSchema", definition.collectionSchema],
+      ["itemSchema", definition.itemSchema],
+    ] as const) {
+      if (!schemaKeys.has(key))
+        addDiagnostic(
+          collector,
+          "unknown-reference",
+          `${definition.pointer}/${field}`,
+          `Schema ${key} is not declared`,
+        );
+    }
+  }
+  for (const template of parsed.taskTemplates) {
+    if (!schemaKeys.has(template.inputSchema)) {
+      addDiagnostic(
+        collector,
+        "unknown-reference",
+        `${template.pointer}/inputSchema`,
+        `Schema ${template.inputSchema} is not declared`,
+      );
+    }
+    if (roleByKey.get(template.role)?.kind !== "agent") {
+      addDiagnostic(
+        collector,
+        "authority-widening",
+        `${template.pointer}/role`,
+        `Role ${template.role} cannot execute generated work`,
+      );
+    }
+    try {
+      validateDataMappingDeclarations(template.inputMappings, {
+        dependencyPhases: parsed.phases.map(({ key }) => consumerKey(key)),
+        declaredPhaseOutputs: parsed.phases.flatMap((phase) =>
+          phase.outputs.map((output) => ({
+            phase: consumerKey(phase.key),
+            output: consumerKey(output.key),
+          })),
+        ),
+        implementationEvidenceViews: parsed.implementationEvidenceViews.map((view) => ({
+          phase: consumerKey(view.phase),
+          view: consumerKey(view.key),
+        })),
+        allowCurrentItem: true,
+      });
+    } catch (error) {
+      addDiagnostic(
+        collector,
+        error instanceof DataflowError ? error.code : "invalid-field",
+        `${template.pointer}/inputMappings`,
+        error instanceof Error ? error.message : "Task template mappings are invalid",
+      );
+    }
+  }
+  for (const phase of parsed.phases) {
+    if (phase.executor.kind === "task-frontier") {
+      if (!forEachByKey.has(phase.executor.forEach))
+        addDiagnostic(
+          collector,
+          "unknown-reference",
+          `${phase.pointer}/executor/forEach`,
+          `forEach ${phase.executor.forEach} is not declared`,
+        );
+      if (!templateByKey.has(phase.executor.template))
+        addDiagnostic(
+          collector,
+          "unknown-reference",
+          `${phase.pointer}/executor/template`,
+          `Task template ${phase.executor.template} is not declared`,
+        );
+    }
+    for (const [index, action] of phase.actions.entries()) {
+      if (!forEachByKey.has(action.forEach))
+        addDiagnostic(
+          collector,
+          "unknown-reference",
+          `${phase.pointer}/actions/${index}/forEach`,
+          `forEach ${action.forEach} is not declared`,
+        );
+    }
+  }
+}
+
+function validatePhaseDataflowSemantics(
+  parsed: ParsedWorkflow,
+  collector: DiagnosticCollector,
+): void {
+  const schemaKeys = new Set(parsed.schemas.map(({ key }) => key));
+  const roleByKey = new Map(parsed.roles.map((role) => [role.key, role]));
+  const gateKeys = new Set(parsed.gates.map(({ key }) => key));
+  const phaseByKey = new Map(parsed.phases.map((phase) => [phase.key, phase]));
+  const declaredPhaseOutputs = parsed.phases.flatMap((phase) =>
+    phase.outputs.map((output) => ({
+      phase: consumerKey(phase.key),
+      output: consumerKey(output.key),
+    })),
+  );
+  const evidenceViews = parsed.implementationEvidenceViews.map((view) => ({
+    phase: consumerKey(view.phase),
+    view: consumerKey(view.key),
+  }));
+
+  if (!schemaKeys.has(parsed.workflow.inputSchema)) {
+    addDiagnostic(
+      collector,
+      "unknown-reference",
+      "/workflow/input/schema",
+      `Workflow input schema ${parsed.workflow.inputSchema} is not declared`,
+    );
+  }
+  for (const view of parsed.implementationEvidenceViews) {
+    if (!phaseByKey.has(view.phase)) {
+      addDiagnostic(
+        collector,
+        "unknown-reference",
+        `${view.pointer}/phase`,
+        `Evidence view phase ${view.phase} is not declared`,
+      );
+    }
+  }
+  for (const phase of parsed.phases) {
+    if (!schemaKeys.has(phase.input.schema)) {
+      addDiagnostic(
+        collector,
+        "unknown-reference",
+        `${phase.pointer}/input/schema`,
+        `Phase input schema ${phase.input.schema} is not declared`,
+      );
+    }
+    if (phase.executor.kind === "agent") {
+      const role = roleByKey.get(phase.executor.role);
+      if (role === undefined) {
+        addDiagnostic(
+          collector,
+          "unknown-reference",
+          `${phase.pointer}/executor/role`,
+          `Executor role ${phase.executor.role} is not declared`,
+        );
+      } else if (role.kind !== "agent") {
+        addDiagnostic(
+          collector,
+          "authority-widening",
+          `${phase.pointer}/executor/role`,
+          `Executor role ${phase.executor.role} is not an agent`,
+        );
+      }
+    } else if (
+      phase.executor.kind === "task-set" &&
+      phase.executor.work.some((work) => work.key === "phase-executor")
+    ) {
+      addDiagnostic(
+        collector,
+        "duplicate-key",
+        `${phase.pointer}/executor/work`,
+        "Task-set work cannot use the reserved phase-executor key",
+      );
+    }
+    const outputKeys = new Set<string>();
+    const outputPaths = new Set<string>();
+    for (const output of phase.outputs) {
+      if (outputKeys.has(output.key)) {
+        addDiagnostic(
+          collector,
+          "duplicate-key",
+          `${phase.pointer}/outputs`,
+          `Phase output ${output.key} is duplicated`,
+        );
+      }
+      if (outputPaths.has(output.path)) {
+        addDiagnostic(
+          collector,
+          "duplicate-key",
+          `${phase.pointer}/outputs`,
+          `Phase output path ${output.path} is duplicated`,
+        );
+      }
+      outputKeys.add(output.key);
+      outputPaths.add(output.path);
+      if (!schemaKeys.has(output.schema)) {
+        addDiagnostic(
+          collector,
+          "unknown-reference",
+          `${phase.pointer}/outputs/${escapePointer(output.key)}/schema`,
+          `Phase output schema ${output.schema} is not declared`,
+        );
+      }
+    }
+    for (const required of phase.exit.requiredOutputs) {
+      if (!outputKeys.has(required)) {
+        addDiagnostic(
+          collector,
+          "unknown-reference",
+          `${phase.pointer}/exit/requiredOutputs`,
+          `Required output ${required} is not declared by phase ${phase.key}`,
+        );
+      }
+    }
+    if (phase.exit.gate !== undefined && !gateKeys.has(phase.exit.gate)) {
+      addDiagnostic(
+        collector,
+        "unknown-reference",
+        `${phase.pointer}/exit/gate`,
+        `Exit gate ${phase.exit.gate} is not declared`,
+      );
+    }
+    try {
+      validateDataMappingDeclarations(phase.input.mappings, {
+        dependencyPhases: transitivePhaseDependencies(phase, phaseByKey).map(consumerKey),
+        declaredPhaseOutputs,
+        implementationEvidenceViews: evidenceViews,
+        allowCurrentItem: false,
+      });
+    } catch (error) {
+      addDiagnostic(
+        collector,
+        error instanceof DataflowError ? error.code : "invalid-field",
+        `${phase.pointer}/input/mappings`,
+        error instanceof Error ? error.message : "Phase input mappings are invalid",
+      );
+    }
+  }
+}
+
+function transitivePhaseDependencies(
+  phase: ParsedPhase,
+  phaseByKey: ReadonlyMap<string, ParsedPhase>,
+): readonly string[] {
+  const found = new Set<string>();
+  const pending = [...phase.dependsOn];
+  while (pending.length > 0) {
+    const key = pending.pop();
+    if (key === undefined || found.has(key)) continue;
+    found.add(key);
+    pending.push(...(phaseByKey.get(key)?.dependsOn ?? []));
+  }
+  return [...found].sort(compareText);
 }
 
 function validateWorkSemantics(parsed: ParsedWorkflow, collector: DiagnosticCollector): void {
@@ -1638,7 +3088,6 @@ function validateWorkSemantics(parsed: ParsedWorkflow, collector: DiagnosticColl
     ...parsed.phases.flatMap(({ key: phase, work }) =>
       work.map((declaration) => ({ phase, work: declaration })),
     ),
-    ...parsed.projectedWork,
   ];
   for (const { phase, work } of declarations) {
     const qualifiedKey = `${phase}/${work.key}`;
@@ -1677,16 +3126,13 @@ function validateWorkSemantics(parsed: ParsedWorkflow, collector: DiagnosticColl
         `Input schema ${work.inputSchema} is not declared`,
       );
     }
-    if (!phaseKeys.has(phase)) {
+    if (!phaseKeys.has(phase))
       addDiagnostic(
         collector,
         "unknown-reference",
-        work.pointer.startsWith("/projectedWork")
-          ? `${work.pointer.slice(0, work.pointer.lastIndexOf("/work"))}/phase`
-          : work.pointer,
-        `Projected work phase ${phase} is not declared`,
+        work.pointer,
+        `Work phase ${phase} is not declared`,
       );
-    }
   }
 }
 
@@ -1701,7 +3147,7 @@ function validateAmendmentSemantics(
       isRecord(entry.value) ? entry.value : {},
     ]),
   );
-  const schemaKeys = new Set(baseSnapshot.schemas.map(({ key }) => key));
+  const schemaKeys = new Set<string>(baseSnapshot.schemas.map(({ key }) => key));
   for (const operation of parsed.operations) {
     if (operation.kind !== "add-task") continue;
     const role = roleByKey.get(operation.work.role);
@@ -1741,17 +3187,24 @@ function registriesFromSnapshot(snapshot: ConfigurationSnapshot): ValidatedRegis
   }
   for (const keys of gateKeysByPhase.values()) keys.sort(compareText);
   return {
+    prompts: snapshot.prompts,
     schemas: snapshot.schemas,
     roles: snapshot.roles,
     modelPolicies: snapshot.modelPolicies,
     sensors: snapshot.sensors,
     gates: snapshot.gates,
-    projections: snapshot.projections,
+    implementationEvidenceViews: snapshot.implementationEvidenceViews,
+    phaseDataflow: snapshot.phaseDataflow,
+    forEach: snapshot.forEach,
+    taskTemplates: snapshot.taskTemplates,
     gateKeysByPhase,
   };
 }
 
-function validateConfigurationSnapshot(value: unknown, sha256: Sha256): ConfigurationSnapshot {
+export function validateConfigurationSnapshot(
+  value: unknown,
+  sha256: Sha256,
+): ConfigurationSnapshot {
   const snapshot = canonicalValue(value);
   if (!isRecord(snapshot)) throw new TypeError("Base configuration snapshot must be an object");
   const expectedKeys = [
@@ -1759,12 +3212,16 @@ function validateConfigurationSnapshot(value: unknown, sha256: Sha256): Configur
     "execution",
     ...(Object.hasOwn(snapshot, "remote") ? ["remote"] : []),
     "graph",
+    "prompts",
     "schemas",
     "roles",
     "modelPolicies",
     "sensors",
     "gates",
-    "projections",
+    "implementationEvidenceViews",
+    "phaseDataflow",
+    "forEach",
+    "taskTemplates",
     "componentDigests",
     "snapshotDigest",
   ].sort(compareText);
@@ -1785,14 +3242,24 @@ function validateConfigurationSnapshot(value: unknown, sha256: Sha256): Configur
     ? validateSnapshotRemotePolicy(snapshot.remote)
     : undefined;
   const registries: ValidatedRegistries = {
-    schemas: validateSnapshotRegistry(snapshot.schemas, "schemas", sha256),
+    prompts: validateSnapshotPromptResources(snapshot.prompts, sha256),
+    schemas: validateSnapshotSchemaResources(snapshot.schemas, sha256),
     roles: validateSnapshotRegistry(snapshot.roles, "roles", sha256),
     modelPolicies: validateSnapshotRegistry(snapshot.modelPolicies, "modelPolicies", sha256),
     sensors: validateSnapshotRegistry(snapshot.sensors, "sensors", sha256),
     gates: validateSnapshotRegistry(snapshot.gates, "gates", sha256),
-    projections: validateSnapshotRegistry(snapshot.projections, "projections", sha256),
+    implementationEvidenceViews: validateSnapshotRegistry(
+      snapshot.implementationEvidenceViews,
+      "implementationEvidenceViews",
+      sha256,
+    ),
+    phaseDataflow: validateSnapshotRegistry(snapshot.phaseDataflow, "phaseDataflow", sha256),
+    forEach: validateSnapshotRegistry(snapshot.forEach, "forEach", sha256),
+    taskTemplates: validateSnapshotRegistry(snapshot.taskTemplates, "taskTemplates", sha256),
     gateKeysByPhase: new Map(),
   };
+  validateSnapshotResourceSet(registries.prompts, registries.schemas);
+  validateSnapshotSchemaSafety(registries.schemas);
   const roleKeys = new Set(registries.roles.map(({ key }) => String(key)));
   for (const mapping of remote?.roleMappings ?? []) {
     if (mapping.localRoles.some((role) => !roleKeys.has(role))) {
@@ -1857,6 +3324,155 @@ function validateSnapshotRegistry(
     throw new TypeError(`Base snapshot ${label} entries have duplicate keys`);
   }
   return Object.freeze(entries);
+}
+
+function validateSnapshotPromptResources(
+  value: unknown,
+  sha256: Sha256,
+): readonly ConfigurationPromptResource[] {
+  if (!Array.isArray(value)) throw new TypeError("Base snapshot prompts must be an array");
+  const resources = value.map((item, index) => {
+    if (!isRecord(item)) throw new TypeError(`Base snapshot prompts[${index}] must be an object`);
+    const source = validateSnapshotTextSource(item.source, "prompt", sha256);
+    const inputPaths = canonicalPromptInputPaths(item.inputPaths as readonly string[]);
+    const template = parsePromptTemplate(source.utf8);
+    if (
+      inputPaths.length !== template.inputPaths.length ||
+      inputPaths.some((path, pathIndex) => path !== template.inputPaths[pathIndex])
+    ) {
+      throw new TypeError(`Base snapshot prompts[${index}] inputPaths do not match its template`);
+    }
+    const content = canonicalValue({ key: item.key, source, inputPaths });
+    if (!isConsumerKey(item.key) || canonicalDigest(content, sha256) !== item.digest) {
+      throw new TypeError(`Base snapshot prompts[${index}] has an invalid key or digest`);
+    }
+    return canonicalValue({
+      key: item.key,
+      source,
+      inputPaths,
+      digest: item.digest,
+    }) as unknown as ConfigurationPromptResource;
+  });
+  return validateSortedUniqueResourceKeys(resources, "prompts");
+}
+
+function validateSnapshotSchemaResources(
+  value: unknown,
+  sha256: Sha256,
+): readonly ConfigurationSchemaResource[] {
+  if (!Array.isArray(value)) throw new TypeError("Base snapshot schemas must be an array");
+  const resources = value.map((item, index) => {
+    if (!isRecord(item)) throw new TypeError(`Base snapshot schemas[${index}] must be an object`);
+    const source = validateSnapshotTextSource(item.source, "schema", sha256);
+    const schema = parseStrictJsonResource(source.utf8).value;
+    const schemaDigest = canonicalDigest(schema, sha256);
+    const content = canonicalValue({ key: item.key, source, schema, schemaDigest });
+    if (
+      !isConsumerKey(item.key) ||
+      item.schemaDigest !== schemaDigest ||
+      canonicalSerialize(schema) !== canonicalSerialize(canonicalValue(item.schema)) ||
+      canonicalDigest(content, sha256) !== item.digest
+    ) {
+      throw new TypeError(
+        `Base snapshot schemas[${index}] does not match its exact bytes or digest`,
+      );
+    }
+    return canonicalValue({
+      key: item.key,
+      source,
+      schema,
+      schemaDigest,
+      digest: item.digest,
+    }) as unknown as ConfigurationSchemaResource;
+  });
+  return validateSortedUniqueResourceKeys(resources, "schemas");
+}
+
+function validateSnapshotResourceSet(
+  prompts: readonly ConfigurationPromptResource[],
+  schemas: readonly ConfigurationSchemaResource[],
+): void {
+  if (prompts.length > CONFIGURATION_RESOURCE_LIMITS.maxPromptResources) {
+    throw new TypeError("Base snapshot has too many prompt resources");
+  }
+  if (schemas.length > CONFIGURATION_RESOURCE_LIMITS.maxSchemaResources) {
+    throw new TypeError("Base snapshot has too many schema resources");
+  }
+  const paths = [...prompts, ...schemas].map(({ source }) => source.path);
+  if (new Set(paths).size !== paths.length) {
+    throw new TypeError("Base snapshot contains duplicate resource paths");
+  }
+  const aggregateBytes = [...prompts, ...schemas].reduce(
+    (total, resource) => total + resource.source.byteLength,
+    0,
+  );
+  if (aggregateBytes > CONFIGURATION_RESOURCE_LIMITS.maxAggregateBytes) {
+    throw new TypeError("Base snapshot resource set exceeds its aggregate byte limit");
+  }
+}
+
+function validateSnapshotSchemaSafety(schemas: readonly ConfigurationSchemaResource[]): void {
+  const externalSchemas = schemas.flatMap((resource) => {
+    if (!isRecord(resource.schema) || typeof resource.schema.$id !== "string") return [];
+    const id = normalizeSchemaResourceId(resource.schema.$id);
+    return id === undefined ? [] : [{ key: resource.key, id, schema: resource.schema }];
+  });
+  for (const resource of schemas) {
+    const findings = analyzeSchemaDefinition(
+      resource.schema,
+      `/schemas/${escapePointer(resource.key)}`,
+      externalSchemas
+        .filter(({ key }) => key !== resource.key)
+        .map(({ id, schema }) => ({ id, schema })),
+    ).findings;
+    if (findings.length > 0) {
+      throw new TypeError(`Base snapshot schema ${resource.key} is unsafe or invalid`);
+    }
+  }
+}
+
+function validateSnapshotTextSource(
+  value: unknown,
+  kind: "prompt" | "schema",
+  sha256: Sha256,
+): ConfigurationPromptResource["source"] {
+  if (!isRecord(value)) throw new TypeError(`Base snapshot ${kind} source must be an object`);
+  const path = validateConfigurationResourcePath(kind, value.path as string);
+  const utf8 = value.utf8;
+  if (typeof utf8 !== "string" || utf8.includes("\0")) {
+    throw new TypeError(`Base snapshot ${kind} source has invalid UTF-8 text`);
+  }
+  const bytes = new TextEncoder().encode(utf8);
+  const mediaType =
+    kind === "prompt" ? "text/markdown; charset=utf-8" : "application/schema+json; charset=utf-8";
+  if (
+    value.mediaType !== mediaType ||
+    value.byteLength !== bytes.byteLength ||
+    value.contentDigest !== sha256.digest(bytes)
+  ) {
+    throw new TypeError(`Base snapshot ${kind} source does not match its exact bytes`);
+  }
+  return canonicalValue({
+    path,
+    mediaType,
+    byteLength: bytes.byteLength,
+    contentDigest: value.contentDigest,
+    utf8,
+  }) as unknown as ConfigurationPromptResource["source"];
+}
+
+function validateSortedUniqueResourceKeys<T extends { readonly key: ConsumerKey }>(
+  resources: readonly T[],
+  label: string,
+): readonly T[] {
+  const sorted = [...resources].sort(byKey);
+  if (resources.some((resource, index) => resource.key !== sorted[index]?.key)) {
+    throw new TypeError(`Base snapshot ${label} entries are not canonically ordered`);
+  }
+  if (new Set(resources.map(({ key }) => key)).size !== resources.length) {
+    throw new TypeError(`Base snapshot ${label} entries have duplicate keys`);
+  }
+  return Object.freeze(resources);
 }
 
 function lowerAmendment(
@@ -1947,7 +3563,6 @@ function lowerConfiguration(
     ...parsed.phases.flatMap((phase) =>
       phase.work.map((work) => ({ phaseKey: phase.key, work, projected: false })),
     ),
-    ...parsed.projectedWork.map(({ phase, work }) => ({ phaseKey: phase, work, projected: true })),
   ];
   const uniqueWork: typeof allWork = [];
   const seen = new Set<string>();
@@ -1979,7 +3594,7 @@ function lowerConfiguration(
         key: consumerKey(parsed.workflow.key),
         generation: definitionGeneration(parsed.workflow.generation),
         source: { locator: collector.locator, pointer: "/workflow" },
-        input: parsed.workflow.input,
+        input: canonicalValue({ schema: parsed.workflow.inputSchema }),
       },
       phases: phases.sort(byDefinitionId),
       executableWork: executableWork.sort(byDefinitionId),
@@ -2021,7 +3636,7 @@ function lowerPhaseDeclaration(
     parentId: workflowIdentity,
     dependsOn: phase.dependsOn.map((key) => phaseIdentity(workflowKey, key, sha256)),
     source: { locator, pointer },
-    input: phase.input,
+    input: normalizedPhaseDataflow(phase),
   };
 }
 
@@ -2035,9 +3650,11 @@ function lowerWorkDeclaration(
   sourceById: Map<string, { pointer: string }>,
   sha256: Sha256,
 ) {
-  const pointer = projected
-    ? `/projectedWork/${escapePointer(phaseKey)}/${escapePointer(work.key)}`
-    : `/phases/${escapePointer(phaseKey)}/work/${escapePointer(work.key)}`;
+  const pointer = work.reservedExecutor
+    ? `/phases/${escapePointer(phaseKey)}/executor`
+    : projected
+      ? `/projectedWork/${escapePointer(phaseKey)}/${escapePointer(work.key)}`
+      : `/phases/${escapePointer(phaseKey)}/executor/work/${escapePointer(work.key)}`;
   const id = taskIdentity(workflowKey, phaseKey, work.key, sha256);
   sourceById.set(id, { pointer });
   const sortedCriteria = [...work.completionPolicy.criteria].sort((left, right) =>
@@ -2108,6 +3725,47 @@ function normalizedWorkDefinition(work: ParsedWork): CanonicalValue {
   );
 }
 
+function normalizedPhaseDataflow(phase: ParsedPhase): CanonicalValue {
+  const executor =
+    phase.executor.kind === "agent"
+      ? {
+          kind: "agent" as const,
+          role: phase.executor.role,
+          budgets: phase.executor.budgets,
+          completionPolicy: phase.executor.completionPolicy,
+          resumeAcrossAttempts: phase.executor.resumeAcrossAttempts,
+          reservedTaskKey: "phase-executor",
+        }
+      : phase.executor.kind === "task-set"
+        ? {
+            kind: "task-set" as const,
+            work: phase.executor.work.map(normalizedWorkDefinition),
+          }
+        : {
+            kind: "task-frontier" as const,
+            forEach: phase.executor.forEach,
+            template: phase.executor.template,
+          };
+  return canonicalValue({
+    key: phase.key,
+    generation: phase.generation,
+    dependsOn: [...phase.dependsOn].sort(compareText),
+    input: {
+      schema: phase.input.schema,
+      mappings: [...phase.input.mappings].sort((left, right) => compareText(left.key, right.key)),
+    },
+    executor,
+    outputs: [...phase.outputs].sort((left, right) => compareText(left.key, right.key)),
+    iteration: phase.iteration,
+    exit: {
+      requiredOutputs: [...phase.exit.requiredOutputs].sort(compareText),
+      ...(phase.exit.gate === undefined ? {} : { gate: phase.exit.gate }),
+      approval: phase.exit.approval,
+    },
+    actions: phase.actions,
+  });
+}
+
 function normalizeEvidencePolicy(policy: ParsedEvidencePolicy) {
   const requirements = [...policy.requirements].sort((left, right) =>
     compareText(canonicalSerialize(left.kind), canonicalSerialize(right.kind)),
@@ -2125,23 +3783,34 @@ function createConfigurationSnapshot(
   sha256: Sha256,
 ): ConfigurationSnapshot {
   const contentRegistries = {
+    prompts: registries.prompts,
     schemas: registries.schemas,
     roles: registries.roles,
     modelPolicies: registries.modelPolicies,
     sensors: registries.sensors,
     gates: registries.gates,
-    projections: registries.projections,
+    implementationEvidenceViews: registries.implementationEvidenceViews,
+    phaseDataflow: registries.phaseDataflow,
+    forEach: registries.forEach,
+    taskTemplates: registries.taskTemplates,
   };
   const componentDigests = {
     execution: canonicalDigest(canonicalValue(execution), sha256),
     ...(remote === undefined ? {} : { remote: canonicalDigest(canonicalValue(remote), sha256) }),
     graph: canonicalDigest(canonicalValue(graph), sha256),
+    prompts: canonicalDigest(canonicalValue(contentRegistries.prompts), sha256),
     schemas: canonicalDigest(canonicalValue(contentRegistries.schemas), sha256),
     roles: canonicalDigest(canonicalValue(contentRegistries.roles), sha256),
     modelPolicies: canonicalDigest(canonicalValue(contentRegistries.modelPolicies), sha256),
     sensors: canonicalDigest(canonicalValue(contentRegistries.sensors), sha256),
     gates: canonicalDigest(canonicalValue(contentRegistries.gates), sha256),
-    projections: canonicalDigest(canonicalValue(contentRegistries.projections), sha256),
+    implementationEvidenceViews: canonicalDigest(
+      canonicalValue(contentRegistries.implementationEvidenceViews),
+      sha256,
+    ),
+    phaseDataflow: canonicalDigest(canonicalValue(contentRegistries.phaseDataflow), sha256),
+    forEach: canonicalDigest(canonicalValue(contentRegistries.forEach), sha256),
+    taskTemplates: canonicalDigest(canonicalValue(contentRegistries.taskTemplates), sha256),
   };
   const content = {
     apiVersion: CONFIGURATION_SNAPSHOT_API_VERSION,
@@ -2167,6 +3836,29 @@ function registryEntries(
       })
       .sort((left, right) => compareText(left.key, right.key)),
   );
+}
+
+function stripResolvedPrompt(prompt: ResolvedPrompt): ConfigurationPromptResource {
+  return canonicalValue({
+    key: consumerKey(prompt.key),
+    source: prompt.source,
+    inputPaths: prompt.inputPaths,
+    digest: prompt.digest,
+  }) as unknown as ConfigurationPromptResource;
+}
+
+function stripResolvedSchema(schema: ResolvedSchema): ConfigurationSchemaResource {
+  return canonicalValue({
+    key: consumerKey(schema.key),
+    source: schema.source,
+    schema: schema.schema,
+    schemaDigest: schema.schemaDigest,
+    digest: schema.digest,
+  }) as unknown as ConfigurationSchemaResource;
+}
+
+function byKey(left: { readonly key: string }, right: { readonly key: string }): number {
+  return compareText(left.key, right.key);
 }
 
 function reportDuplicateKeys(

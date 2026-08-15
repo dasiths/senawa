@@ -327,6 +327,12 @@ export class PortalApplication {
         this.#dispatch({ type: "cache", cache: "graphEdges", key: revision, value: edges });
         return true;
       }
+      case "delivery": {
+        const delivery = await this.#client.delivery(repositoryId, runId);
+        if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
+        this.#dispatch({ type: "cache", cache: "delivery", key, value: delivery });
+        return true;
+      }
       case "activity":
         return true;
       case "artifacts": {

@@ -33,6 +33,7 @@ export const PORTAL_LIMITS = Object.freeze({
   maxWorkspaceItems: 100,
   maxIntegrationItems: 100,
   maxHumanNeeds: 100,
+  maxDeliveryItems: 256,
   maxArtifactPreviewBytes: 65_536,
   jsonViewerNodeBudget: 500,
 });
@@ -161,6 +162,53 @@ export interface PortalGraphEdgePage {
   readonly nextAfter: number;
   readonly hasMore: boolean;
   readonly edges: readonly PortalGraphEdge[];
+}
+
+export type PortalDeliveryRecordKind =
+  | "phase-attempt"
+  | "phase-transition"
+  | "phase-output"
+  | "fan-out-evaluation"
+  | "generated-task"
+  | "plan-import";
+
+export interface PortalDeliveryRecord {
+  readonly identity: string;
+  readonly kind: PortalDeliveryRecordKind;
+  readonly phaseId?: OpaqueIdentity;
+  readonly definitionGeneration?: number;
+  readonly attempt?: number;
+  readonly state?: string;
+  readonly outputName?: string;
+  readonly schemaKey?: string;
+  readonly contentDigest?: string;
+  readonly byteLength?: number;
+  readonly sensitivity?: AssetSensitivity;
+  readonly accepted?: boolean;
+  readonly trigger?: string;
+  readonly disposition?: string;
+  readonly nextAttempt?: number;
+  readonly forEachKey?: string;
+  readonly evaluationDigest?: string;
+  readonly taskSetDigest?: string;
+  readonly applied?: boolean;
+  readonly taskId?: OpaqueIdentity;
+  readonly inputDigest?: string;
+  readonly proposalDigest?: string;
+  readonly decisionDigest?: string;
+  readonly applicationDigest?: string;
+}
+
+export interface PortalDeliveryPage {
+  readonly apiVersion: ProtocolVersion;
+  readonly repositoryId: RepositoryId;
+  readonly runId: RunId;
+  readonly dataflowRevision: number;
+  readonly taskFrontierRevision: number;
+  readonly after: number;
+  readonly nextAfter: number;
+  readonly hasMore: boolean;
+  readonly records: readonly PortalDeliveryRecord[];
 }
 
 export type PortalRecordKind = "candidate" | "gate" | "decision" | "closure" | "escalation";

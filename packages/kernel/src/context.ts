@@ -10,6 +10,12 @@ import {
 } from "./canonical.js";
 import type { TaskGenerationReference, TerminalDisposition } from "./completion.js";
 import {
+  type PhaseAttempt,
+  type PhaseInputBinding,
+  validatePhaseAttempt,
+  validatePhaseInputBinding,
+} from "./dataflow.js";
+import {
   type AssetBindingId,
   type AssetId,
   assetBindingId,
@@ -29,8 +35,8 @@ import {
 } from "./identity.js";
 
 export const TASK_DEPENDENCY_BARRIER_API_VERSION = "senawa.dev/task-dependency-barrier/v1alpha1";
-export const WORKER_CONTEXT_BASE_API_VERSION = "senawa.dev/worker-context-base/v1alpha1";
-export const WORKER_DISPATCH_API_VERSION = "senawa.dev/worker-dispatch/v1alpha1";
+export const WORKER_CONTEXT_BASE_API_VERSION = "senawa.dev/worker-context-base/v1alpha3";
+export const WORKER_DISPATCH_API_VERSION = "senawa.dev/worker-dispatch/v1alpha3";
 export const WORKER_MODEL_ROUTE_SELECTION_API_VERSION =
   "senawa.dev/worker-model-route-selection/v1alpha1";
 
@@ -112,6 +118,39 @@ export interface ContextRoleReference {
   readonly roleDigest: Sha256Digest;
 }
 
+export interface HistoricalPromptResource {
+  readonly key: ConsumerKey;
+  readonly path: string;
+  readonly resourceDigest: Sha256Digest;
+  readonly contentDigest: Sha256Digest;
+  readonly byteLength: number;
+  readonly utf8: string;
+  readonly inputPaths: readonly string[];
+}
+
+export interface HistoricalMappedInput {
+  readonly value: CanonicalValue;
+  readonly valueDigest: Sha256Digest;
+}
+
+export interface PhaseOutputDeclarationInput {
+  readonly outputName: ConsumerKey;
+  readonly schemaKey: ConsumerKey;
+  readonly schemaResourceDigest: Sha256Digest;
+  readonly maxBytes: number;
+  readonly sensitivity: AssetSensitivity;
+}
+
+export interface PhaseOutputDeclaration extends PhaseOutputDeclarationInput {
+  readonly declarationDigest: Sha256Digest;
+}
+
+export interface DispatchPromptResourceReference {
+  readonly key: ConsumerKey;
+  readonly resourceDigest: Sha256Digest;
+  readonly contentDigest: Sha256Digest;
+}
+
 export interface ContextBudget {
   readonly unit: BudgetUnit;
   readonly limit: number;
@@ -127,6 +166,11 @@ export interface WorkerContextBaseInput {
   readonly repositoryBase: RepositoryBase;
   readonly modelPolicy: ContextModelPolicyReference;
   readonly role: ContextRoleReference;
+  readonly prompt: HistoricalPromptResource;
+  readonly mappedInput: HistoricalMappedInput;
+  readonly phaseAttempt: PhaseAttempt;
+  readonly phaseInputBinding: PhaseInputBinding;
+  readonly phaseOutputDeclarations: readonly PhaseOutputDeclarationInput[];
   readonly capabilities: readonly string[];
   readonly budgets: readonly ContextBudget[];
 }
@@ -142,6 +186,12 @@ export interface WorkerContextBase {
   readonly repositoryBase: RepositoryBase;
   readonly modelPolicy: ContextModelPolicyReference;
   readonly role: ContextRoleReference;
+  readonly prompt: HistoricalPromptResource;
+  readonly mappedInput: HistoricalMappedInput;
+  readonly phaseAttempt: PhaseAttempt;
+  readonly phaseInputBinding: PhaseInputBinding;
+  readonly phaseOutputDeclarations: readonly PhaseOutputDeclaration[];
+  readonly phaseOutputDeclarationsDigest: Sha256Digest;
   readonly capabilities: readonly string[];
   readonly budgets: readonly ContextBudget[];
   readonly contextDigest: Sha256Digest;
@@ -156,6 +206,7 @@ export interface WorkerDispatchInput {
   readonly roleKey: ConsumerKey;
   readonly capabilities: readonly string[];
   readonly promptPackDigest: Sha256Digest;
+  readonly promptResource: DispatchPromptResourceReference;
 }
 
 export interface WorkerDispatch {
@@ -172,6 +223,7 @@ export interface WorkerDispatch {
     readonly roleKey: ConsumerKey;
   }>;
   readonly capabilities: readonly string[];
+  readonly promptResource: DispatchPromptResourceReference;
   readonly promptPackDigest: Sha256Digest;
 }
 
@@ -297,6 +349,12 @@ export function validateWorkerContextBase(value: unknown, sha256: Sha256): Worke
     "repositoryBase",
     "modelPolicy",
     "role",
+    "prompt",
+    "mappedInput",
+    "phaseAttempt",
+    "phaseInputBinding",
+    "phaseOutputDeclarations",
+    "phaseOutputDeclarationsDigest",
     "capabilities",
     "budgets",
     "contextDigest",
@@ -336,6 +394,29 @@ export function validateWorkerContextBase(value: unknown, sha256: Sha256): Worke
     repositoryBase: snapshot.repositoryBase,
     modelPolicy: snapshot.modelPolicy,
     role: snapshot.role,
+    prompt: snapshot.prompt,
+    mappedInput: snapshot.mappedInput,
+    phaseAttempt: snapshot.phaseAttempt,
+    phaseInputBinding: snapshot.phaseInputBinding,
+    phaseOutputDeclarations: (
+      snapshot.phaseOutputDeclarations as unknown as readonly CanonicalValue[]
+    ).map((declaration) => {
+      assertExactKeys(declaration, "phase output declaration", [
+        "outputName",
+        "schemaKey",
+        "schemaResourceDigest",
+        "maxBytes",
+        "sensitivity",
+        "declarationDigest",
+      ]);
+      return {
+        outputName: declaration.outputName,
+        schemaKey: declaration.schemaKey,
+        schemaResourceDigest: declaration.schemaResourceDigest,
+        maxBytes: declaration.maxBytes,
+        sensitivity: declaration.sensitivity,
+      };
+    }),
     capabilities: snapshot.capabilities,
     budgets: snapshot.budgets,
   };
@@ -392,6 +473,7 @@ export function validateWorkerDispatch(
     "ordinal",
     "worker",
     "capabilities",
+    "promptResource",
     "promptPackDigest",
   ]);
   if (snapshot.apiVersion !== WORKER_DISPATCH_API_VERSION) {
@@ -405,6 +487,7 @@ export function validateWorkerDispatch(
     workerPrincipalId: snapshot.worker.principalId,
     roleKey: snapshot.worker.roleKey,
     capabilities: snapshot.capabilities,
+    promptResource: snapshot.promptResource,
     promptPackDigest: snapshot.promptPackDigest,
   };
   const recompiled = compileWorkerDispatch(input, context, sha256);
@@ -541,6 +624,11 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
     "repositoryBase",
     "modelPolicy",
     "role",
+    "prompt",
+    "mappedInput",
+    "phaseAttempt",
+    "phaseInputBinding",
+    "phaseOutputDeclarations",
     "capabilities",
     "budgets",
   ]);
@@ -559,6 +647,26 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
   const repositoryBase = repositoryBaseReference(value.repositoryBase);
   const modelPolicy = modelPolicyReference(value.modelPolicy);
   const role = roleReference(value.role);
+  const prompt = historicalPromptResource(value.prompt, sha256);
+  const mappedInput = historicalMappedInput(value.mappedInput, sha256);
+  const phaseAttempt = validatePhaseAttempt(value.phaseAttempt, sha256);
+  const phaseInputBinding = validatePhaseInputBinding(value.phaseInputBinding, sha256);
+  if (
+    phaseInputBinding.phase.phaseId !== phaseAttempt.phase.phaseId ||
+    phaseInputBinding.phase.definitionGeneration !== phaseAttempt.phase.definitionGeneration ||
+    phaseInputBinding.phase.attempt !== phaseAttempt.phase.attempt ||
+    phaseInputBinding.bindingDigest !== phaseAttempt.inputBindingDigest ||
+    phaseInputBinding.sourceSetDigest !== phaseAttempt.sourceSetDigest ||
+    phaseAttempt.graphRevisionDigest !== value.graphRevisionDigest ||
+    phaseAttempt.configurationSnapshotDigest !== value.configurationSnapshotDigest
+  ) {
+    fail("context-mismatch", "Phase attempt and input binding do not match the worker context");
+  }
+  const phaseOutputDeclarations = outputDeclarations(value.phaseOutputDeclarations, sha256);
+  const phaseOutputDeclarationsDigest = canonicalDigest(
+    canonicalValue({ declarations: phaseOutputDeclarations }),
+    sha256,
+  );
   const capabilities = capabilitySet(value.capabilities, "invalid-context");
   const budgets = contextBudgets(value.budgets);
   const content = {
@@ -572,6 +680,12 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
     repositoryBase,
     modelPolicy,
     role,
+    prompt,
+    mappedInput,
+    phaseAttempt,
+    phaseInputBinding,
+    phaseOutputDeclarations,
+    phaseOutputDeclarationsDigest,
     capabilities,
     budgets,
   };
@@ -582,6 +696,47 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
     contextDigest,
     contextId: derivedContextId,
   }) as unknown as WorkerContextBase;
+}
+
+function outputDeclarations(value: unknown, sha256: Sha256): readonly PhaseOutputDeclaration[] {
+  if (!Array.isArray(value)) fail("invalid-context", "Phase output declarations must be an array");
+  const declarations = value.map((item) => {
+    assertExactKeys(item, "phase output declaration input", [
+      "outputName",
+      "schemaKey",
+      "schemaResourceDigest",
+      "maxBytes",
+      "sensitivity",
+    ]);
+    if (!isConsumerKey(item.outputName) || !isConsumerKey(item.schemaKey)) {
+      fail("invalid-context", "Phase output declaration keys are invalid");
+    }
+    assertDigest(item.schemaResourceDigest, "schemaResourceDigest", "invalid-context");
+    if (!isPositiveSafeInteger(item.maxBytes)) {
+      fail("invalid-context", "Phase output declaration maxBytes must be positive and finite");
+    }
+    if (
+      !new Set(["public", "internal", "confidential", "restricted"]).has(String(item.sensitivity))
+    ) {
+      fail("invalid-context", "Phase output declaration sensitivity is invalid");
+    }
+    const content = {
+      outputName: item.outputName,
+      schemaKey: item.schemaKey,
+      schemaResourceDigest: item.schemaResourceDigest,
+      maxBytes: item.maxBytes,
+      sensitivity: item.sensitivity,
+    };
+    return canonicalValue({
+      ...content,
+      declarationDigest: canonicalDigest(canonicalValue(content), sha256),
+    }) as unknown as PhaseOutputDeclaration;
+  });
+  declarations.sort((left, right) => compareText(left.outputName, right.outputName));
+  if (new Set(declarations.map(({ outputName }) => outputName)).size !== declarations.length) {
+    fail("invalid-context", "Phase output declaration slots must be unique");
+  }
+  return declarations;
 }
 
 function compileWorkerDispatch(
@@ -596,6 +751,7 @@ function compileWorkerDispatch(
     "workerPrincipalId",
     "roleKey",
     "capabilities",
+    "promptResource",
     "promptPackDigest",
   ]);
   if (!isRepositoryId(value.repositoryId)) {
@@ -627,6 +783,14 @@ function compileWorkerDispatch(
     }
   }
   assertDigest(value.promptPackDigest, "promptPackDigest", "invalid-dispatch");
+  const promptResource = dispatchPromptResource(value.promptResource);
+  if (
+    promptResource.key !== context.prompt.key ||
+    promptResource.resourceDigest !== context.prompt.resourceDigest ||
+    promptResource.contentDigest !== context.prompt.contentDigest
+  ) {
+    fail("context-mismatch", "Worker dispatch prompt resource does not match the context prompt");
+  }
   const content = {
     apiVersion: WORKER_DISPATCH_API_VERSION,
     repositoryId: value.repositoryId,
@@ -644,6 +808,7 @@ function compileWorkerDispatch(
       roleKey: value.roleKey as ConsumerKey,
     },
     capabilities,
+    promptResource,
     promptPackDigest: value.promptPackDigest as Sha256Digest,
   };
   const dispatchDigest = canonicalDigest(canonicalValue(content), sha256);
@@ -846,6 +1011,143 @@ function roleReference(value: unknown): ContextRoleReference {
   }
   assertDigest(value.roleDigest, "roleDigest", "invalid-context");
   return value as unknown as ContextRoleReference;
+}
+
+function historicalPromptResource(value: unknown, sha256: Sha256): HistoricalPromptResource {
+  assertExactKeys(value, "historical prompt resource", [
+    "key",
+    "path",
+    "resourceDigest",
+    "contentDigest",
+    "byteLength",
+    "utf8",
+    "inputPaths",
+  ]);
+  if (!isConsumerKey(value.key)) fail("invalid-context", "Historical prompt key is invalid");
+  if (
+    typeof value.path !== "string" ||
+    !value.path.startsWith("prompts/") ||
+    !value.path.endsWith(".md") ||
+    value.path.includes("\0") ||
+    value.path.includes("\\") ||
+    value.path
+      .split("/")
+      .some((segment) => segment.length === 0 || segment === "." || segment === "..")
+  ) {
+    fail("invalid-context", "Historical prompt path is invalid");
+  }
+  assertDigest(value.resourceDigest, "resourceDigest", "invalid-context");
+  assertDigest(value.contentDigest, "contentDigest", "invalid-context");
+  if (typeof value.utf8 !== "string" || value.utf8.includes("\0")) {
+    fail("invalid-context", "Historical prompt text must be NUL-free UTF-8 text");
+  }
+  const bytes = new TextEncoder().encode(value.utf8);
+  if (bytes.byteLength > 32 * 1_024 || value.byteLength !== bytes.byteLength) {
+    fail("invalid-context", "Historical prompt byte length is invalid");
+  }
+  if (sha256.digest(bytes) !== value.contentDigest) {
+    fail("invalid-context", "Historical prompt content digest does not match its exact bytes");
+  }
+  const inputPaths = promptInputPaths(value.inputPaths);
+  const templatePaths = parseHistoricalPromptTemplate(value.utf8);
+  if (
+    inputPaths.length !== templatePaths.length ||
+    inputPaths.some((path, index) => path !== templatePaths[index])
+  ) {
+    fail("invalid-context", "Historical prompt inputPaths do not match its exact template");
+  }
+  const source = {
+    path: value.path,
+    mediaType: "text/markdown; charset=utf-8",
+    byteLength: bytes.byteLength,
+    contentDigest: value.contentDigest,
+    utf8: value.utf8,
+  };
+  const resourceDigest = canonicalDigest(
+    canonicalValue({ key: value.key, source, inputPaths }),
+    sha256,
+  );
+  if (resourceDigest !== value.resourceDigest) {
+    fail("invalid-context", "Historical prompt resource digest does not match its exact content");
+  }
+  return canonicalValue({
+    key: value.key,
+    path: value.path,
+    resourceDigest,
+    contentDigest: value.contentDigest,
+    byteLength: bytes.byteLength,
+    utf8: value.utf8,
+    inputPaths,
+  }) as unknown as HistoricalPromptResource;
+}
+
+function historicalMappedInput(value: unknown, sha256: Sha256): HistoricalMappedInput {
+  assertExactKeys(value, "historical mapped input", ["value", "valueDigest"]);
+  assertDigest(value.valueDigest, "valueDigest", "invalid-context");
+  const mappedValue = canonicalValue(value.value);
+  const bytes = new TextEncoder().encode(canonicalSerialize(mappedValue));
+  if (bytes.byteLength > 32 * 1_024) {
+    fail("invalid-context", "Historical mapped input exceeds 32768 canonical UTF-8 bytes");
+  }
+  const valueDigest = canonicalDigest(mappedValue, sha256);
+  if (valueDigest !== value.valueDigest) {
+    fail("invalid-context", "Historical mapped input digest does not match its value");
+  }
+  return canonicalValue({ value: mappedValue, valueDigest }) as unknown as HistoricalMappedInput;
+}
+
+function dispatchPromptResource(value: unknown): DispatchPromptResourceReference {
+  assertExactKeys(
+    value,
+    "worker dispatch prompt resource",
+    ["key", "resourceDigest", "contentDigest"],
+    "invalid-dispatch",
+  );
+  if (!isConsumerKey(value.key)) fail("invalid-dispatch", "Dispatch prompt key is invalid");
+  assertDigest(value.resourceDigest, "resourceDigest", "invalid-dispatch");
+  assertDigest(value.contentDigest, "contentDigest", "invalid-dispatch");
+  return value as unknown as DispatchPromptResourceReference;
+}
+
+function promptInputPaths(value: unknown): readonly string[] {
+  if (!Array.isArray(value) || value.length > 256) {
+    fail("invalid-context", "Historical prompt inputPaths must be a bounded array");
+  }
+  const paths = value.map((path) => {
+    if (
+      typeof path !== "string" ||
+      path.length === 0 ||
+      path.length > 1_024 ||
+      !path.startsWith("/") ||
+      path.endsWith("/") ||
+      path.includes("//") ||
+      /~(?:[^01]|$)/u.test(path)
+    ) {
+      fail("invalid-context", "Historical prompt input path is invalid");
+    }
+    return path;
+  });
+  assertUnique(paths, "invalid-context", "Historical prompt input path");
+  return Object.freeze(paths.sort(compareText));
+}
+
+function parseHistoricalPromptTemplate(template: string): readonly string[] {
+  const tokenPattern = /^\$\{\{[ \t]*input((?:\.[A-Za-z_][A-Za-z0-9_-]{0,63})+)[ \t]*\}\}/u;
+  const paths = new Set<string>();
+  let tokenCount = 0;
+  let offset = 0;
+  while (offset < template.length) {
+    const marker = template.indexOf("${{", offset);
+    if (marker < 0) break;
+    const match = tokenPattern.exec(template.slice(marker));
+    if (match === null || match[1] === undefined || tokenCount >= 256) {
+      fail("invalid-context", "Historical prompt template is invalid");
+    }
+    paths.add(`/${match[1].slice(1).split(".").join("/")}`);
+    tokenCount += 1;
+    offset = marker + match[0].length;
+  }
+  return Object.freeze([...paths].sort(compareText));
 }
 
 function capabilitySet(value: unknown, code: ContextErrorCode): string[] {
