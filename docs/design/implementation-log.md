@@ -57,6 +57,7 @@ Each phase records:
 | 13. Reporting, packaging, and hardening | Complete | `017b1eb` | Pushed |
 | 14. Standard delivery workflow authoring | In progress | Pending | Pending |
 | 15. Consumer documentation and adoption journeys | Not started | Pending | Pending |
+| 16. Operational portal parity | Not started | Pending | Pending |
 
 ## Decision D-001: Clean alpha implementation reset
 
@@ -8335,6 +8336,46 @@ Passed on 2026-08-15:
 * Root build, typecheck, Biome across 278 files with 30 intentional
   prompt-template warnings, architecture boundaries across 443 source files,
   documentation links across 25 Markdown files, and `git diff --check`
+
+## Decision D-093: Restore run-console parity without a graph library
+
+* Date: 2026-08-15
+* Status: Accepted for Phase 16
+* Phase: Phase 16
+* Decision: Rebuild the interactive workflow diagram with a deterministic
+  in-house layered layout and inert SVG rendering. Persist agent transcript
+  output as bounded durable authority with owner-scoped bounded queries and
+  replayable events, and derive node highlighting from durable status rather
+  than timing. Leave the historical `steer` command out of scope.
+* Alternatives: Reuse the historical `cytoscape` 3.33.1, `cytoscape-dagre`
+  2.5.0, and `dagre` 0.8.5 stack; stream worker output straight through without
+  persistence; infer running nodes from recent events.
+* Rationale: The portal's single production dependency on protocol is what keeps
+  it browser-safe and authority-free, and three unmaintained runtime libraries
+  would enter the alpha install graph for layout that Senawa's small graphs do
+  not need. Pass-through output cannot be replayed after restart, cannot be
+  bounded durably, and cannot be shown for a completed dispatch. Timing-derived
+  highlighting contradicts the derived-projection rule that every other portal
+  view already follows.
+* Consequence: Phase 16A must add a per-node status projection and a bounded
+  transcript record with capture at the execution-host boundary before any
+  portal work. The historical serve-from-`node_modules` asset trick is not
+  reintroduced; every asset stays a content-hashed first-party build output
+  under `script-src 'self'`.
+
+## Phase 16 research
+
+The pre-reset run console at `origin/main:packages/browser/src` was inventoried
+in full. Its complete node, edge, layout, state, interaction, terminal, panel,
+route, and accessibility surface is recorded in the Phase 16 research notes,
+together with a gap analysis against the current portal.
+
+The two structural gaps are server-side. `listGraphNodes` reports a hardcoded
+`defined` lifecycle with zeroed human-need and evidence counts, so no run status
+reaches the browser today. No agent transcript record, table, query, or event
+exists at all, so the terminal view has no data source. Everything else the
+historical console did is either already present or reachable from the current
+protocol surface.
 
 ## Entry template
 

@@ -1218,9 +1218,127 @@ approved consumer documentation and the implementation log decision record.
 
 `docs: add consumer adoption guides`
 
+## Phase 16: Operational portal parity
+
+### Goal
+
+Restore and surpass the pre-reset run console. The portal must render an
+interactive workflow diagram that highlights running work, let a human click any
+node to explore it, and stream that node's agent output into a terminal-style
+view. Every projection stays bounded, sanitized, and derived from durable
+authority.
+
+### Required research
+
+Phase 16 research is complete and recorded in the implementation log. The
+historical portal used `cytoscape` 3.33.1, `cytoscape-dagre` 2.5.0, and `dagre`
+0.8.5, served from `node_modules` as first-party assets. Its inventory,
+including every node class, edge kind, layout constant, interaction, terminal
+line format, and panel, is captured there together with the gap analysis against
+the current portal.
+
+### Decisions carried into this phase
+
+* The portal keeps `@senawa/protocol` as its only production dependency. The
+  diagram uses a deterministic in-house layered layout and inert SVG rendering
+  rather than adding a graph library to the alpha install graph.
+* Agent transcript output is durable authority, not a live pass-through. It is
+  persisted, bounded, sanitized, and replayable by cursor exactly like every
+  other portal projection.
+* Historical `steer` authority is out of scope. It requires a new command intent
+  and capability, and no implemented workflow needs it.
+
+### Phase 16A: Durable node status and agent transcript
+
+* Add a per-node run-status projection so `listGraphNodes` reports real
+  lifecycle, current-attempt, executor role, human-need, and evidence facts
+  instead of hardcoded defaults. The projection derives from durable phase
+  attempts, transitions, dispatch currentness, completion accounting, closure,
+  and escalation records.
+* Add a bounded durable agent transcript record with an owner scope, monotonic
+  sequence, timestamp, stream classification, and sanitized text. Owners are a
+  dispatch, a task generation, or a phase generation.
+* Capture worker transcript lines at the execution-host boundary through an
+  injected port, never from model prose treated as authority.
+* Enforce per-owner line, byte, and retention ceilings at write time.
+* Add exact protocol contracts, bounded portal query routes, and replayable SSE
+  for both surfaces.
+
+### Phase 16B: Interactive workflow diagram
+
+* Compute a deterministic layered layout from the exact graph revision: rank by
+  longest path over containment and dependency edges, order within rank by
+  stable identity, and place tasks inside their owning phase.
+* Render inert SVG with text nodes only. No `innerHTML`, no external fetch, no
+  script in rendered content.
+* Encode node state as classes: running, awaiting human, accepted, failed, and
+  not started, plus selection, task placeholder, and completion boundary.
+* Support click and keyboard selection, arrow-key traversal within and across
+  ranks, pan, zoom, fit, focus, and a stable test hook.
+* Selecting a node drives the inspector, the terminal scope, and the available
+  authority actions.
+
+### Phase 16C: Terminal-style output view
+
+* Render a `role="log"` pane with timestamp, stream, and text columns, bounded
+  line retention, wrapped text, and no ANSI interpretation.
+* Merge transcript records and worker lifecycle events into one ordered view
+  keyed by owner and sequence.
+* Follow the tail by default, unpin on manual scroll, count unseen lines, and
+  offer a jump-to-latest control plus an `End` key shortcut.
+* Scope strictly to the selected node, with an explicit run-wide option.
+* Provide copy and download affordances that emit exactly the displayed bounded
+  text.
+
+### Phase 16D: Parity panels
+
+* Restore the command narrator, question banner with elapsed and overdue
+  marking, attention title marker, answer draft persistence, dual resizable
+  rails with keyboard resize, roving-tabindex node toolbar, copy-identity
+  control, and the full-screen asset overlay.
+* Restore two-step end confirmation and decision notes only where the current
+  command contracts already carry the required fields.
+
+### Acceptance
+
+* The diagram renders every phase and task of the exact selected graph revision
+  and marks running work distinctly from awaiting, accepted, failed, and not
+  started work.
+* Clicking or keyboard-selecting a node scopes the inspector and terminal to
+  that node.
+* The terminal shows durable agent output for the selected node, follows the
+  tail, and never exceeds its bounded retention.
+* Portal projections expose no prompt bodies, grant tokens, repository content,
+  secrets, or unsanitized process text.
+* The portal still imports protocol only and adds no production dependency.
+* Desktop and mobile layouts remain usable with no overlapping controls.
+
+### Validation
+
+* Deterministic layout golden vectors for representative graphs
+* Node-state derivation tests across running, awaiting, accepted, failed,
+  escalated, and superseded work
+* Transcript ceiling, retention, sanitization, and replay tests
+* Hostile transcript and hostile node-label rendering tests
+* Desktop and mobile Playwright journeys for selection, traversal, terminal
+  follow, jump-to-latest, copy, and download
+* Screenshot evidence for the diagram and terminal in both layouts
+* Complete inference-free browser matrix with no worker adapter composed
+
+### Disproof
+
+* The diagram needs a third-party runtime library or executes rendered content.
+* Node highlighting is inferred from timing rather than durable authority.
+* Terminal output is unbounded, unsanitized, or lost across restart.
+* Model prose is presented as repository or workflow evidence.
+
+### Commit
+
+`feat: add interactive portal run console`
+
 ## Final pull request
 
-After Phase 15 is independently approved, committed, and pushed:
+After Phase 16 is independently approved, committed, and pushed:
 
 * Fetch and compare the branch with the remote base branch.
 * Generate a complete branch reference and review it in parallel chunks.
