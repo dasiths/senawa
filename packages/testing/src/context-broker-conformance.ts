@@ -787,6 +787,72 @@ export function registerContextBrokerConformance(
       expect(harness.authority.snapshot().phaseOutputOutbox).toHaveLength(1);
     });
 
+    it("records finite attributable phase output attempts", () => {
+      const harness = createHarness();
+      const record = harness.broker.recordPhaseOutputAttempt;
+      const count = harness.broker.countRejectedPhaseOutputAttempts;
+      if (record === undefined || count === undefined) return;
+      const dispatchId = harness.dispatch.dispatchId;
+      const base = { dispatchId, outputName: "verification" } as const;
+
+      expect(count.call(harness.broker, dispatchId, "verification")).toBe(0);
+      const first = record.call(harness.broker, {
+        ...base,
+        attemptId: "attempt_1",
+        toolCallId: "call_1",
+        outcome: "rejected",
+        findingsDigest: "1".repeat(64),
+      });
+      expect(first).toMatchObject({ recordedAttempts: 1, replayed: false, exhausted: false });
+      expect(
+        record.call(harness.broker, {
+          ...base,
+          attemptId: "attempt_1",
+          toolCallId: "call_1",
+          outcome: "rejected",
+          findingsDigest: "1".repeat(64),
+        }),
+      ).toMatchObject({ recordedAttempts: 1, replayed: true });
+      expect(() =>
+        record.call(harness.broker, {
+          ...base,
+          attemptId: "attempt_1",
+          toolCallId: "call_1",
+          outcome: "rejected",
+          findingsDigest: "2".repeat(64),
+        }),
+      ).toThrowError(expect.objectContaining({ code: "submission-conflict" }));
+
+      record.call(harness.broker, {
+        ...base,
+        attemptId: "attempt_2",
+        toolCallId: "call_2",
+        outcome: "rejected",
+        findingsDigest: "2".repeat(64),
+      });
+      expect(
+        record.call(harness.broker, {
+          ...base,
+          attemptId: "attempt_3",
+          toolCallId: "call_3",
+          outcome: "rejected",
+          findingsDigest: "3".repeat(64),
+        }),
+      ).toMatchObject({ recordedAttempts: 3, exhausted: true });
+      expect(count.call(harness.broker, dispatchId, "verification")).toBe(3);
+      expect(count.call(harness.broker, dispatchId, "other-slot")).toBe(0);
+
+      expect(
+        record.call(harness.broker, {
+          ...base,
+          attemptId: "attempt_4",
+          toolCallId: "call_4",
+          outcome: "accepted",
+          submissionId: "submission_phase-output",
+        }),
+      ).toMatchObject({ outcome: "accepted", recordedAttempts: 3 });
+    });
+
     it("keeps unrelated dispatch completion current when an affected task scope is fenced", () => {
       const harness = createHarness();
       if (harness.authority.installTaskScopeFences === undefined) return;

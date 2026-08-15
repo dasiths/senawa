@@ -30,6 +30,7 @@ import {
   type RuntimeDependencies,
 } from "@senawa/runtime";
 import Database from "better-sqlite3";
+import { CURRENT_SCHEMA_VERSION } from "./index.js";
 
 export interface SqliteReportingSnapshotAuthorityOptions {
   readonly databasePath: string;
@@ -81,10 +82,10 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
     this.#database.pragma("trusted_schema = OFF");
     this.#database.pragma("query_only = ON");
     this.#schemaVersion = this.#database.pragma("user_version", { simple: true }) as number;
-    if (this.#schemaVersion !== 11) {
+    if (this.#schemaVersion !== CURRENT_SCHEMA_VERSION) {
       this.#database.close();
       throw new TypeError(
-        `Reporting requires SQLite schema version 11, received ${this.#schemaVersion}`,
+        `Reporting requires SQLite schema version ${CURRENT_SCHEMA_VERSION}, received ${this.#schemaVersion}`,
       );
     }
   }

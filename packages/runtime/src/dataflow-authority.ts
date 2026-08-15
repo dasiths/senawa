@@ -59,6 +59,26 @@ export interface RuntimeSchemaValidatorPort {
   ): readonly RuntimeSchemaFinding[];
 }
 
+/** Exact validation receipt derivation shared by dataflow publication and worker submission. */
+export function schemaValidationReceiptDigest(
+  boundary: string,
+  contract: Pick<RuntimeSchemaContract, "key" | "schemaResourceDigest" | "validatorProfileDigest">,
+  contentDigest: Sha256Digest,
+  sha256: Sha256,
+): Sha256Digest {
+  return canonicalDigest(
+    canonicalValue({
+      boundary,
+      schemaKey: contract.key,
+      schemaResourceDigest: contract.schemaResourceDigest,
+      validatorProfileDigest: contract.validatorProfileDigest,
+      contentDigest,
+      findings: [],
+    }),
+    sha256,
+  );
+}
+
 export interface CanonicalJsonAssetDescriptor {
   readonly contentDigest: Sha256Digest;
   readonly byteLength: number;
@@ -349,15 +369,10 @@ export class RuntimeDataflowAuthority {
         Object.freeze(findings),
       );
     }
-    return canonicalDigest(
-      canonicalValue({
-        boundary,
-        schemaKey: schema.key,
-        schemaResourceDigest: schema.schemaResourceDigest,
-        validatorProfileDigest: schema.validatorProfileDigest,
-        contentDigest: canonicalDigest(value, this.sha256),
-        findings: [],
-      }),
+    return schemaValidationReceiptDigest(
+      boundary,
+      schema,
+      canonicalDigest(value, this.sha256),
       this.sha256,
     );
   }

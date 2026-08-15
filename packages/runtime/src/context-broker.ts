@@ -113,6 +113,113 @@ export interface PhaseOutputFactPort {
   admitPhaseOutputFact(fact: PhaseOutputFact): CompletionFactAdmission;
 }
 
+export const PHASE_OUTPUT_LIMITS = Object.freeze({
+  maxOutputBytes: 262_144,
+  maxOutputNodes: 10_000,
+  maxChangeNotes: 16,
+  maxChangeNoteLength: 512,
+  maxReportedFindings: 8,
+  maxAttempts: 3,
+});
+
+export interface PhaseOutputAttemptInput {
+  readonly dispatchId: string;
+  readonly attemptId: string;
+  readonly outcome: "rejected" | "accepted";
+  readonly outputName: string;
+  readonly toolCallId: string;
+  readonly findingsDigest?: string;
+  readonly submissionId?: string;
+}
+
+export interface PhaseOutputAttemptResult {
+  readonly attemptId: string;
+  readonly outcome: PhaseOutputAttemptInput["outcome"];
+  readonly recordedAttempts: number;
+  readonly replayed: boolean;
+  readonly exhausted: boolean;
+}
+
+export interface PhaseOutputAttemptRecord extends PhaseOutputAttemptInput {}
+
+export function phaseOutputAttemptKey(dispatchId: string, attemptId: string): string {
+  return `${dispatchId}\0${attemptId}`;
+}
+
+function canonicalAttempt(input: PhaseOutputAttemptInput): string {
+  return canonicalStringify({
+    dispatchId: input.dispatchId,
+    attemptId: input.attemptId,
+    outcome: input.outcome,
+    outputName: input.outputName,
+    toolCallId: input.toolCallId,
+    ...(input.findingsDigest === undefined ? {} : { findingsDigest: input.findingsDigest }),
+    ...(input.submissionId === undefined ? {} : { submissionId: input.submissionId }),
+  });
+}
+
+/** Shared rejected-attempt accounting for in-memory and durable phase output ledgers. */
+export function evaluatePhaseOutputAttempt(
+  existing: readonly PhaseOutputAttemptRecord[],
+  input: PhaseOutputAttemptInput,
+  maxAttempts: number = PHASE_OUTPUT_LIMITS.maxAttempts,
+): { readonly result: PhaseOutputAttemptResult; readonly insert: boolean } {
+  const prior = existing.find(
+    (record) => record.dispatchId === input.dispatchId && record.attemptId === input.attemptId,
+  );
+  if (prior !== undefined) {
+    if (canonicalAttempt(prior) !== canonicalAttempt(input)) {
+      throw new ContextBrokerError(
+        "submission-conflict",
+        "Phase output attempt identity was reused with different content",
+      );
+    }
+    const rejected = countRejected(existing, input);
+    return {
+      insert: false,
+      result: Object.freeze({
+        attemptId: input.attemptId,
+        outcome: input.outcome,
+        recordedAttempts: rejected,
+        replayed: true,
+        exhausted: rejected >= maxAttempts,
+      }),
+    };
+  }
+  const rejected = countRejected([...existing, input], input);
+  return {
+    insert: true,
+    result: Object.freeze({
+      attemptId: input.attemptId,
+      outcome: input.outcome,
+      recordedAttempts: rejected,
+      replayed: false,
+      exhausted: rejected >= maxAttempts,
+    }),
+  };
+}
+
+function countRejected(
+  records: readonly PhaseOutputAttemptRecord[],
+  input: PhaseOutputAttemptInput,
+): number {
+  return records.filter(
+    (record) =>
+      record.outcome === "rejected" &&
+      record.dispatchId === input.dispatchId &&
+      record.outputName === input.outputName,
+  ).length;
+}
+
+function recordPhaseOutputAttemptInLedger(
+  ledger: Map<string, PhaseOutputAttemptRecord>,
+  input: PhaseOutputAttemptInput,
+): PhaseOutputAttemptResult {
+  const { result, insert } = evaluatePhaseOutputAttempt([...ledger.values()], input);
+  if (insert) ledger.set(phaseOutputAttemptKey(input.dispatchId, input.attemptId), input);
+  return result;
+}
+
 export interface ContextBrokerDependencies {
   readonly sha256: Sha256;
   currentTime(): string;
@@ -187,6 +294,9 @@ export interface ContextBrokerClient {
   admitSubmission(input: SubmissionAdmissionInput): SubmissionAdmissionResult;
   deliverCompletionFact(submissionId: string): boolean;
   deliverPhaseOutputFact?(submissionId: string): boolean;
+  installCanonicalOutputAsset?(asset: InstalledCanonicalOutputAsset, bytes: Uint8Array): void;
+  recordPhaseOutputAttempt?(input: PhaseOutputAttemptInput): PhaseOutputAttemptResult;
+  countRejectedPhaseOutputAttempts?(dispatchId: string, outputName: string): number;
 }
 
 export interface ContextBrokerEvent {
@@ -1654,6 +1764,25 @@ export class ContextBroker implements ContextBrokerClient {
       pending.delivering = false;
     }
   }
+
+  installCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset, bytes: Uint8Array): void {
+    this.assets.installCanonicalOutputAsset(asset, bytes);
+  }
+
+  recordPhaseOutputAttempt(input: PhaseOutputAttemptInput): PhaseOutputAttemptResult {
+    return recordPhaseOutputAttemptInLedger(this.#phaseOutputAttempts, input);
+  }
+
+  countRejectedPhaseOutputAttempts(dispatchId: string, outputName: string): number {
+    return [...this.#phaseOutputAttempts.values()].filter(
+      (record) =>
+        record.outcome === "rejected" &&
+        record.dispatchId === dispatchId &&
+        record.outputName === outputName,
+    ).length;
+  }
+
+  readonly #phaseOutputAttempts = new Map<string, PhaseOutputAttemptRecord>();
 
   private acceptedPhaseOutputForSlot(
     submission: Extract<WorkerSubmission, { readonly type: "phase-output" }>,

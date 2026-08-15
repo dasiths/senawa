@@ -176,6 +176,10 @@ import {
   InMemoryContextAuthority,
   type InMemoryRunnerRunInput,
   type InstalledCanonicalOutputAsset,
+  evaluatePhaseOutputAttempt,
+  type PhaseOutputAttemptInput,
+  type PhaseOutputAttemptRecord,
+  type PhaseOutputAttemptResult,
   type InstallTaskScopeFencesInput,
   type IntegrationAttemptInput,
   type IntegrationAttemptRecord,
@@ -225,7 +229,7 @@ import {
 } from "@senawa/runtime";
 import Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 11;
+export const CURRENT_SCHEMA_VERSION = 12;
 export const ASSET_SECURITY_LIMITS = Object.freeze({
   maxObjectBytes: 256 * 1024 * 1024,
   defaultMaxObjects: 10_000,
@@ -8558,6 +8562,80 @@ export class SqliteContextBroker {
     if (!this.hasCanonicalOutputAsset(asset)) {
       throw new TypeError("Canonical phase output validation receipt conflicts with prior content");
     }
+  }
+
+  recordPhaseOutputAttempt(input: PhaseOutputAttemptInput): PhaseOutputAttemptResult {
+    this.#database.exec("BEGIN IMMEDIATE");
+    let committed = false;
+    try {
+      const existing = this.#loadPhaseOutputAttempts(input.dispatchId);
+      const { result, insert } = evaluatePhaseOutputAttempt(existing, input);
+      if (insert) {
+        this.#database
+          .prepare(
+            `INSERT INTO phase_output_attempts(
+               dispatch_id, attempt_id, output_name, tool_call_id, outcome,
+               findings_digest, submission_id, canonical_attempt
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            input.dispatchId,
+            input.attemptId,
+            input.outputName,
+            input.toolCallId,
+            input.outcome,
+            input.findingsDigest ?? null,
+            input.submissionId ?? null,
+            canonicalStringify(input),
+          );
+      }
+      this.#database.exec("COMMIT");
+      committed = true;
+      return result;
+    } catch (error) {
+      if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  countRejectedPhaseOutputAttempts(dispatchId: string, outputName: string): number {
+    const row = this.#database
+      .prepare<[string, string], { total: number }>(
+        `SELECT COUNT(*) AS total FROM phase_output_attempts
+         WHERE dispatch_id = ? AND output_name = ? AND outcome = 'rejected'`,
+      )
+      .get(dispatchId, outputName);
+    return row?.total ?? 0;
+  }
+
+  #loadPhaseOutputAttempts(dispatchId: string): readonly PhaseOutputAttemptRecord[] {
+    return this.#database
+      .prepare<
+        [string],
+        {
+          dispatch_id: string;
+          attempt_id: string;
+          output_name: string;
+          tool_call_id: string;
+          outcome: "rejected" | "accepted";
+          findings_digest: string | null;
+          submission_id: string | null;
+        }
+      >(
+        `SELECT dispatch_id, attempt_id, output_name, tool_call_id, outcome,
+                findings_digest, submission_id
+         FROM phase_output_attempts WHERE dispatch_id = ? ORDER BY attempt_id`,
+      )
+      .all(dispatchId)
+      .map((row) => ({
+        dispatchId: row.dispatch_id,
+        attemptId: row.attempt_id,
+        outputName: row.output_name,
+        toolCallId: row.tool_call_id,
+        outcome: row.outcome,
+        ...(row.findings_digest === null ? {} : { findingsDigest: row.findings_digest }),
+        ...(row.submission_id === null ? {} : { submissionId: row.submission_id }),
+      }));
   }
 
   hasCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset): boolean {
