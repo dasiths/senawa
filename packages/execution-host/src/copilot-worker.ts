@@ -714,7 +714,19 @@ function phaseOutputTool(
         );
       } catch {
         // A throwing handler would send raw exception text to the model.
-        return outputFailure("output-refused", []);
+        return recordRejected(
+          input,
+          state,
+          sha256,
+          {
+            attemptId: derivedIdentity("attempt", dispatch.dispatchId, invocation, sha256),
+            dispatchId: dispatch.dispatchId,
+            outputName,
+            invocation,
+          },
+          "output-refused",
+          [],
+        );
       }
     },
   );
@@ -748,11 +760,21 @@ async function submitPhaseOutput(
     return outputFailure("output-attempt-budget-exhausted", []);
   }
   let canonical: CanonicalValue;
+  let output: unknown;
   try {
     const wrapper = exactObject(args, ["output"], ["changeNotes"]);
     changeNotes(wrapper.changeNotes);
-    assertBoundedArgument(wrapper.output);
-    canonical = canonicalValue(wrapper.output);
+    output = wrapper.output;
+  } catch {
+    return recordRejected(input, state, sha256, identity, "output-arguments-invalid", []);
+  }
+  try {
+    assertBoundedArgument(output, maxBytes);
+  } catch {
+    return recordRejected(input, state, sha256, identity, "output-too-large", []);
+  }
+  try {
+    canonical = canonicalValue(output);
   } catch {
     return recordRejected(input, state, sha256, identity, "output-arguments-invalid", []);
   }
@@ -901,23 +923,36 @@ function recordRejected(
 }
 
 /** Bounds raw tool arguments iteratively before any canonical materialization. */
-function assertBoundedArgument(value: unknown): void {
+function assertBoundedArgument(value: unknown, maxBytes: number): void {
   const stack: { readonly value: unknown; readonly depth: number }[] = [{ value, depth: 1 }];
   let nodes = 0;
+  let bytes = 0;
   while (stack.length > 0) {
     const entry = stack.pop();
     if (entry === undefined) break;
     nodes += 1;
+    bytes += 2;
     if (nodes > PHASE_OUTPUT_LIMITS.maxOutputNodes) invalidArguments();
+    if (bytes > maxBytes) invalidArguments();
     if (entry.depth > PHASE_OUTPUT_LIMITS.maxOutputDepth) invalidArguments();
     const current = entry.value;
     if (typeof current === "string") {
-      if (current.length > PHASE_OUTPUT_LIMITS.maxOutputBytes) invalidArguments();
+      bytes += current.length;
+      if (bytes > maxBytes) invalidArguments();
       continue;
     }
     if (current === null || typeof current !== "object") continue;
-    const children = Array.isArray(current) ? current : Object.values(current);
-    for (const child of children) stack.push({ value: child, depth: entry.depth + 1 });
+    const children = Array.isArray(current) ? current : Object.entries(current);
+    for (const child of children) {
+      if (Array.isArray(current)) {
+        stack.push({ value: child, depth: entry.depth + 1 });
+        continue;
+      }
+      const [key, nested] = child as [string, unknown];
+      bytes += key.length;
+      if (bytes > maxBytes) invalidArguments();
+      stack.push({ value: nested, depth: entry.depth + 1 });
+    }
   }
 }
 

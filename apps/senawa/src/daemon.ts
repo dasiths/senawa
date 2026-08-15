@@ -65,6 +65,7 @@ import {
   configurationOutputSchemaFor,
   configurationPhaseOutputSchemas,
   configurationRuntimeSchemaValidator,
+  phaseOutputAssetPort,
 } from "./dataflow-composition.js";
 import { RuntimePhaseOutputFactBridge } from "./phase-output-bridge.js";
 import { optionalPortalAssetSource } from "./portal-assets.js";
@@ -214,7 +215,9 @@ export async function startSenawaService(
       new RuntimeDataflowAuthority(
         dependencies.sha256,
         configurationRuntimeSchemaValidator(),
-        new SqliteCanonicalJsonAssetStore(authority.commandAuthority),
+        phaseOutputAssetPort(new SqliteCanonicalJsonAssetStore(authority.commandAuthority), (digest) =>
+          contextBroker.loadCanonicalOutputBytes(digest),
+        ),
         authority.commandAuthority,
       ),
       {

@@ -5,8 +5,9 @@ import {
   validateSchemaInstance,
 } from "@senawa/configuration";
 import type { PhaseOutputSchemaResolverPort } from "@senawa/execution-host";
-import type { CanonicalValue, Sha256 } from "@senawa/kernel";
+import { type CanonicalValue, canonicalValue, type Sha256, type Sha256Digest } from "@senawa/kernel";
 import type {
+  CanonicalJsonAssetPort,
   PhaseOutputFact,
   RuntimeSchemaContract,
   RuntimeSchemaFinding,
@@ -62,6 +63,26 @@ export function configurationPhaseOutputSchemas(
         contracts.set(String(declaration.outputName), contract);
       }
       return contracts;
+    },
+  });
+}
+
+/**
+ * Reads canonical phase output bytes from the broker that staged them, falling
+ * back to the command authority's canonical JSON assets for other boundaries.
+ */
+export function phaseOutputAssetPort(
+  assets: CanonicalJsonAssetPort,
+  stagedBytes: (contentDigest: string) => Uint8Array | undefined,
+): CanonicalJsonAssetPort {
+  return Object.freeze({
+    install: (value: CanonicalValue) => assets.install(value),
+    load(contentDigest: Sha256Digest): CanonicalValue | undefined {
+      const installed = assets.load(contentDigest);
+      if (installed !== undefined) return installed;
+      const bytes = stagedBytes(String(contentDigest));
+      if (bytes === undefined) return undefined;
+      return canonicalValue(JSON.parse(new TextDecoder().decode(bytes)) as unknown);
     },
   });
 }

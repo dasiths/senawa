@@ -8775,7 +8775,14 @@ export class SqliteContextBroker {
     try {
       const pending = this.#loadAuthority().phaseOutputOutbox.get(submissionId);
       if (pending === undefined || pending.delivered) return false;
-      if (this.#phaseOutputFacts.admitPhaseOutputFact(pending.fact) === "deferred") return false;
+      let admission: "accepted" | "deferred";
+      try {
+        admission = this.#phaseOutputFacts.admitPhaseOutputFact(pending.fact);
+      } catch {
+        // A failed publication leaves the fact pending for a later drain.
+        return false;
+      }
+      if (admission === "deferred") return false;
       this.#database.exec("BEGIN IMMEDIATE");
       let committed = false;
       try {
@@ -8841,6 +8848,26 @@ export class SqliteContextBroker {
       .filter(([, fact]) => !fact.delivered)
       .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))[0];
     return pending === undefined ? false : this.deliverCompletionFact(pending[0]);
+  }
+
+  deliverPhaseOutputOutboxOnce(): boolean {
+    const pending = [...this.#loadAuthority().phaseOutputOutbox.entries()]
+      .filter(([, fact]) => !fact.delivered)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))[0];
+    return pending === undefined ? false : this.deliverPhaseOutputFact(pending[0]);
+  }
+
+  /** Reads exact canonical phase output bytes staged by an accepted submission. */
+  loadCanonicalOutputBytes(contentDigest: string): Uint8Array | undefined {
+    const row = this.#database
+      .prepare<[string], { canonical_bytes: Uint8Array }>(
+        "SELECT canonical_bytes FROM phase_output_assets WHERE content_digest = ? LIMIT 1",
+      )
+      .get(contentDigest);
+    if (row === undefined) return undefined;
+    return this.dependencies.sha256.digest(row.canonical_bytes) === contentDigest
+      ? row.canonical_bytes
+      : undefined;
   }
 
   claimAmendmentProposalOutbox(

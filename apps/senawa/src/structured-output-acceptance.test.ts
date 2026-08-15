@@ -48,7 +48,10 @@ import {
 import { SqliteContextBroker } from "@senawa/storage-sqlite";
 import { deterministicSha256 } from "@senawa/testing";
 import { describe, expect, it, vi } from "vitest";
-import { configurationRuntimeSchemaValidator } from "./dataflow-composition.js";
+import {
+  configurationRuntimeSchemaValidator,
+  phaseOutputAssetPort,
+} from "./dataflow-composition.js";
 import { RuntimePhaseOutputFactBridge } from "./phase-output-bridge.js";
 
 const sha256: Sha256 = deterministicSha256;
@@ -109,13 +112,18 @@ const HOSTILE_OUTPUT = Object.freeze({
 describe("Phase 14I structured output acceptance", () => {
   it("records a rejected attempt durably and accepts the corrected output after restart", async () => {
     const fixture = buildFixture();
-    const publication = createPublication();
+    let currentBroker: SqliteContextBroker | undefined;
+    const trackBroker = (broker: SqliteContextBroker): SqliteContextBroker => {
+      currentBroker = broker;
+      return broker;
+    };
+    const publication = createPublication(() => required(currentBroker));
     const root = await createRoot();
     try {
       const databasePath = join(root, "context.db");
       const sdk = new FakeSdkPort();
       const adapter = new CopilotSerialWorkerAdapter(sdk, sha256);
-      const rejected = openBroker(databasePath, publication);
+      const rejected = trackBroker(openBroker(databasePath, publication));
       let rejectedResults: readonly CopilotSdkToolResult[] = [];
       try {
         register(rejected, fixture);
@@ -144,7 +152,7 @@ describe("Phase 14I structured output acceptance", () => {
         rejected.close();
       }
 
-      const reopened = openBroker(databasePath, publication);
+      const reopened = trackBroker(openBroker(databasePath, publication));
       try {
         expect(
           reopened.countRejectedPhaseOutputAttempts(fixture.dispatch.dispatchId, OUTPUT_NAME),
@@ -229,9 +237,14 @@ describe("Phase 14I structured output acceptance", () => {
 
   it("replays an exact accepted submission without duplicate publication", async () => {
     const fixture = buildFixture();
-    const publication = createPublication();
+    let currentBroker: SqliteContextBroker | undefined;
+    const trackBroker = (broker: SqliteContextBroker): SqliteContextBroker => {
+      currentBroker = broker;
+      return broker;
+    };
+    const publication = createPublication(() => required(currentBroker));
     const root = await createRoot();
-    const broker = openBroker(join(root, "context.db"), publication);
+    const broker = trackBroker(openBroker(join(root, "context.db"), publication));
     try {
       register(broker, fixture);
       const sdk = new FakeSdkPort();
@@ -266,9 +279,14 @@ describe("Phase 14I structured output acceptance", () => {
 
   it("refuses a conflicting output for the same slot", async () => {
     const fixture = buildFixture();
-    const publication = createPublication();
+    let currentBroker: SqliteContextBroker | undefined;
+    const trackBroker = (broker: SqliteContextBroker): SqliteContextBroker => {
+      currentBroker = broker;
+      return broker;
+    };
+    const publication = createPublication(() => required(currentBroker));
     const root = await createRoot();
-    const broker = openBroker(join(root, "context.db"), publication);
+    const broker = trackBroker(openBroker(join(root, "context.db"), publication));
     try {
       register(broker, fixture);
       const sdk = new FakeSdkPort();
@@ -313,9 +331,14 @@ describe("Phase 14I structured output acceptance", () => {
 
   it("refuses phase output bound to a stale context", async () => {
     const fixture = buildFixture();
-    const publication = createPublication();
+    let currentBroker: SqliteContextBroker | undefined;
+    const trackBroker = (broker: SqliteContextBroker): SqliteContextBroker => {
+      currentBroker = broker;
+      return broker;
+    };
+    const publication = createPublication(() => required(currentBroker));
     const root = await createRoot();
-    const broker = openBroker(join(root, "context.db"), publication);
+    const broker = trackBroker(openBroker(join(root, "context.db"), publication));
     try {
       register(broker, fixture);
       const sdk = new FakeSdkPort();
@@ -368,9 +391,14 @@ describe("Phase 14I structured output acceptance", () => {
 
   it("treats hostile output content as inert data", async () => {
     const fixture = buildFixture();
-    const publication = createPublication();
+    let currentBroker: SqliteContextBroker | undefined;
+    const trackBroker = (broker: SqliteContextBroker): SqliteContextBroker => {
+      currentBroker = broker;
+      return broker;
+    };
+    const publication = createPublication(() => required(currentBroker));
     const root = await createRoot();
-    const broker = openBroker(join(root, "context.db"), publication);
+    const broker = trackBroker(openBroker(join(root, "context.db"), publication));
     try {
       register(broker, fixture);
       const sdk = new FakeSdkPort();
@@ -410,10 +438,15 @@ describe("Phase 14I structured output acceptance", () => {
 
   it("keeps rejected output bodies out of durable state", async () => {
     const fixture = buildFixture();
-    const publication = createPublication();
+    let currentBroker: SqliteContextBroker | undefined;
+    const trackBroker = (broker: SqliteContextBroker): SqliteContextBroker => {
+      currentBroker = broker;
+      return broker;
+    };
+    const publication = createPublication(() => required(currentBroker));
     const root = await createRoot();
     try {
-      const broker = openBroker(join(root, "context.db"), publication);
+      const broker = trackBroker(openBroker(join(root, "context.db"), publication));
       let snapshotJson = "";
       try {
         register(broker, fixture);
@@ -438,7 +471,7 @@ describe("Phase 14I structured output acceptance", () => {
         broker.close();
       }
 
-      const reopened = openBroker(join(root, "context.db"), publication);
+      const reopened = trackBroker(openBroker(join(root, "context.db"), publication));
       try {
         expect(
           reopened.countRejectedPhaseOutputAttempts(fixture.dispatch.dispatchId, OUTPUT_NAME),
@@ -458,9 +491,14 @@ describe("Phase 14I structured output acceptance", () => {
   it("never constructs an SDK client or invokes a model", async () => {
     const productionPort = vi.spyOn(ProductionCopilotSdkPort, "create");
     const fixture = buildFixture();
-    const publication = createPublication();
+    let currentBroker: SqliteContextBroker | undefined;
+    const trackBroker = (broker: SqliteContextBroker): SqliteContextBroker => {
+      currentBroker = broker;
+      return broker;
+    };
+    const publication = createPublication(() => required(currentBroker));
     const root = await createRoot();
-    const broker = openBroker(join(root, "context.db"), publication);
+    const broker = trackBroker(openBroker(join(root, "context.db"), publication));
     try {
       register(broker, fixture);
       const sdk = new FakeSdkPort();
@@ -597,8 +635,6 @@ function submitOutputs(
   return async (config, session) => {
     const tool = required(config.tools.find(({ name }) => name === "submit_phase_output"));
     for (const invocation of invocations) {
-      // Publication loads the accepted body by digest, so stage it as a canonical asset.
-      publication.assets.install(canonicalValue(invocation.output));
       const args =
         invocation.changeNotes === undefined
           ? { output: invocation.output }
@@ -626,14 +662,14 @@ interface OutputPublication {
 }
 
 /** Publishes admitted output facts through the same bridge the daemon composes. */
-function createPublication(): OutputPublication {
+function createPublication(stagedBytes: () => SqliteContextBroker): OutputPublication {
   const assets = new InMemoryCanonicalJsonAssetStore(sha256);
   const persistence = new InMemoryRuntimeDataflowPersistence(sha256);
   const bridge = new RuntimePhaseOutputFactBridge(
     new RuntimeDataflowAuthority(
       sha256,
       configurationRuntimeSchemaValidator(),
-      assets,
+      phaseOutputAssetPort(assets, (digest) => stagedBytes().loadCanonicalOutputBytes(digest)),
       persistence,
     ),
     {
