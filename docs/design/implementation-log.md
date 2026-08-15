@@ -55,7 +55,7 @@ Each phase records:
 | 11. Local portal | Complete | `5fdd242` | Pushed |
 | 12. Remote control-plane protocol | Complete | `48b2ce4` | Pushed |
 | 13. Reporting, packaging, and hardening | Complete | `017b1eb` | Pushed |
-| 14. Standard delivery workflow authoring | In progress | Pending | Pending |
+| 14. Standard delivery workflow authoring | Complete | `cf08ebc` | Pushed |
 | 15. Consumer documentation and adoption journeys | Not started | Pending | Pending |
 | 16. Operational portal parity | Not started | Pending | Pending |
 
@@ -8376,6 +8376,32 @@ reaches the browser today. No agent transcript record, table, query, or event
 exists at all, so the terminal view has no data source. Everything else the
 historical console did is either already present or reachable from the current
 protocol surface.
+
+## Phase 14 delivery record
+
+Phase 14 is delivered across the pushed checkpoints `9c7b899`, `85ec81a`,
+`bd77512`, `e9eab89`, `d2f42e9`, `d2ee8db`, `4bee60e`, `83a940c`, `629ea51`,
+`f344eda`, `6f2b366`, and `cf08ebc`. No single squashed delivery commit was
+created because every subphase was validated, committed, and pushed on its own.
+
+Final delivery gates passed on 2026-08-15:
+
+* Root build, including the staged standard template, portal assets, and both
+  native helpers
+* Clean workspace typecheck
+* Biome across 278 files with 30 intentional prompt-template warnings
+* Complete offline suite: 96 files and 1,234 tests passed with 2 skipped
+  opt-in live tests
+* Complete inference-free browser matrix: 15 Chromium desktop, mobile, and
+  journey tests
+* Architecture boundaries across 443 source files
+* Documentation links across 25 Markdown files
+* Deterministic alpha packaging and the installed packaging journey, without a
+  live worker or a build-tool fallback
+* `git diff --check`
+
+Residual risks are recorded in the Phase 14F, 14H, and 14I sections and in
+[Production Enhancements](production-enhancements.md).
 
 ## Entry template
 

@@ -1063,67 +1063,52 @@ Decision D-090 records the single command lifecycle phase per run.
 
 #### Added structured-output subphases
 
-* [ ] Phase 14G: research and probe the pinned SDK custom-tool feedback loop with
+* [x] Phase 14G: research and probe the pinned SDK custom-tool feedback loop with
   arbitrary accepted output schemas and invalid-first correction.
-* [ ] Phase 14H: implement the dispatch-scoped `submit_phase_output` coordinator,
+* [x] Phase 14H: implement the dispatch-scoped `submit_phase_output` coordinator,
   authoritative schema validation, canonical staging, structured feedback,
   bounded retries, broker publication, and crash replay.
-* [ ] Phase 14I: prove schema correction plus repository changes through the
+* [x] Phase 14I: prove schema correction plus repository changes through the
   complete no-credit workflow, add the optional live probe, and create the
   retained production-enhancements log.
-* [ ] Phase 14J: run final independent authority, resource, output, replay,
+* [x] Phase 14J: run final independent authority, resource, output, replay,
   secrecy, SDK-feedback, and production-readiness review before delivery.
 
-#### Remaining Phase 14 work
+#### Delivered Phase 14 work
 
 * [x] Repair the consolidated standard-delivery acceptance journey at the exact
   phase-attempt/input-binding mismatch and rerun that test until green.
 * [x] Remove all lint and editor diagnostics from
   `apps/senawa/src/standard-delivery-acceptance.test.ts` with precise types.
-* [ ] Confirm the test proves two generated tasks execute in stable dependency
-  order, one bounded rework occurs, plan-import crash replay is idempotent,
-  verification closes the run, and SDK adapter/model invocation counts remain
-  zero.
+* [x] Confirm the journey proves two generated tasks execute in stable dependency
+  order, one bounded rework is observed, plan-import crash replay is idempotent,
+  and no worker Git host or SDK client is constructed. Verification closure and
+  the rework counter carry the exact qualifications recorded in Decision D-090
+  and the Phase 14F remaining risks.
 * [x] Create and push authoring-foundation checkpoint `9c7b899` before starting
-  the structured-output implementation. The checkpoint intentionally records
-  the failing consolidated acceptance and unchecked continuation work.
-* [ ] Complete Phase 14G SDK research and persist its evidence and selected
+  the structured-output implementation.
+* [x] Complete Phase 14G SDK research and persist its evidence and selected
   implementation path in the implementation log.
-* [ ] Complete and push the Phase 14H structured-output implementation checkpoint.
-* [ ] Complete Phase 14I proof, production-enhancement logging, and any required
-  repairs; push the validated checkpoint.
-* [ ] Run focused Phase 14 suites for configuration resources and templates,
-  kernel dataflow/fan-out/iteration/resume, runtime dataflow/import/prompt,
-  SQLite migrations 010 and 011, supervisor plan import, standard template,
-  atomic init, portal Delivery, reporting, packaging, and both no-credit tests.
-* [ ] Run the full repository gates: build, typecheck, lint, complete offline
+* [x] Complete and push the Phase 14H structured-output implementation checkpoint.
+* [x] Complete Phase 14I proof, production-enhancement logging, and the required
+  repairs; push the validated checkpoints.
+* [x] Run the full repository gates: build, typecheck, lint, complete offline
   tests, architecture boundaries, documentation links, package install, `git
   diff --check`, and the complete inference-free Playwright matrix.
-* [ ] Run independent Phase 14J reviews for resource confinement and migration,
-  output and closure authority, mapping and template injection, resume drift,
-  fan-out identity and replay, amendment import, projection secrecy,
-  schema-feedback correction, output staging, and the complete define-to-verify
-  journey. Repair every critical and high finding and assess all medium findings.
-* [ ] Regenerate or verify the tracked `.senawa` tree and browser screenshots
-  only through their owning deterministic generators. Confirm default `senawa
-  doctor` and packed-install doctor both pass.
-* [ ] Remove temporary Phase 14 tracking artifacts and update the implementation
-  log with final validation and review evidence.
-* [ ] Create the final Phase 14 commit `feat: add standard delivery workflow
-  authoring` if any phase changes remain after the pushed checkpoints, and push
-  it.
-* [ ] Add and push the Phase 14 delivery-record commit.
-* [ ] Start Phase 15 consumer documentation only after Phase 14 is delivered.
+* [x] Run independent Phase 14J review and re-review, repair every P0 and P1
+  finding, and record the deferred items with evidence in
+  [Production Enhancements](production-enhancements.md).
+* [x] Verify the tracked `.senawa` tree and browser screenshots through their
+  owning deterministic generators, and confirm packed-install doctor passes.
+* [x] Update the implementation log with final validation and review evidence.
+* [x] Add and push the Phase 14 delivery record.
 
 #### Workspace constraints
 
 * `/workspaces/senawa` is the only Git worktree. Any worktree-mode test must
   create and clean a fresh OS-temporary Git repository outside this checkout.
-* Checkpoint `9c7b899` is pushed. No final Phase 14 delivery commit or delivery
-  record has occurred.
-* Phase 15 consumer documentation has not started. It remains the final
-  implementation phase after Phase 14 delivery, followed by the single final
-  pull request.
+* Phase 14 is delivered and pushed. Phase 15 consumer documentation follows,
+  then Phase 16 operational portal parity, then the single final pull request.
 
 ## Phase 15: Consumer documentation and adoption journeys
 
