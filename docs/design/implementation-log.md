@@ -56,8 +56,9 @@ Each phase records:
 | 12. Remote control-plane protocol | Complete | `48b2ce4` | Pushed |
 | 13. Reporting, packaging, and hardening | Complete | `017b1eb` | Pushed |
 | 14. Standard delivery workflow authoring | Complete | `cf08ebc` | Pushed |
-| 15. Consumer documentation and adoption journeys | Not started | Pending | Pending |
+| 15. Consumer documentation and adoption journeys | Renumbered to 17 | Not applicable | Not applicable |
 | 16. Operational portal parity | Not started | Pending | Pending |
+| 17. Design and consumer documentation | Not started | Pending | Pending |
 
 ## Decision D-001: Clean alpha implementation reset
 

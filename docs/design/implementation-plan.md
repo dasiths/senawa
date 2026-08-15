@@ -1107,105 +1107,9 @@ Decision D-090 records the single command lifecycle phase per run.
 
 * `/workspaces/senawa` is the only Git worktree. Any worktree-mode test must
   create and clean a fresh OS-temporary Git repository outside this checkout.
-* Phase 14 is delivered and pushed. Phase 15 consumer documentation follows,
-  then Phase 16 operational portal parity, then the single final pull request.
-
-## Phase 15: Consumer documentation and adoption journeys
-
-> Execution order: Phase 16 runs before Phase 15. Consumer documentation must
-> describe only final implemented behavior, and Phase 16 changes the portal
-> surface that the getting-started and operations guides depend on.
-
-### Goal
-
-Publish consumer-facing documentation that explains why Senawa exists, how its
-authority model works, how the major components fit together, and how to adopt,
-configure, operate, and troubleshoot the alpha without reading implementation
-history or source code.
-
-### Required research
-
-Run a fresh RPI research cycle after Phase 14. The research must:
-
-* Identify the primary consumer audiences and their first successful journeys.
-* Review the final CLI, configuration schema, examples, package exports,
-  operational limits, and security boundaries from the delivered code.
-* Compare the implemented terminology with common workflow-engine, software
-  factory, agent, and local-control-plane concepts without copying product
-  documentation.
-* Inventory questions that current README and reference pages do not answer.
-* Select a documentation information architecture and record rejected
-  alternatives in the implementation log.
-
-Research artifacts remain temporary. The active repository retains only the
-approved consumer documentation and the implementation log decision record.
-
-### Acceptance
-
-* A consumer overview explains the design philosophy: deterministic authority,
-  immutable context, proposal-only agents, evidence-backed transitions,
-  intent-before-effect execution, durable recovery, and local-first control.
-* An architecture guide explains protocol, kernel, configuration, runtime,
-  SQLite authority, execution host, supervisor, CLI, portal, control plane,
-  reporting, and testing responsibilities without exposing obsolete packages.
-* A getting-started journey covers installation, `senawa init`, configuration,
-  `senawa doctor`, service startup, command submission, status, events, and
-  shutdown using only implemented commands.
-* Workflow authoring documentation covers workflow input, external prompt files,
-  arbitrary schemas, phase executors, mapped inputs, output artifacts, template
-  substitution, schema-selected task loops, plan import, iteration, rework,
-  approvals, completion, roles, model routes, budgets, sensors, gates,
-  projected work, and the default `execution.workspaceMode: repository`
-  behavior.
-* Optional worktree documentation states that `worktree` mode requires explicit
-  configuration. Its examples and tests use a fresh temporary Git repository,
-  never the mounted Senawa checkout.
-* Operations documentation covers private local paths, credentials, loopback
-  sessions, backup, restore, recovery, drain, logs, SDK session state, platform
-  requirements, live-probe opt-in, and failure handling.
-* Security documentation distinguishes principals, capabilities, grants,
-  approvals, proposals, stale results, local transport trust, and remote
-  control-plane trust.
-* Troubleshooting and limitations describe the alpha platform matrix, required
-  native build tools, JSON-only configuration, explicit live-model costs, and
-  unsupported or deferred behavior.
-* Examples are complete, bounded, link-checked, and executable without credits
-  unless explicitly labelled as opt-in live examples.
-* README becomes a concise entry point and links to the consumer documentation,
-  references, examples, and design records.
-* Documentation describes only behavior proven by the final implementation and
-  clearly labels optional, experimental, and future features.
-
-### Validation
-
-* Fresh-install documentation journey in a temporary directory
-* Default init assertions for `.senawa/workflow.json`, including nested sensor
-  and gate configuration and non-overwrite behavior
-* Command and configuration examples checked against built executables and exact
-  codecs
-* Documentation links, anchors, frontmatter, and terminology checks
-* Consumer review by independent subagents for onboarding, architecture,
-  operations, and security
-* Hostile-copy and secret-leak review of examples and diagnostic output
-* Desktop and narrow-width rendering checks for documentation pages where the
-  chosen publishing surface supports them
-* Final diff review proving no historical, WIP, or tracking artifacts remain
-
-### Disproof
-
-* A first-time consumer must inspect source code to complete the getting-started
-  journey.
-* Documentation advertises a command, option, authority, platform, or hosted
-  service that the alpha does not implement.
-* An example requires Git worktree support by default or mutates the Senawa
-  repository during validation.
-* Agent proposals, model text, central receipts, or prompt content are described
-  as workflow authority.
-* Backup, recovery, security, cost, or platform limits are omitted.
-
-### Commit
-
-`docs: add consumer adoption guides`
+* Phase 14 is delivered and pushed. Phase 16 operational portal parity follows,
+  then Phase 17 design and consumer documentation, then the single final pull
+  request.
 
 ## Phase 16: Operational portal parity
 
@@ -1325,9 +1229,138 @@ the current portal.
 
 `feat: add interactive portal run console`
 
+## Phase 17: Design and consumer documentation
+
+Phase 15 was renumbered to Phase 17 so documentation lands after the portal
+work. Documentation must describe only final implemented behavior, and Phase 16
+changed the portal surface that the getting-started and operations guides
+depend on. No phase carries the number 15.
+
+### Goal
+
+Publish two complete documentation sets. A design set explains why Senawa
+exists, how its authority model works, and how every component fits together in
+enough depth that a contributor can reason about the system without reading the
+implementation log or the source. A consumer set explains how to adopt,
+configure, operate, and troubleshoot the alpha without reading implementation
+history or source code.
+
+### Required research
+
+Run a fresh RPI research cycle after Phase 16. The research must:
+
+* Identify the primary consumer audiences and their first successful journeys.
+* Review the final CLI, configuration schema, examples, package exports,
+  operational limits, and security boundaries from the delivered code.
+* Compare the implemented terminology with common workflow-engine, software
+  factory, agent, and local-control-plane concepts without copying product
+  documentation.
+* Inventory questions that current README and reference pages do not answer.
+* Select a documentation information architecture and record rejected
+  alternatives in the implementation log.
+
+Research artifacts remain temporary. The active repository retains only the
+approved consumer documentation and the implementation log decision record.
+
+### Acceptance
+
+#### Design documentation
+
+* A design overview explains the philosophy: deterministic authority, immutable
+  context, proposal-only agents, evidence-backed transitions, intent-before-effect
+  execution, durable recovery, bounded autonomous loops, and local-first control.
+* An architecture guide explains protocol, kernel, configuration, runtime,
+  SQLite authority, execution host, supervisor, CLI, portal, control plane,
+  reporting, and testing responsibilities, the dependency direction between
+  them, and why each boundary exists. It exposes no obsolete package.
+* An authority model guide explains, with diagrams, how a command becomes a
+  durable receipt, how the kernel decides, how effects persist intent before
+  acting and reconcile before committing, how fences and leases prevent stale
+  writers, and how projections stay derived rather than authoritative.
+* A workflow model guide explains the canonical graph, phases, tasks, criteria,
+  typed edges, generations, supersession, completion accounting, evidence,
+  gates, approvals, closure, escalation, budgets, and additive amendments.
+* A dataflow guide explains workflow input, phase attempts, mapped inputs,
+  schema-validated outputs, structured agent output submission, fan-out task
+  generation, plan import, and iteration.
+* A durability guide explains the SQLite schema families, migrations, the
+  content-addressed asset store, backup, restore, integrity verification, and
+  the exact crash-recovery guarantees.
+* An extension guide explains how to add an adapter, a sensor, a worker, or a
+  transport without violating the dependency rules, and which contracts are
+  stable versus internal.
+* Every design page states which behavior is proven by which test surface, so a
+  reader can verify a claim without reading the implementation log.
+
+#### Consumer documentation
+
+* A getting-started journey covers installation, `senawa init`, configuration,
+  `senawa doctor`, service startup, command submission, status, events, portal
+  use, and shutdown using only implemented commands.
+* Workflow authoring documentation covers workflow input, external prompt files,
+  arbitrary schemas, phase executors, mapped inputs, output artifacts, template
+  substitution, schema-selected task loops, plan import, iteration, rework,
+  approvals, completion, roles, model routes, budgets, sensors, gates,
+  projected work, and the default `execution.workspaceMode: repository`
+  behavior.
+* Portal documentation covers the run console: the interactive workflow diagram,
+  node run states, selection and keyboard traversal, the terminal-style agent
+  output view with its bounded retention, questions, approvals, allowances, and
+  run control.
+* Optional worktree documentation states that `worktree` mode requires explicit
+  configuration. Its examples and tests use a fresh temporary Git repository,
+  never the mounted Senawa checkout.
+* Operations documentation covers private local paths, credentials, loopback
+  sessions, backup, restore, recovery, drain, logs, SDK session state, platform
+  requirements, live-probe opt-in, and failure handling.
+* Security documentation distinguishes principals, capabilities, grants,
+  approvals, proposals, stale results, local transport trust, and remote
+  control-plane trust.
+* Troubleshooting and limitations describe the alpha platform matrix, required
+  native build tools, JSON-only configuration, explicit live-model costs, and
+  unsupported or deferred behavior, linking to
+  [Production Enhancements](production-enhancements.md).
+* Examples are complete, bounded, link-checked, and executable without credits
+  unless explicitly labelled as opt-in live examples.
+* README becomes a concise entry point and links to the design set, the consumer
+  set, references, examples, and design records.
+* Documentation describes only behavior proven by the final implementation and
+  clearly labels optional, experimental, and future features.
+
+### Validation
+
+* Fresh-install documentation journey in a temporary directory
+* Default init assertions for `.senawa/workflow.json`, including nested sensor
+  and gate configuration and non-overwrite behavior
+* Command and configuration examples checked against built executables and exact
+  codecs
+* Documentation links, anchors, frontmatter, and terminology checks
+* Consumer review by independent subagents for onboarding, architecture,
+  operations, and security
+* Hostile-copy and secret-leak review of examples and diagnostic output
+* Desktop and narrow-width rendering checks for documentation pages where the
+  chosen publishing surface supports them
+* Final diff review proving no historical, WIP, or tracking artifacts remain
+
+### Disproof
+
+* A first-time consumer must inspect source code to complete the getting-started
+  journey.
+* Documentation advertises a command, option, authority, platform, or hosted
+  service that the alpha does not implement.
+* An example requires Git worktree support by default or mutates the Senawa
+  repository during validation.
+* Agent proposals, model text, central receipts, or prompt content are described
+  as workflow authority.
+* Backup, recovery, security, cost, or platform limits are omitted.
+
+### Commit
+
+`docs: add consumer adoption guides`
+
 ## Final pull request
 
-After Phase 16 is independently approved, committed, and pushed:
+After Phase 17 is independently approved, committed, and pushed:
 
 * Fetch and compare the branch with the remote base branch.
 * Generate a complete branch reference and review it in parallel chunks.
@@ -1357,7 +1390,7 @@ The autonomous implementation is complete only when:
   checks pass from a fresh install.
 * The no-credit end-to-end workflow passes after process restarts.
 * The current branch contains no Beads or legacy compatibility implementation.
-* Phase 15 consumer documentation passes its fresh research, journey,
+* Phase 17 design and consumer documentation passes its fresh research, journey,
   independent review, and link validation gates.
 * The complete implementation branch is pushed and has one final pull request.
 * The final implementation review states which planned contracts were accepted,
