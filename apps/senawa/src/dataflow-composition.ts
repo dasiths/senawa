@@ -5,7 +5,12 @@ import {
   validateSchemaInstance,
 } from "@senawa/configuration";
 import type { PhaseOutputSchemaResolverPort } from "@senawa/execution-host";
-import { type CanonicalValue, canonicalValue, type Sha256, type Sha256Digest } from "@senawa/kernel";
+import {
+  type CanonicalValue,
+  canonicalValue,
+  type Sha256,
+  type Sha256Digest,
+} from "@senawa/kernel";
 import type {
   CanonicalJsonAssetPort,
   PhaseOutputFact,

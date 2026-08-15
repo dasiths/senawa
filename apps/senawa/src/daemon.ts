@@ -215,8 +215,9 @@ export async function startSenawaService(
       new RuntimeDataflowAuthority(
         dependencies.sha256,
         configurationRuntimeSchemaValidator(),
-        phaseOutputAssetPort(new SqliteCanonicalJsonAssetStore(authority.commandAuthority), (digest) =>
-          contextBroker.loadCanonicalOutputBytes(digest),
+        phaseOutputAssetPort(
+          new SqliteCanonicalJsonAssetStore(authority.commandAuthority),
+          (digest) => contextBroker.loadCanonicalOutputBytes(digest),
         ),
         authority.commandAuthority,
       ),
