@@ -1112,6 +1112,10 @@ Decision D-090 records the single command lifecycle phase per run.
 
 ## Phase 15: Consumer documentation and adoption journeys
 
+> Execution order: Phase 16 runs before Phase 15. Consumer documentation must
+> describe only final implemented behavior, and Phase 16 changes the portal
+> surface that the getting-started and operations guides depend on.
+
 ### Goal
 
 Publish consumer-facing documentation that explains why Senawa exists, how its

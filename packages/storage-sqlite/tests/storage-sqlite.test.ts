@@ -24,6 +24,7 @@ import {
   type CompletionSubmission,
   canonicalDigest,
   canonicalValue,
+  compileWorkflowGraph,
   consumerKey,
   createAmendmentProposal,
   createBudgetLedger,
@@ -3530,6 +3531,302 @@ describe("SQLite authority durability", () => {
     },
   );
 });
+
+describe("SQLite portal graph node run status", () => {
+  it("derives run state, attempt, and needs from attempts, approvals, and closure", () => {
+    const sandbox = createSandbox();
+    const authority = new SqliteAuthority(sandbox.options);
+    const portal = new SqlitePortalQueryAuthority(sandbox.options);
+    const journey = createAdmissionFixture();
+    try {
+      const graph = createRuntimeGraph();
+      expect(
+        authority.submit(
+          instantiateCommand("command_node-status-instantiate", "approval-required"),
+          journey.at(),
+        ).status,
+      ).toBe("completed");
+      const nodes = () =>
+        new Map(
+          portal
+            .listGraphNodes(runtimeFixture.repositoryId, runtimeFixture.runId, graph.revisionDigest)
+            .nodes.map((node) => [node.nodeId, node]),
+        );
+      expect(nodes().get(runtimeFixture.phase.phaseId)).toMatchObject({
+        runState: "not-started",
+        humanNeedCount: 0,
+        evidenceCount: 0,
+      });
+      expect(nodes().get(runtimeFixture.workflowId)?.runState).toBe("not-started");
+
+      startFixturePhaseAttempt(authority, graph);
+      expect(nodes().get(runtimeFixture.phase.phaseId)).toMatchObject({
+        runState: "running",
+        attempt: 1,
+      });
+      expect(nodes().get(runtimeFixture.workflowId)?.runState).toBe("running");
+
+      const completion = authority.submit(
+        runtimeCommand({
+          commandId: "command_node-status-completion",
+          intent: "submit-completion",
+          payload: completionPayload(),
+          expectedDefinitionRevision: runtimeFixture.task.contextRevisionDigest,
+          expectedGraphRevision: graph.revisionDigest,
+        }),
+        journey.at(),
+      );
+      expect(completion.status).toBe("completed");
+      expect(nodes().get(runtimeFixture.task.taskId)?.runState).toBe("accepted");
+      expect(nodes().get(runtimeFixture.criterionId)?.runState).toBe("accepted");
+
+      const gate = acceptedGate(
+        graph,
+        (completion.result as unknown as { assessment: AccountingAssessment }).assessment,
+      );
+      expect(
+        authority.submit(
+          runtimeCommand({
+            commandId: "command_node-status-gate",
+            intent: "evaluate-gate",
+            payload: {
+              phase: runtimeFixture.phase,
+              phaseAttempt: gate.phaseAttempt,
+              inputBindingDigest: gate.inputBindingDigest,
+              requiredOutputPublications: [],
+              outputSetDigest: gate.outputSetDigest,
+              dependencyBarrierDigest: runtimeFixture.dependencyBarrierDigest,
+              gateDefinition: gate.definition,
+              readings: [gate.reading],
+            },
+            expectedGraphRevision: graph.revisionDigest,
+            exactObjectDigest: gate.candidateDigest,
+          }),
+          journey.at(),
+        ).status,
+      ).toBe("completed");
+      expect(nodes().get(runtimeFixture.phase.phaseId)).toMatchObject({
+        runState: "awaiting-human",
+        humanNeedCount: 1,
+        attempt: 1,
+      });
+
+      expect(
+        authority.submit(
+          runtimeCommand({
+            commandId: "command_node-status-approval",
+            intent: "record-authority-decision",
+            payload: { decision: "approve" },
+            expectedGraphRevision: graph.revisionDigest,
+            exactObjectDigest: gate.candidateDigest,
+          }),
+          journey.at(),
+        ).status,
+      ).toBe("completed");
+      expect(nodes().get(runtimeFixture.phase.phaseId)).toMatchObject({
+        runState: "running",
+        humanNeedCount: 0,
+      });
+
+      expect(
+        authority.submit(
+          runtimeCommand({
+            commandId: "command_node-status-close",
+            intent: "close-phase",
+            payload: {},
+            expectedGraphRevision: graph.revisionDigest,
+            exactObjectDigest: gate.candidateDigest,
+          }),
+          journey.at(),
+        ).status,
+      ).toBe("completed");
+      expect(nodes().get(runtimeFixture.phase.phaseId)?.runState).toBe("accepted");
+      expect(nodes().get(runtimeFixture.workflowId)?.runState).toBe("accepted");
+    } finally {
+      portal.close();
+      authority.close();
+      sandbox.dispose();
+    }
+  });
+
+  it("reports escalated phases and superseded tasks from durable transitions and edges", () => {
+    const sandbox = createSandbox();
+    const authority = new SqliteAuthority(sandbox.options);
+    const portal = new SqlitePortalQueryAuthority(sandbox.options);
+    try {
+      const graph = supersedingGraph();
+      expect(
+        authority.submit(
+          runtimeCommand({
+            commandId: "command_superseded-instantiate",
+            intent: "instantiate-run",
+            payload: {
+              workflowId: runtimeFixture.workflowId,
+              configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+              execution: runtimeFixture.execution,
+              graph,
+              phase: runtimeFixture.phase,
+              approvalPolicy: { policy: "no-approval" },
+              escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+              allowancePolicy: runtimeFixture.allowancePolicy,
+            },
+          }),
+          admission(),
+        ).status,
+      ).toBe("completed");
+      const nodes = () =>
+        new Map(
+          portal
+            .listGraphNodes(runtimeFixture.repositoryId, runtimeFixture.runId, graph.revisionDigest)
+            .nodes.map((node) => [node.nodeId, node]),
+        );
+      expect(nodes().get(runtimeFixture.task.taskId)).toMatchObject({
+        runState: "superseded",
+        supersededBy: "task_replacement",
+      });
+      expect(nodes().get("task_replacement")?.runState).toBe("not-started");
+
+      const attempt = startFixturePhaseAttempt(authority, graph);
+      const policy = {
+        maxAttempts: 1,
+        upstreamChange: "refuse" as const,
+        exhaustion: "escalate" as const,
+      };
+      authority.appendPhaseAttemptTransition(
+        planPhaseAttemptTransition(
+          {
+            repositoryId: runtimeFixture.repositoryId,
+            runId: runtimeFixture.runId,
+            phase: attempt.phase,
+            attemptDigest: attempt.attemptDigest,
+            trigger: "gate-rejected",
+            triggerDigest: sha256Digest("a".repeat(64)),
+            policyDigest: canonicalDigest(canonicalValue(policy), deterministicSha256),
+            policy,
+            budgetLedger: createBudgetLedger({
+              counters: [{ unit: "review-iteration", limit: 1, used: 1 }],
+              appliedAllowanceDecisionDigests: [],
+            }),
+          },
+          deterministicSha256,
+        ).transition,
+      );
+      expect(nodes().get(runtimeFixture.phase.phaseId)).toMatchObject({
+        runState: "failed",
+        attempt: 1,
+      });
+      expect(nodes().get(runtimeFixture.workflowId)?.runState).toBe("failed");
+    } finally {
+      portal.close();
+      authority.close();
+      sandbox.dispose();
+    }
+  });
+});
+
+function supersedingGraph() {
+  return compileWorkflowGraph(
+    {
+      workflow: {
+        id: runtimeFixture.workflowId,
+        key: consumerKey("fixture"),
+        generation: definitionGeneration(1),
+        source: { locator: "fixture://runtime", pointer: "" },
+      },
+      phases: [
+        {
+          id: runtimeFixture.phase.phaseId,
+          key: consumerKey("delivery"),
+          generation: runtimeFixture.phase.definitionGeneration,
+          parentId: runtimeFixture.workflowId,
+          source: { locator: "fixture://runtime", pointer: "/phases/delivery" },
+        },
+      ],
+      executableWork: [
+        {
+          id: runtimeFixture.task.taskId,
+          key: consumerKey("verify"),
+          generation: runtimeFixture.task.definitionGeneration,
+          parentId: runtimeFixture.phase.phaseId,
+          source: { locator: "fixture://runtime", pointer: "/tasks/verify" },
+          completionPolicy: { criteria: [], evidencePolicy: { mode: "none", requirements: [] } },
+        },
+        {
+          id: taskId("task_replacement"),
+          key: consumerKey("replacement"),
+          generation: definitionGeneration(runtimeFixture.task.definitionGeneration + 1),
+          parentId: runtimeFixture.phase.phaseId,
+          source: { locator: "fixture://runtime", pointer: "/tasks/replacement" },
+          completionPolicy: { criteria: [], evidencePolicy: { mode: "none", requirements: [] } },
+          supersedes: [runtimeFixture.task.taskId],
+        },
+      ],
+      criteria: [],
+    },
+    deterministicSha256,
+  );
+}
+
+function startFixturePhaseAttempt(
+  authority: SqliteAuthority,
+  graph: ReturnType<typeof createRuntimeGraph>,
+) {
+  const configuration = amendmentConfigurationSnapshot(graph);
+  authority.putConfigurationSnapshot(configuration);
+  const schema = {
+    key: "request",
+    schemaResourceDigest: sha256Digest("6".repeat(64)),
+    validatorProfileDigest: sha256Digest("7".repeat(64)),
+    schema: canonicalValue({ type: "object" }),
+    externalSchemas: [],
+  };
+  const service = new RuntimeDataflowAuthority(
+    deterministicSha256,
+    { validate: () => [] },
+    new SqliteCanonicalJsonAssetStore(authority),
+    authority,
+  );
+  const workflowInput = service.bindWorkflowInput({
+    repositoryId: runtimeFixture.repositoryId,
+    runId: runtimeFixture.runId,
+    workflowId: runtimeFixture.workflowId,
+    graphRevisionDigest: graph.revisionDigest,
+    configurationSnapshotDigest: configuration.snapshotDigest,
+    schema,
+    value: { request: "build" },
+  });
+  return service.startPhaseAttempt({
+    repositoryId: runtimeFixture.repositoryId,
+    runId: runtimeFixture.runId,
+    phase: { ...runtimeFixture.phase, attempt: 1 },
+    graphRevisionDigest: graph.revisionDigest,
+    configurationSnapshotDigest: configuration.snapshotDigest,
+    executorDigest: sha256Digest("8".repeat(64)),
+    upstreamClosureSetDigest: sha256Digest("9".repeat(64)),
+    upstreamOutputSetDigest: sha256Digest("0".repeat(64)),
+    schema,
+    mappings: [
+      {
+        key: consumerKey("request"),
+        source: { kind: "workflow-input" as const, pointer: "/request" },
+        destinationPointer: "/request",
+      },
+    ],
+    sourceBindings: [
+      {
+        source: { kind: "workflow-input" as const },
+        sourceBindingDigest: workflowInput.bindingDigest,
+        value: canonicalValue({ request: "build" }),
+      },
+    ],
+    mappingPolicy: {
+      dependencyPhases: [],
+      declaredPhaseOutputs: [],
+      implementationEvidenceViews: [],
+      allowCurrentItem: false,
+    },
+  }).attempt;
+}
 
 function createConformanceHarness(): RuntimeAuthorityConformanceHarness {
   const sandbox = createSandbox();

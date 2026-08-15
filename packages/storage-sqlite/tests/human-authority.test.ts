@@ -551,6 +551,21 @@ describe("SQLite Phase 11B portal query authority", () => {
     expect(() =>
       portal.listGraphNodes(runtimeFixture.repositoryId, runtimeFixture.runId, "f".repeat(64)),
     ).toThrow("graph revision is stale");
+    const graphNodes = () =>
+      new Map(
+        portal
+          .listGraphNodes(
+            runtimeFixture.repositoryId,
+            runtimeFixture.runId,
+            graph?.graphRevision ?? "missing",
+          )
+          .nodes.map((node) => [node.nodeId, node]),
+      );
+    for (const node of graphNodes().values()) {
+      expect(node).toMatchObject({ runState: "not-started", humanNeedCount: 0, evidenceCount: 0 });
+      expect(node.roleKey).toBeUndefined();
+      expect(node.attempt).toBeUndefined();
+    }
 
     const worker = createWorkerExecutionFixture(createRuntimeGraph(), [
       "worker.submit.question",
@@ -566,6 +581,16 @@ describe("SQLite Phase 11B portal query authority", () => {
       completionRequirements: worker.completionRequirements,
       taskScope: taskScope(worker.context.contextDigest),
     });
+    expect(graphNodes().get(runtimeFixture.task.taskId)).toMatchObject({
+      runState: "running",
+      roleKey: "implementer",
+      humanNeedCount: 0,
+      evidenceCount: 0,
+    });
+    expect(graphNodes().get(runtimeFixture.workflowId)).toMatchObject({
+      runState: "not-started",
+      humanNeedCount: 0,
+    });
     broker.admitSubmission({
       submission: {
         apiVersion: PROTOCOL_VERSION,
@@ -580,6 +605,33 @@ describe("SQLite Phase 11B portal query authority", () => {
         type: "question",
         question: { prompt: "<script>not executable</script>", details: { exact: true } },
       },
+    });
+    broker.admitSubmission({
+      submission: {
+        apiVersion: PROTOCOL_VERSION,
+        submissionId: "submission_portal-node-asset",
+        repositoryId: worker.dispatch.repositoryId,
+        runId: worker.dispatch.runId,
+        dispatchId: worker.dispatch.dispatchId,
+        task: worker.dispatch.task,
+        contextId: worker.dispatch.contextId,
+        contextDigest: worker.dispatch.contextDigest,
+        principalId: worker.dispatch.worker.principalId,
+        type: "asset",
+        asset: {
+          assetId: "asset_portal-node-evidence",
+          contentDigest: "e".repeat(64),
+          byteLength: 12,
+          mediaType: "text/plain",
+          sensitivity: "internal",
+          summary: "Node evidence",
+        },
+      },
+    });
+    expect(graphNodes().get(runtimeFixture.task.taskId)).toMatchObject({
+      runState: "awaiting-human",
+      humanNeedCount: 1,
+      evidenceCount: 1,
     });
     const overviewB = portal.getRunOverview(runtimeFixture.repositoryId, runtimeFixture.runId);
     expect(overviewB?.sync.contextRevision).toBeGreaterThan(
@@ -629,6 +681,31 @@ describe("SQLite Phase 11B portal query authority", () => {
       }),
     ).toThrow("mutually exclusive");
     broker.close();
+    portal.close();
+    authority.close();
+    fixture.dispose();
+  });
+
+  it("marks an ended run with unaccepted work as failed", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    const portal = new SqlitePortalQueryAuthority(fixture.options);
+    const graphRevision =
+      portal.getGraphSummary(runtimeFixture.repositoryId, runtimeFixture.runId)?.graphRevision ??
+      "missing";
+    const workflowNode = () =>
+      portal
+        .listGraphNodes(runtimeFixture.repositoryId, runtimeFixture.runId, graphRevision)
+        .nodes.find((node) => node.kind === "workflow");
+    expect(workflowNode()?.runState).toBe("not-started");
+    expect(
+      authority.submit(runControlCommand("end-run", "command_portal-end", 0), admission()),
+    ).toMatchObject({ status: "completed" });
+    expect(authority.queryRunControl(runtimeFixture.repositoryId, runtimeFixture.runId)?.mode).toBe(
+      "ended",
+    );
+    expect(workflowNode()?.runState).toBe("failed");
     portal.close();
     authority.close();
     fixture.dispose();

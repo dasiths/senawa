@@ -27,6 +27,7 @@ import {
   type PortalGraphNode,
   type PortalGraphNodeKind,
   type PortalGraphNodePage,
+  type PortalGraphNodeRunState,
   type PortalGraphSummary,
   type PortalHumanNeed,
   type PortalHumanNeedKind,
@@ -60,8 +61,17 @@ const DIGEST = /^[0-9a-f]{64}$/;
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const MEDIA_TYPE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/;
 const TOKEN = /^[a-z0-9](?:[a-z0-9:-]{0,126}[a-z0-9])?$/;
+const CONSUMER_KEY = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const RUN_MODES = new Set<PortalRunMode>(["running", "paused", "ending", "ended"]);
 const NODE_KINDS = new Set<PortalGraphNodeKind>(["workflow", "phase", "task", "criterion"]);
+const NODE_RUN_STATES = new Set<PortalGraphNodeRunState>([
+  "not-started",
+  "running",
+  "awaiting-human",
+  "accepted",
+  "failed",
+  "superseded",
+]);
 const EDGE_KINDS = new Set<PortalGraphEdgeKind>(["containment", "dependency", "supersession"]);
 const RECORD_KINDS = new Set<PortalRecordKind>([
   "candidate",
@@ -791,16 +801,26 @@ function portalGraphNode(value: unknown, path: string): PortalGraphNode {
       "title",
       "definitionGeneration",
       "lifecycle",
+      "runState",
       "humanNeedCount",
       "evidenceCount",
     ],
-    ["parentNodeId", "sourcePointer", "normalizedInput", "completionPolicy", "supersededBy"],
+    [
+      "parentNodeId",
+      "sourcePointer",
+      "normalizedInput",
+      "completionPolicy",
+      "supersededBy",
+      "attempt",
+      "roleKey",
+    ],
   );
   identity(object.nodeId, `${path}.nodeId`);
   oneOf(object.kind, `${path}.kind`, NODE_KINDS);
   boundedString(object.title, `${path}.title`, 1, 1_024);
   integer(object.definitionGeneration, `${path}.definitionGeneration`, 1);
   token(object.lifecycle, `${path}.lifecycle`);
+  oneOf(object.runState, `${path}.runState`, NODE_RUN_STATES);
   integer(object.humanNeedCount, `${path}.humanNeedCount`);
   integer(object.evidenceCount, `${path}.evidenceCount`);
   optional(object, "parentNodeId", identity, path);
@@ -811,6 +831,8 @@ function portalGraphNode(value: unknown, path: string): PortalGraphNode {
     path,
   );
   optional(object, "supersededBy", identity, path);
+  optional(object, "attempt", (entry, entryPath) => integer(entry, entryPath, 1), path);
+  optional(object, "roleKey", consumerKey, path);
   return Object.freeze({
     ...object,
     ...(Object.hasOwn(object, "normalizedInput")
@@ -1261,6 +1283,11 @@ function timestamp(value: unknown, path: string): void {
 function token(value: unknown, path: string): void {
   boundedString(value, path, 1, 128);
   if (!TOKEN.test(value as string)) fail("invalid-value", path, "must be a lowercase token");
+}
+function consumerKey(value: unknown, path: string): void {
+  boundedString(value, path, 1, 63);
+  if (!CONSUMER_KEY.test(value as string))
+    fail("invalid-value", path, "must be a lowercase consumer key");
 }
 function boundedString(value: unknown, path: string, minimum: number, maximum: number): void {
   if (typeof value !== "string") fail("invalid-type", path, "must be a string");

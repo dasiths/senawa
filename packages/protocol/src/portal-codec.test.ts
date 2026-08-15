@@ -127,6 +127,7 @@ describe("portal codecs", () => {
       title: "Task",
       definitionGeneration: 1,
       lifecycle: "ready",
+      runState: "running",
       humanNeedCount: 0,
       evidenceCount: 0,
     };
@@ -169,6 +170,40 @@ describe("portal codecs", () => {
         nodes: [{ ...node, normalizedInput: Array.from({ length: 10_000 }, () => null) }],
       }),
     ).toThrow(/10000 nodes/);
+    const nodePage = (entry: Record<string, unknown>) => ({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId: "repository_alpha",
+      runId: "run_alpha",
+      graphRevision: digest,
+      after: 0,
+      nextAfter: 1,
+      hasMore: false,
+      nodes: [entry],
+    });
+    expect(
+      decodePortalGraphNodePage(
+        nodePage({ ...node, runState: "awaiting-human", attempt: 3, roleKey: "implementer" }),
+      ).nodes[0],
+    ).toMatchObject({ runState: "awaiting-human", attempt: 3, roleKey: "implementer" });
+    expect(() => decodePortalGraphNodePage(nodePage({ ...node, runState: "queued" }))).toThrow(
+      /runState must be one of/,
+    );
+    expect(() => decodePortalGraphNodePage(nodePage({ ...node, attempt: 0 }))).toThrow(
+      /attempt must be a safe integer of at least 1/,
+    );
+    expect(() => decodePortalGraphNodePage(nodePage({ ...node, roleKey: "Implementer" }))).toThrow(
+      /roleKey must be a lowercase consumer key/,
+    );
+    expect(() => decodePortalGraphNodePage(nodePage({ ...node, roleKey: "a".repeat(64) }))).toThrow(
+      /roleKey must contain 1-63/,
+    );
+    expect(() => decodePortalGraphNodePage(nodePage({ ...node, runningState: "running" }))).toThrow(
+      /runningState is not allowed/,
+    );
+    const { runState: _omitted, ...withoutRunState } = node;
+    expect(() => decodePortalGraphNodePage(nodePage(withoutRunState))).toThrow(
+      /runState is required/,
+    );
   });
 
   it("accepts bounded delivery metadata and rejects body-bearing records", () => {

@@ -118,17 +118,28 @@ export interface PortalGraphSummary {
 
 export type PortalGraphNodeKind = "workflow" | "phase" | "task" | "criterion";
 
+export type PortalGraphNodeRunState =
+  | "not-started"
+  | "running"
+  | "awaiting-human"
+  | "accepted"
+  | "failed"
+  | "superseded";
+
 export interface PortalGraphNode {
   readonly nodeId: OpaqueIdentity;
   readonly kind: PortalGraphNodeKind;
   readonly title: string;
   readonly definitionGeneration: number;
   readonly lifecycle: string;
+  readonly runState: PortalGraphNodeRunState;
   readonly parentNodeId?: OpaqueIdentity;
   readonly sourcePointer?: string;
   readonly normalizedInput?: JsonValue;
   readonly completionPolicy?: JsonValue;
   readonly supersededBy?: OpaqueIdentity;
+  readonly attempt?: number;
+  readonly roleKey?: string;
   readonly humanNeedCount: number;
   readonly evidenceCount: number;
 }

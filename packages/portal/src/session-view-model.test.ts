@@ -103,6 +103,8 @@ describe("portal route view model", () => {
           title: "Compile release",
           definitionGeneration: 1,
           lifecycle: "open",
+          runState: "running",
+          roleKey: "implementer",
           humanNeedCount: 0,
           evidenceCount: 0,
         },

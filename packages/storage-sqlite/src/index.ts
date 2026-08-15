@@ -57,6 +57,7 @@ import {
   validatePhaseOutputPublication,
   type validateWorkflowGraph,
   validateWorkflowInputBinding,
+  type WorkflowGraph,
   type WorkflowInputBinding,
 } from "@senawa/kernel";
 import {
@@ -115,6 +116,7 @@ import {
   type PortalEventWindow,
   type PortalGraphEdgePage,
   type PortalGraphNodePage,
+  type PortalGraphNodeRunState,
   type PortalGraphSummary,
   type PortalHumanNeed,
   type PortalHumanNeedPage,
@@ -3515,7 +3517,13 @@ export class SqlitePortalQueryAuthority {
   ): PortalGraphNodePage {
     validatePortalOffset(after);
     validatePortalLimit(limit, PORTAL_LIMITS.maxGraphItems);
-    const graph = this.#requiredGraphRevision(repositoryId, runId, graphRevision);
+    const projection = this.#database
+      .transaction(() => {
+        const graph = this.#requiredGraphRevision(repositoryId, runId, graphRevision);
+        return { graph, statuses: this.#graphNodeStatuses(repositoryId, runId, graph) };
+      })
+      .deferred();
+    const graph = projection.graph;
     const nodes = graph.nodes.slice(after, after + limit);
     return decodePortalGraphNodePage({
       apiVersion: PROTOCOL_VERSION,
@@ -3531,12 +3539,14 @@ export class SqlitePortalQueryAuthority {
         const supersededBy = graph.edges.find(
           (edge) => edge.kind === "supersedes" && edge.to === definition.id,
         )?.from;
+        const status = projection.statuses.get(definition.id) ?? NOT_STARTED_NODE_STATUS;
         return {
           nodeId: definition.id,
           kind: node.kind,
           title: definition.key,
           definitionGeneration: definition.generation,
           lifecycle: "defined",
+          runState: status.runState,
           ...(parentNodeId === undefined ? {} : { parentNodeId }),
           ...(definition.source.pointer.length === 0
             ? {}
@@ -3544,8 +3554,10 @@ export class SqlitePortalQueryAuthority {
           ...(definition.input === null ? {} : { normalizedInput: definition.input as JsonValue }),
           ...(node.kind === "task" ? { completionPolicy: node.definition.completionPolicy } : {}),
           ...(supersededBy === undefined ? {} : { supersededBy }),
-          humanNeedCount: 0,
-          evidenceCount: 0,
+          ...(status.attempt === undefined ? {} : { attempt: status.attempt }),
+          ...(status.roleKey === undefined ? {} : { roleKey: status.roleKey }),
+          humanNeedCount: status.humanNeedCount,
+          evidenceCount: status.evidenceCount,
         };
       }),
     });
@@ -4401,6 +4413,302 @@ export class SqlitePortalQueryAuthority {
     return graph;
   }
 
+  #graphNodeStatuses(
+    repositoryId: string,
+    runId: string,
+    graph: WorkflowGraph,
+  ): ReadonlyMap<string, PortalNodeStatus> {
+    const runKey = canonicalStringify([repositoryId, runId]);
+    const superseded = new Set<string>(
+      graph.edges.filter((edge) => edge.kind === "supersedes").map((edge) => edge.to),
+    );
+    const attempts = new Map<string, PortalPhaseAttemptFacts>();
+    for (const row of this.#database
+      .prepare<[string], PortalPhaseAttemptRow>(
+        `SELECT a.phase_id, a.definition_generation, a.attempt_ordinal, t.disposition
+         FROM phase_attempts a
+         LEFT JOIN phase_attempt_transitions t ON t.attempt_digest = a.attempt_digest
+         WHERE a.run_key = ?
+         ORDER BY a.phase_id, a.definition_generation, a.attempt_ordinal`,
+      )
+      .all(runKey)) {
+      const key = generationKey(row.phase_id, row.definition_generation);
+      const prior = attempts.get(key);
+      attempts.set(key, {
+        latestAttempt: row.attempt_ordinal,
+        latestDisposition: row.disposition,
+        closed: (prior?.closed ?? false) || row.disposition === "closed",
+      });
+    }
+    const phaseEvidence = generationCounts(
+      this.#database
+        .prepare<[string], PortalGenerationCountRow>(
+          `SELECT a.phase_id AS id, a.definition_generation AS generation, COUNT(*) AS total
+           FROM phase_output_publications p
+           JOIN phase_attempts a ON a.attempt_digest = p.attempt_digest
+           WHERE p.run_key = ? GROUP BY a.phase_id, a.definition_generation`,
+        )
+        .all(runKey),
+    );
+    const phaseNeeds = generationCounts(
+      this.#database
+        .prepare<[string], PortalGenerationCountRow>(
+          `SELECT phase_id AS id, definition_generation AS generation, COUNT(*) AS total
+           FROM runner_integration_attempts
+           WHERE run_key = ? AND state IN ('conflicted', 'target-moved', 'rework-required')
+           GROUP BY phase_id, definition_generation`,
+        )
+        .all(runKey),
+    );
+    const failedTasks = generationCounts(
+      this.#database
+        .prepare<[string], PortalGenerationCountRow>(
+          `SELECT task_id AS id, definition_generation AS generation, COUNT(*) AS total
+           FROM runner_workspaces WHERE run_key = ? AND state = 'failed'
+           GROUP BY task_id, definition_generation`,
+        )
+        .all(runKey),
+    );
+    const taskNeeds = generationCounts(
+      this.#database
+        .prepare<[string, string], PortalGenerationCountRow>(
+          `SELECT json_extract(q.canonical_question, '$.task.taskId') AS id,
+                  json_extract(q.canonical_question, '$.task.definitionGeneration') AS generation,
+                  COUNT(*) AS total
+           FROM context_questions q
+           LEFT JOIN context_question_answers a ON a.submission_id = q.submission_id
+           WHERE q.repository_id = ? AND q.run_id = ? AND a.submission_id IS NULL
+           GROUP BY id, generation`,
+        )
+        .all(repositoryId, runId),
+    );
+    const taskEvidence = generationCounts(
+      this.#database
+        .prepare<[string, string], PortalGenerationCountRow>(
+          `SELECT json_extract(canonical_submission, '$.task.taskId') AS id,
+                  json_extract(canonical_submission, '$.task.definitionGeneration') AS generation,
+                  COUNT(*) AS total
+           FROM context_submissions
+           WHERE repository_id = ? AND run_id = ? AND submission_type = 'asset'
+           GROUP BY id, generation`,
+        )
+        .all(repositoryId, runId),
+    );
+    const dispatched = new Map<string, string | undefined>();
+    for (const row of this.#database
+      .prepare<[string, string], PortalTaskDispatchRow>(
+        `SELECT json_extract(b.canonical_context, '$.task.taskId') AS task_id,
+                json_extract(b.canonical_context, '$.task.definitionGeneration') AS generation,
+                json_extract(b.canonical_context, '$.role.key') AS role_key
+         FROM context_dispatches d JOIN context_bases b ON b.context_id = d.context_id
+         WHERE d.repository_id = ? AND d.run_id = ? ORDER BY d.dispatch_id`,
+      )
+      .all(repositoryId, runId)) {
+      if (row.task_id === null || row.generation === null) continue;
+      dispatched.set(generationKey(row.task_id, row.generation), row.role_key ?? undefined);
+    }
+    const runtime = this.#runtimeNodeFacts(repositoryId, runId);
+    const mode =
+      this.#database
+        .prepare<[string], { mode: RunControlMode }>(
+          "SELECT mode FROM run_control_state WHERE run_key = ?",
+        )
+        .get(runKey)?.mode ?? "running";
+    const runNeeds = this.#runScopedNeedCount(runKey, mode);
+
+    const statuses = new Map<string, PortalNodeStatus>();
+    const phaseRunStates: PortalGraphNodeRunState[] = [];
+    for (const node of graph.nodes) {
+      const id: string = node.definition.id;
+      const key = generationKey(id, node.definition.generation);
+      if (node.kind === "phase") {
+        const attempt = attempts.get(key);
+        const lifecycle = runtime.lifecycles.get(key);
+        const humanNeedCount =
+          (lifecycle?.awaitingApproval === true ? 1 : 0) + (phaseNeeds.get(key) ?? 0);
+        const runState: PortalGraphNodeRunState = superseded.has(id)
+          ? "superseded"
+          : lifecycle?.closed === true || attempt?.closed === true
+            ? "accepted"
+            : attempt?.latestDisposition === "escalate" || attempt?.latestDisposition === "fail"
+              ? "failed"
+              : humanNeedCount > 0
+                ? "awaiting-human"
+                : attempt !== undefined || lifecycle?.started === true
+                  ? "running"
+                  : "not-started";
+        phaseRunStates.push(runState);
+        statuses.set(id, {
+          runState,
+          humanNeedCount,
+          evidenceCount: phaseEvidence.get(key) ?? 0,
+          ...(attempt === undefined ? {} : { attempt: attempt.latestAttempt }),
+        });
+      } else if (node.kind === "task") {
+        const disposition = runtime.acceptedTasks.get(key);
+        const humanNeedCount = taskNeeds.get(key) ?? 0;
+        const runState: PortalGraphNodeRunState =
+          superseded.has(id) || disposition === "superseded"
+            ? "superseded"
+            : disposition === "blocked" || failedTasks.has(key)
+              ? "failed"
+              : disposition !== undefined
+                ? "accepted"
+                : humanNeedCount > 0
+                  ? "awaiting-human"
+                  : dispatched.has(key)
+                    ? "running"
+                    : "not-started";
+        const roleKey = dispatched.get(key);
+        statuses.set(id, {
+          runState,
+          humanNeedCount,
+          evidenceCount: taskEvidence.get(key) ?? 0,
+          ...(roleKey === undefined ? {} : { roleKey }),
+        });
+      } else if (node.kind === "criterion") {
+        const disposition = runtime.criterionOutcomes.get(id);
+        statuses.set(id, {
+          runState: superseded.has(id)
+            ? "superseded"
+            : disposition === "satisfied" || disposition === "waived"
+              ? "accepted"
+              : disposition === "unsatisfied"
+                ? "failed"
+                : "not-started",
+          humanNeedCount: 0,
+          evidenceCount: runtime.criterionEvidence.get(id) ?? 0,
+        });
+      }
+    }
+    for (const node of graph.nodes) {
+      if (node.kind !== "workflow") continue;
+      statuses.set(node.definition.id, {
+        runState:
+          phaseRunStates.length > 0 &&
+          phaseRunStates.every((state) => state === "accepted" || state === "superseded")
+            ? "accepted"
+            : phaseRunStates.includes("failed") || mode === "ended"
+              ? "failed"
+              : runNeeds > 0
+                ? "awaiting-human"
+                : phaseRunStates.some((state) => state !== "not-started")
+                  ? "running"
+                  : "not-started",
+        humanNeedCount: runNeeds,
+        evidenceCount: 0,
+      });
+    }
+    return statuses;
+  }
+
+  #runtimeNodeFacts(repositoryId: string, runId: string): PortalRuntimeNodeFacts {
+    const lifecycles = new Map<string, PortalPhaseLifecycleFacts>();
+    const acceptedTasks = new Map<string, string>();
+    const criterionOutcomes = new Map<string, string>();
+    const criterionEvidence = new Map<string, number>();
+    const recordsRow = this.#runtimeRecordRow(repositoryId, runId);
+    if (recordsRow === undefined)
+      return { lifecycles, acceptedTasks, criterionOutcomes, criterionEvidence };
+    const records = requiredJsonRecord(
+      decodeCanonicalJsonValue(recordsRow.records_json),
+      "Portal runtime records",
+    );
+    for (const lifecycle of runtimeLifecycleRecords(records)) {
+      const phase = requiredJsonRecord(lifecycle.phase, "Portal lifecycle phase");
+      const key = generationKey(
+        requiredStringField(phase.phaseId, "lifecycle phaseId"),
+        requiredPositiveIntegerField(phase.definitionGeneration, "lifecycle definitionGeneration"),
+      );
+      const candidate = optionalJsonRecord(lifecycle.candidate);
+      const policy = optionalJsonRecord(lifecycle.approvalPolicy);
+      const assessments = Array.isArray(lifecycle.assessments) ? lifecycle.assessments : [];
+      const prior = lifecycles.get(key);
+      lifecycles.set(key, {
+        closed: (prior?.closed ?? false) || optionalJsonRecord(lifecycle.closure) !== undefined,
+        awaitingApproval:
+          (prior?.awaitingApproval ?? false) ||
+          (candidate !== undefined &&
+            optionalJsonRecord(lifecycle.authorityDecision) === undefined &&
+            policy?.policy === "approval-required"),
+        started: (prior?.started ?? false) || candidate !== undefined || assessments.length > 0,
+      });
+      for (const entry of assessments) {
+        const assessment = requiredJsonRecord(
+          requiredJsonRecord(entry, "Portal accepted assessment").assessment,
+          "Portal accounting assessment",
+        );
+        const submission = requiredJsonRecord(
+          assessment.submission,
+          "Portal completion submission",
+        );
+        const task = requiredJsonRecord(submission.task, "Portal completion task");
+        acceptedTasks.set(
+          generationKey(
+            requiredStringField(task.taskId, "assessment taskId"),
+            requiredPositiveIntegerField(
+              task.definitionGeneration,
+              "assessment definitionGeneration",
+            ),
+          ),
+          requiredStringField(submission.disposition, "assessment disposition"),
+        );
+        for (const outcome of Array.isArray(submission.criteria) ? submission.criteria : []) {
+          const record = requiredJsonRecord(outcome, "Portal criterion outcome");
+          criterionOutcomes.set(
+            requiredStringField(record.criterionId, "criterion outcome criterionId"),
+            requiredStringField(record.disposition, "criterion outcome disposition"),
+          );
+        }
+        for (const attachment of Array.isArray(submission.evidence) ? submission.evidence : []) {
+          const criterionId = requiredJsonRecord(
+            attachment,
+            "Portal evidence attachment",
+          ).criterionId;
+          if (typeof criterionId !== "string") continue;
+          criterionEvidence.set(criterionId, (criterionEvidence.get(criterionId) ?? 0) + 1);
+        }
+      }
+    }
+    return { lifecycles, acceptedTasks, criterionOutcomes, criterionEvidence };
+  }
+
+  #runScopedNeedCount(runKey: string, mode: RunControlMode): number {
+    const escalations =
+      this.#database
+        .prepare<[string], { total: number }>(
+          `SELECT COUNT(*) AS total FROM runner_escalations e
+           LEFT JOIN runner_allowance_resolutions r ON r.escalation_command_id = e.command_id
+           WHERE e.run_key = ? AND r.escalation_command_id IS NULL`,
+        )
+        .get(runKey)?.total ?? 0;
+    const amendments =
+      this.#database
+        .prepare<[string], { total: number }>(
+          `SELECT COUNT(*) AS total FROM amendment_proposals p
+           LEFT JOIN amendment_decisions d ON d.amendment_id = p.amendment_id
+           LEFT JOIN amendment_applications a ON a.amendment_id = p.amendment_id
+           LEFT JOIN amendment_withdrawals w ON w.amendment_id = p.amendment_id
+           WHERE p.run_key = ? AND w.amendment_id IS NULL AND d.decision IS NOT 'reject'
+             AND (d.decision IS NULL OR a.application_digest IS NULL)`,
+        )
+        .get(runKey)?.total ?? 0;
+    if (mode !== "ending") return escalations + amendments;
+    const uncertain =
+      this.#database
+        .prepare<[string], { total: number }>(
+          `SELECT COUNT(*) AS total FROM runner_effect_intents i
+           LEFT JOIN runner_effect_outcomes o ON o.intent_id = i.intent_id
+             AND o.commit_cursor = (
+               SELECT MAX(next.commit_cursor) FROM runner_effect_outcomes next
+               WHERE next.intent_id = i.intent_id
+             )
+           WHERE i.run_key = ? AND (o.status IS NULL OR o.status IN ('active', 'unknown'))`,
+        )
+        .get(runKey)?.total ?? 0;
+    return escalations + amendments + (uncertain > 0 ? 1 : 0);
+  }
+
   #syncVector(repositoryId: string, runId: string, graphRevision: string): PortalSyncVector {
     const row = this.#database
       .prepare<
@@ -4858,6 +5166,71 @@ function validatePortalLimit(limit: number, maximum: number): void {
       `Portal page limit must be a positive safe integer no greater than ${maximum}`,
     );
   }
+}
+
+interface PortalNodeStatus {
+  readonly runState: PortalGraphNodeRunState;
+  readonly humanNeedCount: number;
+  readonly evidenceCount: number;
+  readonly attempt?: number;
+  readonly roleKey?: string;
+}
+
+interface PortalPhaseAttemptRow {
+  readonly phase_id: string;
+  readonly definition_generation: number;
+  readonly attempt_ordinal: number;
+  readonly disposition: string | null;
+}
+
+interface PortalPhaseAttemptFacts {
+  readonly latestAttempt: number;
+  readonly latestDisposition: string | null;
+  readonly closed: boolean;
+}
+
+interface PortalPhaseLifecycleFacts {
+  readonly closed: boolean;
+  readonly awaitingApproval: boolean;
+  readonly started: boolean;
+}
+
+interface PortalRuntimeNodeFacts {
+  readonly lifecycles: ReadonlyMap<string, PortalPhaseLifecycleFacts>;
+  readonly acceptedTasks: ReadonlyMap<string, string>;
+  readonly criterionOutcomes: ReadonlyMap<string, string>;
+  readonly criterionEvidence: ReadonlyMap<string, number>;
+}
+
+interface PortalGenerationCountRow {
+  readonly id: string | null;
+  readonly generation: number | null;
+  readonly total: number;
+}
+
+interface PortalTaskDispatchRow {
+  readonly task_id: string | null;
+  readonly generation: number | null;
+  readonly role_key: string | null;
+}
+
+const NOT_STARTED_NODE_STATUS: PortalNodeStatus = Object.freeze({
+  runState: "not-started",
+  humanNeedCount: 0,
+  evidenceCount: 0,
+});
+
+function generationKey(id: string, generation: number): string {
+  return `${id}@${generation}`;
+}
+
+function generationCounts(rows: readonly PortalGenerationCountRow[]): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    if (row.id === null || row.generation === null) continue;
+    counts.set(generationKey(row.id, row.generation), row.total);
+  }
+  return counts;
 }
 
 function requiredJsonRecord(
