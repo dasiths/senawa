@@ -4,6 +4,7 @@ import { isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CONFIGURATION_SNAPSHOT_API_VERSION,
+  type ConfigurationRegistryEntry,
   type ConfigurationSnapshot,
   compileWorkflowConfiguration,
   validateSchemaInstance,
@@ -15,7 +16,10 @@ import {
 } from "@senawa/execution-host";
 import {
   type AccountingAssessment,
+  type AssetSensitivity,
+  approvalId,
   assessCompletionAccounting,
+  type CanonicalValue,
   canonicalDigest,
   canonicalValue,
   closePhase,
@@ -27,6 +31,7 @@ import {
   createSensorReading,
   createWorkerContextBase,
   createWorkerDispatch,
+  type DataMappingDeclaration,
   definitionGeneration,
   deriveCompletionRequirements,
   digestAccountingAssessment,
@@ -35,8 +40,12 @@ import {
   evaluateGate,
   evaluateTaskFrontier,
   type FanOutEvaluation,
+  type GateDefinition,
+  type MappingSourceBinding,
   type PhaseOutputAcceptance,
+  type PhaseOutputPublication,
   runId,
+  type Sha256Digest,
   sha256Digest,
 } from "@senawa/kernel";
 import { canonicalBytes, decodeCanonicalJsonValue, PROTOCOL_VERSION } from "@senawa/protocol";
@@ -48,13 +57,14 @@ import {
   type EffectInspection,
   type EffectIntent,
   type EffectObservation,
+  type GeneratedTaskAuthorityTemplate,
   PlanImportCoordinator,
   RuntimeDataflowAuthority,
   type RuntimeDependencies,
   renderPromptPack,
 } from "@senawa/runtime";
 import {
-  SqliteAuthority,
+  type SqliteAuthority,
   SqliteCanonicalJsonAssetStore,
   SqliteContextBroker,
   SqlitePortalQueryAuthority,
@@ -250,12 +260,11 @@ describe("Phase 14F standard delivery acceptance", () => {
           promptDigests,
         }),
       );
-      const planValue = canonicalValue({
-        tasks: [
-          { id: "alpha", title: "Create alpha", instruction: "Write alpha.txt", dependsOn: [] },
-          { id: "beta", title: "Create beta", instruction: "Write beta.txt", dependsOn: ["alpha"] },
-        ],
-      });
+      const planTasks = [
+        { id: "alpha", title: "Create alpha", instruction: "Write alpha.txt", dependsOn: [] },
+        { id: "beta", title: "Create beta", instruction: "Write beta.txt", dependsOn: ["alpha"] },
+      ];
+      const planValue = canonicalValue({ tasks: planTasks });
       const plan = closeAgentPhase({
         supervisor,
         dataflow,
@@ -273,19 +282,19 @@ describe("Phase 14F standard delivery acceptance", () => {
       accepted.set("plan", plan);
       expect([...promptDigests.keys()]).toEqual(["define", "research", "plan"]);
 
+      const planAcceptance = required(plan.acceptance);
+      const planPublication = required(plan.publication);
       const evaluation = evaluatePlan(
         snapshot,
         plan.attempt.attempt.attemptDigest,
-        plan.acceptance,
+        planAcceptance,
         planValue,
       );
       const reordered = evaluatePlan(
         snapshot,
         plan.attempt.attempt.attemptDigest,
-        plan.acceptance,
-        canonicalValue({
-          tasks: [...(planValue.tasks as unknown as readonly unknown[])].reverse(),
-        }),
+        planAcceptance,
+        canonicalValue({ tasks: [...planTasks].reverse() }),
       );
       expect(reordered.evaluationDigest).toBe(evaluation.evaluationDigest);
       expect(reordered.taskSetDigest).toBe(evaluation.taskSetDigest);
@@ -299,7 +308,7 @@ describe("Phase 14F standard delivery acceptance", () => {
             evaluationDigest: evaluation.evaluationDigest,
             diffDigest: compareFanOutEvaluations(evaluation, undefined, deterministicSha256)
               .diffDigest,
-            acceptanceDigest: plan.acceptance.acceptanceDigest,
+            acceptanceDigest: planAcceptance.acceptanceDigest,
           },
           baseGraph: snapshot.graph,
           baseContextDigest: plan.attempt.inputBinding.bindingDigest,
@@ -332,8 +341,8 @@ describe("Phase 14F standard delivery acceptance", () => {
       const importRequest = {
         evaluation,
         phaseAttempt: plan.attempt.attempt,
-        publication: plan.publication,
-        acceptance: plan.acceptance,
+        publication: planPublication,
+        acceptance: planAcceptance,
         expectedClosureDigest: plan.closureDigest,
         expectedDefinitionDigest: required(snapshot.forEach.find(({ key }) => key === "plan-tasks"))
           .digest,
@@ -429,8 +438,15 @@ describe("Phase 14F standard delivery acceptance", () => {
       });
       expect(production.order).toEqual(["alpha", "beta"]);
       expect(production.reworks).toBe(1);
-      expect(production.sdkAdapterConstructions).toBe(0);
-      expect(production.modelInvocations).toBe(0);
+      expect(production.gitHostConstructions).toBe(0);
+      expect(production.workerHostConstructions).toBeGreaterThan(0);
+
+      // The implementation service owns and closes the authority it scheduled through.
+      supervisor = new SqliteSupervisorAuthority({
+        databasePath: fixture.databasePath,
+        assetDirectory: fixture.assetDirectory,
+        dependencies,
+      });
       const implementation = closeTaskPhase(
         supervisor,
         resultSnapshot,
@@ -439,7 +455,9 @@ describe("Phase 14F standard delivery acceptance", () => {
         true,
       );
       accepted.set("implement", implementation);
-      expect(supervisor.queryProjection(REPOSITORY_ID, RUN_ID)?.payload).toMatchObject({
+      expect(
+        supervisor.commandAuthority.queryProjection(REPOSITORY_ID, RUN_ID)?.payload,
+      ).toMatchObject({
         status: "closed",
       });
 
@@ -482,11 +500,13 @@ describe("Phase 14F standard delivery acceptance", () => {
           outputSource(plan, planValue),
         ],
         promptDigests,
-        finalAuthority: true,
       });
       accepted.set("verify", verify);
       expect(promptDigests.get("verify")).toBeDefined();
-      expect(supervisor.queryProjection(REPOSITORY_ID, RUN_ID)?.payload).toMatchObject({
+      expect(verify.closureDigest).toBeDefined();
+      expect(
+        supervisor.commandAuthority.queryProjection(REPOSITORY_ID, RUN_ID)?.payload,
+      ).toMatchObject({
         status: "closed",
       });
       supervisor.close();
@@ -502,17 +522,15 @@ describe("Phase 14F standard delivery acceptance", () => {
         dependencies,
       });
       const delivery = portal.listDeliveryRecords(REPOSITORY_ID, RUN_ID, 0, 256);
-      expect(
-        new Set(delivery.records.map(({ kind }) => kind)).toEqual(
-          new Set([
-            "phase-attempt",
-            "phase-transition",
-            "phase-output",
-            "fan-out-evaluation",
-            "generated-task",
-            "plan-import",
-          ]),
-        ),
+      expect(new Set(delivery.records.map(({ kind }) => kind))).toEqual(
+        new Set([
+          "phase-attempt",
+          "phase-transition",
+          "phase-output",
+          "fan-out-evaluation",
+          "generated-task",
+          "plan-import",
+        ]),
       );
       expect(delivery.records.filter(({ kind }) => kind === "phase-attempt")).toHaveLength(5);
       expect(delivery.records.filter(({ kind }) => kind === "phase-output")).not.toContainEqual(
@@ -556,7 +574,9 @@ describe("Phase 14F standard delivery acceptance", () => {
       ]) {
         expect(serializedReport).not.toContain(secret);
       }
-      expect(reopened.queryProjection(REPOSITORY_ID, RUN_ID)?.payload).toMatchObject({
+      expect(
+        reopened.commandAuthority.queryProjection(REPOSITORY_ID, RUN_ID)?.payload,
+      ).toMatchObject({
         status: "closed",
       });
       reopened.close();
@@ -579,17 +599,96 @@ interface AcceptedPhase {
   readonly attempt: ReturnType<RuntimeDataflowAuthority["startPhaseAttempt"]>;
   readonly publication?: ReturnType<RuntimeDataflowAuthority["publishPhaseOutput"]>;
   readonly acceptance?: PhaseOutputAcceptance;
-  readonly closureDigest: string;
+  readonly closureDigest: Sha256Digest;
+}
+
+interface AcceptedAssessment {
+  readonly assessment: AccountingAssessment;
+  readonly assessmentDigest: Sha256Digest;
+}
+
+interface SnapshotGate {
+  readonly key: string;
+  readonly phase: string;
+  readonly definition: GateDefinition;
+}
+
+type ContextBudgets = ReturnType<typeof createWorkerContextBase>["budgets"];
+
+interface SnapshotPhase {
+  readonly key: string;
+  readonly dependsOn?: readonly string[];
+  readonly input: {
+    readonly schema: string;
+    readonly mappings: readonly DataMappingDeclaration[];
+  };
+  readonly executor: CanonicalValue & { readonly budgets: ContextBudgets };
+  readonly outputs: readonly {
+    readonly key: string;
+    readonly schema: string;
+    readonly maxBytes: number;
+    readonly sensitivity: AssetSensitivity;
+  }[];
+}
+
+interface SnapshotAgentRole {
+  readonly key: string;
+  readonly capabilities: readonly string[];
+  readonly prompt: string;
+  readonly modelPolicy: string;
+}
+
+interface SnapshotEvidenceView {
+  readonly key: string;
+  readonly phase: string;
+}
+
+interface SnapshotForEach {
+  readonly key: string;
+  readonly pointer: string;
+  readonly identityPointer: string;
+  readonly limits: Parameters<typeof evaluateTaskFrontier>[0]["limits"];
+}
+
+interface SnapshotTaskTemplate {
+  readonly key: string;
+  readonly generation: number;
+  readonly budgets: ContextBudgets;
+  readonly inputSchema: string;
+  readonly inputMappings: readonly DataMappingDeclaration[];
+  readonly dependencyIdentityPointer: string;
+  readonly completionPolicy: {
+    readonly criteria: GeneratedTaskAuthorityTemplate["criteria"];
+    readonly evidencePolicy: GeneratedTaskAuthorityTemplate["evidencePolicy"];
+  };
+}
+
+interface GeneratedSeed {
+  readonly member: FanOutEvaluation["members"][number];
+  readonly context: ReturnType<typeof createWorkerContextBase>;
+  readonly dispatch: ReturnType<typeof createWorkerDispatch>;
+  readonly completionRequirements: ReturnType<typeof deriveCompletionRequirements>[number];
+  readonly taskScope: {
+    readonly runId: string;
+    readonly taskId: string;
+    readonly definitionGeneration: number;
+    readonly acceptedContextDigest: Sha256Digest;
+    readonly fenceGeneration: number;
+  };
+}
+
+function effectDispatchId(intent: EffectIntent): string {
+  return String((intent.command.input as { readonly dispatchId?: unknown }).dispatchId);
 }
 
 function startPhase(
   dataflow: RuntimeDataflowAuthority,
   snapshot: ConfigurationSnapshot,
   phaseKey: string,
-  sourceBindings: readonly any[],
+  sourceBindings: readonly MappingSourceBinding[],
 ) {
   const phase = phaseNode(snapshot, phaseKey);
-  const declaration = registry(snapshot.phaseDataflow, phaseKey) as any;
+  const declaration = phaseDeclaration(snapshot, phaseKey);
   return dataflow.startPhaseAttempt({
     repositoryId: REPOSITORY_ID,
     runId: RUN_ID,
@@ -613,16 +712,16 @@ function startPhase(
     mappings: declaration.input.mappings,
     sourceBindings,
     mappingPolicy: {
-      dependencyPhases: declaration.dependsOn.map(consumerKey),
-      declaredPhaseOutputs: snapshot.phaseDataflow.flatMap(({ value }: any) =>
-        value.outputs.map(({ key }: any) => ({
-          phase: consumerKey(value.key),
+      dependencyPhases: (declaration.dependsOn ?? []).map(consumerKey),
+      declaredPhaseOutputs: snapshot.phaseDataflow.flatMap((entry) =>
+        registryValue<SnapshotPhase>(entry).outputs.map(({ key }) => ({
+          phase: consumerKey(registryValue<SnapshotPhase>(entry).key),
           output: consumerKey(key),
         })),
       ),
-      implementationEvidenceViews: snapshot.implementationEvidenceViews.map(({ value }: any) => ({
-        phase: consumerKey(value.phase),
-        view: consumerKey(value.key),
+      implementationEvidenceViews: snapshot.implementationEvidenceViews.map((entry) => ({
+        phase: consumerKey(registryValue<SnapshotEvidenceView>(entry).phase),
+        view: consumerKey(registryValue<SnapshotEvidenceView>(entry).key),
       })),
       allowCurrentItem: false,
     },
@@ -637,7 +736,7 @@ function closeAgentPhase(input: {
   readonly phaseKey: string;
   readonly outputName: string;
   readonly outputValue: ReturnType<typeof canonicalValue>;
-  readonly sources: readonly any[];
+  readonly sources: readonly MappingSourceBinding[];
   readonly promptDigests: Map<string, string>;
   readonly finalAuthority?: boolean;
 }): AcceptedPhase {
@@ -663,10 +762,10 @@ function closeAgentPhase(input: {
           ? "verifier"
           : "definer",
   );
-  const roleValue = role.value as any;
+  const roleValue = registryValue<SnapshotAgentRole>(role);
   const prompt = required(input.snapshot.prompts.find(({ key }) => key === roleValue.prompt));
   const model = registryEntry(input.snapshot.modelPolicies, roleValue.modelPolicy);
-  const declaration = registry(input.snapshot.phaseDataflow, input.phaseKey) as any;
+  const declaration = phaseDeclaration(input.snapshot, input.phaseKey);
   const context = createWorkerContextBase(
     {
       task: contextTask,
@@ -701,7 +800,7 @@ function closeAgentPhase(input: {
       phaseAttempt: started.attempt,
       phaseInputBinding: started.inputBinding,
       phaseOutputDeclarations: declaration.outputs.map(
-        ({ key, schema, maxBytes, sensitivity }: any) => ({
+        ({ key, schema, maxBytes, sensitivity }) => ({
           outputName: consumerKey(key),
           schemaKey: consumerKey(schema),
           schemaResourceDigest: runtimeSchemaContract(input.snapshot, schema, deterministicSha256)
@@ -748,7 +847,7 @@ function closeAgentPhase(input: {
   const asset = input.assets.install(input.outputValue);
   const schema = runtimeSchemaContract(
     input.snapshot,
-    declaration.outputs[0].schema,
+    required(declaration.outputs[0]).schema,
     deterministicSha256,
   );
   const validationReceiptDigest = canonicalDigest(
@@ -846,7 +945,7 @@ function closeTaskPhase(
   supervisor: SqliteSupervisorAuthority,
   snapshot: ConfigurationSnapshot,
   started: ReturnType<RuntimeDataflowAuthority["startPhaseAttempt"]>,
-  assessments: readonly { assessment: AccountingAssessment; assessmentDigest: string }[],
+  assessments: readonly AcceptedAssessment[],
   finalAuthority = false,
 ): AcceptedPhase {
   return closePhaseAuthority(supervisor, snapshot, started, [], assessments, finalAuthority);
@@ -856,8 +955,8 @@ function closePhaseAuthority(
   supervisor: SqliteSupervisorAuthority,
   snapshot: ConfigurationSnapshot,
   started: ReturnType<RuntimeDataflowAuthority["startPhaseAttempt"]>,
-  publications: readonly any[],
-  assessments: readonly any[],
+  publications: readonly PhaseOutputPublication[],
+  assessments: readonly AcceptedAssessment[],
   finalAuthority = false,
 ): AcceptedPhase {
   const phase = required(
@@ -866,11 +965,13 @@ function closePhaseAuthority(
     ),
   );
   if (phase.kind !== "phase") throw new Error("Phase missing");
-  const tasks = assessments.map(({ assessment }: any) => assessment.submission.task);
+  const tasks = assessments.map(({ assessment }) => assessment.submission.task);
   const gateEntry = required(
-    snapshot.gates.find(({ value }: any) => value.phase === phase.definition.key),
+    snapshot.gates.find(
+      (entry) => registryValue<SnapshotGate>(entry).phase === phase.definition.key,
+    ),
   );
-  const gate = (gateEntry.value as any).definition;
+  const gate = registryValue<SnapshotGate>(gateEntry).definition;
   const candidate = createPhaseCandidate(
     {
       phase: { phaseId: phase.definition.id, definitionGeneration: phase.definition.generation },
@@ -901,7 +1002,7 @@ function closePhaseAuthority(
   const decision = createAuthorityDecision(
     {
       decision: "approve",
-      approvalId: `approval_${phase.definition.key}`,
+      approvalId: approvalId(`approval_${phase.definition.key}`),
       principal: runtimePrincipal,
       occurredAt: NOW,
       candidateDigest: candidate.candidateDigest,
@@ -939,7 +1040,7 @@ function closePhaseAuthority(
       submit(
         supervisor,
         runtimeCommand({
-          commandId: "command_standard-verify-gate",
+          commandId: `command_standard-${phase.definition.key}-gate`,
           intent: "evaluate-gate",
           payload: {
             phase: candidate.phase,
@@ -960,7 +1061,7 @@ function closePhaseAuthority(
       submit(
         supervisor,
         runtimeCommand({
-          commandId: "command_standard-verify-approve",
+          commandId: `command_standard-${phase.definition.key}-approve`,
           intent: "record-authority-decision",
           payload: { decision: "approve" },
           expectedGraphRevision: snapshot.graph.revisionDigest,
@@ -972,7 +1073,7 @@ function closePhaseAuthority(
       submit(
         supervisor,
         runtimeCommand({
-          commandId: "command_standard-verify-close",
+          commandId: `command_standard-${phase.definition.key}-close`,
           intent: "close-phase",
           payload: {},
           expectedGraphRevision: snapshot.graph.revisionDigest,
@@ -984,8 +1085,10 @@ function closePhaseAuthority(
   return {
     phaseKey: String(phase.definition.key),
     attempt: started,
-    publication: publications[0],
-    acceptance: closure.outputAcceptances[0],
+    ...(publications[0] === undefined ? {} : { publication: publications[0] }),
+    ...(closure.outputAcceptances[0] === undefined
+      ? {}
+      : { acceptance: closure.outputAcceptances[0] }),
     closureDigest: closure.closureDigest,
   };
 }
@@ -1005,8 +1108,8 @@ function evaluatePlan(
   );
   const template = registryEntry(snapshot.taskTemplates, "implementation");
   const implement = phaseNode(snapshot, "implement");
-  const definitionValue = definition.value as any;
-  const templateValue = template.value as any;
+  const definitionValue = registryValue<SnapshotForEach>(definition);
+  const templateValue = registryValue<SnapshotTaskTemplate>(template);
   const schemas = new Map([
     [itemSchema.schemaResourceDigest, itemSchema],
     [collectionSchema.schemaResourceDigest, collectionSchema],
@@ -1070,7 +1173,7 @@ function evaluatePlan(
 
 function generatedAuthorityTemplate(snapshot: ConfigurationSnapshot) {
   const entry = registryEntry(snapshot.taskTemplates, "implementation");
-  const value = entry.value as any;
+  const value = registryValue<SnapshotTaskTemplate>(entry);
   return {
     templateDigest: entry.digest,
     binding: entry.value,
@@ -1201,7 +1304,9 @@ async function runGeneratedImplementation(input: {
         phaseInputBinding: input.attempt.inputBinding,
         phaseOutputDeclarations: [],
         capabilities: GENERATED_WORKER_CAPABILITIES,
-        budgets: (registry(input.snapshot.taskTemplates, "implementation") as any).budgets,
+        budgets: registryValue<SnapshotTaskTemplate>(
+          registryEntry(input.snapshot.taskTemplates, "implementation"),
+        ).budgets,
       },
       deterministicSha256,
     );
@@ -1266,13 +1371,19 @@ async function runGeneratedImplementation(input: {
     input.fixture.repositoryRoot,
     input.snapshot,
   );
+  let workerHostConstructions = 0;
+  let gitHostConstructions = 0;
   const dynamic = new DynamicWorkspaceEffectHost({
     authority: input.supervisor,
     workspaceAuthority: workspace,
     repositoryRoot: input.fixture.repositoryRoot,
     hostWriterCapacity: 1,
-    createWorkerHost: () => worker,
+    createWorkerHost: () => {
+      workerHostConstructions += 1;
+      return worker;
+    },
     createGitHost: async () => {
+      gitHostConstructions += 1;
       throw new Error("Repository-mode acceptance must not construct a Git workspace host");
     },
   });
@@ -1312,7 +1423,8 @@ async function runGeneratedImplementation(input: {
   const assessments = input.supervisor.commandAuthority
     .queryReceiptHistory(REPOSITORY_ID, RUN_ID)
     .flatMap((receipt) => {
-      const assessment = (receipt.result as any)?.assessment as AccountingAssessment | undefined;
+      const result = receipt.result as { readonly assessment?: AccountingAssessment } | undefined;
+      const assessment = result?.assessment;
       return assessment === undefined
         ? []
         : [
@@ -1325,62 +1437,6 @@ async function runGeneratedImplementation(input: {
     .filter(({ assessment }) =>
       input.evaluation.members.some(({ taskId }) => taskId === assessment.submission.task.taskId),
     );
-  if (assessments.length !== 2) {
-    console.log("DEBUG order", worker.order, "reworks", worker.reworks);
-    console.log("DEBUG runs", scheduler.listRuns());
-    console.log(
-      "DEBUG fresh",
-      scheduler.listFreshDispatchRequirements(REPOSITORY_ID, RUN_ID).length,
-    );
-    console.log(
-      "DEBUG runtime",
-      input.supervisor.commandAuthority.queryRunScheduling(REPOSITORY_ID, RUN_ID) === undefined,
-      input.supervisor.commandAuthority.queryRunExecution(REPOSITORY_ID, RUN_ID) === undefined,
-    );
-    console.log(
-      "DEBUG dispatches",
-      broker.listWorkerDispatches(REPOSITORY_ID, RUN_ID).length,
-      broker.authority.snapshot().taskScopes.length,
-    );
-    const runtimeSnapshot = input.supervisor.commandAuthority.queryRunScheduling(
-      REPOSITORY_ID,
-      RUN_ID,
-    );
-    console.log(
-      "DEBUG graph tasks",
-      runtimeSnapshot?.graph.nodes
-        .filter((node) => node.kind === "task")
-        .map((node) => `${node.definition.id}@${node.definition.generation}`),
-    );
-    console.log(
-      "DEBUG scopes",
-      broker.authority
-        .snapshot()
-        .taskScopes.map(
-          (scope: any) =>
-            `${scope.taskId}@${scope.definitionGeneration} claims=${scope.claimsAccepted} fence=${scope.fenceGeneration}`,
-        ),
-    );
-    console.log(
-      "DEBUG stored",
-      broker
-        .listWorkerDispatches(REPOSITORY_ID, RUN_ID)
-        .map(
-          (stored: any) =>
-            `${stored.dispatch.task.taskId}@${stored.dispatch.task.definitionGeneration} effect=${stored.effect !== undefined} ctx=${stored.context.contextDigest === stored.taskScope.acceptedContextDigest}`,
-        ),
-    );
-    console.log(
-      "DEBUG seeds",
-      seeds.map(({ member }) => member.taskId),
-    );
-    console.log(
-      "DEBUG receipts",
-      input.supervisor.commandAuthority
-        .queryReceiptHistory(REPOSITORY_ID, RUN_ID)
-        .map((receipt) => `${receipt.status}:${JSON.stringify((receipt as any).error ?? "")}`),
-    );
-  }
   expect(assessments).toHaveLength(2);
   await service.stop();
   broker.close();
@@ -1390,8 +1446,8 @@ async function runGeneratedImplementation(input: {
     order: worker.order,
     reworks: worker.reworks,
     assessments,
-    sdkAdapterConstructions: 0,
-    modelInvocations: 0,
+    workerHostConstructions,
+    gitHostConstructions,
   };
 }
 
@@ -1402,20 +1458,12 @@ class GeneratedWorkers implements AsyncEffectHost {
   constructor(
     readonly broker: SqliteContextBroker,
     readonly authority: SqliteAuthority,
-    readonly seeds: readonly any[],
+    readonly seeds: readonly GeneratedSeed[],
     readonly root: string,
     readonly snapshot: ConfigurationSnapshot,
   ) {}
   async dispatch(intent: EffectIntent): Promise<EffectObservation> {
-    try {
-      return await this.#dispatch(intent);
-    } catch (error) {
-      console.log("DEBUG dispatch failure", error);
-      throw error;
-    }
-  }
-  async #dispatch(intent: EffectIntent): Promise<EffectObservation> {
-    const dispatchId = String((intent.command.input as any).dispatchId);
+    const dispatchId = String(effectDispatchId(intent));
     const seed = required(this.seeds.find(({ dispatch }) => dispatch.dispatchId === dispatchId));
     if (!this.completed.has(dispatchId)) {
       const identity = seed.member.identity;
@@ -1477,7 +1525,7 @@ class GeneratedWorkers implements AsyncEffectHost {
               task: seed.dispatch.task,
               disposition: "completed",
               summary: `Completed generated ${identity}`,
-              criteria: seed.completionRequirements.criteria.map(({ criterionId }: any) => ({
+              criteria: seed.completionRequirements.criteria.map(({ criterionId }) => ({
                 criterionId,
                 disposition: "satisfied",
               })),
@@ -1503,9 +1551,7 @@ class GeneratedWorkers implements AsyncEffectHost {
   }
   async inspect(intent: EffectIntent): Promise<EffectInspection> {
     return {
-      status: this.completed.has(String((intent.command.input as any).dispatchId))
-        ? "completed"
-        : "missing",
+      status: this.completed.has(String(effectDispatchId(intent))) ? "completed" : "missing",
       observedAt: NOW,
     };
   }
@@ -1519,7 +1565,7 @@ function outputSource(phase: AcceptedPhase, value: ReturnType<typeof canonicalVa
     source: {
       kind: "phase-output" as const,
       phase: consumerKey(phase.phaseKey),
-      output: consumerKey((phase.publication as any).outputName),
+      output: consumerKey(required(phase.publication).outputName),
     },
     sourceBindingDigest: required(phase.acceptance).acceptanceDigest,
     acceptanceDigest: required(phase.acceptance).acceptanceDigest,
@@ -1537,11 +1583,19 @@ function phaseNode(snapshot: ConfigurationSnapshot, key: string) {
   return node;
 }
 
-function registry(entries: ConfigurationSnapshot["phaseDataflow"], key: string) {
-  return registryEntry(entries, key).value;
-}
-function registryEntry(entries: readonly { key: string; value: any; digest: any }[], key: string) {
+function registryEntry(
+  entries: readonly ConfigurationRegistryEntry[],
+  key: string,
+): ConfigurationRegistryEntry {
   return required(entries.find((entry) => entry.key === key));
+}
+
+function registryValue<T>(entry: ConfigurationRegistryEntry): T {
+  return entry.value as unknown as T;
+}
+
+function phaseDeclaration(snapshot: ConfigurationSnapshot, key: string): SnapshotPhase {
+  return registryValue<SnapshotPhase>(registryEntry(snapshot.phaseDataflow, key));
 }
 
 function submit(supervisor: SqliteSupervisorAuthority, command: ReturnType<typeof runtimeCommand>) {

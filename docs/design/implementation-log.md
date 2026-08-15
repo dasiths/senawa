@@ -7936,6 +7936,107 @@ No commit or push was performed, as required for Phase 14E and Phase 14F.
   its temporary lint diagnostics remain, and Phase 14G through Phase 14J are
   unchecked.
 
+## Decision D-090: Bind one command lifecycle phase per run and link applied plan imports
+
+* Date: 2026-08-15
+* Status: Accepted for Phase 14F
+* Phase: Phase 14
+* Decision: The alpha runtime keeps exactly one command-driven lifecycle phase
+  per run, established at `instantiate-run`. The consolidated standard-delivery
+  acceptance journey binds that phase to `implement`, because generated fan-out
+  tasks are the work that must prove production dispatch, durable completion
+  admission, gate evaluation, human approval, and closure through protocol
+  commands. Define, research, plan, and verify continue to close through kernel
+  candidate, gate, approval, and closure records in the fixture. Applying an
+  approved amendment now links its originating plan import inside the same
+  command transaction, so the durable import state reaches `applied`.
+* Alternatives: Add a phase-selection command; keep `verify` as the run
+  lifecycle phase and bypass the completion bridge for generated tasks; leave
+  `markFanOutEvaluationApplied` uncalled and weaken the delivery assertion.
+* Rationale: A worker context must bind one exact graph revision, and generated
+  tasks exist only in the post-import revision. Proving the production path for
+  those tasks is the highest-value evidence in this journey. Plan-import applied
+  linkage already existed as durable schema and a public method, but no
+  composition called it, so the portal and reporting delivery ledger could never
+  observe an applied import.
+* Consequence: The implement phase attempt starts after the reviewed amendment
+  applies, against the result snapshot. Verify closure remains kernel authority
+  in this fixture. A future multi-phase command lifecycle needs its own phase
+  transition contract; nothing in this decision creates one.
+
+## Phase 14F acceptance repair
+
+### Decisions
+
+* D-090 records the single command lifecycle phase and the applied plan-import
+  linkage.
+* Worker context capabilities are protocol worker capabilities such as
+  `worker.submit.asset`, not consumer role capabilities such as
+  `implement-task`. The generated implementation seeds now carry the exact
+  capabilities their submissions require.
+
+### Repairs
+
+* The implement phase attempt is created after the approved amendment applies,
+  bound to the post-import graph revision and configuration snapshot. This
+  resolves the recorded `ContextError: Phase attempt and input binding do not
+  match the worker context` blocker without weakening
+  `createWorkerContextBase` validation.
+* The journey reopens `SqliteSupervisorAuthority` after each `SupervisorService`
+  stop, because the service owns and closes the authority it scheduled through.
+* `SqliteAuthority.submit` links the originating plan import when
+  `apply-approved-amendment` completes. `markFanOutEvaluationApplied` retains
+  its public transaction wrapper over the extracted internal update.
+* Run projections are read through `commandAuthority.queryProjection`, and the
+  delivery-kind assertion compares sets instead of nesting `toEqual` inside
+  `expect`.
+* Temporary `any` annotations were replaced with exact configuration snapshot
+  view types, kernel mapping and publication types, and runtime template types.
+  No lint rule was suppressed.
+* Pre-existing Biome formatting drift in `packages/execution-host/tsconfig.json`
+  and `packages/storage-sqlite/tsconfig.json` was corrected so the repository
+  lint gate passes.
+* The journey previously returned hardcoded zero `sdkAdapterConstructions` and
+  `modelInvocations` values, so those assertions could not fail. They are
+  replaced with observed worker and Git host construction counts from the
+  production composition factories.
+
+### Validation
+
+Passed on 2026-08-15:
+
+* Consolidated Phase 14F acceptance: 1 test
+* Root build, including staged standard template, portal assets, and both
+  native helpers
+* Clean workspace typecheck
+* Biome check across 277 files with 30 intentional prompt-template warnings and
+  no errors
+* Complete offline suite: 94 files and 1,215 tests passed; one opt-in live SDK
+  file and test skipped
+* Complete browser matrix: 15 Chromium desktop, mobile, and journey tests
+* Architecture boundaries across 439 source files
+* Documentation links across 24 Markdown files
+* `git diff --check`
+
+### Review
+
+Independent Phase 14J review remains outstanding. The transient
+`delivery-mobile.png` capture produced by the browser run was restored to its
+committed bytes because its Delivery ledger content is unchanged and screenshots
+are not pixel-diff baselines.
+
+### Remaining risks
+
+* Phase 14G through Phase 14J remain unstarted. Structured agent output, its SDK
+  feedback probe, the production-enhancements log, and final independent review
+  are still required before Phase 14 delivery.
+* The journey's `reworks` counter records one observed schema rejection inside
+  the deterministic worker, not a durable rework attempt. A bounded rework cycle
+  through runner authority remains covered only by focused suites.
+* Verification closure is proven through kernel candidate, gate, approval, and
+  closure records rather than protocol commands, because the run binds its one
+  command lifecycle phase to `implement`.
+
 ## Entry template
 
 ```markdown

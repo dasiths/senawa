@@ -954,6 +954,7 @@ export class SqliteAuthority
           this.#fault("after-amendment-fences");
         }
         if (command.intent.type === "apply-approved-amendment" && receipt.status === "completed") {
+          linkAppliedPlanImport(this.#database, receipt.result);
           this.#fault("after-amendment-application");
         }
         if (command.intent.type === "instantiate-run" && receipt.status === "completed") {
@@ -1911,43 +1912,7 @@ export class SqliteAuthority
     }
     this.#database.exec("BEGIN IMMEDIATE");
     try {
-      const importRow = this.#database
-        .prepare<
-          [string],
-          {
-            acceptance_digest: string;
-            proposal_digest: string;
-            amendment_id: string;
-            state: string;
-          }
-        >(
-          `SELECT acceptance_digest, proposal_digest, amendment_id, state
-           FROM plan_imports WHERE evaluation_digest = ?`,
-        )
-        .get(evaluationDigest);
-      if (importRow === undefined || !["proposed", "approved"].includes(importRow.state)) {
-        throw new TypeError("Plan import is not ready for applied linkage");
-      }
-      const canonicalImport = canonicalStringify({
-        evaluationDigest,
-        acceptanceDigest: importRow.acceptance_digest,
-        proposalDigest: importRow.proposal_digest,
-        amendmentId: importRow.amendment_id,
-        decisionDigest,
-        applicationDigest,
-        state: "applied",
-      });
-      const changed = this.#database
-        .prepare(
-          `UPDATE plan_imports
-           SET state = 'applied', decision_digest = ?, application_digest = ?, canonical_import = ?
-           WHERE evaluation_digest = ? AND state IN ('proposed', 'approved')`,
-        )
-        .run(decisionDigest, applicationDigest, canonicalImport, evaluationDigest).changes;
-      if (changed !== 1) throw new TypeError("Plan import is not ready for applied linkage");
-      this.#database
-        .prepare("UPDATE fan_out_evaluations SET applied = 1 WHERE evaluation_digest = ?")
-        .run(evaluationDigest);
+      markPlanImportApplied(this.#database, evaluationDigest, decisionDigest, applicationDigest);
       this.#database.exec("COMMIT");
     } catch (error) {
       if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
@@ -9805,6 +9770,72 @@ function normalizeAmendmentRows(snapshot: AuthoritySnapshot): NormalizedAmendmen
     withdrawals: withdrawals.sort(compareNormalized("amendment_id")),
     applications: applications.sort(compareNormalized("amendment_id")),
   };
+}
+
+function markPlanImportApplied(
+  database: Database.Database,
+  evaluationDigest: string,
+  decisionDigest: string,
+  applicationDigest: string,
+): void {
+  if (![evaluationDigest, decisionDigest, applicationDigest].every(isSha256Digest)) {
+    throw new TypeError("Applied fan-out linkage requires SHA-256 digests");
+  }
+  const importRow = database
+    .prepare<
+      [string],
+      {
+        acceptance_digest: string;
+        proposal_digest: string;
+        amendment_id: string;
+        state: string;
+      }
+    >(
+      `SELECT acceptance_digest, proposal_digest, amendment_id, state
+       FROM plan_imports WHERE evaluation_digest = ?`,
+    )
+    .get(evaluationDigest);
+  if (importRow === undefined || !["proposed", "approved"].includes(importRow.state)) {
+    throw new TypeError("Plan import is not ready for applied linkage");
+  }
+  const canonicalImport = canonicalStringify({
+    evaluationDigest,
+    acceptanceDigest: importRow.acceptance_digest,
+    proposalDigest: importRow.proposal_digest,
+    amendmentId: importRow.amendment_id,
+    decisionDigest,
+    applicationDigest,
+    state: "applied",
+  });
+  const changed = database
+    .prepare(
+      `UPDATE plan_imports
+       SET state = 'applied', decision_digest = ?, application_digest = ?, canonical_import = ?
+       WHERE evaluation_digest = ? AND state IN ('proposed', 'approved')`,
+    )
+    .run(decisionDigest, applicationDigest, canonicalImport, evaluationDigest).changes;
+  if (changed !== 1) throw new TypeError("Plan import is not ready for applied linkage");
+  database
+    .prepare("UPDATE fan_out_evaluations SET applied = 1 WHERE evaluation_digest = ?")
+    .run(evaluationDigest);
+}
+
+function linkAppliedPlanImport(database: Database.Database, result: unknown): void {
+  const application = isPlainRecord(result) ? result.application : undefined;
+  if (!isPlainRecord(application)) return;
+  const row = database
+    .prepare<[string], { evaluation_digest: string }>(
+      `SELECT evaluation_digest FROM plan_imports
+       WHERE amendment_id = ? AND state IN ('proposed', 'approved')`,
+    )
+    .get(String(application.amendmentId));
+  if (row === undefined) return;
+  markPlanImportApplied(
+    database,
+    row.evaluation_digest,
+    String(application.decisionDigest),
+    String(application.applicationDigest),
+  );
 }
 
 function persistAmendmentProjections(

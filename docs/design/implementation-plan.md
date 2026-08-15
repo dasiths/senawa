@@ -1044,39 +1044,22 @@ clean at this handoff. Do not restart the phase or rewrite the checkpoint.
   recorded browser gate was 15 Chromium tests passed. These results are stale
   until rerun after the current failing test is repaired.
 
-#### Current blocker
+#### Resolved Phase 14F blocker
 
-* [ ] Complete `apps/senawa/src/standard-delivery-acceptance.test.ts`, the required
-  consolidated Phase 14F journey. It drives generated init and doctor, define,
-  research, plan, reviewed plan import, two generated implementation tasks with
-  rework, implementation evidence, verify, final closure, portal Delivery, and
-  secret-safe reporting without model credit.
-* The focused command currently fails:
+`apps/senawa/src/standard-delivery-acceptance.test.ts` now passes. It drives
+generated init and doctor, define, research, plan, reviewed plan import, two
+generated implementation tasks with rework, implementation evidence, verify,
+closure, portal Delivery, and secret-safe reporting without model credit.
 
-  ```bash
-  pnpm exec vitest run apps/senawa/src/standard-delivery-acceptance.test.ts
-  ```
-
-* Current failure:
-
-  ```text
-  ContextError: Phase attempt and input binding do not match the worker context
-  apps/senawa/src/standard-delivery-acceptance.test.ts:1146
-  ```
-
-* Diagnosed cause: the fixture starts the implement phase attempt against the
-  pre-import configuration snapshot and graph revision, then constructs
-  generated implementation contexts against the post-import result snapshot.
-  `compileWorkerContextBase` requires the phase attempt's graph revision and
-  configuration snapshot digests to equal the context's own digests, so the two
-  can never agree. Generated tasks exist only in the post-import graph revision,
-  so the kernel binding is correct and the fixture ordering is wrong. Start the
-  implement attempt after the reviewed amendment applies, against the result
-  snapshot. Do not weaken `createWorkerContextBase` validation.
-* The same test contains unresolved Biome `noExplicitAny` findings and type-only
-  import organization findings. Replace the temporary `any` annotations with
-  actual configuration, dataflow, fan-out, assessment, seed, and effect types;
-  do not suppress the rules.
+The failure was a fixture ordering defect. The implement phase attempt was
+started against the pre-import configuration snapshot and graph revision while
+generated implementation contexts bound the post-import result snapshot, and
+`compileWorkerContextBase` requires those digests to be equal. The attempt now
+starts after the reviewed amendment applies. Repairs also corrected worker
+context capabilities, authority reopen after each service stop, the projection
+read path, and the delivery-kind assertion. Applying an approved amendment now
+links its originating plan import, so the delivery ledger reaches `applied`.
+Decision D-090 records the single command lifecycle phase per run.
 
 #### Added structured-output subphases
 
@@ -1093,9 +1076,9 @@ clean at this handoff. Do not restart the phase or rewrite the checkpoint.
 
 #### Remaining Phase 14 work
 
-* [ ] Repair the consolidated standard-delivery acceptance journey at the exact
+* [x] Repair the consolidated standard-delivery acceptance journey at the exact
   phase-attempt/input-binding mismatch and rerun that test until green.
-* [ ] Remove all lint and editor diagnostics from
+* [x] Remove all lint and editor diagnostics from
   `apps/senawa/src/standard-delivery-acceptance.test.ts` with precise types.
 * [ ] Confirm the test proves two generated tasks execute in stable dependency
   order, one bounded rework occurs, plan-import crash replay is idempotent,
