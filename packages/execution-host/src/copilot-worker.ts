@@ -309,12 +309,11 @@ interface RunScope {
  * One captured record is exactly one displayed row, so multi-line output is
  * split here rather than allowed to forge extra rows in the portal terminal.
  *
- * The capture identity is the digest of the exact record, so every adapter run
- * of one dispatch owns its own `lineId` namespace: a re-drive under a new wall
- * clock cannot reuse a retained identity, and an exact replay still resolves to
- * the retained line. Nothing seeds the counter from a durable read, so no read
- * failure can strand the capture on identities the store already holds. The
- * per-run ordinal keeps two identical lines of one run distinct.
+ * The capture identity is the digest of the exact record, so a re-drive under a
+ * new wall clock cannot reuse a retained identity and an exact replay still
+ * resolves to the retained line. Nothing seeds the counter from a durable read,
+ * so no read failure can strand the capture on identities the store already
+ * holds. The per-run ordinal keeps two identical lines of one run distinct.
  */
 function transcriptNoteSink(
   input: CopilotWorkerRunInput,

@@ -1123,8 +1123,6 @@ describe("SQLite Phase 11B portal query authority", () => {
       .listGraphNodes(runtimeFixture.repositoryId, runtimeFixture.runId, graph.revisionDigest)
       .nodes.find(({ nodeId }) => nodeId === runtimeFixture.task.taskId);
     expect(node?.dispatchId).toBe(later.dispatch.dispatchId);
-    // The surviving role label comes from the same winning attempt.
-    expect(node?.roleKey).toBe(later.context.role.key);
     portal.close();
     fixture.dispose();
   });

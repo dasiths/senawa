@@ -57,7 +57,7 @@ Each phase records:
 | 13. Reporting, packaging, and hardening | Complete | `017b1eb` | Pushed |
 | 14. Standard delivery workflow authoring | Complete | `cf08ebc` | Pushed |
 | 15. Consumer documentation and adoption journeys | Renumbered to 17 | Not applicable | Not applicable |
-| 16. Operational portal parity | Not started | Pending | Pending |
+| 16. Operational portal parity | Complete | `8610468` | Pushed |
 | 17. Design and consumer documentation | Not started | Pending | Pending |
 
 ## Decision D-001: Clean alpha implementation reset
@@ -8541,11 +8541,14 @@ A third independent review rejected Phase 16. Every finding is repaired below.
 * Unsafe transcript seed path. The adapter read the durable owner high-water
   sequence outside the append transaction; a failed read left the ordinal at 0
   and every append for a re-driven dispatch was refused, losing output silently.
-  The preferred repair was taken: each adapter run now owns its `lineId`
-  namespace. The capture identity is the digest of the exact record
-  (`dispatchId`, per-run ordinal, `occurredAt`, stream, and text), so a re-drive
-  under a new wall clock cannot reuse a retained identity and an exact replay
-  still resolves to the retained line. No durable per-run nonce was available:
+  The preferred repair was taken: the capture identity is now the digest of the
+  exact record (`dispatchId`, per-run ordinal, `occurredAt`, stream, and text),
+  so a re-drive under a new wall clock cannot reuse a retained identity and an
+  exact replay still resolves to the retained line. The identity is content
+  derived rather than namespaced per run: two adapter runs that emit an
+  identical line at the identical millisecond and ordinal resolve to the same
+  retained record, which is a benign exact replay rather than a refusal. No
+  durable per-run nonce was available:
   the supervisor's `attemptId` counter is in memory and restarts with the
   process, so it cannot distinguish a run after a host restart. Nothing seeds
   the counter now, so `AgentTranscriptPort.latestSequence` and
@@ -8571,8 +8574,9 @@ A third independent review rejected Phase 16. Every finding is repaired below.
 
 * `packages/storage-sqlite/tests/human-authority.test.ts` registers two
   dispatches for one context whose digests sort inverted against their ordinals
-  and asserts the node reports the higher ordinal's `dispatchId` and that
-  attempt's `roleKey`.
+  and asserts the node reports the higher ordinal's `dispatchId`. The surviving
+  `roleKey` comes from the same row by construction rather than by assertion,
+  because both fixtures declare the same role.
 * `packages/execution-host/src/copilot-worker.test.ts` re-drives one dispatch
   under a new clock against an owner that already retains a full prior run and
   asserts six distinct identities, six retained lines, and no refusal; a second
@@ -8591,8 +8595,15 @@ A third independent review rejected Phase 16. Every finding is repaired below.
 
 ### Validation
 
-Passed on 2026-08-16. Playwright was not run for this repair; the browser matrix
-result above is the last recorded run.
+Passed on 2026-08-16:
+
+* Workspace typecheck and root build
+* Complete offline suite: 104 files and 1,320 tests passed with 2 skipped
+  opt-in live tests
+* Biome across 299 files with 31 intentional prompt-template warnings
+* Architecture boundaries across 463 source files
+* Documentation links across 25 Markdown files
+* `git diff --check`
 
 ## Decision D-093: Restore run-console parity without a graph library
 
@@ -8659,6 +8670,47 @@ Final delivery gates passed on 2026-08-15:
 
 Residual risks are recorded in the Phase 14F, 14H, and 14I sections and in
 [Production Enhancements](production-enhancements.md).
+
+## Phase 16 delivery record
+
+Phase 16 is delivered across the pushed checkpoints `e700989`, `76ba907`,
+`86ecec7`, `b4cfedf`, `23bf33d`, `ccd7b1a`, `d870d69`, and `8610468`.
+
+Four independent review rounds were run. The first three rejected the work and
+produced one P0, three P1, and thirteen P2 or P3 findings covering a dead
+terminal in the default repository workspace mode, cross-run transcript
+eviction, a portal that never observed new lines, newline forging, dropped
+cross-phase edges, partial replay idempotence, drafts surviving session expiry,
+locale-dependent ordering, a missing run-wide scope, a resume path that silently
+dropped every transcript line, permanent graph staleness during active output, a
+superseded dispatch attempt published as current, and a false screenshot claim
+in this log. Every P0, P1, and P2 finding is repaired with a regression test.
+
+The fourth review approved Phase 16 with three P3 follow-ups, all now closed: an
+overstated capture-identity comment, an assertion that could not fail, and an
+unenumerated validation record.
+
+Final delivery gates passed on 2026-08-16:
+
+* Root build, including staged portal assets and both native helpers
+* Clean workspace typecheck
+* Biome across 299 files with 31 intentional prompt-template warnings
+* Complete offline suite: 104 files and 1,320 tests passed with 2 skipped
+  opt-in live tests
+* Complete inference-free browser matrix at head: 30 Chromium tests passed with
+  one desktop-only rail test skipped on mobile
+* Architecture boundaries across 463 source files
+* Documentation links across 25 Markdown files
+* `git diff --check`
+
+### Remaining risks
+
+* The transcript records session and tool lifecycle lines. Model prose is
+  deliberately never captured, so the terminal shows what the host observed
+  rather than what the model said.
+* Transcript delivery uses an isolated revision component rather than a
+  dedicated event frame. The pane observes new lines within one poll; a frame
+  would lower that latency and is recorded as future work rather than a defect.
 
 ## Entry template
 
