@@ -177,11 +177,11 @@ Treat as stable, with a versioned identifier and a compatibility obligation:
   `WORKER_CONTEXT_BASE_API_VERSION`, `WORKER_DISPATCH_API_VERSION`,
   `PHASE_ATTEMPT_API_VERSION`, `FAN_OUT_EVALUATION_API_VERSION`, and
   `AMENDMENT_PROPOSAL_API_VERSION`.
-* Whatever a package lists in its `exports` field. Every published package
-  exposes `.`; `storage-sqlite` also exposes `./reporting-snapshot`, and
-  `testing` exposes its three conformance subpaths. `portal` is private and
-  declares no `exports` field, because it ships built assets rather than a
-  module surface.
+* Whatever a package lists in its `exports` field. Every package that declares
+  one exposes `.`; `storage-sqlite` also exposes `./reporting-snapshot`, and
+  `testing` exposes its three conformance subpaths. `portal` and the `senawa`
+  app declare no `exports` field, because they ship built assets and an
+  executable rather than a module surface.
 * The `senawa` executable surface documented in the
   [CLI reference](../reference/cli.md) and the routes in the
   [local supervisor HTTP reference](../reference/local-supervisor-http.md).

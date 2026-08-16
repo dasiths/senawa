@@ -58,7 +58,7 @@ Each phase records:
 | 14. Standard delivery workflow authoring | Complete | `cf08ebc` | Pushed |
 | 15. Consumer documentation and adoption journeys | Renumbered to 17 | Not applicable | Not applicable |
 | 16. Operational portal parity | Complete | `8610468` | Pushed |
-| 17. Design and consumer documentation | Complete | Pending | Pending |
+| 17. Design and consumer documentation | Complete | `1b78ac1` | Pushed |
 
 ## Decision D-001: Clean alpha implementation reset
 
@@ -8747,9 +8747,9 @@ Rejected alternatives:
   documentation must describe final behavior and Phase 16 changed the portal
   surface. No phase carries the number 15.
 * The prescribed commit message `docs: add consumer adoption guides` was
-  replaced by three focused commits for the design set, the consumer set, and
-  the review corrections, because the phase produced two independent sets and a
-  correction pass.
+  replaced by four focused commits for the design set, the consumer set, the
+  review corrections, and the closing corrections, because the phase produced
+  two independent sets and two correction passes.
 * The plan's acceptance bullet asking the README to link examples is satisfied
   by linking the guides that carry runnable examples. No `examples/` tree
   exists, and inventing one would duplicate the guides.

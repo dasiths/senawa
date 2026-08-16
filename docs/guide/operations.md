@@ -244,6 +244,7 @@ consistent with the authority that references them.
 | `SENAWA_PORTAL_MANIFEST` | Development and test override for portal assets |
 | `SENAWA_REMOTE_ENDPOINT` | Optional outbound connector endpoint |
 | `SENAWA_REMOTE_KEY_FILE` | Optional connector enrollment file |
+| `SENAWA_GIT_EXECUTABLE` | Git executable for worktree mode, default `/usr/bin/git` |
 
 The remote connector is disabled unless the daemon inherits both remote
 variables. Neither value appears in status or logs. See the

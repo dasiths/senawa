@@ -186,10 +186,12 @@ derivation rules.
 
 ### Where the branch stands
 
-Phases 0 through 14 and Phase 16 are delivered, ending with the browser run
-console. No phase carries the number 15; the former Phase 15 was renumbered to
-Phase 17, which adds the design and consumer documentation sets. Current status,
-acceptance criteria, and remaining work live in the [comprehensive
+Every implementation phase is delivered. Phases 0 through 14 built the kernel
+through the packaged alpha and standard delivery authoring, Phase 16 added the
+browser run console, and Phase 17 added the design and consumer documentation
+sets. No phase carries the number 15; the former Phase 15 was renumbered to
+Phase 17 so documentation could describe final behavior. Acceptance criteria and
+the decision record live in the [comprehensive
 plan](docs/design/implementation-plan.md).
 
 ## Development
