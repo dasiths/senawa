@@ -100,6 +100,28 @@ describe("deterministic graph layout", () => {
     expect(polylines(layout)).toEqual(["edge_1 supersession 154,108 154,128 442,128 442,24"]);
   });
 
+  it("renders a dependency whose endpoints live in different phases", () => {
+    const layout = graphLayout(
+      [phase("node_p1"), phase("node_p2"), task("node_t1"), task("node_t2")],
+      [
+        containment("edge_1", "node_p1", "node_t1"),
+        containment("edge_2", "node_p2", "node_t2"),
+        dependency("edge_3", "node_p1", "node_p2"),
+        dependency("edge_4", "node_t1", "node_t2"),
+      ],
+    );
+    expect(boxes(layout)).toEqual([
+      "node_p1 24,24 260x160 r0c0",
+      "node_t1 46,88 216x76 r1c0",
+      "node_p2 24,240 260x160 r2c0",
+      "node_t2 46,304 216x76 r3c0",
+    ]);
+    expect(polylines(layout)).toEqual([
+      "edge_3 dependency 154,184 154,240",
+      "edge_4 dependency 154,164 154,304",
+    ]);
+  });
+
   it("produces identical output for shuffled input and never mutates it", () => {
     const nodes = [
       phase("node_phase"),

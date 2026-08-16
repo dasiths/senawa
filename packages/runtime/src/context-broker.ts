@@ -124,13 +124,19 @@ export interface AgentTranscriptLine {
   readonly repositoryId: string;
   readonly runId: string;
   readonly owner: AgentTranscriptOwner;
+  /** Owner-scoped capture identity that makes an exact replay recognisable. */
+  readonly lineId: string;
   readonly occurredAt: string;
   readonly stream: "stdout" | "stderr" | "system";
   readonly text: string;
 }
 
 export interface AgentTranscriptPort {
-  /** Assigns the next owner-scoped sequence and must be idempotent for an exact replay. */
+  /**
+   * Assigns the next owner-scoped sequence. An exact replay of any retained
+   * record is idempotent, and a record that reuses a retained `lineId` with
+   * different content is refused.
+   */
   append(record: AgentTranscriptLine): void;
 }
 

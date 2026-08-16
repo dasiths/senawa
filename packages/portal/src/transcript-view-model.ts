@@ -25,6 +25,9 @@ export interface TranscriptRow {
 
 export type TranscriptClock = (occurredAt: string) => string;
 
+/** `node` follows the selected graph node; `run` merges every owner of the run. */
+export type TranscriptScope = "node" | "run";
+
 const EMPTY_VIEW: TranscriptView = Object.freeze({
   owner: undefined,
   lines: Object.freeze([]),
@@ -129,15 +132,18 @@ export function transcriptOwnerLabel(owner: PortalTranscriptOwner): string {
 }
 
 /**
- * Scopes the pane to one selected graph node. A dispatch owner wins whenever
- * the selection has one because capture writes worker lines under the dispatch.
+ * Scopes the pane to one selected graph node. The node's own current dispatch
+ * wins because capture writes worker lines under the dispatch, and it is the
+ * only dispatch owner that exists in repository mode, where no workspace row is
+ * ever recorded. A worktree workspace dispatch is the fallback, then the node.
  */
 export function transcriptOwnerForNode(
-  node: Pick<PortalGraphNode, "nodeId" | "kind"> | undefined,
-  dispatchId: string | undefined,
+  node: Pick<PortalGraphNode, "nodeId" | "kind" | "dispatchId"> | undefined,
+  workspaceDispatchId: string | undefined,
 ): PortalTranscriptOwner | undefined {
   if (node === undefined) return undefined;
   if (node.kind !== "task" && node.kind !== "phase") return undefined;
+  const dispatchId = node.dispatchId ?? workspaceDispatchId;
   if (dispatchId !== undefined) return Object.freeze({ kind: "dispatch", id: dispatchId });
   return Object.freeze({ kind: node.kind, id: node.nodeId });
 }

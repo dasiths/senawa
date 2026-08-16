@@ -3569,6 +3569,7 @@ export class SqlitePortalQueryAuthority {
           ...(supersededBy === undefined ? {} : { supersededBy }),
           ...(status.attempt === undefined ? {} : { attempt: status.attempt }),
           ...(status.roleKey === undefined ? {} : { roleKey: status.roleKey }),
+          ...(status.dispatchId === undefined ? {} : { dispatchId: status.dispatchId }),
           humanNeedCount: status.humanNeedCount,
           evidenceCount: status.evidenceCount,
         };
@@ -4339,22 +4340,18 @@ export class SqlitePortalQueryAuthority {
     validateOpaqueIdentity(owner.id);
     validatePortalOffset(after);
     validatePortalLimit(limit, TRANSCRIPT_LIMITS.maxRecordsPerPage);
+    if (owner.kind === "run" && owner.id !== runId)
+      throw new PageQueryError("cursor-ahead", "Run transcript scope must name its own run");
     const run = this.#database
       .prepare<[string, string], { run_key: string }>(
         "SELECT run_key FROM runs WHERE repository_id = ? AND run_id = ?",
       )
       .get(repositoryId, runId);
     if (run === undefined) throw new PageQueryError("cursor-ahead", "Portal run does not exist");
-    const rows = this.#database
-      .prepare<
-        [string, string, string, number, number],
-        { sequence: number; occurred_at: string; stream: string; text: string }
-      >(
-        `SELECT sequence, occurred_at, stream, text FROM agent_transcript_lines
-         WHERE run_key = ? AND owner_kind = ? AND owner_id = ? AND sequence > ?
-         ORDER BY sequence LIMIT ?`,
-      )
-      .all(run.run_key, owner.kind, owner.id, after, limit + 1);
+    const rows =
+      owner.kind === "run"
+        ? this.#runTranscriptRows(run.run_key, after, limit + 1)
+        : this.#ownerTranscriptRows(run.run_key, owner, after, limit + 1);
     const page = rows.slice(0, limit);
     return decodePortalTranscriptPage({
       apiVersion: PROTOCOL_VERSION,
@@ -4375,6 +4372,43 @@ export class SqlitePortalQueryAuthority {
         text: row.text,
       })),
     });
+  }
+
+  #ownerTranscriptRows(
+    runKey: string,
+    owner: PortalTranscriptOwner,
+    after: number,
+    limit: number,
+  ): readonly PortalTranscriptRow[] {
+    return this.#database
+      .prepare<[string, string, string, number, number], PortalTranscriptRow>(
+        `SELECT sequence, occurred_at, stream, text FROM agent_transcript_lines
+         WHERE run_key = ? AND owner_kind = ? AND owner_id = ? AND sequence > ?
+         ORDER BY sequence LIMIT ?`,
+      )
+      .all(runKey, owner.kind, owner.id, after, limit);
+  }
+
+  /**
+   * The run scope merges every owner of one run over the durable run sequence.
+   * It stays bounded by reading only the newest window one owner could retain,
+   * so a run with many owners can never widen the projection.
+   */
+  #runTranscriptRows(runKey: string, after: number, limit: number): readonly PortalTranscriptRow[] {
+    const latest =
+      this.#database
+        .prepare<[string], { latest: number | null }>(
+          "SELECT MAX(run_sequence) AS latest FROM agent_transcript_lines WHERE run_key = ?",
+        )
+        .get(runKey)?.latest ?? 0;
+    const floor = Math.max(after, latest - TRANSCRIPT_LIMITS.maxRetainedLinesPerOwner);
+    return this.#database
+      .prepare<[string, number, number], PortalTranscriptRow>(
+        `SELECT run_sequence AS sequence, occurred_at, stream, text FROM agent_transcript_lines
+         WHERE run_key = ? AND run_sequence > ?
+         ORDER BY run_sequence LIMIT ?`,
+      )
+      .all(runKey, floor, limit);
   }
 
   #activityWindow(
@@ -4557,18 +4591,42 @@ export class SqlitePortalQueryAuthority {
         )
         .all(repositoryId, runId),
     );
-    const dispatched = new Map<string, string | undefined>();
+    const currentContextDigests = new Map<string, string>();
+    for (const row of this.#database
+      .prepare<[string], { task_id: string; generation: number; current_context_digest: string }>(
+        `SELECT task_id, definition_generation AS generation, current_context_digest
+         FROM amendment_work_fences WHERE run_key = ?`,
+      )
+      .all(runKey)) {
+      currentContextDigests.set(
+        generationKey(row.task_id, row.generation),
+        row.current_context_digest,
+      );
+    }
+    const dispatched = new Map<string, PortalTaskDispatchFacts>();
+    const matchedCurrent = new Set<string>();
     for (const row of this.#database
       .prepare<[string, string], PortalTaskDispatchRow>(
         `SELECT json_extract(b.canonical_context, '$.task.taskId') AS task_id,
                 json_extract(b.canonical_context, '$.task.definitionGeneration') AS generation,
-                json_extract(b.canonical_context, '$.role.key') AS role_key
+                json_extract(b.canonical_context, '$.role.key') AS role_key,
+                d.dispatch_id AS dispatch_id,
+                b.context_digest AS context_digest
          FROM context_dispatches d JOIN context_bases b ON b.context_id = d.context_id
-         WHERE d.repository_id = ? AND d.run_id = ? ORDER BY d.dispatch_id`,
+         WHERE d.repository_id = ? AND d.run_id = ? ORDER BY d.rowid`,
       )
       .all(repositoryId, runId)) {
       if (row.task_id === null || row.generation === null) continue;
-      dispatched.set(generationKey(row.task_id, row.generation), row.role_key ?? undefined);
+      const key = generationKey(row.task_id, row.generation);
+      // The accepted context digest names the current dispatch. Without a durable
+      // fence the newest registration is the only current candidate authority has.
+      const current = currentContextDigests.get(key) === row.context_digest;
+      if (matchedCurrent.has(key) && !current) continue;
+      if (current) matchedCurrent.add(key);
+      dispatched.set(key, {
+        dispatchId: row.dispatch_id,
+        ...(row.role_key === null ? {} : { roleKey: row.role_key }),
+      });
     }
     const runtime = this.#runtimeNodeFacts(repositoryId, runId);
     const mode =
@@ -4622,12 +4680,14 @@ export class SqlitePortalQueryAuthority {
                   : dispatched.has(key)
                     ? "running"
                     : "not-started";
-        const roleKey = dispatched.get(key);
+        const roleKey = dispatched.get(key)?.roleKey;
+        const dispatchId = dispatched.get(key)?.dispatchId;
         statuses.set(id, {
           runState,
           humanNeedCount,
           evidenceCount: taskEvidence.get(key) ?? 0,
           ...(roleKey === undefined ? {} : { roleKey }),
+          ...(dispatchId === undefined ? {} : { dispatchId }),
         });
       } else if (node.kind === "criterion") {
         const disposition = runtime.criterionOutcomes.get(id);
@@ -5237,6 +5297,7 @@ interface PortalNodeStatus {
   readonly evidenceCount: number;
   readonly attempt?: number;
   readonly roleKey?: string;
+  readonly dispatchId?: string;
 }
 
 interface PortalPhaseAttemptRow {
@@ -5275,6 +5336,20 @@ interface PortalTaskDispatchRow {
   readonly task_id: string | null;
   readonly generation: number | null;
   readonly role_key: string | null;
+  readonly dispatch_id: string;
+  readonly context_digest: string;
+}
+
+interface PortalTaskDispatchFacts {
+  readonly dispatchId: string;
+  readonly roleKey?: string;
+}
+
+interface PortalTranscriptRow {
+  readonly sequence: number;
+  readonly occurred_at: string;
+  readonly stream: string;
+  readonly text: string;
 }
 
 const NOT_STARTED_NODE_STATUS: PortalNodeStatus = Object.freeze({
@@ -9046,6 +9121,11 @@ export class SqliteContextBroker {
   }
 
   appendTranscript(input: AgentTranscriptLine): AgentTranscriptAppendResult {
+    const ownerKind: string = input.owner.kind;
+    if (ownerKind === "run")
+      throw new TypeError("Agent transcript capture cannot write the run projection scope");
+    validateOpaqueIdentity(input.owner.id);
+    validateOpaqueIdentity(input.lineId);
     this.#database.exec("BEGIN IMMEDIATE");
     let committed = false;
     try {
@@ -9055,21 +9135,26 @@ export class SqliteContextBroker {
         )
         .get(input.repositoryId, input.runId);
       if (run === undefined) throw new TypeError("Agent transcript references an unknown run");
-      const latest = this.#database
+      const retainedReplay = this.#database
         .prepare<
-          [string, string],
+          [string, string, string, string],
           { sequence: number; occurred_at: string; stream: string; text: string }
         >(
           `SELECT sequence, occurred_at, stream, text FROM agent_transcript_lines
-           WHERE owner_kind = ? AND owner_id = ? ORDER BY sequence DESC LIMIT 1`,
+           WHERE run_key = ? AND owner_kind = ? AND owner_id = ? AND line_id = ?`,
         )
-        .get(input.owner.kind, input.owner.id);
-      const replayed =
-        latest !== undefined &&
-        latest.occurred_at === input.occurredAt &&
-        latest.stream === input.stream &&
-        latest.text === input.text;
-      const sequence = replayed ? latest.sequence : (latest?.sequence ?? 0) + 1;
+        .get(run.run_key, input.owner.kind, input.owner.id, input.lineId);
+      const replayed = retainedReplay !== undefined;
+      if (retainedReplay !== undefined) {
+        if (
+          retainedReplay.occurred_at !== input.occurredAt ||
+          retainedReplay.stream !== input.stream ||
+          retainedReplay.text !== input.text
+        ) {
+          throw new TypeError("Agent transcript line conflicts with prior content");
+        }
+      }
+      const sequence = retainedReplay?.sequence ?? this.#nextTranscriptSequence(run.run_key, input);
       if (!replayed) {
         decodePortalTranscriptRecord({
           apiVersion: PROTOCOL_VERSION,
@@ -9081,17 +9166,26 @@ export class SqliteContextBroker {
           stream: input.stream,
           text: input.text,
         });
+        const runSequence =
+          (this.#database
+            .prepare<[string], { latest: number | null }>(
+              "SELECT MAX(run_sequence) AS latest FROM agent_transcript_lines WHERE run_key = ?",
+            )
+            .get(run.run_key)?.latest ?? 0) + 1;
         this.#database
           .prepare(
             `INSERT INTO agent_transcript_lines(
-               run_key, owner_kind, owner_id, sequence, occurred_at, stream, text
-             ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+               run_key, owner_kind, owner_id, sequence, run_sequence, line_id,
+               occurred_at, stream, text
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             run.run_key,
             input.owner.kind,
             input.owner.id,
             sequence,
+            runSequence,
+            input.lineId,
             input.occurredAt,
             input.stream,
             input.text,
@@ -9099,9 +9193,10 @@ export class SqliteContextBroker {
         this.#database
           .prepare(
             `DELETE FROM agent_transcript_lines
-             WHERE owner_kind = ? AND owner_id = ? AND sequence <= ?`,
+             WHERE run_key = ? AND owner_kind = ? AND owner_id = ? AND sequence <= ?`,
           )
           .run(
+            run.run_key,
             input.owner.kind,
             input.owner.id,
             sequence - TRANSCRIPT_LIMITS.maxRetainedLinesPerOwner,
@@ -9109,11 +9204,11 @@ export class SqliteContextBroker {
       }
       const retained =
         this.#database
-          .prepare<[string, string], { total: number }>(
+          .prepare<[string, string, string], { total: number }>(
             `SELECT COUNT(*) AS total FROM agent_transcript_lines
-             WHERE owner_kind = ? AND owner_id = ?`,
+             WHERE run_key = ? AND owner_kind = ? AND owner_id = ?`,
           )
-          .get(input.owner.kind, input.owner.id)?.total ?? 0;
+          .get(run.run_key, input.owner.kind, input.owner.id)?.total ?? 0;
       this.#database.exec("COMMIT");
       committed = true;
       return Object.freeze({ sequence, retained, replayed });
@@ -9121,6 +9216,17 @@ export class SqliteContextBroker {
       if (!committed && this.#database.inTransaction) this.#database.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  #nextTranscriptSequence(runKey: string, input: AgentTranscriptLine): number {
+    return (
+      (this.#database
+        .prepare<[string, string, string], { latest: number | null }>(
+          `SELECT MAX(sequence) AS latest FROM agent_transcript_lines
+           WHERE run_key = ? AND owner_kind = ? AND owner_id = ?`,
+        )
+        .get(runKey, input.owner.kind, input.owner.id)?.latest ?? 0) + 1
+    );
   }
 
   #loadPhaseOutputAttempts(dispatchId: string): readonly PhaseOutputAttemptRecord[] {

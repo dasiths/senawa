@@ -140,6 +140,8 @@ export interface PortalGraphNode {
   readonly supersededBy?: OpaqueIdentity;
   readonly attempt?: number;
   readonly roleKey?: string;
+  /** The dispatch currently executing this node, when authority records one. */
+  readonly dispatchId?: OpaqueIdentity;
   readonly humanNeedCount: number;
   readonly evidenceCount: number;
 }
@@ -472,7 +474,11 @@ export const TRANSCRIPT_LIMITS = Object.freeze({
   maxRetainedLinesPerOwner: 5_000,
 });
 
-export type PortalTranscriptOwnerKind = "dispatch" | "task" | "phase";
+/**
+ * `run` is a read-only projection scope. Capture always writes a dispatch, task,
+ * or phase owner; the run scope merges those durable rows for one run.
+ */
+export type PortalTranscriptOwnerKind = "dispatch" | "task" | "phase" | "run";
 
 export interface PortalTranscriptOwner {
   readonly kind: PortalTranscriptOwnerKind;

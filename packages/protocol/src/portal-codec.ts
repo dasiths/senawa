@@ -116,12 +116,20 @@ const DELIVERY_KINDS = new Set<PortalDeliveryRecordKind>([
   "generated-task",
   "plan-import",
 ]);
-const TRANSCRIPT_OWNER_KINDS = new Set<PortalTranscriptOwnerKind>(["dispatch", "task", "phase"]);
+const TRANSCRIPT_OWNER_KINDS = new Set<PortalTranscriptOwnerKind>([
+  "dispatch",
+  "task",
+  "phase",
+  "run",
+]);
 const TRANSCRIPT_STREAMS = new Set<PortalTranscriptStream>(["stdout", "stderr", "system"]);
 const TRANSCRIPT_TAB = 0x09;
-const TRANSCRIPT_NEWLINE = 0x0a;
 const TRANSCRIPT_SPACE = 0x20;
 const TRANSCRIPT_DELETE = 0x7f;
+const C1_FIRST = 0x80;
+const C1_LAST = 0x9f;
+const LINE_SEPARATOR = 0x2028;
+const PARAGRAPH_SEPARATOR = 0x2029;
 const SURROGATE_FIRST = 0xd800;
 const SURROGATE_LAST = 0xdfff;
 
@@ -784,6 +792,12 @@ function transcriptOwner(value: unknown, path: string): PortalTranscriptOwner {
   return Object.freeze(object) as unknown as PortalTranscriptOwner;
 }
 
+/**
+ * One record is exactly one displayed row. Every character a renderer can treat
+ * as a forced break is refused here so a single captured record can never forge
+ * extra rows in the pane, the clipboard, or a download; capture splits
+ * multi-line output into separate records.
+ */
 function transcriptText(value: unknown, path: string): void {
   boundedString(value, path, 1, TRANSCRIPT_LIMITS.maxLineBytes);
   const text = value as string;
@@ -792,14 +806,17 @@ function transcriptText(value: unknown, path: string): void {
   for (const character of text) {
     const code = character.codePointAt(0) ?? 0;
     if (
-      (code < TRANSCRIPT_SPACE && code !== TRANSCRIPT_TAB && code !== TRANSCRIPT_NEWLINE) ||
+      (code < TRANSCRIPT_SPACE && code !== TRANSCRIPT_TAB) ||
       code === TRANSCRIPT_DELETE ||
+      (code >= C1_FIRST && code <= C1_LAST) ||
+      code === LINE_SEPARATOR ||
+      code === PARAGRAPH_SEPARATOR ||
       (code >= SURROGATE_FIRST && code <= SURROGATE_LAST)
     )
       fail(
         "invalid-value",
         path,
-        "must contain no control characters other than tab and newline and no lone surrogates",
+        "must contain no line breaks, no control characters other than tab, and no lone surrogates",
       );
   }
 }
@@ -935,6 +952,7 @@ function portalGraphNode(value: unknown, path: string): PortalGraphNode {
       "supersededBy",
       "attempt",
       "roleKey",
+      "dispatchId",
     ],
   );
   identity(object.nodeId, `${path}.nodeId`);
@@ -955,6 +973,7 @@ function portalGraphNode(value: unknown, path: string): PortalGraphNode {
   optional(object, "supersededBy", identity, path);
   optional(object, "attempt", (entry, entryPath) => integer(entry, entryPath, 1), path);
   optional(object, "roleKey", consumerKey, path);
+  optional(object, "dispatchId", identity, path);
   return Object.freeze({
     ...object,
     ...(Object.hasOwn(object, "normalizedInput")

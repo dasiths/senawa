@@ -56,6 +56,7 @@ import {
   restoreTranscriptScroll,
   transcriptPaneView,
 } from "./transcript-pane.js";
+import type { TranscriptScope } from "./transcript-view-model.js";
 
 const GRAPH_MODES: readonly GraphMode[] = Object.freeze(["diagram", "table", "tree"]);
 
@@ -74,6 +75,7 @@ export interface PortalRenderActions {
   readonly pageActivity: (kind: "events" | "receipts", before: number) => void;
   readonly toggleRightRail: (open: boolean) => void;
   readonly setTranscriptPinned: (pinned: boolean) => void;
+  readonly setTranscriptScope: (scope: TranscriptScope) => void;
   readonly setRailLayout: (layout: RailLayout) => void;
   readonly setRailCollapsed: (side: RailSide, collapsed: boolean) => void;
   readonly openAssetOverlay: (artifactId: string, triggerId: string) => void;
@@ -663,7 +665,11 @@ function renderGraph(state: PortalState, actions: PortalRenderActions): HTMLElem
   section.append(
     transcriptPaneView({
       view: state.ui.transcript,
-      actions: { setTranscriptPinned: (pinned) => actions.setTranscriptPinned(pinned) },
+      scope: state.ui.transcriptScope,
+      actions: {
+        setTranscriptPinned: (pinned) => actions.setTranscriptPinned(pinned),
+        setTranscriptScope: (scope) => actions.setTranscriptScope(scope),
+      },
     }),
   );
   return section;

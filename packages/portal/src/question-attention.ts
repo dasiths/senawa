@@ -21,10 +21,15 @@ export function pendingQuestionNeed(
     .filter((need) => need.kind === "question")
     .toSorted((left, right) =>
       left.createdAt === right.createdAt
-        ? left.needId.localeCompare(right.needId)
-        : left.createdAt.localeCompare(right.createdAt),
+        ? compareCodeUnits(left.needId, right.needId)
+        : compareCodeUnits(left.createdAt, right.createdAt),
     )
     .at(0);
+}
+
+/** Code-unit ordering so the banner never depends on the viewer's locale. */
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export function questionAttention(

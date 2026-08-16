@@ -190,6 +190,10 @@ describe("portal state", () => {
       expect(cleared.ui.transcript.owner).toBeUndefined();
       expect(cleared.ui.transcript.pinned).toBe(true);
     }
+    const runWide = portalReducer(loaded, { type: "transcript-scope", scope: "run" });
+    expect(runWide.ui.transcriptScope).toBe("run");
+    expect(runWide.ui.transcript.lines).toEqual([]);
+    expect(portalReducer(runWide, { type: "transcript-scope", scope: "run" })).toBe(runWide);
   });
 });
 

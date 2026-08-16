@@ -10,6 +10,7 @@ import {
 import { allowanceCommandDraft, allowanceReviewIsCurrent } from "./allowance-review.js";
 import {
   answerDraftIdentity,
+  clearAnswerDrafts,
   pruneAnswerDrafts,
   readAnswerDraft,
   writeAnswerDraft,
@@ -207,6 +208,7 @@ export class PortalApplication {
     if (changed) {
       this.#stream.close();
       this.#streamIdentity = undefined;
+      clearAnswerDrafts(sessionStorage);
       this.#dispatch({ type: "select-run", repositoryId, runId });
     }
     if (
@@ -739,10 +741,17 @@ export class PortalApplication {
     this.#dispatch({ type: "cache", cache: kind, key, value });
   }
 
-  /** Derives the transcript owner from the selected node, preferring its dispatch. */
+  /**
+   * Derives the transcript owner from the selected node. The node's own current
+   * dispatch wins because capture writes worker lines under the dispatch, and it
+   * is the only owner that exists in the default repository mode where no
+   * workspace row is ever created.
+   */
   #transcriptOwner(): PortalTranscriptOwner | undefined {
     const identity = this.#selectedIdentity();
     if (identity === undefined || this.#state.route.name !== "graph") return undefined;
+    if (this.#state.ui.transcriptScope === "run")
+      return Object.freeze({ kind: "run", id: identity.runId });
     const revision = this.#state.vector?.graphRevision;
     if (revision === undefined) return undefined;
     const node = this.#state.caches.graphNodes[
@@ -752,7 +761,7 @@ export class PortalApplication {
     const workspaces =
       this.#state.caches.workspaces[runKey(identity.repositoryId, identity.runId)]?.workspaces ??
       [];
-    const dispatchId = workspaces
+    const workspaceDispatchId = workspaces
       .filter(
         (workspace) =>
           workspace.taskId === node.nodeId &&
@@ -761,7 +770,7 @@ export class PortalApplication {
       .map(({ dispatchId: value }) => value)
       .sort()
       .at(-1);
-    return transcriptOwnerForNode(node, dispatchId);
+    return transcriptOwnerForNode(node, workspaceDispatchId);
   }
 
   #syncTranscript(): Promise<void> {
@@ -842,6 +851,10 @@ export class PortalApplication {
       pageActivity: (kind, before) => void this.#pageActivity(kind, before),
       toggleRightRail: (open) => this.#dispatch({ type: "right-rail", open }),
       setTranscriptPinned: (pinned) => this.#dispatch({ type: "transcript-pin", pinned }),
+      setTranscriptScope: (scope) => {
+        this.#dispatch({ type: "transcript-scope", scope });
+        void this.#syncTranscript();
+      },
       setRailLayout: (layout) => {
         this.#dispatch({ type: "rail-layout", layout });
         saveRailLayout(localStorage, this.#state.ui.railLayout);
@@ -918,6 +931,7 @@ export class PortalApplication {
     this.#stream.close();
     this.#streamIdentity = undefined;
     clearPortalSession(sessionStorage);
+    clearAnswerDrafts(sessionStorage);
     this.#client.setCsrfToken(undefined);
     this.#dispatch({
       type: "session-expired",

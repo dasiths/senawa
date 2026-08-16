@@ -37,6 +37,34 @@ describe("question attention", () => {
     expect(pendingQuestionNeed([need("need_a", "escalation", "x")])).toBeUndefined();
   });
 
+  it("orders identities by code unit rather than by viewer locale", () => {
+    const needs = [
+      need("need_ab", "question", "2026-08-15T00:00:00.000Z"),
+      need("need_a-c", "question", "2026-08-15T00:00:00.000Z"),
+      need("need_a.d", "question", "2026-08-15T00:00:00.000Z"),
+      need("need_a:e", "question", "2026-08-15T00:00:00.000Z"),
+    ];
+    const codeUnitFirst = [...needs].sort((left, right) =>
+      left.needId < right.needId ? -1 : left.needId > right.needId ? 1 : 0,
+    )[0];
+    expect(pendingQuestionNeed(needs)?.needId).toBe(codeUnitFirst?.needId);
+    expect(pendingQuestionNeed(needs)?.needId).toBe("need_a-c");
+
+    // A collator would fold punctuation and case, so it must never be consulted.
+    const collator = String.prototype.localeCompare;
+    let consulted = 0;
+    String.prototype.localeCompare = function locale(this: string, that: string): number {
+      consulted += 1;
+      return collator.call(this, that);
+    };
+    try {
+      expect(pendingQuestionNeed(needs)?.needId).toBe("need_a-c");
+    } finally {
+      String.prototype.localeCompare = collator;
+    }
+    expect(consulted).toBe(0);
+  });
+
   it("marks a question overdue only at the bounded threshold", () => {
     const question = need("need_a", "question", "2026-08-15T00:00:00.000Z");
     expect(questionAttention(question, asked + QUESTION_OVERDUE_MS - 1)?.overdue).toBe(false);

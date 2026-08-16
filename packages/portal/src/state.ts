@@ -39,6 +39,7 @@ import {
   mergeTranscriptPage,
   selectTranscriptOwner,
   setTranscriptPinned,
+  type TranscriptScope,
   type TranscriptView,
 } from "./transcript-view-model.js";
 
@@ -150,6 +151,7 @@ export interface PortalUiState {
   readonly graphMode: GraphMode;
   readonly graphViewport: PortalGraphViewport;
   readonly transcript: TranscriptView;
+  readonly transcriptScope: TranscriptScope;
   readonly narration: CommandNarration | undefined;
   readonly railLayout: RailLayout;
   readonly assetOverlay: PortalAssetOverlayState | undefined;
@@ -214,6 +216,7 @@ export type PortalAction =
   | { readonly type: "transcript-owner"; readonly owner: PortalTranscriptOwner | undefined }
   | { readonly type: "transcript-page"; readonly page: PortalTranscriptPage }
   | { readonly type: "transcript-pin"; readonly pinned: boolean }
+  | { readonly type: "transcript-scope"; readonly scope: TranscriptScope }
   | { readonly type: "rail-layout"; readonly layout: RailLayout }
   | { readonly type: "rail-collapse"; readonly side: RailSide; readonly collapsed: boolean }
   | { readonly type: "asset-overlay-open"; readonly artifactId: string; readonly triggerId: string }
@@ -259,6 +262,7 @@ export function initialPortalState(route: PortalRoute): PortalState {
       graphMode: "table",
       graphViewport: INITIAL_GRAPH_VIEWPORT,
       transcript: emptyTranscriptView(),
+      transcriptScope: "node",
       narration: undefined,
       railLayout: DEFAULT_RAIL_LAYOUT,
       assetOverlay: undefined,
@@ -486,6 +490,15 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
         ui: Object.freeze({
           ...state.ui,
           transcript: setTranscriptPinned(state.ui.transcript, action.pinned),
+        }),
+      });
+    case "transcript-scope":
+      if (state.ui.transcriptScope === action.scope) return state;
+      return next(state, {
+        ui: Object.freeze({
+          ...state.ui,
+          transcriptScope: action.scope,
+          transcript: emptyTranscriptView(),
         }),
       });
     case "rail-layout":

@@ -65,7 +65,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   const assetDirectory = join(environment.XDG_STATE_HOME ?? root, "senawa", "assets");
   mkdirSync(join(environment.XDG_STATE_HOME ?? root, "senawa"), { recursive: true, mode: 0o700 });
   const dependencies: RuntimeDependencies = runtimeDependencies;
-  seedAuthority({ databasePath, assetDirectory, dependencies });
+  const journeyDispatchId = seedAuthority({ databasePath, assetDirectory, dependencies });
 
   let sessionNow = Date.parse(NOW);
   const started = await startSenawaService(environment, {
@@ -85,15 +85,18 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     advanceSession: () => {
       sessionNow += 9 * 60 * 60 * 1_000;
     },
+    appendTranscript: () => appendJourneyTranscript(databasePath),
   });
   process.env.SENAWA_E2E_CONTROL_ORIGIN = control.origin;
   process.env.SENAWA_E2E_REPOSITORY_ID = repositoryForRun(RUNS.journey);
   process.env.SENAWA_E2E_RUNS = JSON.stringify(RUNS);
+  process.env.SENAWA_E2E_JOURNEY_DISPATCH_ID = journeyDispatchId;
 
   return async () => {
     delete process.env.SENAWA_E2E_CONTROL_ORIGIN;
     delete process.env.SENAWA_E2E_REPOSITORY_ID;
     delete process.env.SENAWA_E2E_RUNS;
+    delete process.env.SENAWA_E2E_JOURNEY_DISPATCH_ID;
     await closeServer(control.server);
     await started.service.stop();
     rmSync(root, { recursive: true, force: true });
@@ -106,18 +109,53 @@ interface AuthorityOptions {
   readonly dependencies: RuntimeDependencies;
 }
 
-function seedAuthority(options: AuthorityOptions): void {
+let liveTranscriptOrdinal = 0;
+
+/**
+ * Appends one durable line to the live run so a tail-following portal must
+ * observe it. It writes the phase owner, which no absolute fixture count
+ * depends on, because durable appends persist across browser projects.
+ */
+function appendJourneyTranscript(databasePath: string): string {
+  liveTranscriptOrdinal += 1;
+  const text = `live tail line ${liveTranscriptOrdinal}`;
+  const broker = new SqliteContextBroker({
+    databasePath,
+    dependencies: {
+      sha256: productionSha256,
+      currentTime: () => NOW,
+      issueGrantToken: () => new Uint8Array(32).fill(9),
+    },
+  });
+  try {
+    broker.appendTranscript({
+      repositoryId: repositoryForRun(RUNS.journey),
+      runId: RUNS.journey,
+      owner: { kind: "phase", id: runtimeFixture.phase.phaseId },
+      lineId: `live-${liveTranscriptOrdinal}`,
+      occurredAt: new Date(Date.parse(NOW) + 900_000 + liveTranscriptOrdinal).toISOString(),
+      stream: "stdout",
+      text,
+    });
+  } finally {
+    broker.close();
+  }
+  return text;
+}
+
+function seedAuthority(options: AuthorityOptions): string {
   const authority = new SqliteAuthority(options);
   const graph = portalGraph();
   const compactGraph = portalGraph(false);
-  seedHumanRun(authority, options, graph, RUNS.journey, true);
+  const journeyDispatchId = seedHumanRun(authority, options, graph, RUNS.journey, true);
   seedWorkspaceRun(authority, options, compactGraph);
-  seedTranscripts(options);
+  seedTranscripts(options, journeyDispatchId);
   authority.close();
+  return journeyDispatchId;
 }
 
 /** Owner-scoped agent output so the terminal pane has durable authority to read. */
-function seedTranscripts(options: AuthorityOptions): void {
+function seedTranscripts(options: AuthorityOptions, journeyDispatchId: string): void {
   const broker = new SqliteContextBroker({
     databasePath: options.databasePath,
     dependencies: {
@@ -136,13 +174,16 @@ function seedTranscripts(options: AuthorityOptions): void {
         repositoryId: repositoryForRun(runId),
         runId,
         owner,
+        lineId: `${owner.kind}-${index + 1}`,
         occurredAt: new Date(Date.parse(NOW) + index * 1_000).toISOString(),
         stream: line.stream,
         text: line.text,
       });
     }
   };
-  append(RUNS.journey, { kind: "task", id: runtimeFixture.task.taskId }, [
+  // The journey run is repository mode, where the dispatch is the only owner the
+  // writer and the portal can agree on because no workspace row ever exists.
+  append(RUNS.journey, { kind: "dispatch", id: journeyDispatchId }, [
     { stream: "system", text: "session started" },
     { stream: "stdout", text: "hostile line <script>blocked()</script></div> stays inert" },
     { stream: "stderr", text: "tool call refused: capability worker.write is absent" },
@@ -172,7 +213,7 @@ function seedHumanRun(
   graph: ReturnType<typeof portalGraph>,
   runId: string,
   withActivity: boolean,
-): void {
+): string {
   const suffix = runToken(runId);
   const repositoryId = repositoryForRun(runId);
   instantiate(authority, graph, runId, "repository", "approval-required");
@@ -326,6 +367,7 @@ function seedHumanRun(
       );
     }
   }
+  return worker.dispatch.dispatchId;
 }
 
 function seedArtifacts(
@@ -1024,6 +1066,7 @@ function gitRevision(commit: string, tree: string) {
 async function startControlServer(actions: {
   readonly bootstrap: () => Promise<string>;
   readonly advanceSession: () => void;
+  readonly appendTranscript: () => string;
 }): Promise<{ readonly origin: string; readonly server: Server }> {
   const server = createServer(async (request, response) => {
     try {
@@ -1033,6 +1076,9 @@ async function startControlServer(actions: {
       if (request.method === "POST" && request.url === "/advance-session") {
         actions.advanceSession();
         return json(response, 204, {});
+      }
+      if (request.method === "POST" && request.url === "/append-transcript") {
+        return json(response, 200, { text: actions.appendTranscript() });
       }
       return json(response, 404, { error: "not-found" });
     } catch (error) {

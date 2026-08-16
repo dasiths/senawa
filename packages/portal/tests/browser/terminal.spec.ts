@@ -1,5 +1,13 @@
 import { expect, type Page, test } from "@playwright/test";
-import { assertDocumentFits, bootstrapPortal, navigate, runs, selectRun } from "./support.js";
+import {
+  assertDocumentFits,
+  bootstrapPortal,
+  controlOrigin,
+  journeyDispatchId,
+  navigate,
+  runs,
+  selectRun,
+} from "./support.js";
 
 test("streams, follows, bounds, and exports the selected node agent output", async ({
   page,
@@ -13,9 +21,14 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   await expect(pane).toContainText("Select a phase or task node");
   await expect(page.locator(".agent-terminal-scope")).toHaveText("No node selected");
 
+  // Repository mode records no workspace row, so the node's own current dispatch
+  // is the only owner the writer and the pane can agree on.
   await page.getByRole("button", { name: /^task verify,/u }).click();
-  await expect(page.locator(".agent-terminal-scope")).toHaveText("task task_verify");
-  await expect(pane).toHaveAttribute("aria-label", "Agent output for task task_verify");
+  await expect(page.locator(".agent-terminal-scope")).toHaveText(`dispatch ${journeyDispatchId}`);
+  await expect(pane).toHaveAttribute(
+    "aria-label",
+    `Agent output for dispatch ${journeyDispatchId}`,
+  );
   await expect(pane).toHaveAttribute("tabindex", "0");
   await expect.poll(async () => (await snapshot(page)).lineCount).toBe(144);
 
@@ -78,15 +91,36 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download output", exact: true }).click();
   const saved = await download;
-  expect(saved.suggestedFilename()).toBe("senawa-transcript-task-task_verify.txt");
+  expect(saved.suggestedFilename()).toBe(`senawa-transcript-dispatch-${journeyDispatchId}.txt`);
   expect(await readDownload(saved)).toBe(exported);
 
+  // A durable append bumps the portal revision, so one poll must deliver the line.
   await page.getByRole("button", { name: /^phase delivery,/u }).press("Enter");
   await expect(page.locator(".agent-terminal-scope")).toHaveText("phase phase_delivery");
-  await expect.poll(async () => (await snapshot(page)).lineCount).toBe(2);
+  await expect.poll(async () => (await snapshot(page)).lineCount).toBeGreaterThanOrEqual(2);
   await expect(page.locator(".agent-terminal-log")).not.toContainText("journey task output");
   await expect(page.locator(".agent-terminal-log")).toContainText("phase attempt 1 opened");
   await expect.poll(async () => (await snapshot(page)).pinned).toBe(true);
+
+  const beforeAppend = (await snapshot(page)).lineCount;
+  const appended = await fetch(`${controlOrigin}/append-transcript`, { method: "POST" });
+  expect(appended.ok).toBe(true);
+  const { text: liveLine } = (await appended.json()) as { readonly text: string };
+  await expect
+    .poll(async () => (await snapshot(page)).lineCount, { timeout: 30_000 })
+    .toBe(beforeAppend + 1);
+  await expect(page.locator(".agent-terminal-row").last()).toContainText(liveLine);
+  await expect.poll(() => tailOffset(page)).toBeLessThanOrEqual(12);
+
+  // The explicit run-wide option merges every owner of the run in one scope.
+  await page.getByRole("button", { name: "Scope to whole run", exact: true }).click();
+  await expect(page.locator(".agent-terminal-scope")).toHaveText(`run ${runs.journey}`);
+  await expect.poll(async () => (await snapshot(page)).lineCount).toBe(144 + beforeAppend + 1);
+  await expect(page.locator(".agent-terminal-log")).toContainText("journey task output line 1");
+  await expect(page.locator(".agent-terminal-log")).toContainText("phase attempt 1 opened");
+  await page.getByRole("button", { name: "Scope to selected node", exact: true }).click();
+  await expect(page.locator(".agent-terminal-scope")).toHaveText("phase phase_delivery");
+  await expect.poll(async () => (await snapshot(page)).lineCount).toBe(beforeAppend + 1);
 
   await assertDocumentFits(page);
 
@@ -112,6 +146,7 @@ async function snapshot(page: Page) {
       window.__senawaTranscriptPane ?? {
         ownerKind: undefined,
         ownerId: undefined,
+        scope: "node" as const,
         lineCount: 0,
         pinned: true,
         unseen: 0,
@@ -138,6 +173,7 @@ declare global {
     __senawaTranscriptPane?: {
       readonly ownerKind: string | undefined;
       readonly ownerId: string | undefined;
+      readonly scope: "node" | "run";
       readonly lineCount: number;
       readonly pinned: boolean;
       readonly unseen: number;

@@ -1,5 +1,6 @@
 import {
   type TranscriptRow,
+  type TranscriptScope,
   type TranscriptView,
   transcriptDownloadName,
   transcriptOwnerLabel,
@@ -9,16 +10,19 @@ import {
 
 export interface TranscriptPaneActions {
   readonly setTranscriptPinned: (pinned: boolean) => void;
+  readonly setTranscriptScope: (scope: TranscriptScope) => void;
 }
 
 export interface TranscriptPaneInput {
   readonly view: TranscriptView;
+  readonly scope: TranscriptScope;
   readonly actions: TranscriptPaneActions;
 }
 
 export interface TranscriptPaneSnapshot {
   readonly ownerKind: string | undefined;
   readonly ownerId: string | undefined;
+  readonly scope: TranscriptScope;
   readonly lineCount: number;
   readonly pinned: boolean;
   readonly unseen: number;
@@ -36,15 +40,16 @@ const LOG_SELECTOR = ".agent-terminal-log";
 const TAIL_SLACK = 12;
 
 export function transcriptPaneView(input: TranscriptPaneInput): HTMLElement {
-  const { view, actions } = input;
+  const { view, scope, actions } = input;
   const pane = element("section", "agent-terminal");
   const rows = transcriptRows(view);
   const plainText = transcriptPlainText(view);
-  pane.append(bar(view, rows.length, plainText, actions));
+  pane.append(bar(view, scope, rows.length, plainText, actions));
   pane.append(log(view, rows, actions));
   window.__senawaTranscriptPane = Object.freeze({
     ownerKind: view.owner?.kind,
     ownerId: view.owner?.id,
+    scope,
     lineCount: rows.length,
     pinned: view.pinned,
     unseen: view.unseen,
@@ -55,6 +60,7 @@ export function transcriptPaneView(input: TranscriptPaneInput): HTMLElement {
 
 function bar(
   view: TranscriptView,
+  scope: TranscriptScope,
   lineCount: number,
   plainText: string,
   actions: TranscriptPaneActions,
@@ -69,6 +75,13 @@ function bar(
     ),
   );
   const controls = element("div", "agent-terminal-controls");
+  const runWide = commandButton(
+    scope === "run" ? "Scope to selected node" : "Scope to whole run",
+    () => actions.setTranscriptScope(scope === "run" ? "node" : "run"),
+  );
+  runWide.className = "command agent-terminal-run-scope";
+  runWide.setAttribute("aria-pressed", scope === "run" ? "true" : "false");
+  controls.append(runWide);
   const copy = commandButton("Copy output", () => {
     const clipboard = navigator.clipboard as Clipboard | undefined;
     if (clipboard !== undefined) void clipboard.writeText(plainText).catch(() => undefined);
@@ -111,7 +124,9 @@ function log(
         "agent-terminal-empty",
         view.owner === undefined
           ? "Select a phase or task node to read its agent output."
-          : "No durable agent output is recorded for this node.",
+          : view.owner.kind === "run"
+            ? "No durable agent output is recorded for this run."
+            : "No durable agent output is recorded for this node.",
       ),
     );
     return pane;

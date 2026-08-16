@@ -334,7 +334,16 @@ describe("CopilotSerialWorkerAdapter", () => {
         occurredAt: "2026-08-13T00:00:00.000Z",
         stream: "system",
       });
+      // One record is exactly one row, and its identity makes a replay recognisable.
+      expect(line.text).not.toMatch(/[\n\r\u0085\u2028\u2029]/u);
+      expect(line.lineId.startsWith(`${fixture.dispatch.dispatchId}:`)).toBe(true);
     }
+    expect(new Set(transcript.lines.map(({ lineId }) => lineId)).size).toBe(
+      transcript.lines.length,
+    );
+    expect(transcript.lines.map(({ lineId }) => lineId)).toEqual(
+      transcript.lines.map((_, index) => `${fixture.dispatch.dispatchId}:${index + 1}`),
+    );
     const captured = JSON.stringify(transcript.lines);
     for (const forbidden of [
       hostileSummary,

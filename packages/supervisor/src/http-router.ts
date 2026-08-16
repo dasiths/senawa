@@ -602,7 +602,7 @@ function validateAssetName(value: string | undefined): string {
 }
 
 function validateTranscriptOwnerKind(value: string | undefined): PortalTranscriptOwnerKind {
-  if (!new Set(["dispatch", "task", "phase"]).has(value ?? "")) throw notFound();
+  if (!new Set(["dispatch", "task", "phase", "run"]).has(value ?? "")) throw notFound();
   return value as PortalTranscriptOwnerKind;
 }
 

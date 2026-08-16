@@ -69,11 +69,12 @@ describe("portal API transport", () => {
         issueGrantToken: () => new Uint8Array(32).fill(3),
       },
     });
-    for (const text of ["session started", "session ended completed"]) {
+    for (const [index, text] of ["session started", "session ended completed"].entries()) {
       broker.appendTranscript({
         repositoryId: runtimeFixture.repositoryId,
         runId: runtimeFixture.runId,
         owner: { kind: "dispatch", id: "dispatch_portal-transport" },
+        lineId: `dispatch_portal-transport:${index + 1}`,
         occurredAt: runtimeFixture.currentTime,
         stream: "system",
         text,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   answerDraftIdentity,
   answerDraftStorageKey,
+  clearAnswerDrafts,
   loadAnswerDrafts,
   MAX_ANSWER_DRAFT_LENGTH,
   MAX_ANSWER_DRAFTS,
@@ -44,6 +45,15 @@ describe("answer draft persistence", () => {
     writeAnswerDraft(storage, identity, "");
     expect(readAnswerDraft(storage, identity)).toBeUndefined();
     expect(storage.getItem(answerDraftStorageKey())).toBeNull();
+  });
+
+  it("drops every persisted draft, not only the current question", () => {
+    const storage = new MemoryStorage();
+    writeAnswerDraft(storage, answerDraftIdentity("repository_one", "run_one", question), "one");
+    writeAnswerDraft(storage, answerDraftIdentity("repository_one", "run_two", question), "two");
+    clearAnswerDrafts(storage);
+    expect(storage.getItem(answerDraftStorageKey())).toBeNull();
+    expect(loadAnswerDrafts(storage).size).toBe(0);
   });
 
   it("bounds one draft body and the retained draft count", () => {

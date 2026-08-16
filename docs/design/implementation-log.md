@@ -8338,6 +8338,88 @@ Passed on 2026-08-15:
   prompt-template warnings, architecture boundaries across 443 source files,
   documentation links across 25 Markdown files, and `git diff --check`
 
+## Decision D-094: Give agent transcript capture a run key and a capture identity
+
+* Date: 2026-08-16
+* Status: Accepted for Phase 16
+* Phase: Phase 16
+* Decision: Key every durable transcript row by run, give each captured record
+  an owner-scoped `lineId`, project the current dispatch onto the graph node,
+  bump the portal revision on append, refuse every forced line break at the
+  codec boundary, and serve a bounded run-wide projection owner.
+* Alternatives: Keep the owner-only primary key and derive replay identity from
+  record content; publish a new event-stream frame kind for transcript lines;
+  drop the run-wide terminal scope from the plan.
+* Rationale: Task and phase owners come from the graph compiler and carry no run
+  id, so two runs of one workflow shared an owner namespace and one run's
+  retention deleted the other's rows. Content-derived replay identity cannot
+  distinguish a genuine duplicate line from a retry, and it leaves nothing to
+  refuse when a record conflicts. Event-stream frames are canonical cursor
+  authority with digests and replay, so a transcript frame would widen that
+  contract for observability output; the portal already compares the whole
+  revision vector, so bumping `portal_revision` delivers new lines within one
+  poll without touching the event contract.
+* Consequence: Schema 13 changes in place because it is unreleased and its
+  checksum is recomputed at load. `AgentTranscriptLine` gains a required
+  `lineId`; the Copilot worker derives it from the dispatch identity and a
+  monotonic ordinal so an exact dispatch replay stays idempotent. The run owner
+  kind is a read-only projection: capture refuses it, and the durable table
+  still admits only dispatch, task, and phase owners.
+
+## Phase 16 independent review repair
+
+An adversarial review rejected Phase 16. Every finding is repaired below.
+
+### Findings and repairs
+
+* Terminal dead in repository mode. `PortalGraphNode` gained an optional
+  `dispatchId` carrying the current dispatch, selected by matching the task
+  fence's accepted context digest and falling back to the newest registration.
+  The portal derives the transcript owner from that field first, then the
+  worktree workspace lookup, then the node itself.
+* Cross-run transcript eviction. `agent_transcript_lines` is keyed by
+  `(run_key, owner_kind, owner_id, sequence)`, and the latest, insert,
+  retention, and count statements all carry the run key.
+* New lines never reached a live portal. A migration 013 trigger bumps
+  `portal_revision` on insert, which the portal's existing vector comparison
+  already detects; the graph route then resynchronizes the transcript. This is
+  the revision-component route, not a new event frame.
+* Newline forging. The codec refuses every character a renderer treats as a
+  forced break, including C1 controls and the Unicode line and paragraph
+  separators, the durable `CHECK` refuses the same, and the worker splits
+  multi-line output into separate records.
+* Cross-phase dependency edges. The layout drops only containment edges across
+  boxes, so a dependency between two phases now renders.
+* Replay idempotence. An exact replay of any retained record is idempotent, and
+  a record that reuses a retained `lineId` with different content is refused.
+* Answer drafts survive session expiry. Session expiry and run change now clear
+  every persisted draft.
+* Locale-dependent ordering. The question banner orders identities by code unit.
+* Run-wide terminal scope. Implemented as a `run` projection owner over a new
+  durable `run_sequence`, bounded to the newest window one owner could retain.
+
+### Deviations
+
+* `AgentTranscriptLine` gained a required `lineId`. The port contract could not
+  refuse a conflicting record without an identity the caller supplies.
+* The seven Playwright screenshot baselines regenerate with different bytes at
+  identical dimensions on every run. None of the captured states renders the
+  graph route or the terminal, so they were restored rather than committed.
+
+### Validation
+
+Passed on 2026-08-16:
+
+* Workspace typecheck and root build, including staged portal assets and both
+  native helpers
+* Complete offline suite: 104 files and 1,311 tests passed with 2 skipped
+  opt-in live tests
+* Biome across 299 files with 31 intentional prompt-template warnings
+* Complete inference-free browser matrix: 30 Chromium desktop, mobile, and
+  journey tests with 1 desktop-only test skipped on mobile
+* Architecture boundaries across 463 source files, documentation links across
+  25 Markdown files, and `git diff --check`
+
 ## Decision D-093: Restore run-console parity without a graph library
 
 * Date: 2026-08-15

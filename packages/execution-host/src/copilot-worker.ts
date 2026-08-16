@@ -299,24 +299,34 @@ interface RunScope {
   readonly note: (text: string) => void;
 }
 
+/**
+ * One captured record is exactly one displayed row, so multi-line output is
+ * split here rather than allowed to forge extra rows in the portal terminal.
+ */
 function transcriptNoteSink(
   input: CopilotWorkerRunInput,
   dispatch: WorkerDispatch,
 ): (text: string) => void {
   const port = input.transcript;
   if (port === undefined) return () => undefined;
+  let ordinal = 0;
   return (text) => {
-    try {
-      port.append({
-        repositoryId: dispatch.repositoryId,
-        runId: dispatch.runId,
-        owner: { kind: "dispatch", id: dispatch.dispatchId },
-        occurredAt: input.broker.dependencies.currentTime(),
-        stream: "system",
-        text,
-      });
-    } catch {
-      // Transcript capture is observability and must never fail a dispatch.
+    for (const line of text.split(/\r\n|[\n\r\u0085\u2028\u2029]/u)) {
+      if (line.length === 0) continue;
+      ordinal += 1;
+      try {
+        port.append({
+          repositoryId: dispatch.repositoryId,
+          runId: dispatch.runId,
+          owner: { kind: "dispatch", id: dispatch.dispatchId },
+          lineId: `${dispatch.dispatchId}:${ordinal}`,
+          occurredAt: input.broker.dependencies.currentTime(),
+          stream: "system",
+          text: line,
+        });
+      } catch {
+        // Transcript capture is observability and must never fail a dispatch.
+      }
     }
   };
 }

@@ -1,7 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalBytes, PROTOCOL_VERSION, TRANSCRIPT_LIMITS } from "@senawa/protocol";
+import {
+  canonicalBytes,
+  decodeCommandEnvelope,
+  PROTOCOL_VERSION,
+  TRANSCRIPT_LIMITS,
+} from "@senawa/protocol";
 import {
   type AgentTranscriptLine,
   createRoleAuthorizationPolicy,
@@ -28,6 +33,8 @@ import {
 } from "../src/index.js";
 
 const roots = new Set<string>();
+const SECOND_REPOSITORY_ID = "repository_transcript-second";
+const SECOND_RUN_ID = "run_transcript-second";
 let allocationSequence = 0;
 const dependencies: RuntimeDependencies = {
   sha256: deterministicSha256,
@@ -817,23 +824,42 @@ describe("SQLite Phase 11B portal query authority", () => {
       dependencies: contextDependencies(),
     });
 
-    expect(broker.appendTranscript(transcriptLine({ text: "session started" }))).toEqual({
+    expect(
+      broker.appendTranscript(transcriptLine({ lineId: "capture:1", text: "session started" })),
+    ).toEqual({
       sequence: 1,
       retained: 1,
       replayed: false,
     });
     expect(
-      broker.appendTranscript(transcriptLine({ text: "tool submit_completion success" })),
+      broker.appendTranscript(
+        transcriptLine({ lineId: "capture:2", text: "tool submit_completion success" }),
+      ),
     ).toEqual({ sequence: 2, retained: 2, replayed: false });
     expect(
-      broker.appendTranscript(transcriptLine({ stream: "stdout", text: "line\twith\ttabs" })),
+      broker.appendTranscript(
+        transcriptLine({ lineId: "capture:3", stream: "stdout", text: "line\twith\ttabs" }),
+      ),
     ).toEqual({ sequence: 3, retained: 3, replayed: false });
     expect(
-      broker.appendTranscript(transcriptLine({ stream: "stdout", text: "line\twith\ttabs" })),
+      broker.appendTranscript(
+        transcriptLine({ lineId: "capture:3", stream: "stdout", text: "line\twith\ttabs" }),
+      ),
     ).toEqual({ sequence: 3, retained: 3, replayed: true });
+    // An exact replay of any retained record stays idempotent, not just the newest.
+    expect(
+      broker.appendTranscript(transcriptLine({ lineId: "capture:1", text: "session started" })),
+    ).toEqual({ sequence: 1, retained: 3, replayed: true });
+    expect(() =>
+      broker.appendTranscript(transcriptLine({ lineId: "capture:1", text: "forged replacement" })),
+    ).toThrow("conflicts with prior content");
     expect(
       broker.appendTranscript(
-        transcriptLine({ owner: { kind: "phase", id: "phase_transcript" }, text: "phase opened" }),
+        transcriptLine({
+          lineId: "phase-capture:1",
+          owner: { kind: "phase", id: "phase_transcript" },
+          text: "phase opened",
+        }),
       ),
     ).toEqual({ sequence: 1, retained: 1, replayed: false });
 
@@ -843,18 +869,29 @@ describe("SQLite Phase 11B portal query authority", () => {
       { text: "bell\u0007" },
       { text: "escape\u001b[31mred" },
       { text: "carriage\rreturn" },
+      { text: "forged\nrow" },
     ]) {
-      expect(() => broker.appendTranscript(transcriptLine(invalid))).toThrow(/\$\./u);
+      expect(() =>
+        broker.appendTranscript(transcriptLine({ lineId: "capture:invalid", ...invalid })),
+      ).toThrow(/\$\./u);
     }
     expect(() =>
       broker.appendTranscript({
-        ...transcriptLine({}),
+        ...transcriptLine({ lineId: "capture:stream" }),
         stream: "stdin" as unknown as AgentTranscriptLine["stream"],
       }),
     ).toThrow(/stream must be one of/u);
     expect(() =>
-      broker.appendTranscript(transcriptLine({ runId: "run_absent", text: "orphan" })),
+      broker.appendTranscript(
+        transcriptLine({ lineId: "capture:orphan", runId: "run_absent", text: "orphan" }),
+      ),
     ).toThrow("unknown run");
+    expect(() =>
+      broker.appendTranscript({
+        ...transcriptLine({ lineId: "capture:run" }),
+        owner: { kind: "run" as unknown as "dispatch", id: runtimeFixture.runId },
+      }),
+    ).toThrow("cannot write the run projection scope");
 
     broker.close();
     broker = new SqliteContextBroker({
@@ -908,7 +945,11 @@ describe("SQLite Phase 11B portal query authority", () => {
 
     const ceiling = TRANSCRIPT_LIMITS.maxRetainedLinesPerOwner;
     seedTranscriptLines(fixture.databasePath, "dispatch_transcript", 4, ceiling + 1);
-    expect(broker.appendTranscript(transcriptLine({ text: `line ${ceiling + 2}` }))).toEqual({
+    expect(
+      broker.appendTranscript(
+        transcriptLine({ lineId: "capture:ceiling", text: `line ${ceiling + 2}` }),
+      ),
+    ).toEqual({
       sequence: ceiling + 2,
       retained: ceiling,
       replayed: false,
@@ -925,6 +966,185 @@ describe("SQLite Phase 11B portal query authority", () => {
     broker.close();
     fixture.dispose();
   });
+
+  it("agrees on the dispatch transcript owner in repository mode without a workspace row", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    const graph = createRuntimeGraph();
+    authority.close();
+    const worker = createWorkerExecutionFixture(graph, ["worker.submit.completion"]);
+    const broker = new SqliteContextBroker({
+      databasePath: fixture.databasePath,
+      dependencies: contextDependencies(),
+    });
+    broker.registerDispatch({
+      context: worker.context,
+      dispatch: worker.dispatch,
+      completionRequirements: worker.completionRequirements,
+      taskScope: taskScope(worker.context.contextDigest),
+    });
+    // The writer is the execution host: it always owns lines by dispatch.
+    broker.appendTranscript({
+      repositoryId: worker.dispatch.repositoryId,
+      runId: worker.dispatch.runId,
+      owner: { kind: "dispatch", id: worker.dispatch.dispatchId },
+      lineId: `${worker.dispatch.dispatchId}:1`,
+      occurredAt: "2026-08-14T12:00:00.000Z",
+      stream: "system",
+      text: "session started",
+    });
+
+    const inspection = new Database(fixture.databasePath, { readonly: true });
+    const workspaceRows =
+      inspection
+        .prepare<[], { total: number }>("SELECT COUNT(*) AS total FROM runner_workspaces")
+        .get()?.total ?? 0;
+    inspection.close();
+    expect(workspaceRows).toBe(0);
+
+    const portal = new SqlitePortalQueryAuthority(fixture.options);
+    const node = portal
+      .listGraphNodes(runtimeFixture.repositoryId, runtimeFixture.runId, graph.revisionDigest)
+      .nodes.find(({ nodeId }) => nodeId === runtimeFixture.task.taskId);
+    expect(node?.dispatchId).toBe(worker.dispatch.dispatchId);
+    expect(node?.runState).toBe("running");
+    expect(
+      portal
+        .listTranscript(runtimeFixture.repositoryId, runtimeFixture.runId, {
+          kind: "dispatch",
+          id: node?.dispatchId ?? "",
+        })
+        .records.map(({ text }) => text),
+    ).toEqual(["session started"]);
+    portal.close();
+    broker.close();
+    fixture.dispose();
+  });
+
+  it("keeps two runs of one owner namespace independent in sequence and retention", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    instantiate(authority, { repositoryId: SECOND_REPOSITORY_ID, runId: SECOND_RUN_ID });
+    authority.close();
+    const broker = new SqliteContextBroker({
+      databasePath: fixture.databasePath,
+      dependencies: contextDependencies(),
+    });
+    const owner = { kind: "task", id: "task_shared" } as const;
+    for (const [index, text] of ["run a line one", "run a line two"].entries()) {
+      broker.appendTranscript(transcriptLine({ lineId: `a:${index}`, owner, text }));
+    }
+    expect(
+      broker.appendTranscript(
+        transcriptLine({
+          lineId: "b:0",
+          owner,
+          repositoryId: SECOND_REPOSITORY_ID,
+          runId: SECOND_RUN_ID,
+          text: "run b line one",
+        }),
+      ),
+    ).toEqual({ sequence: 1, retained: 1, replayed: false });
+
+    const portal = new SqlitePortalQueryAuthority(fixture.options);
+    const first = portal.listTranscript(runtimeFixture.repositoryId, runtimeFixture.runId, owner);
+    expect(first.records.map(({ sequence, text }) => [sequence, text])).toEqual([
+      [1, "run a line one"],
+      [2, "run a line two"],
+    ]);
+    expect(
+      portal
+        .listTranscript(SECOND_REPOSITORY_ID, SECOND_RUN_ID, owner)
+        .records.map(({ text }) => text),
+    ).toEqual(["run b line one"]);
+
+    // Run B retention must never evict run A rows that share the owner namespace.
+    const ceiling = TRANSCRIPT_LIMITS.maxRetainedLinesPerOwner;
+    seedTranscriptLines(fixture.databasePath, "task_shared", 2, ceiling + 1, {
+      ownerKind: "task",
+      repositoryId: SECOND_REPOSITORY_ID,
+      runId: SECOND_RUN_ID,
+    });
+    broker.appendTranscript(
+      transcriptLine({
+        lineId: "b:evict",
+        owner,
+        repositoryId: SECOND_REPOSITORY_ID,
+        runId: SECOND_RUN_ID,
+        text: `line ${ceiling + 2}`,
+      }),
+    );
+    expect(
+      portal
+        .listTranscript(runtimeFixture.repositoryId, runtimeFixture.runId, owner)
+        .records.map(({ text }) => text),
+    ).toEqual(["run a line one", "run a line two"]);
+    expect(
+      portal.listTranscript(SECOND_REPOSITORY_ID, SECOND_RUN_ID, owner, 0, 1).records[0]?.sequence,
+    ).toBe(3);
+    portal.close();
+    broker.close();
+    fixture.dispose();
+  });
+
+  it("bumps the portal revision on transcript append and serves a bounded run-wide scope", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    authority.close();
+    const broker = new SqliteContextBroker({
+      databasePath: fixture.databasePath,
+      dependencies: contextDependencies(),
+    });
+    const portal = new SqlitePortalQueryAuthority(fixture.options);
+    const before = portal.getRunOverview(runtimeFixture.repositoryId, runtimeFixture.runId);
+    broker.appendTranscript(
+      transcriptLine({
+        lineId: "revision:1",
+        owner: { kind: "task", id: "task_alpha" },
+        text: "alpha one",
+      }),
+    );
+    const after = portal.getRunOverview(runtimeFixture.repositoryId, runtimeFixture.runId);
+    expect(after?.sync.portalRevision).toBe((before?.sync.portalRevision ?? 0) + 1);
+    // A replay is not a new line, so it must not move the revision vector.
+    broker.appendTranscript(
+      transcriptLine({
+        lineId: "revision:1",
+        owner: { kind: "task", id: "task_alpha" },
+        text: "alpha one",
+      }),
+    );
+    expect(
+      portal.getRunOverview(runtimeFixture.repositoryId, runtimeFixture.runId)?.sync.portalRevision,
+    ).toBe(after?.sync.portalRevision);
+
+    broker.appendTranscript(
+      transcriptLine({
+        lineId: "revision:2",
+        owner: { kind: "phase", id: "phase_beta" },
+        text: "beta one",
+      }),
+    );
+    const merged = portal.listTranscript(runtimeFixture.repositoryId, runtimeFixture.runId, {
+      kind: "run",
+      id: runtimeFixture.runId,
+    });
+    expect(merged.records.map(({ text }) => text)).toEqual(["alpha one", "beta one"]);
+    expect(merged.records.map(({ owner }) => owner.kind)).toEqual(["run", "run"]);
+    expect(merged.nextAfter).toBe(2);
+    expect(() =>
+      portal.listTranscript(runtimeFixture.repositoryId, runtimeFixture.runId, {
+        kind: "run",
+        id: "run_other",
+      }),
+    ).toThrow("must name its own run");
+    portal.close();
+    broker.close();
+    fixture.dispose();
+  });
 });
 
 function transcriptLine(overrides: Partial<AgentTranscriptLine>): AgentTranscriptLine {
@@ -932,6 +1152,7 @@ function transcriptLine(overrides: Partial<AgentTranscriptLine>): AgentTranscrip
     repositoryId: runtimeFixture.repositoryId,
     runId: runtimeFixture.runId,
     owner: { kind: "dispatch", id: "dispatch_transcript" },
+    lineId: "capture:default",
     occurredAt: "2026-08-14T12:00:00.000Z",
     stream: "system",
     text: "session started",
@@ -944,6 +1165,11 @@ function seedTranscriptLines(
   ownerId: string,
   from: number,
   to: number,
+  scope: {
+    readonly ownerKind?: string;
+    readonly repositoryId?: string;
+    readonly runId?: string;
+  } = {},
 ): void {
   const database = new Database(databasePath);
   try {
@@ -951,16 +1177,31 @@ function seedTranscriptLines(
       .prepare<[string, string], { run_key: string }>(
         "SELECT run_key FROM runs WHERE repository_id = ? AND run_id = ?",
       )
-      .get(runtimeFixture.repositoryId, runtimeFixture.runId);
+      .get(scope.repositoryId ?? runtimeFixture.repositoryId, scope.runId ?? runtimeFixture.runId);
     if (run === undefined) throw new Error("Expected a durable run fixture");
+    const base =
+      database
+        .prepare<[string], { latest: number | null }>(
+          "SELECT MAX(run_sequence) AS latest FROM agent_transcript_lines WHERE run_key = ?",
+        )
+        .get(run.run_key)?.latest ?? 0;
     const insert = database.prepare(
       `INSERT INTO agent_transcript_lines(
-         run_key, owner_kind, owner_id, sequence, occurred_at, stream, text
-       ) VALUES (?, 'dispatch', ?, ?, '2026-08-14T12:00:00.000Z', 'system', ?)`,
+         run_key, owner_kind, owner_id, sequence, run_sequence, line_id,
+         occurred_at, stream, text
+       ) VALUES (?, ?, ?, ?, ?, ?, '2026-08-14T12:00:00.000Z', 'system', ?)`,
     );
     database.transaction(() => {
       for (let sequence = from; sequence <= to; sequence += 1) {
-        insert.run(run.run_key, ownerId, sequence, `line ${sequence}`);
+        insert.run(
+          run.run_key,
+          scope.ownerKind ?? "dispatch",
+          ownerId,
+          sequence,
+          base + sequence - from + 1,
+          `seed:${sequence}`,
+          `line ${sequence}`,
+        );
       }
     })();
   } finally {
@@ -987,23 +1228,33 @@ function createFixture() {
   };
 }
 
-function instantiate(authority: SqliteAuthority): void {
+function instantiate(
+  authority: SqliteAuthority,
+  run: { readonly repositoryId: string; readonly runId: string } = runtimeFixture,
+): void {
+  const base = runtimeCommand({
+    commandId: `command_phase11-instantiate-${run.runId.replaceAll(/[^a-z0-9-]/gu, "-")}`,
+    intent: "instantiate-run",
+    payload: {
+      workflowId: runtimeFixture.workflowId,
+      configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+      execution: runtimeFixture.execution,
+      graph: createRuntimeGraph(),
+      phase: runtimeFixture.phase,
+      approvalPolicy: { policy: "no-approval" },
+      escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+      allowancePolicy: runtimeFixture.allowancePolicy,
+    },
+  });
   expect(
     authority.submit(
-      runtimeCommand({
-        commandId: "command_phase11-instantiate",
-        intent: "instantiate-run",
-        payload: {
-          workflowId: runtimeFixture.workflowId,
-          configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
-          execution: runtimeFixture.execution,
-          graph: createRuntimeGraph(),
-          phase: runtimeFixture.phase,
-          approvalPolicy: { policy: "no-approval" },
-          escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
-          allowancePolicy: runtimeFixture.allowancePolicy,
-        },
-      }),
+      run.runId === runtimeFixture.runId
+        ? base
+        : decodeCommandEnvelope({
+            ...base,
+            repositoryId: run.repositoryId,
+            runId: run.runId,
+          }),
       admission(),
     ),
   ).toMatchObject({ status: "completed" });

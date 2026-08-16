@@ -196,7 +196,13 @@ function layoutEdges(
     const from = absolute.get(edge.fromNodeId);
     const to = absolute.get(edge.toNodeId);
     if (from === undefined || to === undefined) continue;
-    if (containerById.get(edge.fromNodeId) !== containerById.get(edge.toNodeId)) continue;
+    // A phase box already draws its own containment, so only containment edges
+    // are dropped across boxes. Dependencies between phases must stay visible.
+    if (
+      edge.kind === "containment" &&
+      containerById.get(edge.fromNodeId) !== containerById.get(edge.toNodeId)
+    )
+      continue;
     result.push(
       Object.freeze({
         edgeId: edge.edgeId,

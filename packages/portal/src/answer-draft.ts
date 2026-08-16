@@ -54,6 +54,11 @@ export function pruneAnswerDrafts(storage: SessionStorageLike, active: Iterable<
   persist(storage, retained);
 }
 
+/** Drops every persisted draft, used when the session or the selected run changes. */
+export function clearAnswerDrafts(storage: SessionStorageLike): void {
+  storage.removeItem(DRAFT_KEY);
+}
+
 export function loadAnswerDrafts(storage: SessionStorageLike): ReadonlyMap<string, string> {
   const serialized = storage.getItem(DRAFT_KEY);
   if (serialized === null) return new Map();

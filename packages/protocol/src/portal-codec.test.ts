@@ -398,10 +398,15 @@ describe("portal codecs", () => {
       `{"apiVersion":"${PROTOCOL_VERSION}","occurredAt":"${timestamp}","owner":{"id":"dispatch_alpha","kind":"dispatch"},"repositoryId":"repository_alpha","runId":"run_alpha","sequence":1,"stream":"system","text":"session started"}`,
     );
     expect(
-      decodePortalTranscriptRecord(
-        record(7, { stream: "stdout", text: "column\tvalue\nnext line" }),
-      ).text,
-    ).toBe("column\tvalue\nnext line");
+      decodePortalTranscriptRecord(record(7, { stream: "stdout", text: "column\tvalue" })).text,
+    ).toBe("column\tvalue");
+    expect(
+      decodePortalTranscriptRecord(record(8, { owner: { kind: "run", id: "run_alpha" } })).owner,
+    ).toEqual({ kind: "run", id: "run_alpha" });
+    // A record is exactly one displayed row, so it can never forge another row.
+    for (const forged of ["forged\nrow", "forged\r\nrow", "forged\u2028row"]) {
+      expect(() => decodePortalTranscriptRecord(record(9, { text: forged }))).toThrow(/text/u);
+    }
 
     expect(() => decodePortalTranscriptRecord(record(1, { toolArguments: {} }))).toThrow(
       /toolArguments is not allowed/,

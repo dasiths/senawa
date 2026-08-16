@@ -84,6 +84,9 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   await captureState(page, "conflict", mobile);
 
   await page.evaluate(() => sessionStorage.setItem("senawa.portal.pending.v1", "hostile"));
+  await page.evaluate(() =>
+    sessionStorage.setItem("senawa.portal.answer-draft.v1", '{"stale":"draft"}'),
+  );
   const advance = await fetch(`${controlOrigin}/advance-session`, { method: "POST" });
   expect(advance.ok).toBe(true);
   await page.getByRole("tab", { name: "Overview", exact: true }).click();
@@ -97,8 +100,9 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
     await page.evaluate(() => ({
       pending: sessionStorage.getItem("senawa.portal.pending.v1"),
       session: sessionStorage.getItem("senawa.portal.session.v1"),
+      answerDraft: sessionStorage.getItem("senawa.portal.answer-draft.v1"),
     })),
-  ).toEqual({ pending: "hostile", session: null });
+  ).toEqual({ pending: "hostile", session: null, answerDraft: null });
   await captureState(page, "expired", mobile);
 
   if (mobile) await assertMobileTargets(page);

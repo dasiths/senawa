@@ -7,6 +7,8 @@ export interface BrowserRuns {
 
 export const controlOrigin = requiredEnvironment("SENAWA_E2E_CONTROL_ORIGIN");
 export const runs = JSON.parse(requiredEnvironment("SENAWA_E2E_RUNS")) as BrowserRuns;
+/** The repository-mode dispatch that owns the journey run's durable agent output. */
+export const journeyDispatchId = requiredEnvironment("SENAWA_E2E_JOURNEY_DISPATCH_ID");
 
 export function repositoryForRun(runId: string): string {
   return `repository_${runId.slice("run_".length)}`;
