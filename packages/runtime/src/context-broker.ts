@@ -150,12 +150,6 @@ export interface AgentTranscriptPort {
    * different content is refused with `AgentTranscriptRefusalError`.
    */
   append(record: AgentTranscriptLine): void;
-  /**
-   * Highest retained owner-scoped sequence, or 0 when the owner holds none. A
-   * capture that restarts against a retained owner seeds its next identity from
-   * this durable high-water mark so a re-drive can never reuse a prior line.
-   */
-  latestSequence(repositoryId: string, runId: string, owner: AgentTranscriptOwner): number;
 }
 
 export const PHASE_OUTPUT_LIMITS = Object.freeze({

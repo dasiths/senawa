@@ -1647,6 +1647,7 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
           reconciliation_attempts: number | null;
           origin: string | null;
           output_digest: string | null;
+          transcript_refusals: number | null;
           usage_unit: string | null;
           usage_reserved: number | null;
           usage_reported: number | null;
@@ -1663,6 +1664,8 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
                 json_extract(o.canonical_outcome, '$.reconciliationAttempts') AS reconciliation_attempts,
                 json_extract(o.canonical_outcome, '$.origin') AS origin,
                 json_extract(o.canonical_outcome, '$.outputDigest') AS output_digest,
+                json_extract(o.canonical_outcome, '$.details.transcriptRefusals')
+                  AS transcript_refusals,
                 json_extract(o.canonical_outcome, '$.usage.unit') AS usage_unit,
                 json_extract(o.canonical_outcome, '$.usage.reserved') AS usage_reserved,
                 json_extract(o.canonical_outcome, '$.usage.reported') AS usage_reported,
@@ -1693,6 +1696,9 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
           freshness: row.freshness,
           origin: row.origin,
           reconciliationAttempts: row.reconciliation_attempts,
+          // Present only when durable transcript capture refused at least one
+          // line, so an operator reading the report sees the loss.
+          transcriptRefusals: row.transcript_refusals,
         }),
       });
       trajectory.push(effect);

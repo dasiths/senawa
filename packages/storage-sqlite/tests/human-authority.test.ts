@@ -863,27 +863,6 @@ describe("SQLite Phase 11B portal query authority", () => {
     ).toThrowError(
       expect.objectContaining<Partial<AgentTranscriptRefusalError>>({ code: "line-conflict" }),
     );
-    // A restarted capture seeds its next identity from the durable high-water mark.
-    expect(
-      broker.latestTranscriptSequence(runtimeFixture.repositoryId, runtimeFixture.runId, {
-        kind: "dispatch",
-        id: "dispatch_transcript",
-      }),
-    ).toBe(3);
-    expect(
-      broker.latestTranscriptSequence(runtimeFixture.repositoryId, runtimeFixture.runId, {
-        kind: "dispatch",
-        id: "dispatch_absent",
-      }),
-    ).toBe(0);
-    expect(() =>
-      broker.latestTranscriptSequence(runtimeFixture.repositoryId, "run_absent", {
-        kind: "dispatch",
-        id: "dispatch_transcript",
-      }),
-    ).toThrowError(
-      expect.objectContaining<Partial<AgentTranscriptRefusalError>>({ code: "unknown-run" }),
-    );
     expect(
       broker.appendTranscript(
         transcriptLine({
@@ -1103,6 +1082,50 @@ describe("SQLite Phase 11B portal query authority", () => {
     // The role label is graph metadata and survives; only currency is withheld.
     expect(superseded?.roleKey).toBe(worker.context.role.key);
     reopened.close();
+    fixture.dispose();
+  });
+
+  it("publishes the newest dispatch attempt when the digests sort against the ordinals", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    const graph = createRuntimeGraph();
+    authority.close();
+    const first = createWorkerExecutionFixture(graph);
+    // Every attempt shares one context, so all of them satisfy the fence and only
+    // the ordinal separates them. This attempt's opaque digest sorts below the
+    // first, so ordering by digest would publish the superseded attempt.
+    let later = first;
+    for (let ordinal = 2; ordinal <= 32 && later === first; ordinal += 1) {
+      const candidate = createWorkerExecutionFixture(graph, undefined, ordinal);
+      if (candidate.dispatch.dispatchId < first.dispatch.dispatchId) later = candidate;
+    }
+    expect(later.dispatch.dispatchId).not.toBe(first.dispatch.dispatchId);
+    expect(later.dispatch.ordinal).toBeGreaterThan(first.dispatch.ordinal);
+    expect(later.context.contextDigest).toBe(first.context.contextDigest);
+
+    const broker = new SqliteContextBroker({
+      databasePath: fixture.databasePath,
+      dependencies: contextDependencies(),
+    });
+    for (const attempt of [first, later]) {
+      broker.registerDispatch({
+        context: attempt.context,
+        dispatch: attempt.dispatch,
+        completionRequirements: attempt.completionRequirements,
+        taskScope: taskScope(attempt.context.contextDigest),
+      });
+    }
+    broker.close();
+
+    const portal = new SqlitePortalQueryAuthority(fixture.options);
+    const node = portal
+      .listGraphNodes(runtimeFixture.repositoryId, runtimeFixture.runId, graph.revisionDigest)
+      .nodes.find(({ nodeId }) => nodeId === runtimeFixture.task.taskId);
+    expect(node?.dispatchId).toBe(later.dispatch.dispatchId);
+    // The surviving role label comes from the same winning attempt.
+    expect(node?.roleKey).toBe(later.context.role.key);
+    portal.close();
     fixture.dispose();
   });
 

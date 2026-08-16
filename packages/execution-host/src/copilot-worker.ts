@@ -131,7 +131,7 @@ export class CopilotSerialWorkerAdapter {
       dispatchId: validated.dispatch.dispatchId,
       sessionId: validated.dispatch.dispatchId,
       pending: new Set(),
-      note: transcriptNoteSink(input, validated.dispatch, state),
+      note: transcriptNoteSink(input, validated.dispatch, this.sha256, state),
     };
     scope.note("session started");
     let session: CopilotSdkSessionPort | undefined;
@@ -309,37 +309,45 @@ interface RunScope {
  * One captured record is exactly one displayed row, so multi-line output is
  * split here rather than allowed to forge extra rows in the portal terminal.
  *
- * The ordinal is seeded from the durable owner high-water mark because the same
- * dispatch is re-driven after a host restart: restarting at 1 would reuse a
- * retained `lineId` under a new timestamp and every line up to the previous mark
- * would be refused. A refusal is counted rather than swallowed so it reaches the
- * effect outcome details.
+ * The capture identity is the digest of the exact record, so every adapter run
+ * of one dispatch owns its own `lineId` namespace: a re-drive under a new wall
+ * clock cannot reuse a retained identity, and an exact replay still resolves to
+ * the retained line. Nothing seeds the counter from a durable read, so no read
+ * failure can strand the capture on identities the store already holds. The
+ * per-run ordinal keeps two identical lines of one run distinct.
  */
 function transcriptNoteSink(
   input: CopilotWorkerRunInput,
   dispatch: WorkerDispatch,
+  sha256: Sha256,
   state: RunState,
 ): (text: string) => void {
   const port = input.transcript;
   if (port === undefined) return () => undefined;
   const owner = Object.freeze({ kind: "dispatch" as const, id: dispatch.dispatchId });
   let ordinal = 0;
-  try {
-    ordinal = port.latestSequence(dispatch.repositoryId, dispatch.runId, owner);
-  } catch {
-    state.transcriptRefusals += 1;
-  }
   return (text) => {
     for (const line of text.split(/\r\n|[\n\r\u0085\u2028\u2029]/u)) {
       if (line.length === 0) continue;
       ordinal += 1;
+      const occurredAt = input.broker.dependencies.currentTime();
       try {
         port.append({
           repositoryId: dispatch.repositoryId,
           runId: dispatch.runId,
           owner,
-          lineId: `${dispatch.dispatchId}:${ordinal}`,
-          occurredAt: input.broker.dependencies.currentTime(),
+          lineId: sha256.digest(
+            canonicalBytes(
+              canonicalValue({
+                dispatchId: dispatch.dispatchId,
+                occurredAt,
+                ordinal,
+                stream: "system",
+                text: line,
+              }),
+            ),
+          ),
+          occurredAt,
           stream: "system",
           text: line,
         });

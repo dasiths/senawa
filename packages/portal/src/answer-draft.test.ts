@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   answerDraftIdentity,
-  answerDraftRunPrefix,
   answerDraftStorageKey,
   clearAnswerDrafts,
+  dropRunAnswerDrafts,
   loadAnswerDrafts,
   MAX_ANSWER_DRAFT_LENGTH,
   MAX_ANSWER_DRAFTS,
@@ -106,11 +106,9 @@ describe("answer draft persistence", () => {
     writeAnswerDraft(storage, retained, "keep");
     writeAnswerDraft(storage, otherRepository, "keep");
 
-    const prefix = answerDraftRunPrefix("repository_one", "run_one");
-    pruneAnswerDrafts(
-      storage,
-      [...loadAnswerDrafts(storage).keys()].filter((identity) => !identity.startsWith(prefix)),
-    );
+    // Exactly the call the app makes when the selected run changes, so a
+    // production revert cannot pass through a reimplementation here.
+    dropRunAnswerDrafts(storage, "repository_one", "run_one");
 
     expect([...loadAnswerDrafts(storage).keys()].toSorted()).toEqual(
       [retained, otherRepository].toSorted(),

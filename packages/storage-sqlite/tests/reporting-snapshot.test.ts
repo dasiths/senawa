@@ -176,6 +176,38 @@ describe("SQLite reporting snapshot authority", () => {
     fixture.authority.close();
   });
 
+  it("surfaces a refused transcript capture count on the effect record", () => {
+    const fixture = createAuthority();
+    seedWorkerEffectOutcome(fixture.options.databasePath, { transcriptRefusals: 3 });
+    seedWorkerEffectOutcome(fixture.options.databasePath, {}, "quiet");
+    const reporting = new SqliteReportingSnapshotAuthority({
+      databasePath: fixture.options.databasePath,
+      dependencies,
+    });
+
+    const snapshot = reporting.captureReportingSnapshot(
+      runtimeFixture.repositoryId,
+      runtimeFixture.runId,
+    );
+    const effects = snapshot.sections
+      .find(({ name }) => name === "trajectory")
+      ?.records.filter(({ kind }) => kind === "effect");
+
+    expect(
+      effects?.find(({ identity }) => identity === "intent_transcript-refusals")?.scalars,
+    ).toEqual(expect.arrayContaining([{ name: "transcriptRefusals", value: 3 }]));
+    // A run that refused nothing carries no count at all, so a non-zero value is
+    // the only thing an operator ever reads here.
+    expect(
+      effects
+        ?.find(({ identity }) => identity === "intent_transcript-refusals-quiet")
+        ?.scalars.map(({ name }) => name),
+    ).not.toContain("transcriptRefusals");
+
+    reporting.close();
+    fixture.authority.close();
+  });
+
   it("links allowance resolutions to actor, policy, escalation, limits, result, and time", () => {
     const fixture = createAuthority();
     seedAllowanceResolution(fixture.options.databasePath);
@@ -503,6 +535,72 @@ function seedRestrictedWorkerAsset(databasePath: string): void {
       canonicalStringify({ status: "accepted" }),
     );
   database.close();
+}
+
+function seedWorkerEffectOutcome(
+  databasePath: string,
+  details: Readonly<Record<string, number>>,
+  suffix = "",
+): void {
+  const database = new Database(databasePath);
+  const runKey = canonicalStringify([runtimeFixture.repositoryId, runtimeFixture.runId]);
+  const label = suffix.length === 0 ? "" : `-${suffix}`;
+  const commandId = `command_transcript-refusals${label}`;
+  const intentId = `intent_transcript-refusals${label}`;
+  const operationId = `operation_transcript-refusals${label}`;
+  const sequence = suffix.length === 0 ? 20 : 21;
+  try {
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO runner_runs(
+           run_key, repository_id, run_id, context_digest, cursor
+         ) VALUES (?, ?, ?, ?, 0)`,
+      )
+      .run(runKey, runtimeFixture.repositoryId, runtimeFixture.runId, "9".repeat(64));
+    database
+      .prepare(
+        `INSERT INTO runner_commands(
+           command_id, run_key, operation_id, sequence, canonical_command
+         ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        commandId,
+        runKey,
+        operationId,
+        sequence,
+        canonicalStringify({ commandId, kind: "worker", operationId }),
+      );
+    database
+      .prepare(
+        `INSERT INTO runner_effect_intents(
+           intent_id, run_key, command_id, owner_id, fence, attempt_id, canonical_intent
+         ) VALUES (?, ?, ?, 'owner_report', 1, 'attempt_report', ?)`,
+      )
+      .run(
+        intentId,
+        runKey,
+        commandId,
+        canonicalStringify({ command: { commandId, kind: "worker", operationId } }),
+      );
+    database
+      .prepare(
+        `INSERT INTO runner_effect_outcomes(
+           intent_id, attempt_id, commit_cursor, status, canonical_outcome
+         ) VALUES (?, 'attempt_report', ?, 'completed', ?)`,
+      )
+      .run(
+        intentId,
+        sequence,
+        canonicalStringify({
+          details: { dispatchId: "dispatch_report", ...details },
+          observedAt: "2026-08-14T10:12:00.000Z",
+          origin: "dispatch",
+          status: "completed",
+        }),
+      );
+  } finally {
+    database.close();
+  }
 }
 
 function seedAllowanceResolution(databasePath: string): void {

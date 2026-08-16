@@ -10,9 +10,8 @@ import {
 import { allowanceCommandDraft, allowanceReviewIsCurrent } from "./allowance-review.js";
 import {
   answerDraftIdentity,
-  answerDraftRunPrefix,
   clearAnswerDrafts,
-  loadAnswerDrafts,
+  dropRunAnswerDrafts,
   pruneAnswerDrafts,
   readAnswerDraft,
   writeAnswerDraft,
@@ -913,13 +912,7 @@ export class PortalApplication {
   #dropDepartedRunDrafts(): void {
     const departed = this.#selectedIdentity();
     if (departed === undefined) return;
-    const prefix = answerDraftRunPrefix(departed.repositoryId, departed.runId);
-    pruneAnswerDrafts(
-      sessionStorage,
-      [...loadAnswerDrafts(sessionStorage).keys()].filter(
-        (draftIdentity) => !draftIdentity.startsWith(prefix),
-      ),
-    );
+    dropRunAnswerDrafts(sessionStorage, departed.repositoryId, departed.runId);
   }
 
   #syncQuestionTick(): void {

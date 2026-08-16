@@ -19,7 +19,7 @@ export function answerDraftIdentity(
 }
 
 /** Identity prefix shared by every draft of one run, used to drop exactly that run. */
-export function answerDraftRunPrefix(repositoryId: string, runId: string): string {
+function answerDraftRunPrefix(repositoryId: string, runId: string): string {
   return `${repositoryId}\u0000${runId}\u0000`;
 }
 
@@ -57,6 +57,19 @@ export function pruneAnswerDrafts(storage: SessionStorageLike, active: Iterable<
   const retained = new Map([...drafts].filter(([identity]) => keep.has(identity)));
   if (retained.size === drafts.size) return;
   persist(storage, retained);
+}
+
+/** Leaving a run drops exactly that run's drafts; every other run keeps its own. */
+export function dropRunAnswerDrafts(
+  storage: SessionStorageLike,
+  repositoryId: string,
+  runId: string,
+): void {
+  const prefix = answerDraftRunPrefix(repositoryId, runId);
+  pruneAnswerDrafts(
+    storage,
+    [...loadAnswerDrafts(storage).keys()].filter((identity) => !identity.startsWith(prefix)),
+  );
 }
 
 /** Drops every persisted draft, used when the session or the selected run changes. */

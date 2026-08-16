@@ -4628,18 +4628,24 @@ export class SqlitePortalQueryAuthority {
                 d.dispatch_id AS dispatch_id,
                 b.context_digest AS context_digest
          FROM context_dispatches d JOIN context_bases b ON b.context_id = d.context_id
-         WHERE d.repository_id = ? AND d.run_id = ? ORDER BY d.dispatch_id`,
+         WHERE d.repository_id = ? AND d.run_id = ?
+         ORDER BY CAST(json_extract(d.canonical_dispatch, '$.ordinal') AS INTEGER) DESC,
+                  d.dispatch_id DESC`,
       )
       .all(repositoryId, runId)) {
       if (row.task_id === null || row.generation === null) continue;
       const key = generationKey(row.task_id, row.generation);
       // A durable fence names the current context exactly, so a dispatch that
       // does not match it is superseded and must never be published as current.
-      // Only an unfenced node falls back to the newest registration, which is
-      // then the only current candidate authority has.
+      // Only an unfenced node falls back to the newest attempt, which is then
+      // the only current candidate authority has. Rows arrive newest attempt
+      // first because the dispatch ordinal, not its opaque digest, orders them,
+      // so the first accepted row wins and later rows never displace it. The
+      // surviving role label comes from that same winning row.
       const fence = currentContextDigests.get(key);
       const current = fence === undefined || fence === row.context_digest;
-      if (!current && dispatched.get(key)?.dispatchId !== undefined) continue;
+      const retained = dispatched.get(key);
+      if (retained !== undefined && (retained.dispatchId !== undefined || !current)) continue;
       dispatched.set(key, {
         ...(current ? { dispatchId: row.dispatch_id } : {}),
         ...(row.role_key === null ? {} : { roleKey: row.role_key }),
@@ -9251,34 +9257,10 @@ export class SqliteContextBroker {
   }
 
   /**
-   * Bounded durable high-water read that lets a restarted capture continue after
-   * the last retained line instead of colliding with it.
+   * Bounded durable high-water read used by the retention and page bounds; the
+   * next owner-scoped sequence is assigned inside the append transaction so no
+   * caller has to read it first.
    */
-  latestTranscriptSequence(
-    repositoryId: string,
-    runId: string,
-    owner: AgentTranscriptOwner,
-  ): number {
-    const ownerKind: string = owner.kind;
-    if (ownerKind === "run")
-      throw new AgentTranscriptRefusalError(
-        "invalid-scope",
-        "Agent transcript capture cannot read the run projection scope",
-      );
-    validateOpaqueIdentity(owner.id);
-    const run = this.#database
-      .prepare<[string, string], { run_key: string }>(
-        "SELECT run_key FROM runs WHERE repository_id = ? AND run_id = ?",
-      )
-      .get(repositoryId, runId);
-    if (run === undefined)
-      throw new AgentTranscriptRefusalError(
-        "unknown-run",
-        "Agent transcript references an unknown run",
-      );
-    return this.#latestOwnerSequence(run.run_key, owner);
-  }
-
   #nextTranscriptSequence(runKey: string, input: AgentTranscriptLine): number {
     return this.#latestOwnerSequence(runKey, input.owner) + 1;
   }
@@ -9380,8 +9362,6 @@ export class SqliteContextBroker {
     this.assets = new SqliteContextAssetAuthority(this);
     this.transcript = Object.freeze({
       append: (record: AgentTranscriptLine) => void this.appendTranscript(record),
-      latestSequence: (repositoryId: string, runId: string, owner: AgentTranscriptOwner) =>
-        this.latestTranscriptSequence(repositoryId, runId, owner),
     });
     this.authority = Object.freeze({
       snapshot: () => this.#loadAuthority().snapshot(),

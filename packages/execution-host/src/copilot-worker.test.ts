@@ -338,13 +338,10 @@ describe("CopilotSerialWorkerAdapter", () => {
       });
       // One record is exactly one row, and its identity makes a replay recognisable.
       expect(line.text).not.toMatch(/[\n\r\u0085\u2028\u2029]/u);
-      expect(line.lineId.startsWith(`${fixture.dispatch.dispatchId}:`)).toBe(true);
+      expect(line.lineId).toMatch(/^[0-9a-f]{64}$/u);
     }
     expect(new Set(transcript.lines.map(({ lineId }) => lineId)).size).toBe(
       transcript.lines.length,
-    );
-    expect(transcript.lines.map(({ lineId }) => lineId)).toEqual(
-      transcript.lines.map((_, index) => `${fixture.dispatch.dispatchId}:${index + 1}`),
     );
     const captured = JSON.stringify(transcript.lines);
     for (const forbidden of [
@@ -360,17 +357,17 @@ describe("CopilotSerialWorkerAdapter", () => {
     }
   });
 
-  it("continues a re-driven dispatch after the durable high-water mark", async () => {
+  it("continues a re-driven dispatch without reusing a retained capture identity", async () => {
     const transcript = new RecordingTranscript();
     const firstSdk = new FakeSdkPort();
     firstSdk.onSend = complete("completed");
     const first = harness(firstSdk, { transcript });
     expect((await first.adapter.run(first.input)).status).toBe("completed");
-    const retained = transcript.lines.map(({ lineId }) => lineId);
-    expect(retained).toHaveLength(3);
+    expect(transcript.lines).toHaveLength(3);
 
-    // A host restart re-drives the same dispatch under a new wall clock, so the
-    // prior identities would collide if capture restarted its ordinal at one.
+    // A host restart re-drives the same dispatch under a new wall clock. Nothing
+    // seeds the capture from a durable read, so no read failure can strand it on
+    // the identities the owner already retains, and every line still lands.
     const secondSdk = new FakeSdkPort();
     secondSdk.onSend = complete("completed");
     const second = harness(secondSdk, { transcript });
@@ -380,32 +377,31 @@ describe("CopilotSerialWorkerAdapter", () => {
 
     expect(redriven.status).toBe("completed");
     expect(redriven.transcriptRefusals).toBeUndefined();
-    expect(transcript.lines.map(({ lineId }) => lineId)).toEqual(
-      Array.from({ length: 6 }, (_, index) => `${first.dispatch.dispatchId}:${index + 1}`),
-    );
+    expect(transcript.lines).toHaveLength(6);
+    expect(new Set(transcript.lines.map(({ lineId }) => lineId)).size).toBe(6);
     expect(transcript.lines.map(({ occurredAt }) => occurredAt)).toEqual([
       ...Array.from({ length: 3 }, () => "2026-08-13T00:00:00.000Z"),
       ...Array.from({ length: 3 }, () => "2026-08-13T01:00:00.000Z"),
     ]);
-    // The very identity the seeded ordinal skipped is still refused on conflict.
-    expect(() =>
-      transcript.append({
-        repositoryId: first.dispatch.repositoryId,
-        runId: first.dispatch.runId,
-        owner: { kind: "dispatch", id: first.dispatch.dispatchId },
-        lineId: `${first.dispatch.dispatchId}:1`,
-        occurredAt: "2026-08-13T01:00:00.000Z",
-        stream: "system",
-        text: "session started",
-      }),
-    ).toThrowError(
-      expect.objectContaining<Partial<AgentTranscriptRefusalError>>({ code: "line-conflict" }),
-    );
-    // An exact replay of a retained line stays idempotent.
-    const before = transcript.lines.length;
-    const replayed = required(transcript.lines[0]);
-    transcript.append(replayed);
-    expect(transcript.lines).toHaveLength(before);
+  });
+
+  it("keeps an exact replay of one dispatch idempotent", async () => {
+    const transcript = new RecordingTranscript();
+    const firstSdk = new FakeSdkPort();
+    firstSdk.onSend = complete("completed");
+    const first = harness(firstSdk, { transcript });
+    expect((await first.adapter.run(first.input)).status).toBe("completed");
+    const retained = transcript.lines.map(({ lineId }) => lineId);
+
+    // An exact replay reproduces every record, so the durable store recognises
+    // each identity and neither duplicates a row nor refuses the capture.
+    const replaySdk = new FakeSdkPort();
+    replaySdk.onSend = complete("completed");
+    const replay = harness(replaySdk, { transcript });
+    const replayed = await replay.adapter.run(replay.input);
+
+    expect(replayed.transcriptRefusals).toBeUndefined();
+    expect(transcript.lines.map(({ lineId }) => lineId)).toEqual(retained);
   });
 
   it("reports refused transcript capture through the run result", async () => {
@@ -417,8 +413,8 @@ describe("CopilotSerialWorkerAdapter", () => {
     const result = await fixture.adapter.run(fixture.input);
 
     expect(result.status).toBe("completed");
-    // One refused seed read plus one refusal for every line capture attempted.
-    expect(result.transcriptRefusals).toBe(4);
+    // One refusal for every line capture attempted, and nothing else to fail.
+    expect(result.transcriptRefusals).toBe(3);
     expect(failing.lines).toHaveLength(0);
   });
 
@@ -1456,12 +1452,6 @@ class RecordingTranscript implements AgentTranscriptPort {
         "Agent transcript line conflicts with prior content",
       );
     }
-  }
-
-  latestSequence(_repositoryId: string, _runId: string, owner: AgentTranscriptOwner): number {
-    if (this.failing)
-      throw new AgentTranscriptRefusalError("unknown-run", "Transcript sink is unavailable");
-    return this.lines.filter((line) => sameOwner(line.owner, owner)).length;
   }
 }
 

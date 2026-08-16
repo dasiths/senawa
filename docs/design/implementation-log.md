@@ -8361,8 +8361,8 @@ Passed on 2026-08-15:
   poll without touching the event contract.
 * Consequence: Schema 13 changes in place because it is unreleased and its
   checksum is recomputed at load. `AgentTranscriptLine` gains a required
-  `lineId`; the Copilot worker derives it from the dispatch identity and a
-  monotonic ordinal so an exact dispatch replay stays idempotent. The run owner
+  `lineId`; the Copilot worker derives it from the exact record so an exact
+  dispatch replay stays idempotent. The run owner
   kind is a read-only projection: capture refuses it, and the durable table
   still admits only dispatch, task, and phase owners.
 * Amendment: the re-review repair below replaces the `portal_revision` bump with
@@ -8407,9 +8407,9 @@ An adversarial review rejected Phase 16. Every finding is repaired below.
 
 * `AgentTranscriptLine` gained a required `lineId`. The port contract could not
   refuse a conflicting record without an identity the caller supplies.
-* The seven Playwright screenshot baselines regenerate with different bytes at
-  identical dimensions on every run. None of the captured states renders the
-  graph route or the terminal, so they were restored rather than committed.
+* The seven changed Playwright screenshot captures were committed. They are
+  retained as human-review evidence, not as byte baselines, and their bytes are
+  not stable across runs.
 
 ### Validation
 
@@ -8436,16 +8436,16 @@ each with its own regression test.
   ordinal at one inside a factory that runs once per `run()`, so a supported
   same-`dispatchId` re-drive after a host restart reused a retained `lineId`
   under a new timestamp, the durable append refused it, and a bare `catch`
-  swallowed the refusal. `AgentTranscriptPort` now exposes a bounded
-  `latestSequence` read and the sink seeds its ordinal from that durable
-  high-water mark, so a re-drive continues after the previous mark.
-* Untyped and silent transcript refusal. `appendTranscript` and
-  `latestTranscriptSequence` raise `AgentTranscriptRefusalError` with a
-  `line-conflict`, `unknown-run`, or `invalid-scope` code instead of a bare
-  `TypeError`. The adapter counts refusals and reports them through the existing
-  effect outcome details as `transcriptRefusals`, present only when non-zero;
-  the alternative of writing one more `system` line was rejected because the
-  same sink that refused the line would usually refuse that note too.
+  swallowed the refusal. This repair seeded the ordinal from a durable
+  high-water read; the final review repair below replaced that seed with a
+  content-derived capture identity.
+* Untyped and silent transcript refusal. `appendTranscript` raises
+  `AgentTranscriptRefusalError` with a `line-conflict`, `unknown-run`, or
+  `invalid-scope` code instead of a bare `TypeError`. The adapter counts
+  refusals and reports them through the existing effect outcome details as
+  `transcriptRefusals`, present only when non-zero; the alternative of writing
+  one more `system` line was rejected because the same sink that refused the
+  line would usually refuse that note too.
 * Permanently stale graph route during active output. Migration 013 adds a
   `transcript_revision` column and bumps only that component, leaving
   `portal_revision` alone. `PortalSyncVector` carries `transcriptRevision`,
@@ -8453,12 +8453,12 @@ each with its own regression test.
   and a new `transcriptRevisionsEqual` drives the transcript sync from the poll.
 * Superseded dispatch published as current. When a task fence exists and no
   dispatch matches its `current_context_digest`, the graph node now reports no
-  `dispatchId` at all; the newest-registration fallback applies only to an
-  unfenced node. The dispatch scan orders by `dispatch_id` rather than `rowid`,
-  which `VACUUM` or a restore may renumber.
+  `dispatchId` at all; the newest-attempt fallback applies only to an unfenced
+  node. This repair ordered the scan by `dispatch_id` rather than `rowid`; the
+  final review repair below replaced that with the dispatch ordinal.
 * Answer drafts of other runs discarded. Leaving a run prunes only that run's
-  drafts through `pruneAnswerDrafts` and the shared `answerDraftRunPrefix`;
-  session expiry still clears everything.
+  drafts through the run-scoped identity prefix; session expiry still clears
+  everything.
 * Run-wide scope erased the capture owner. The durable run projection carries
   each row's originating owner, the codec accepts a record owner that differs
   from a `run` page owner while still refusing a `run` record owner, and the
@@ -8467,24 +8467,31 @@ each with its own regression test.
   new `scope-mismatch` code, which the supervisor maps to a `400 invalid-request`
   instead of the cursor-ahead conflict.
 
-### Screenshot verdict
+### Screenshot policy
 
-The seven changed PNGs differ only by nondeterministic capture data at identical
-dimensions, so they were restored from `23bf33d` and the prior log claim stands.
-The evidence is a full pixel decode and comparison of both revisions: every pair
-has identical dimensions and colour type, at most 0.53 percent of pixels differ,
-and every differing region is fixture wall clock (`2026-08-15T18:27:54` against
-`2026-08-16T08:43:42`), a "Waiting 28s" against "Waiting 37s" elapsed counter, a
-changed receipt count, or one capture taken while the status still read "Data
-loading". No control, label, or layout differs. These baselines are captured
-artifacts rather than compared baselines: `captureState` writes the file and
-asserts only byte length and byte diversity.
+The seven changed PNGs under `packages/portal/tests/screenshots` were committed
+during Phase 16 and were never restored to their earlier bytes. Git is the
+evidence: `git diff --name-only 23bf33d..d870d69 --
+packages/portal/tests/screenshots` lists `amendment-desktop`,
+`conflict-desktop`, `delivery-desktop`, `delivery-mobile`,
+`need-review-desktop`, `overview-desktop`, and `overview-mobile`, and
+`git log 23bf33d..d870d69 -- packages/portal/tests/screenshots` names exactly
+one commit, `ccd7b1a`.
+
+These files are capture artifacts kept as human-review evidence, not byte
+baselines. No specification compares their bytes. `captureState` in
+`packages/portal/tests/browser/support.ts` writes the file and then asserts only
+`bytes.byteLength > 10_000` and `new Set(bytes).size > 64`; no
+`toHaveScreenshot`, `toMatchSnapshot`, or equivalent byte comparison exists
+anywhere under `packages/portal/tests`. Their bytes are not stable across runs,
+because the captures embed fixture wall clock text and elapsed counters.
+
+Policy: a changed capture under `packages/portal/tests/screenshots` is committed
+as evidence and is reviewed by looking at it. Neither this log nor any review
+may claim that these bytes were restored, pinned, or compared.
 
 ### Deviations
 
-* `context_dispatches` has no registration-sequence column and adding one to a
-  released migration was out of scope, so the stable logical ordering is the
-  dispatch identity, which the review named as an accepted option.
 * The run-wide plain-text export now includes the owner column, so its rows
   differ from the node scope. The pane, clipboard, and download still share one
   exact projection.
@@ -8507,6 +8514,85 @@ Two repairs were mutation checked rather than only asserted. Removing the
 ordinal seed fails both the adapter unit test and the durable app-level re-drive
 test; the app-level test only observes a package change after a rebuild, because
 `apps/**` tests import built `dist` output.
+
+## Phase 16 final review repair
+
+A third independent review rejected Phase 16. Every finding is repaired below.
+
+### Findings and repairs
+
+* False screenshot claim in this log. Two statements asserted that the seven
+  changed captures were restored from `23bf33d` and that the earlier claim
+  stood. Git refutes both: the seven blobs at `d870d69` differ from `23bf33d`,
+  they changed in `ccd7b1a`, and no later commit touched them. Both statements
+  are deleted and replaced by the "Screenshot policy" section above, which
+  states the evidence, the assertion `captureState` actually makes, and a policy
+  that prevents the claim from recurring.
+* Superseded dispatch attempt published as current. The graph dispatch scan
+  ordered by `dispatch_id`, an opaque digest. Every attempt against one context
+  shares the fence's `current_context_digest`, so all of them passed the fence
+  test and the highest-sorting digest won, letting a retried task publish
+  attempt 1 while attempt 3 ran. The scan now orders by
+  `CAST(json_extract(d.canonical_dispatch, '$.ordinal') AS INTEGER) DESC` with
+  `d.dispatch_id DESC` as the deterministic tiebreak, and the loop keeps the
+  first accepted row rather than the last, so the surviving `roleKey` comes from
+  the same winning attempt. A same-context re-dispatch at a higher ordinal is an
+  intended production path, so the newest attempt is the correct answer.
+* Unsafe transcript seed path. The adapter read the durable owner high-water
+  sequence outside the append transaction; a failed read left the ordinal at 0
+  and every append for a re-driven dispatch was refused, losing output silently.
+  The preferred repair was taken: each adapter run now owns its `lineId`
+  namespace. The capture identity is the digest of the exact record
+  (`dispatchId`, per-run ordinal, `occurredAt`, stream, and text), so a re-drive
+  under a new wall clock cannot reuse a retained identity and an exact replay
+  still resolves to the retained line. No durable per-run nonce was available:
+  the supervisor's `attemptId` counter is in memory and restarts with the
+  process, so it cannot distinguish a run after a host restart. Nothing seeds
+  the counter now, so `AgentTranscriptPort.latestSequence` and
+  `SqliteContextBroker.latestTranscriptSequence` were removed as dead code. The
+  durable store still assigns the owner-scoped sequence inside the append
+  transaction.
+* Unread refusal count. `transcriptRefusals` reached the effect outcome details
+  and stopped there. The reporting snapshot effect record now carries a
+  `transcriptRefusals` scalar read from `$.details.transcriptRefusals`, and the
+  scalar builder drops null, so the count appears only when capture actually
+  refused a line. Surfacing it was chosen over rewording the claim.
+* Vacuous adapter assertions. Two assertions in the re-drive test called the
+  test's own `RecordingTranscript.append` fake and could not fail on any
+  production defect. They are deleted; a separate test now proves that an exact
+  replay of one dispatch stays idempotent through the adapter.
+* Self-fulfilling portal test. The departed-run draft test reimplemented the
+  retain-set filter inline, so reverting the production change still passed.
+  `dropRunAnswerDrafts` now holds that logic in `answer-draft.ts`,
+  `answerDraftRunPrefix` is module-private, and the app and the test both call
+  the exported helper.
+
+### Regression tests
+
+* `packages/storage-sqlite/tests/human-authority.test.ts` registers two
+  dispatches for one context whose digests sort inverted against their ordinals
+  and asserts the node reports the higher ordinal's `dispatchId` and that
+  attempt's `roleKey`.
+* `packages/execution-host/src/copilot-worker.test.ts` re-drives one dispatch
+  under a new clock against an owner that already retains a full prior run and
+  asserts six distinct identities, six retained lines, and no refusal; a second
+  test asserts an exact replay adds no line and raises no refusal.
+* `packages/storage-sqlite/tests/reporting-snapshot.test.ts` asserts a non-zero
+  `transcriptRefusals` appears on the effect record and that an effect without
+  refusals carries no such scalar.
+* `packages/portal/src/answer-draft.test.ts` calls `dropRunAnswerDrafts`, the
+  exact function the app calls when the selected run changes.
+
+### Deviations
+
+* The capture `lineId` is no longer human readable. It is a content digest, so
+  the identity is meaningful only as a replay key, which is all the durable
+  contract uses it for.
+
+### Validation
+
+Passed on 2026-08-16. Playwright was not run for this repair; the browser matrix
+result above is the last recorded run.
 
 ## Decision D-093: Restore run-console parity without a graph library
 

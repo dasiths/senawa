@@ -140,6 +140,7 @@ export function createRuntimeGraph(revision = 1) {
 export function createWorkerExecutionFixture(
   graph = createRuntimeGraph(),
   capabilities: readonly string[] = ["worker.submit.completion"],
+  ordinal = 1,
 ) {
   const contextTask = {
     taskId: runtimeFixture.task.taskId,
@@ -215,7 +216,7 @@ export function createWorkerExecutionFixture(
   const dispatchInput = {
     repositoryId: runtimeFixture.repositoryId,
     runId: kernelRunId(runtimeFixture.runId),
-    ordinal: 1,
+    ordinal,
     workerPrincipalId: "principal_worker",
     roleKey: consumerKey("implementer"),
     capabilities,
