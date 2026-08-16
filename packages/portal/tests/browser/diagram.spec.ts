@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { PHASE_EXECUTION_ORDER } from "./global-setup.js";
 import { assertDocumentFits, bootstrapPortal, navigate, runs, selectRun } from "./support.js";
 
 test("renders, selects, traverses, and zooms the workflow diagram", async ({ page }, testInfo) => {
@@ -76,6 +77,54 @@ test("renders, selects, traverses, and zooms the workflow diagram", async ({ pag
   await expect(page.locator(".diagram-state-not-started")).not.toHaveCount(0);
   expect(diagnostics.severe()).toEqual([]);
 });
+
+test("orders phases by execution order in every graph view", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await navigate(page, "Graph");
+
+  // The authority pages nodes in digest order, so a view that echoes arrival
+  // order renders the workflow in an order unrelated to how it runs.
+  await page.getByRole("tab", { name: "Diagram", exact: true }).click();
+  await expect(page.locator(".diagram-node")).not.toHaveCount(0);
+  expect(await phaseOrder(page, ".diagram-node")).toEqual(PHASE_EXECUTION_ORDER);
+
+  await page.getByRole("tab", { name: "Tree", exact: true }).click();
+  await expect(page.locator(".tree-item")).not.toHaveCount(0);
+  expect(await phaseOrder(page, ".tree-item")).toEqual(PHASE_EXECUTION_ORDER);
+
+  await page.getByRole("tab", { name: "Table", exact: true }).click();
+  await expect(page.locator(".graph-table tbody tr")).not.toHaveCount(0);
+  expect(await phaseOrder(page, ".graph-table tbody tr")).toEqual(PHASE_EXECUTION_ORDER);
+  expect(diagnostics.severe()).toEqual([]);
+});
+
+/** Reads the phase titles a view renders, in the order it renders them. */
+async function phaseOrder(page: Page, selector: string): Promise<readonly string[]> {
+  const texts = await page.locator(selector).evaluateAll((elements) =>
+    elements.map((element) => {
+      const label = element.getAttribute("aria-label");
+      if (label !== null) return label.replace(/\s+/gu, " ");
+      // Tree items nest their children, so descendant text would report an
+      // ancestor once per descendant.
+      const own = [...element.childNodes]
+        .filter((node) => node.nodeType === 3)
+        .map((node) => node.textContent ?? "")
+        .join(" ")
+        .trim();
+      if (own.length > 0) return own.replace(/\s+/gu, " ");
+      // Table cells carry no separator of their own, so join them.
+      return [...element.children]
+        .map((child) => child.textContent ?? "")
+        .join(" ")
+        .replace(/\s+/gu, " ")
+        .trim();
+    }),
+  );
+  return texts
+    .filter((text) => /\bphase\b/u.test(text))
+    .map((text) => PHASE_EXECUTION_ORDER.find((key) => new RegExp(`\\b${key}\\b`, "u").test(text)))
+    .filter((key): key is string => key !== undefined);
+}
 
 async function snapshot(page: Page) {
   return await page.evaluate(

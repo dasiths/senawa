@@ -23,6 +23,7 @@ import {
   digestAccountingAssessment,
   digestPhaseOutputSet,
   digestSelectedTaskSet,
+  phaseId as kernelPhaseId,
   runId as kernelRunId,
   sha256Digest,
   taskId,
@@ -664,6 +665,31 @@ function seedWorkspaceRun(
   workspace.close();
 }
 
+function required<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("Fixture phase is missing");
+  return value;
+}
+
+/**
+ * Phases preceding the delivery phase, chained the way a real workflow depends.
+ *
+ * Their identifiers are deliberately not in execution order, because digest
+ * order is what the authority pages nodes in. A fixture whose two orders agree
+ * cannot detect a view that renders the workflow backwards.
+ */
+const UPSTREAM_PHASES = Object.freeze([
+  { key: "define", id: kernelPhaseId("phase_zz-define") },
+  { key: "research", id: kernelPhaseId("phase_mm-research") },
+  { key: "plan", id: kernelPhaseId("phase_aa-plan") },
+  { key: "implement", id: kernelPhaseId("phase_ff-implement") },
+]);
+
+/** Phase keys in the order the workflow runs them. */
+export const PHASE_EXECUTION_ORDER = Object.freeze([
+  ...UPSTREAM_PHASES.map(({ key }) => key),
+  "delivery",
+]);
+
 function portalGraph(hostile = true) {
   return compileWorkflowGraph(
     {
@@ -674,12 +700,21 @@ function portalGraph(hostile = true) {
         source: { locator: "fixture://portal", pointer: "" },
       },
       phases: [
+        ...UPSTREAM_PHASES.map((phase, index) => ({
+          id: phase.id,
+          key: consumerKey(phase.key),
+          generation: definitionGeneration(1),
+          parentId: runtimeFixture.workflowId,
+          source: { locator: "fixture://portal", pointer: `/phases/${phase.key}` },
+          ...(index === 0 ? {} : { dependsOn: [required(UPSTREAM_PHASES[index - 1]).id] }),
+        })),
         {
           id: runtimeFixture.phase.phaseId,
           key: consumerKey("delivery"),
           generation: runtimeFixture.phase.definitionGeneration,
           parentId: runtimeFixture.workflowId,
           source: { locator: "fixture://portal", pointer: "/phases/delivery" },
+          dependsOn: [required(UPSTREAM_PHASES.at(-1)).id],
         },
       ],
       executableWork: [
