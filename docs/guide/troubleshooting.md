@@ -279,7 +279,7 @@ that escalates instead of running unbounded.
 ## Deferred behavior
 
 Evidence-backed deferrals are recorded in
-[Production enhancements](../design/production-enhancements.md), each with its
+[Production enhancements](../design/WIP/redesign-1/production-enhancements.md), each with its
 observed evidence, current behavior, risk, deferral reason, revisit trigger, and
 acceptance test. The current entries are:
 

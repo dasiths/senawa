@@ -181,7 +181,7 @@ takes over. Nothing retries forever.
 
 Whether a given model actually corrects itself is a measurement question, not a
 guarantee. See PE-003 in
-[Production Enhancements](production-enhancements.md#pe-003-model-correction-behavior-is-unproven-without-credits).
+[Production Enhancements](WIP/redesign-1/production-enhancements.md#pe-003-model-correction-behavior-is-unproven-without-credits).
 The current one-slot-per-dispatch limit is recorded as PE-002 in the same
 document.
 

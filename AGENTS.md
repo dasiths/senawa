@@ -4,9 +4,9 @@ These instructions apply to the entire repository.
 
 ## Source of truth
 
-* `docs/design/implementation-plan.md` governs the autonomous implementation
-  sequence and architecture.
-* `docs/design/implementation-log.md` records decisions,
+* `docs/design/WIP/redesign-1/implementation-plan.md` governs the autonomous
+  implementation sequence and architecture.
+* `docs/design/WIP/redesign-1/implementation-log.md` records decisions,
   deviations, validation, commits, and pushes.
 * Old implementation decisions, research, package boundaries, and persisted
   formats do not constrain the implementation.

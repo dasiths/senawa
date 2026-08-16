@@ -37,9 +37,9 @@ the [local supervisor HTTP reference](docs/reference/local-supervisor-http.md),
 and the [remote control-plane reference](docs/reference/remote-control-plane.md).
 
 The [design set](docs/design/README.md) explains why the system behaves this way,
-with the [comprehensive plan](docs/design/implementation-plan.md) as the active
-architecture source and the [implementation
-log](docs/design/implementation-log.md) recording decisions.
+with the [comprehensive plan](docs/design/WIP/redesign-1/implementation-plan.md)
+as the active architecture source and the [implementation
+log](docs/design/WIP/redesign-1/implementation-log.md) recording decisions.
 
 The repository carries no `examples/` tree. Every runnable example lives inside
 the consumer guides: [Getting started](docs/guide/getting-started.md) carries the
@@ -192,7 +192,7 @@ browser run console, and Phase 17 added the design and consumer documentation
 sets. No phase carries the number 15; the former Phase 15 was renumbered to
 Phase 17 so documentation could describe final behavior. Acceptance criteria and
 the decision record live in the [comprehensive
-plan](docs/design/implementation-plan.md).
+plan](docs/design/WIP/redesign-1/implementation-plan.md).
 
 ## Development
 

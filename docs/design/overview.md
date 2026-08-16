@@ -228,7 +228,7 @@ these rules, and [authority-model.md](authority-model.md) for the exact command
 and effect lifecycle.
 
 Behavior that is deliberately deferred is recorded in
-[Production Enhancements](production-enhancements.md) rather than described here.
+[Production Enhancements](WIP/redesign-1/production-enhancements.md) rather than described here.
 
 ## How this is proven
 

@@ -340,7 +340,7 @@ schema and refuses anything oversized, malformed, or conflicting with an already
 accepted slot. Only accepted outputs become readable by downstream mappings.
 
 The alpha exposes the first declared output slot per dispatch; see
-[PE-002](../design/production-enhancements.md) for the deferred multi-slot case.
+[PE-002](../design/WIP/redesign-1/production-enhancements.md) for the deferred multi-slot case.
 
 ### Iteration and rework
 

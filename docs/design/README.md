@@ -43,16 +43,6 @@ Read in this order for a first pass.
 Every design page ends with a section naming the test files and scripts that
 prove its central claims.
 
-## Execution records
-
-* The [Comprehensive Alpha Implementation Plan](implementation-plan.md) is the
-  active architecture and execution source.
-* The [Implementation Log](implementation-log.md) records major choices,
-  deviations, validation, commits, and pushes.
-* [Production Enhancements](production-enhancements.md) records evidence-backed
-  deferred hardening. Behavior listed there is not described as delivered
-  anywhere in the design set.
-
 ## References
 
 * [CLI Reference](../reference/cli.md) for the complete alpha command surface.

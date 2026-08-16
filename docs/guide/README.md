@@ -74,5 +74,5 @@ tells you why the system behaves that way.
   backup, restore, and crash recovery.
 * [Extending Senawa](../design/extending.md) covers adapters, sensors, workers,
   and transports.
-* [Production enhancements](../design/production-enhancements.md) records
+* [Production enhancements](../design/WIP/redesign-1/production-enhancements.md) records
   deferred hardening that the alpha does not claim as delivered.

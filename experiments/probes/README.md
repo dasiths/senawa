@@ -9,7 +9,7 @@ and its dated change log.
 The former aggregate findings and design documents were removed during the alpha
 reset. A probe may inform a new implementation decision, but it is not current
 architecture. New design and implementation authority lives in the
-[comprehensive plan](../../docs/design/implementation-plan.md).
+[comprehensive plan](../../docs/design/WIP/redesign-1/implementation-plan.md).
 
 | Probe                                            | Question                                                                        | Cost         |
 |--------------------------------------------------|---------------------------------------------------------------------------------|--------------|
