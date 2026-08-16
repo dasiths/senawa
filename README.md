@@ -3,27 +3,41 @@ title: Senawa
 description: Deterministic workflow kernel and alpha command-line tooling
 ---
 
-Senawa is being rebuilt as the deterministic workflow kernel of a
-consumer-defined software factory.
+Senawa is the deterministic workflow kernel of a consumer-defined software
+factory. It executes consumer-defined workflows as an auditable state machine on
+your own host, with a local supervisor, a SQLite authority, and a browser run
+console.
 
-The repository is in an alpha implementation reset. The executable creates and
-validates versioned workflow configuration, starts the local supervisor, and
-uses authenticated Unix-socket HTTP for workflow and operational commands.
-Product direction and implementation phases are documented in the
-[comprehensive plan](docs/design/implementation-plan.md), with decisions in the
-[implementation log](docs/design/implementation-log.md).
+The repository is in an alpha implementation reset. Start with
+[Getting started](docs/guide/getting-started.md).
 
-The Node-local supervisor package exposes authenticated HTTP over a private Unix
-socket and session-authenticated HTTP on `127.0.0.1`. See the [local supervisor
-HTTP reference](docs/reference/local-supervisor-http.md) for routes and the alpha
-security boundary. The daemon owns durable command recovery, bounded wake
-processing, service lifecycle, persisted logs, SDK session-store health, and
-state backup composition.
+## Documentation
 
-The optional outbound connector is disabled by default and preserves local
-supervisor authority when enabled. See the [remote control-plane
-reference](docs/reference/remote-control-plane.md) for local enrollment,
-classified synchronization, partition behavior, and reference-server limits.
+* [Consumer guide](docs/guide/README.md) is the index for everything below.
+* [Getting started](docs/guide/getting-started.md) installs the alpha, creates a
+  workflow tree, starts the service, opens the portal, submits a command, and
+  shuts down without spending model credits.
+* [Workflow authoring](docs/guide/workflow-authoring.md) documents every field
+  of `.senawa/workflow.json`.
+* [Portal](docs/guide/portal.md) documents the run console, its workflow
+  diagram, and its human decision surfaces.
+* [Worktree mode](docs/guide/worktree-mode.md) documents the optional isolated
+  workspace mode.
+* [Operations](docs/guide/operations.md) documents paths, credentials, backup,
+  restore, recovery, diagnostics, and the live-worker opt-in.
+* [Security](docs/guide/security.md) documents principals, capabilities, grants,
+  approvals, and the local and remote trust boundaries.
+* [Troubleshooting and limits](docs/guide/troubleshooting.md) documents the
+  platform matrix, common failures, and deferred behavior.
+
+The references define exact surfaces: the [CLI reference](docs/reference/cli.md),
+the [local supervisor HTTP reference](docs/reference/local-supervisor-http.md),
+and the [remote control-plane reference](docs/reference/remote-control-plane.md).
+
+The [design set](docs/design/README.md) explains why the system behaves this way,
+with the [comprehensive plan](docs/design/implementation-plan.md) as the active
+architecture source and the [implementation
+log](docs/design/implementation-log.md) recording decisions.
 
 ## High-level design
 
@@ -131,10 +145,8 @@ stateDiagram-v2
 
 ### Where the branch stands
 
-Phases 0 through 13 are delivered. Phase 14 adds standard delivery workflow
-authoring: external prompt and schema resources, typed phase dataflow,
-schema-selected task fan-out, reviewed plan import, and schema-validated agent
-output. Phase 15 adds consumer documentation. Current status, acceptance
+Phases 0 through 16 are delivered, ending with the browser run console. Phase 17
+adds the design and consumer documentation sets. Current status, acceptance
 criteria, and remaining work live in the [comprehensive
 plan](docs/design/implementation-plan.md).
 
@@ -177,38 +189,16 @@ validation.
 
 ## CLI
 
-`senawa init` creates the complete canonical example at
-`.senawa/workflow.json`. The document contains workflow structure, execution
-policy, roles, model policy, schemas, sensors, gates, and projected work. Init
-non-recursively creates a real `.senawa` directory when needed, exclusively
-creates the file, writes and syncs it, closes it, then syncs `.senawa` and the
-project root. Existing files and directories are never overwritten. A failed
-operation can leave an exclusively created partial file or directory in place;
-init never removes those paths.
+The alpha ships one public executable, `senawa`. It creates and validates
+workflow configuration, owns the local supervisor lifecycle, submits workflow
+commands, reads durable receipts, events, and projections, reviews amendments,
+mints portal sessions, and performs backup, restore, integrity, diagnostics, and
+repair operations.
 
-`senawa init <path>` creates exactly the supplied file and requires its parent
-directory to exist. Even an explicit `.senawa/workflow.json` does not create
-`.senawa`. The default path rejects a stable `.senawa` symlink, but pathname-only
-Node filesystem APIs cannot prevent a hostile parent swap between validation
-and file creation.
-
-`senawa doctor` reads only `.senawa/workflow.json`. It does not search ancestor
-directories or fall back to the earlier root `senawa.json` location. An
-explicit path validates exactly that path, so `senawa doctor senawa.json`
-remains available during manual migration. Doctor reports deterministic syntax
-locations, safe filesystem error codes, and all configuration diagnostics. It
-does not execute sensors, invoke models, start work, or contact a runner. See
-the [CLI reference](docs/reference/cli.md) for the complete alpha surface and
-migration steps.
-
-`senawa service start` launches the detached local supervisor and waits for an
-authenticated status response. Use `senawa service run` for foreground service
-ownership, or `status`, `drain`, `stop`, `logs`, and `recover` for lifecycle
-operations. Workflow commands, receipt and event queries, projection reads, and
-portal bootstrap all use the same authenticated local client. Installed
-packages discover their verified portal manifest relative to the `senawa`
-package. `SENAWA_PORTAL_MANIFEST` remains an explicit development and test
-override.
+See [Getting started](docs/guide/getting-started.md) for the first journey,
+[Operations](docs/guide/operations.md) for the operational commands, and the
+[CLI reference](docs/reference/cli.md) for the complete surface with exact
+arguments and exit codes.
 
 Measured historical substrate behavior remains under
 [experiments/probes](experiments/probes/README.md). Those probes do not imply
