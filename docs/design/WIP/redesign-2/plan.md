@@ -28,7 +28,7 @@ wherever that is possible.
 
 | Phase | Title | State |
 |---|---|---|
-| 0 | Settle the shape | In progress |
+| 0 | Settle the shape | Complete |
 | 1 | An authored workflow becomes a run | Not started |
 | 2 | One phase runs a real agent end to end | Not started |
 | 3 | The consumer command line | Not started |
@@ -53,17 +53,21 @@ answerable with a spike rather than an opinion.
   dependency order. `containerAssignment` resolves to the outermost phase
   ancestor and the layout builds one member level, so depth 1 groups today and
   deeper structure flattens rather than breaking.
-* [ ] **Does the task layer survive?** Determine how deeply tasks are coupled to
-  runner semantics, particularly task scopes and the claims the context broker
-  binds against. Produce a written answer with references, and a recommendation.
-* [ ] **What replaces `toolCallId` as the submission idempotency key?** Evaluate a
-  client nonce, a senawa-issued attempt ordinal, and a content digest against
-  replay, crash, and duplicate-delivery cases.
-* [ ] **What does the authoring format look like?** Draft the three YAML documents
-  for the standard delivery workflow and show, by compiling them, that they
-  produce a graph the kernel accepts.
+* [x] **Does the task layer survive?** Yes, beneath phases. The compiler already
+  synthesises one reserved `phase-executor` task per agent phase, so an agent
+  phase is already a phase containing one task. Criteria cannot parent to a phase
+  at three independent levels, and the runner keys budgets by unit and claims by
+  operation rather than by task, so no runner code changes. Recorded as D-002.
+* [x] **What replaces `toolCallId` as the submission idempotency key?** A content
+  digest of the canonical submission, computed by senawa and never supplied by
+  the agent. Recorded as D-003.
+* [x] **What does the authoring format look like?** Three YAML documents totalling
+  115 lines compile into a 23-node graph the kernel accepts, with zero JSON
+  Pointers and zero budget units authored. Proven by the `v1-authoring` probe and
+  recorded as D-004.
 
 Exit when all four are written down with evidence and the last compiles.
+**Phase 0 is complete.**
 
 ## Phase 1: An authored workflow becomes a run
 

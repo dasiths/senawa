@@ -1,0 +1,37 @@
+# Agent definitions. One persona per entry.
+# A persona is a templated prompt plus how it should be run.
+
+definer:
+  description: Turns a request into an exact definition of done.
+  model: claude-sonnet-4.6
+  prompt: prompts/definer.md
+  # Session scope: run | phase | element
+  #   run     keeps one session for the whole run
+  #   phase   restarts per phase
+  #   element restarts per fan-out member
+  session: run
+
+researcher:
+  description: Establishes what the repository already does.
+  model: claude-sonnet-4.6
+  prompt: prompts/researcher.md
+  session: run
+
+planner:
+  description: Decomposes the definition into independent units of work.
+  model: claude-sonnet-4.6
+  prompt: prompts/planner.md
+  session: run
+
+implementor:
+  description: Implements one unit of work.
+  model: claude-sonnet-4.6
+  prompt: prompts/implementor.md
+  # Members of a fan-out are independent, so each starts clean.
+  session: element
+
+verifier:
+  description: Checks the delivered work against the definition.
+  model: claude-sonnet-4.6
+  prompt: prompts/verifier.md
+  session: run

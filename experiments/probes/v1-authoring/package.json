@@ -1,0 +1,6 @@
+{
+  "name": "senawa-probe-v1-authoring",
+  "private": true,
+  "type": "module",
+  "dependencies": { "yaml": "2.6.1" }
+}

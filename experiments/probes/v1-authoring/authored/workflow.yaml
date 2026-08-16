@@ -1,0 +1,42 @@
+name: standard-delivery
+description: Define, research, plan, implement, and verify a change.
+
+# The shape of the request this workflow accepts.
+input: schemas/request.json
+
+phases:
+  - name: define
+    agent: definer
+    output: schemas/definition.json
+    # No `needs`, so this phase sees only the workflow input.
+    approve: true
+
+  - name: research
+    agent: researcher
+    needs: [define]
+    output: schemas/research.json
+
+  - name: plan
+    agent: planner
+    needs: [define, research]
+    output: schemas/plan.json
+    approve: true
+
+  - name: implement
+    agent: implementor
+    needs: [plan]
+    # Fan out over a collection an earlier phase computed. One member phase per
+    # element, grouped under this phase.
+    forEach: plan.tasks
+    output: schemas/implementation.json
+    gates: [build, tests]
+    # continue: keep going with the members that passed
+    # fail-fast: stop the phase on the first failure
+    onFailure: continue
+
+  - name: verify
+    agent: verifier
+    needs: [implement]
+    output: schemas/verification.json
+    gates: [build, tests, lint]
+    approve: true

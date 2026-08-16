@@ -13,6 +13,8 @@ architecture. New design and implementation authority lives in the
 
 | Probe                                            | Question                                                                        | Cost         |
 |--------------------------------------------------|---------------------------------------------------------------------------------|--------------|
+| [v1-authoring](v1-authoring/README.md)         | Can three YAML documents replace the fourteen-key workflow file?                     | offline      |
+| [v1-authoring](v1-authoring/README.md)           | Can three YAML documents replace the fourteen-key workflow file?                        | offline      |
 | [hook-latency](hook-latency/README.md)           | Is a bundled Node CLI fast enough to run as a `preToolUse` hook?                | offline      |
 | [hook-enforcement](hook-enforcement/README.md)   | Do hooks genuinely block a tool call, and how do they fail?                      | AI credits   |
 | [beads-graph](beads-graph/README.md)             | Does the `bd` contract behave the way the graph adapter needs, under contention? | offline      |

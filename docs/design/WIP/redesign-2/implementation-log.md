@@ -16,7 +16,7 @@ commit messages where they explain a choice.
 
 | Phase | Title | State | Commit |
 |---|---|---|---|
-| 0 | Settle the shape | In progress | |
+| 0 | Settle the shape | Complete | |
 | 1 | An authored workflow becomes a run | Not started | |
 | 2 | One phase runs a real agent end to end | Not started | |
 | 3 | The consumer command line | Not started | |
@@ -51,3 +51,83 @@ commit messages where they explain a choice.
   structure flattens into the top group rather than failing. That matches the
   agreed bound of one level and makes deeper nesting a contained layout change
   rather than a graph model change.
+
+### Decision D-002: Tasks survive beneath phases
+
+* Date: 2026-08-16
+* Status: Accepted
+* Decision: A fan-out member is a phase that contains one reserved unit of
+  executable work. The task layer is not removed.
+* Alternatives: Remove tasks entirely and let phases carry criteria directly;
+  or keep fan-out members as tasks and add nesting at task level.
+* Rationale: The compiler already does this. A phase declaring an `agent`
+  executor synthesises exactly one task keyed `phase-executor`, parented to the
+  phase and carrying the phase's completion policy and criteria, with its source
+  pointer rewritten so diagnostics still point at the authored line. An agent
+  phase is therefore already a phase containing one task, and the author never
+  writes it. Removing tasks would instead mean breaking `isTaskId` at three
+  independent enforcement points and adding a `PhaseId -> CriterionId` edge the
+  model does not have.
+* Consequence: The `continue` failure policy falls out for free. Candidate
+  formation selects a phase's tasks by direct parentage, so a member phase's task
+  is invisible to the parent's candidate set and a failed member cannot block it.
+  The runner needs no change at all: budgets are keyed by unit, capacity by
+  resource, and claims by operation, none of them by task.
+* Risk accepted: amendment quiescence computes affected task scopes with a
+  single-level parent filter, so introducing a nesting level silently narrows the
+  sweep. A member could then claim against a superseded definition, which is
+  exactly what fencing exists to prevent. Phase 6 must make that descent
+  transitive and cover it with a test. Recorded here so it is not discovered
+  later.
+
+### Decision D-003: Submission identity is a content digest senawa computes
+
+* Date: 2026-08-16
+* Status: Accepted
+* Decision: `submissionId` becomes `submission_` followed by the SHA-256 of the
+  canonical submission with its own identifier removed. Senawa computes it during
+  admission. The agent never supplies it.
+* Alternatives: An agent-supplied nonce, or a senawa-issued attempt ordinal handed
+  out at dispatch.
+* Rationale: The preimage already carries repository, run, dispatch, task,
+  context, principal, and payload, so the identifier is cryptographically scoped
+  to one dispatch without trusting the agent. This is the repository's existing
+  style: `dispatchId` and both command bridge identifiers are already content
+  digests. Exact replay becomes unconditional rather than depending on a client
+  reproducing an opaque token. Both alternatives put a key in the model's hands,
+  and submissions live in one flat map per state root, which would make an
+  agent-chosen identifier a cross-dispatch squatting surface.
+* Consequence: The submission-conflict branch becomes unreachable for derived
+  identifiers, because different content is now a different key. It stays for
+  durable rehydration and any wire-supplied identifier, and conflict detection
+  moves to rules that already exist and are already tested. Two deliberately
+  identical submissions collapse into one, which is benign except for a repeated
+  question; that surfaces to the agent as already open rather than being papered
+  over with a salt.
+
+### Decision D-004: The authoring surface is three YAML documents
+
+* Date: 2026-08-16
+* Status: Accepted
+* Decision: A consumer authors `agents.yaml`, `workflow.yaml`, and `sensors.yaml`,
+  with schemas and input and output as JSON. Everything the current template makes
+  an author write by hand is derived.
+* Rationale: Proven by the `v1-authoring` probe rather than argued. 115 lines of
+  YAML compile into a graph of 23 nodes and 29 edges that the kernel accepts,
+  against 853 lines across 18 files with a nesting depth of 7 today. The author
+  writes no JSON Pointer and no budget unit. A phase names `needs`, and the
+  binding is the earlier phase's declared output; a phase names `forEach`, and
+  members lower into grouped member phases.
+* Consequence: Diagnostics must be part of the format rather than an afterthought.
+  The probe already detects an unknown agent, an unknown gate, and a `forEach`
+  that reads a phase the author forgot to declare in `needs`. That last one is the
+  class of mistake the pointer-based format made impossible by making the author
+  state everything twice, so deriving the binding means the compiler has to catch
+  it instead.
+
+### Validation
+
+* `v1-authoring` probe: compiles clean, and reports all three seeded diagnostics
+  when the authored workflow is deliberately broken.
+* Nested phase spike: nine nodes and twelve edges compiled, parent rendered as a
+  container with members inside in dependency order.
