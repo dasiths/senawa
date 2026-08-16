@@ -92,11 +92,14 @@ export type CopilotWorkerRunResult =
       readonly status: "completed" | "blocked" | "missing-completion" | "aborted";
       readonly dispatchId: string;
       readonly submissions: readonly SubmissionAdmissionResult[];
+      /** Present only when durable transcript capture refused at least one line. */
+      readonly transcriptRefusals?: number;
     }
   | {
       readonly status: "crashed";
       readonly dispatchId: string;
       readonly submissions: readonly SubmissionAdmissionResult[];
+      readonly transcriptRefusals?: number;
       readonly error: Readonly<{ readonly code: "copilot-worker-failed" }>;
     };
 
@@ -121,13 +124,14 @@ export class CopilotSerialWorkerAdapter {
       submissionIds: new Set(),
       submissionCount: 0,
       rejectedPhaseOutputs: 0,
+      transcriptRefusals: 0,
     };
     const scope: RunScope = {
       active: true,
       dispatchId: validated.dispatch.dispatchId,
       sessionId: validated.dispatch.dispatchId,
       pending: new Set(),
-      note: transcriptNoteSink(input, validated.dispatch),
+      note: transcriptNoteSink(input, validated.dispatch, state),
     };
     scope.note("session started");
     let session: CopilotSdkSessionPort | undefined;
@@ -215,6 +219,7 @@ export class CopilotSerialWorkerAdapter {
       status,
       dispatchId: validated.dispatch.dispatchId,
       submissions: Object.freeze([...state.submissions]),
+      ...(state.transcriptRefusals === 0 ? {} : { transcriptRefusals: state.transcriptRefusals }),
     };
     return status === "crashed"
       ? Object.freeze({ ...base, status, error: Object.freeze({ code: "copilot-worker-failed" }) })
@@ -288,6 +293,7 @@ interface RunState {
   readonly submissionIds: Set<string>;
   submissionCount: number;
   rejectedPhaseOutputs: number;
+  transcriptRefusals: number;
   completionDisposition?: CompletionSubmission["disposition"];
 }
 
@@ -302,14 +308,27 @@ interface RunScope {
 /**
  * One captured record is exactly one displayed row, so multi-line output is
  * split here rather than allowed to forge extra rows in the portal terminal.
+ *
+ * The ordinal is seeded from the durable owner high-water mark because the same
+ * dispatch is re-driven after a host restart: restarting at 1 would reuse a
+ * retained `lineId` under a new timestamp and every line up to the previous mark
+ * would be refused. A refusal is counted rather than swallowed so it reaches the
+ * effect outcome details.
  */
 function transcriptNoteSink(
   input: CopilotWorkerRunInput,
   dispatch: WorkerDispatch,
+  state: RunState,
 ): (text: string) => void {
   const port = input.transcript;
   if (port === undefined) return () => undefined;
+  const owner = Object.freeze({ kind: "dispatch" as const, id: dispatch.dispatchId });
   let ordinal = 0;
+  try {
+    ordinal = port.latestSequence(dispatch.repositoryId, dispatch.runId, owner);
+  } catch {
+    state.transcriptRefusals += 1;
+  }
   return (text) => {
     for (const line of text.split(/\r\n|[\n\r\u0085\u2028\u2029]/u)) {
       if (line.length === 0) continue;
@@ -318,14 +337,16 @@ function transcriptNoteSink(
         port.append({
           repositoryId: dispatch.repositoryId,
           runId: dispatch.runId,
-          owner: { kind: "dispatch", id: dispatch.dispatchId },
+          owner,
           lineId: `${dispatch.dispatchId}:${ordinal}`,
           occurredAt: input.broker.dependencies.currentTime(),
           stream: "system",
           text: line,
         });
       } catch {
-        // Transcript capture is observability and must never fail a dispatch.
+        // Transcript capture is observability and must never fail a dispatch,
+        // but the refusal is reported through the effect outcome details.
+        state.transcriptRefusals += 1;
       }
     }
   };

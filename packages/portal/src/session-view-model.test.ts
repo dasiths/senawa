@@ -64,6 +64,7 @@ describe("portal route view model", () => {
         workspaceRevision: 1,
         humanRevision: 1,
         portalRevision: 4,
+        transcriptRevision: 0,
         graphRevision: digest,
         lifecycleRevision: 2,
       },

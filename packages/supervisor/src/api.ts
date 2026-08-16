@@ -375,13 +375,15 @@ function mapApiError(error: unknown): SupervisorApiError {
     return invalidRequest("Request validation failed");
   }
   if (error instanceof PageQueryError) {
-    return error.code === "cursor-ahead"
-      ? invalidRequest("Page cursor exceeds the latest authority cursor")
-      : new SupervisorApiError(
-          "event-replay-gap",
-          409,
-          "Event cursor precedes the available replay range",
-        );
+    if (error.code === "cursor-ahead")
+      return invalidRequest("Page cursor exceeds the latest authority cursor");
+    if (error.code === "scope-mismatch")
+      return invalidRequest("Page scope does not name its own run");
+    return new SupervisorApiError(
+      "event-replay-gap",
+      409,
+      "Event cursor precedes the available replay range",
+    );
   }
   if (error instanceof PortalApiError) {
     return new SupervisorApiError(error.code, error.status, error.message);

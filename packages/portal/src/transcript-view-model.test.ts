@@ -21,6 +21,7 @@ import {
   transcriptOwnerLabel,
   transcriptPlainText,
   transcriptRows,
+  transcriptShowsOwner,
 } from "./transcript-view-model.js";
 
 const REPOSITORY = "repository_portal";
@@ -226,9 +227,27 @@ describe("transcript projections", () => {
       ]),
     );
     expect(transcriptRows(view, FIXED_CLOCK)).toEqual([
-      { sequence: 1, time: "04:05:01", stream: "system", text: "session started" },
-      { sequence: 2, time: "04:05:02", stream: "stderr", text: "tool call failed" },
-      { sequence: 3, time: "04:05:03", stream: "stdout", text: "<script>alert(1)</script></div>" },
+      {
+        sequence: 1,
+        time: "04:05:01",
+        stream: "system",
+        text: "session started",
+        owner: TASK_OWNER,
+      },
+      {
+        sequence: 2,
+        time: "04:05:02",
+        stream: "stderr",
+        text: "tool call failed",
+        owner: TASK_OWNER,
+      },
+      {
+        sequence: 3,
+        time: "04:05:03",
+        stream: "stdout",
+        text: "<script>alert(1)</script></div>",
+        owner: TASK_OWNER,
+      },
     ]);
     expect(transcriptPlainText(view, FIXED_CLOCK)).toBe(
       [
@@ -238,6 +257,34 @@ describe("transcript projections", () => {
       ].join("\n"),
     );
     expect(transcriptPlainText(emptyTranscriptView(), FIXED_CLOCK)).toBe("");
+  });
+
+  it("keeps the originating owner of every line in the run-wide scope", () => {
+    const runOwner: PortalTranscriptOwner = Object.freeze({ kind: "run", id: RUN });
+    const view = mergeTranscriptPage(
+      selected(runOwner),
+      page(
+        [
+          record(1, "dispatch line", "system", DISPATCH_OWNER),
+          record(2, "task line", "stdout", TASK_OWNER),
+        ],
+        { owner: runOwner },
+      ),
+    );
+
+    expect(transcriptShowsOwner(view)).toBe(true);
+    expect(transcriptRows(view, FIXED_CLOCK).map(({ owner }) => owner)).toEqual([
+      DISPATCH_OWNER,
+      TASK_OWNER,
+    ]);
+    expect(transcriptPlainText(view, FIXED_CLOCK)).toBe(
+      [
+        `04:05:01\t${transcriptOwnerLabel(DISPATCH_OWNER)}\tsystem\tdispatch line`,
+        `04:05:02\t${transcriptOwnerLabel(TASK_OWNER)}\tstdout\ttask line`,
+      ].join("\n"),
+    );
+    // A node scope names one owner already, so its rows stay unqualified.
+    expect(transcriptShowsOwner(selected())).toBe(false);
   });
 
   it("never lets one record forge an extra plain-text row", () => {

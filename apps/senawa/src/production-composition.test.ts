@@ -23,7 +23,9 @@ import {
   type RuntimeDependencies,
 } from "@senawa/runtime";
 import {
+  SqliteAuthority,
   SqliteContextBroker,
+  SqlitePortalQueryAuthority,
   SqliteRunnerAuthority,
   SqliteWorkspaceIntegrationAuthority,
 } from "@senawa/storage-sqlite";
@@ -372,6 +374,151 @@ describe("production worker composition", () => {
     await service.drain();
     await service.stop();
   }, 15_000);
+
+  it("re-drives one dispatch after a host restart without losing transcript lines", async () => {
+    let redriveAllocation = 0;
+    const root = mkdtempSync(join(tmpdir(), "senawa-worker-redrive-"));
+    roots.add(root);
+    const databasePath = join(root, "authority.db");
+    const authority = new SqliteAuthority({
+      databasePath,
+      assetDirectory: join(root, "assets"),
+      dependencies,
+    });
+    const graph = createRuntimeGraph();
+    expect(
+      authority.submit(
+        runtimeCommand({
+          commandId: "command_redrive-instantiate",
+          intent: "instantiate-run",
+          payload: {
+            workflowId: runtimeFixture.workflowId,
+            configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+            execution: runtimeFixture.execution,
+            graph,
+            phase: runtimeFixture.phase,
+            approvalPolicy: { policy: "no-approval" },
+            escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+            allowancePolicy: runtimeFixture.allowancePolicy,
+          },
+        }),
+        {
+          currentTime: runtimeFixture.currentTime,
+          facts: { source: "redrive-composition-test" },
+          allocateId: () => {
+            redriveAllocation += 1;
+            return `stream-event-redrive-instantiate-${redriveAllocation}`;
+          },
+        },
+      ),
+    ).toMatchObject({ status: "completed" });
+    authority.close();
+
+    // A host restart brings a new wall clock, so re-used line identities would
+    // conflict on occurredAt and every line up to the prior mark would be lost.
+    let currentTime: string = runtimeFixture.currentTime;
+    const broker = new SqliteContextBroker({
+      databasePath,
+      dependencies: {
+        sha256: deterministicSha256,
+        currentTime: () => currentTime,
+        issueGrantToken: () => new Uint8Array(32).fill(7),
+      },
+    });
+    const worker = createWorkerExecutionFixture(graph);
+    broker.registerDispatch({
+      context: worker.context,
+      dispatch: worker.dispatch,
+      completionRequirements: worker.completionRequirements,
+      taskScope: workerTaskScope(worker),
+    });
+    const input = decodeCanonicalJsonValue({
+      dispatchId: worker.dispatch.dispatchId,
+      routeSelection: worker.routeSelection,
+      timeoutMs: 1_000,
+      grantPolicy: {
+        expiresAfterMs: 2_000,
+        maxOperations: 4,
+        maxBytes: 4_096,
+        maxChunkBytes: 1_024,
+      },
+    });
+    const intent: EffectIntent = {
+      command: {
+        sequence: 1,
+        commandId: "command_redrive-worker",
+        repositoryId: worker.dispatch.repositoryId,
+        runId: worker.dispatch.runId,
+        operationId: "operation_redrive-worker",
+        kind: "worker",
+        taskScope: workerTaskScope(worker),
+        contextDigest: worker.context.contextDigest,
+        inputDigest: deterministicSha256.digest(canonicalBytes(input)),
+        input,
+        budgetReservation: { unit: "model-millidollars", amount: 1 },
+        queuedAt: runtimeFixture.currentTime,
+        maxReconciliationAttempts: 2,
+      },
+      owner: "owner_redrive",
+      fence: 1,
+      attemptId: "attempt_redrive",
+      status: "intent",
+      persistedAt: runtimeFixture.currentTime,
+    };
+    const context: AsyncEffectHostContext = {
+      lease: { owner: "owner_redrive", fence: 1, expiresAt: "2026-08-12T12:00:30.000Z" },
+      signal: new AbortController().signal,
+    };
+    const hostOptions = {
+      broker,
+      workingDirectory: "/tmp/senawa-production-work",
+      transcript: broker.transcript,
+    };
+
+    const firstObservation = await new CopilotWorkerEffectHost({
+      ...hostOptions,
+      sdk: new CompletingSdkPort(),
+    }).dispatch(intent, context);
+    expect(firstObservation.details).not.toHaveProperty("transcriptRefusals");
+    const portal = new SqlitePortalQueryAuthority({
+      databasePath,
+      assetDirectory: join(root, "assets"),
+      dependencies,
+    });
+    const owner = { kind: "dispatch", id: worker.dispatch.dispatchId } as const;
+    const afterFirst = portal.listTranscript(
+      worker.dispatch.repositoryId,
+      worker.dispatch.runId,
+      owner,
+    );
+    expect(afterFirst.records.length).toBeGreaterThan(1);
+
+    currentTime = "2026-08-12T13:00:00.000Z";
+    const secondObservation = await new CopilotWorkerEffectHost({
+      ...hostOptions,
+      sdk: new CompletingSdkPort(),
+    }).dispatch(intent, context);
+
+    expect(secondObservation.details).not.toHaveProperty("transcriptRefusals");
+    const afterSecond = portal.listTranscript(
+      worker.dispatch.repositoryId,
+      worker.dispatch.runId,
+      owner,
+    );
+    expect(afterSecond.records.map(({ sequence }) => sequence)).toEqual(
+      Array.from({ length: afterFirst.records.length * 2 }, (_, index) => index + 1),
+    );
+    expect(
+      afterSecond.records.slice(0, afterFirst.records.length).map(({ occurredAt }) => occurredAt),
+    ).toEqual(afterFirst.records.map(({ occurredAt }) => occurredAt));
+    expect(
+      afterSecond.records
+        .slice(afterFirst.records.length)
+        .every(({ occurredAt }) => occurredAt === "2026-08-12T13:00:00.000Z"),
+    ).toBe(true);
+    portal.close();
+    broker.close();
+  });
 
   it("rejects cross-authority worker intents before broker or SDK mutation", async () => {
     const root = mkdtempSync(join(tmpdir(), "senawa-worker-binding-"));

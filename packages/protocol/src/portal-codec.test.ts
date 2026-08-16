@@ -26,6 +26,7 @@ function sync() {
     workspaceRevision: 4,
     humanRevision: 5,
     portalRevision: 6,
+    transcriptRevision: 8,
     graphRevision: digest,
     lifecycleRevision: 7,
   };
@@ -464,6 +465,29 @@ describe("portal codecs", () => {
         }),
       ),
     ).toThrow(/must match the page owner/);
+    // A run page merges owners, so its records name the capture owner instead.
+    expect(
+      decodePortalTranscriptPage(
+        transcriptPage(
+          [
+            record(1, { owner: { kind: "dispatch", id: "dispatch_alpha" } }),
+            record(2, { owner: { kind: "phase", id: "phase_alpha" } }),
+          ],
+          { owner: { kind: "run", id: "run_alpha" }, nextAfter: 2 },
+        ),
+      ).records.map(({ owner }) => owner),
+    ).toEqual([
+      { kind: "dispatch", id: "dispatch_alpha" },
+      { kind: "phase", id: "phase_alpha" },
+    ]);
+    expect(() =>
+      decodePortalTranscriptPage(
+        transcriptPage([record(1, { owner: { kind: "run", id: "run_alpha" } })], {
+          owner: { kind: "run", id: "run_alpha" },
+          nextAfter: 1,
+        }),
+      ),
+    ).toThrow(/must name a capture owner/);
     expect(() =>
       decodePortalTranscriptPage(
         transcriptPage([record(1, { runId: "run_beta" })], { nextAfter: 1 }),

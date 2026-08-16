@@ -9,8 +9,10 @@ import {
 } from "@senawa/protocol";
 import {
   type AgentTranscriptLine,
+  type AgentTranscriptRefusalError,
   createRoleAuthorizationPolicy,
   FencedRunner,
+  type PageQueryError,
   type RuntimeDependencies,
 } from "@senawa/runtime";
 import {
@@ -853,6 +855,35 @@ describe("SQLite Phase 11B portal query authority", () => {
     expect(() =>
       broker.appendTranscript(transcriptLine({ lineId: "capture:1", text: "forged replacement" })),
     ).toThrow("conflicts with prior content");
+    // The refusal is typed so a caller can report it instead of guessing.
+    expect(() =>
+      broker.appendTranscript(
+        transcriptLine({ lineId: "capture:1", occurredAt: "2026-08-14T13:00:00.000Z" }),
+      ),
+    ).toThrowError(
+      expect.objectContaining<Partial<AgentTranscriptRefusalError>>({ code: "line-conflict" }),
+    );
+    // A restarted capture seeds its next identity from the durable high-water mark.
+    expect(
+      broker.latestTranscriptSequence(runtimeFixture.repositoryId, runtimeFixture.runId, {
+        kind: "dispatch",
+        id: "dispatch_transcript",
+      }),
+    ).toBe(3);
+    expect(
+      broker.latestTranscriptSequence(runtimeFixture.repositoryId, runtimeFixture.runId, {
+        kind: "dispatch",
+        id: "dispatch_absent",
+      }),
+    ).toBe(0);
+    expect(() =>
+      broker.latestTranscriptSequence(runtimeFixture.repositoryId, "run_absent", {
+        kind: "dispatch",
+        id: "dispatch_transcript",
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<AgentTranscriptRefusalError>>({ code: "unknown-run" }),
+    );
     expect(
       broker.appendTranscript(
         transcriptLine({
@@ -885,13 +916,17 @@ describe("SQLite Phase 11B portal query authority", () => {
       broker.appendTranscript(
         transcriptLine({ lineId: "capture:orphan", runId: "run_absent", text: "orphan" }),
       ),
-    ).toThrow("unknown run");
+    ).toThrowError(
+      expect.objectContaining<Partial<AgentTranscriptRefusalError>>({ code: "unknown-run" }),
+    );
     expect(() =>
       broker.appendTranscript({
         ...transcriptLine({ lineId: "capture:run" }),
         owner: { kind: "run" as unknown as "dispatch", id: runtimeFixture.runId },
       }),
-    ).toThrow("cannot write the run projection scope");
+    ).toThrowError(
+      expect.objectContaining<Partial<AgentTranscriptRefusalError>>({ code: "invalid-scope" }),
+    );
 
     broker.close();
     broker = new SqliteContextBroker({
@@ -1022,6 +1057,55 @@ describe("SQLite Phase 11B portal query authority", () => {
     fixture.dispose();
   });
 
+  it("publishes no dispatch when a fence names a context no dispatch matches", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    const graph = createRuntimeGraph();
+    authority.close();
+    const worker = createWorkerExecutionFixture(graph);
+    const broker = new SqliteContextBroker({
+      databasePath: fixture.databasePath,
+      dependencies: contextDependencies(),
+    });
+    broker.registerDispatch({
+      context: worker.context,
+      dispatch: worker.dispatch,
+      completionRequirements: worker.completionRequirements,
+      taskScope: taskScope(worker.context.contextDigest),
+    });
+    broker.close();
+
+    const portal = new SqlitePortalQueryAuthority(fixture.options);
+    const taskNode = () =>
+      portal
+        .listGraphNodes(runtimeFixture.repositoryId, runtimeFixture.runId, graph.revisionDigest)
+        .nodes.find(({ nodeId }) => nodeId === runtimeFixture.task.taskId);
+    // A matching fence names exactly one current dispatch.
+    expect(taskNode()?.dispatchId).toBe(worker.dispatch.dispatchId);
+    portal.close();
+
+    // An applied amendment moves the fence before the successor dispatch exists,
+    // so no registered dispatch is current and none may be published.
+    const database = new Database(fixture.databasePath);
+    try {
+      database
+        .prepare("UPDATE amendment_work_fences SET current_context_digest = ? WHERE task_id = ?")
+        .run("c".repeat(64), runtimeFixture.task.taskId);
+    } finally {
+      database.close();
+    }
+    const reopened = new SqlitePortalQueryAuthority(fixture.options);
+    const superseded = reopened
+      .listGraphNodes(runtimeFixture.repositoryId, runtimeFixture.runId, graph.revisionDigest)
+      .nodes.find(({ nodeId }) => nodeId === runtimeFixture.task.taskId);
+    expect(superseded?.dispatchId).toBeUndefined();
+    // The role label is graph metadata and survives; only currency is withheld.
+    expect(superseded?.roleKey).toBe(worker.context.role.key);
+    reopened.close();
+    fixture.dispose();
+  });
+
   it("keeps two runs of one owner namespace independent in sequence and retention", () => {
     const fixture = createFixture();
     const authority = new SqliteAuthority(fixture.options);
@@ -1089,7 +1173,7 @@ describe("SQLite Phase 11B portal query authority", () => {
     fixture.dispose();
   });
 
-  it("bumps the portal revision on transcript append and serves a bounded run-wide scope", () => {
+  it("bumps only the transcript revision on append and keeps run-wide capture owners", () => {
     const fixture = createFixture();
     const authority = new SqliteAuthority(fixture.options);
     instantiate(authority);
@@ -1108,7 +1192,9 @@ describe("SQLite Phase 11B portal query authority", () => {
       }),
     );
     const after = portal.getRunOverview(runtimeFixture.repositoryId, runtimeFixture.runId);
-    expect(after?.sync.portalRevision).toBe((before?.sync.portalRevision ?? 0) + 1);
+    expect(after?.sync.transcriptRevision).toBe((before?.sync.transcriptRevision ?? 0) + 1);
+    // Agent output must never invalidate the bounded graph or overview assembly.
+    expect(after?.sync.portalRevision).toBe(before?.sync.portalRevision);
     // A replay is not a new line, so it must not move the revision vector.
     broker.appendTranscript(
       transcriptLine({
@@ -1118,8 +1204,9 @@ describe("SQLite Phase 11B portal query authority", () => {
       }),
     );
     expect(
-      portal.getRunOverview(runtimeFixture.repositoryId, runtimeFixture.runId)?.sync.portalRevision,
-    ).toBe(after?.sync.portalRevision);
+      portal.getRunOverview(runtimeFixture.repositoryId, runtimeFixture.runId)?.sync
+        .transcriptRevision,
+    ).toBe(after?.sync.transcriptRevision);
 
     broker.appendTranscript(
       transcriptLine({
@@ -1133,7 +1220,12 @@ describe("SQLite Phase 11B portal query authority", () => {
       id: runtimeFixture.runId,
     });
     expect(merged.records.map(({ text }) => text)).toEqual(["alpha one", "beta one"]);
-    expect(merged.records.map(({ owner }) => owner.kind)).toEqual(["run", "run"]);
+    // The merged scope reports which owner produced every line.
+    expect(merged.owner).toEqual({ kind: "run", id: runtimeFixture.runId });
+    expect(merged.records.map(({ owner }) => owner)).toEqual([
+      { kind: "task", id: "task_alpha" },
+      { kind: "phase", id: "phase_beta" },
+    ]);
     expect(merged.nextAfter).toBe(2);
     expect(() =>
       portal.listTranscript(runtimeFixture.repositoryId, runtimeFixture.runId, {
@@ -1141,6 +1233,12 @@ describe("SQLite Phase 11B portal query authority", () => {
         id: "run_other",
       }),
     ).toThrow("must name its own run");
+    expect(() =>
+      portal.listTranscript(runtimeFixture.repositoryId, runtimeFixture.runId, {
+        kind: "run",
+        id: "run_other",
+      }),
+    ).toThrowError(expect.objectContaining<Partial<PageQueryError>>({ code: "scope-mismatch" }));
     portal.close();
     broker.close();
     fixture.dispose();

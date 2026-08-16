@@ -18,6 +18,11 @@ export function answerDraftIdentity(
   return [repositoryId, runId, need.sourceId, need.sourceDigest].join("\u0000");
 }
 
+/** Identity prefix shared by every draft of one run, used to drop exactly that run. */
+export function answerDraftRunPrefix(repositoryId: string, runId: string): string {
+  return `${repositoryId}\u0000${runId}\u0000`;
+}
+
 export function answerDraftStorageKey(): string {
   return DRAFT_KEY;
 }

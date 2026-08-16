@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   answerDraftIdentity,
+  answerDraftRunPrefix,
   answerDraftStorageKey,
   clearAnswerDrafts,
   loadAnswerDrafts,
@@ -89,6 +90,31 @@ describe("answer draft persistence", () => {
     expect([...loadAnswerDrafts(storage).keys()]).toEqual([open]);
     pruneAnswerDrafts(storage, []);
     expect(storage.getItem(answerDraftStorageKey())).toBeNull();
+  });
+
+  it("drops only the departed run's drafts when the selected run changes", () => {
+    const storage = new MemoryStorage();
+    const departed = answerDraftIdentity("repository_one", "run_one", question);
+    const departedOther = answerDraftIdentity("repository_one", "run_one", {
+      ...question,
+      sourceId: "submission_two",
+    });
+    const retained = answerDraftIdentity("repository_one", "run_two", question);
+    const otherRepository = answerDraftIdentity("repository_two", "run_one", question);
+    writeAnswerDraft(storage, departed, "drop");
+    writeAnswerDraft(storage, departedOther, "drop");
+    writeAnswerDraft(storage, retained, "keep");
+    writeAnswerDraft(storage, otherRepository, "keep");
+
+    const prefix = answerDraftRunPrefix("repository_one", "run_one");
+    pruneAnswerDrafts(
+      storage,
+      [...loadAnswerDrafts(storage).keys()].filter((identity) => !identity.startsWith(prefix)),
+    );
+
+    expect([...loadAnswerDrafts(storage).keys()].toSorted()).toEqual(
+      [retained, otherRepository].toSorted(),
+    );
   });
 
   it("discards a hostile or oversized persisted record", () => {

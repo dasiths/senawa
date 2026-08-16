@@ -8365,6 +8365,10 @@ Passed on 2026-08-15:
   monotonic ordinal so an exact dispatch replay stays idempotent. The run owner
   kind is a read-only projection: capture refuses it, and the durable table
   still admits only dispatch, task, and phase owners.
+* Amendment: the re-review repair below replaces the `portal_revision` bump with
+  a dedicated `transcript_revision` component, because bumping the shared
+  component made an actively writing run permanently fail the bounded assembly
+  equality check.
 
 ## Phase 16 independent review repair
 
@@ -8380,10 +8384,11 @@ An adversarial review rejected Phase 16. Every finding is repaired below.
 * Cross-run transcript eviction. `agent_transcript_lines` is keyed by
   `(run_key, owner_kind, owner_id, sequence)`, and the latest, insert,
   retention, and count statements all carry the run key.
-* New lines never reached a live portal. A migration 013 trigger bumps
-  `portal_revision` on insert, which the portal's existing vector comparison
+* New lines never reached a live portal. A migration 013 trigger bumps a
+  revision component on insert, which the portal's existing vector comparison
   already detects; the graph route then resynchronizes the transcript. This is
-  the revision-component route, not a new event frame.
+  the revision-component route, not a new event frame. The re-review repair
+  below moves that bump to a dedicated `transcript_revision` component.
 * Newline forging. The codec refuses every character a renderer treats as a
   forced break, including C1 controls and the Unicode line and paragraph
   separators, the durable `CHECK` refuses the same, and the worker splits
@@ -8419,6 +8424,89 @@ Passed on 2026-08-16:
   journey tests with 1 desktop-only test skipped on mobile
 * Architecture boundaries across 463 source files, documentation links across
   25 Markdown files, and `git diff --check`
+
+## Phase 16 independent re-review repair
+
+A second adversarial review rejected Phase 16. Every finding is repaired below,
+each with its own regression test.
+
+### Findings and repairs
+
+* Re-driven dispatch lost every transcript line. The capture sink restarted its
+  ordinal at one inside a factory that runs once per `run()`, so a supported
+  same-`dispatchId` re-drive after a host restart reused a retained `lineId`
+  under a new timestamp, the durable append refused it, and a bare `catch`
+  swallowed the refusal. `AgentTranscriptPort` now exposes a bounded
+  `latestSequence` read and the sink seeds its ordinal from that durable
+  high-water mark, so a re-drive continues after the previous mark.
+* Untyped and silent transcript refusal. `appendTranscript` and
+  `latestTranscriptSequence` raise `AgentTranscriptRefusalError` with a
+  `line-conflict`, `unknown-run`, or `invalid-scope` code instead of a bare
+  `TypeError`. The adapter counts refusals and reports them through the existing
+  effect outcome details as `transcriptRefusals`, present only when non-zero;
+  the alternative of writing one more `system` line was rejected because the
+  same sink that refused the line would usually refuse that note too.
+* Permanently stale graph route during active output. Migration 013 adds a
+  `transcript_revision` column and bumps only that component, leaving
+  `portal_revision` alone. `PortalSyncVector` carries `transcriptRevision`,
+  `vectorsEqual` deliberately excludes it from the bounded assembly comparison,
+  and a new `transcriptRevisionsEqual` drives the transcript sync from the poll.
+* Superseded dispatch published as current. When a task fence exists and no
+  dispatch matches its `current_context_digest`, the graph node now reports no
+  `dispatchId` at all; the newest-registration fallback applies only to an
+  unfenced node. The dispatch scan orders by `dispatch_id` rather than `rowid`,
+  which `VACUUM` or a restore may renumber.
+* Answer drafts of other runs discarded. Leaving a run prunes only that run's
+  drafts through `pruneAnswerDrafts` and the shared `answerDraftRunPrefix`;
+  session expiry still clears everything.
+* Run-wide scope erased the capture owner. The durable run projection carries
+  each row's originating owner, the codec accepts a record owner that differs
+  from a `run` page owner while still refusing a `run` record owner, and the
+  pane shows the owner on every row when the scope is run-wide.
+* Inaccurate page-query code. A transcript scope naming another run raises the
+  new `scope-mismatch` code, which the supervisor maps to a `400 invalid-request`
+  instead of the cursor-ahead conflict.
+
+### Screenshot verdict
+
+The seven changed PNGs differ only by nondeterministic capture data at identical
+dimensions, so they were restored from `23bf33d` and the prior log claim stands.
+The evidence is a full pixel decode and comparison of both revisions: every pair
+has identical dimensions and colour type, at most 0.53 percent of pixels differ,
+and every differing region is fixture wall clock (`2026-08-15T18:27:54` against
+`2026-08-16T08:43:42`), a "Waiting 28s" against "Waiting 37s" elapsed counter, a
+changed receipt count, or one capture taken while the status still read "Data
+loading". No control, label, or layout differs. These baselines are captured
+artifacts rather than compared baselines: `captureState` writes the file and
+asserts only byte length and byte diversity.
+
+### Deviations
+
+* `context_dispatches` has no registration-sequence column and adding one to a
+  released migration was out of scope, so the stable logical ordering is the
+  dispatch identity, which the review named as an accepted option.
+* The run-wide plain-text export now includes the owner column, so its rows
+  differ from the node scope. The pane, clipboard, and download still share one
+  exact projection.
+
+### Validation
+
+Passed on 2026-08-16:
+
+* Workspace typecheck and root build, including staged portal assets and both
+  native helpers
+* Complete offline suite: 104 files and 1,317 tests passed with 2 skipped
+  opt-in live tests
+* Biome across 299 files with 31 intentional prompt-template warnings
+* Complete inference-free browser matrix: 30 Chromium desktop, mobile, and
+  journey tests with 1 desktop-only test skipped on mobile
+* Architecture boundaries across 463 source files, documentation links across
+  25 Markdown files, and `git diff --check`
+
+Two repairs were mutation checked rather than only asserted. Removing the
+ordinal seed fails both the adapter unit test and the durable app-level re-drive
+test; the app-level test only observes a package change after a rebuild, because
+`apps/**` tests import built `dist` output.
 
 ## Decision D-093: Restore run-console parity without a graph library
 

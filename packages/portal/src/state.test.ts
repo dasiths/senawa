@@ -2,7 +2,7 @@ import { type EventStreamFrame, type PortalRunOverview, PROTOCOL_VERSION } from 
 import { describe, expect, it } from "vitest";
 import { boundedJsonModel } from "./bounded-json.js";
 import { parsePortalHash, portalHash } from "./router.js";
-import { actionsLocked, vectorsEqual } from "./selectors.js";
+import { actionsLocked, transcriptRevisionsEqual, vectorsEqual } from "./selectors.js";
 import { artifactContentKey, initialPortalState, portalReducer } from "./state.js";
 
 const digest = "a".repeat(64);
@@ -13,6 +13,7 @@ const sync = Object.freeze({
   workspaceRevision: 1,
   humanRevision: 2,
   portalRevision: 7,
+  transcriptRevision: 5,
   graphRevision: digest,
   lifecycleRevision: 4,
 });
@@ -208,9 +209,18 @@ describe("portal pure models", () => {
     expect(parsePortalHash("#/runs/../run_one/graph")).toEqual({ name: "overview" });
   });
 
-  it("compares the complete sync vector", () => {
+  it("compares the assembly sync vector without the transcript component", () => {
     expect(vectorsEqual(sync, { ...sync })).toBe(true);
     expect(vectorsEqual(sync, { ...sync, humanRevision: 3 })).toBe(false);
+    // Agent output must never make an actively writing run permanently stale.
+    expect(vectorsEqual(sync, { ...sync, transcriptRevision: sync.transcriptRevision + 9 })).toBe(
+      true,
+    );
+    expect(transcriptRevisionsEqual(sync, { ...sync })).toBe(true);
+    expect(
+      transcriptRevisionsEqual(sync, { ...sync, transcriptRevision: sync.transcriptRevision + 1 }),
+    ).toBe(false);
+    expect(transcriptRevisionsEqual(sync, { ...sync, humanRevision: 3 })).toBe(true);
   });
 
   it("bounds JSON nodes and string prefixes", () => {

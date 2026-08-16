@@ -94,7 +94,8 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   expect(saved.suggestedFilename()).toBe(`senawa-transcript-dispatch-${journeyDispatchId}.txt`);
   expect(await readDownload(saved)).toBe(exported);
 
-  // A durable append bumps the portal revision, so one poll must deliver the line.
+  // A durable append bumps only the transcript revision, so one poll delivers the
+  // line while the bounded graph assembly stays fresh instead of going stale.
   await page.getByRole("button", { name: /^phase delivery,/u }).press("Enter");
   await expect(page.locator(".agent-terminal-scope")).toHaveText("phase phase_delivery");
   await expect.poll(async () => (await snapshot(page)).lineCount).toBeGreaterThanOrEqual(2);
@@ -102,6 +103,8 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   await expect(page.locator(".agent-terminal-log")).toContainText("phase attempt 1 opened");
   await expect.poll(async () => (await snapshot(page)).pinned).toBe(true);
 
+  const status = page.getByRole("region", { name: "Portal status" });
+  await expect(status).toContainText("Data current");
   const beforeAppend = (await snapshot(page)).lineCount;
   const appended = await fetch(`${controlOrigin}/append-transcript`, { method: "POST" });
   expect(appended.ok).toBe(true);
@@ -111,15 +114,34 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
     .toBe(beforeAppend + 1);
   await expect(page.locator(".agent-terminal-row").last()).toContainText(liveLine);
   await expect.poll(() => tailOffset(page)).toBeLessThanOrEqual(12);
+  await expect(status).toContainText("Data current");
+  await expect(status).not.toContainText("Authority changed during bounded assembly");
+  await expect(page.locator(".diagram-node")).not.toHaveCount(0);
 
-  // The explicit run-wide option merges every owner of the run in one scope.
+  // The explicit run-wide option merges every owner of the run in one scope and
+  // still names the owner that produced each line.
   await page.getByRole("button", { name: "Scope to whole run", exact: true }).click();
   await expect(page.locator(".agent-terminal-scope")).toHaveText(`run ${runs.journey}`);
   await expect.poll(async () => (await snapshot(page)).lineCount).toBe(144 + beforeAppend + 1);
   await expect(page.locator(".agent-terminal-log")).toContainText("journey task output line 1");
   await expect(page.locator(".agent-terminal-log")).toContainText("phase attempt 1 opened");
+  await expect(
+    page.locator(".agent-terminal-row").first().locator(".agent-terminal-owner"),
+  ).toHaveText(`dispatch ${journeyDispatchId}`);
+  await expect(
+    page.locator(".agent-terminal-row").last().locator(".agent-terminal-owner"),
+  ).toHaveText("phase phase_delivery");
+  expect(
+    new Set(
+      await page
+        .locator(".agent-terminal-row")
+        .evaluateAll((rows) => rows.map((row) => row.dataset.owner ?? "")),
+    ).size,
+  ).toBe(2);
+  expect((await snapshot(page)).plainText).toContain(`\tphase phase_delivery\t`);
   await page.getByRole("button", { name: "Scope to selected node", exact: true }).click();
   await expect(page.locator(".agent-terminal-scope")).toHaveText("phase phase_delivery");
+  await expect(page.locator(".agent-terminal-owner")).toHaveCount(0);
   await expect.poll(async () => (await snapshot(page)).lineCount).toBe(beforeAppend + 1);
 
   await assertDocumentFits(page);

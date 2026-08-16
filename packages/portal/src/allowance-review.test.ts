@@ -55,6 +55,7 @@ const overview = {
     workspaceRevision: 1,
     humanRevision: 1,
     portalRevision: 1,
+    transcriptRevision: 1,
     graphRevision: review.expectedGraphRevision,
     lifecycleRevision: 1,
   },

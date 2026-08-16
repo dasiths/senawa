@@ -45,6 +45,11 @@ export interface PortalSyncVector {
   readonly workspaceRevision: number;
   readonly humanRevision: number;
   readonly portalRevision: number;
+  /**
+   * Agent output advances only this component so an actively writing run never
+   * invalidates a bounded assembly window that requires vector equality.
+   */
+  readonly transcriptRevision: number;
   readonly graphRevision: string;
   readonly lifecycleRevision: number;
 }

@@ -950,11 +950,13 @@ function mapHttpError(error: unknown): {
   if (error instanceof SupervisorApiError) return error;
   if (error instanceof PortalApiError) return error;
   if (error instanceof PageQueryError) {
-    return {
-      code: "stale-query",
-      status: 409,
-      message: "Portal query cursor or revision is stale",
-    };
+    return error.code === "scope-mismatch"
+      ? { code: "invalid-request", status: 400, message: "Portal query scope is not its own run" }
+      : {
+          code: "stale-query",
+          status: 409,
+          message: "Portal query cursor or revision is stale",
+        };
   }
   if (error instanceof SupervisorHttpRouteError) {
     return {

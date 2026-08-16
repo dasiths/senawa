@@ -184,6 +184,9 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
       workerStatus: result.status,
       completionStatus: acceptedCompletion ? "accepted" : "missing",
       submissionIds: result.submissions.map(({ submissionId }) => submissionId),
+      ...(result.transcriptRefusals === undefined
+        ? {}
+        : { transcriptRefusals: result.transcriptRefusals }),
     };
     return {
       status,

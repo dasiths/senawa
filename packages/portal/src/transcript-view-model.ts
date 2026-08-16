@@ -21,6 +21,8 @@ export interface TranscriptRow {
   readonly time: string;
   readonly stream: PortalTranscriptStream;
   readonly text: string;
+  /** The capture owner of the line, which the run-wide scope merges but never erases. */
+  readonly owner: PortalTranscriptOwner;
 }
 
 export type TranscriptClock = (occurredAt: string) => string;
@@ -112,9 +114,15 @@ export function transcriptRows(
         time: clock(line.occurredAt),
         stream: line.stream,
         text: line.text,
+        owner: line.owner,
       }),
     ),
   );
+}
+
+/** The run-wide scope merges owners, so each row names the one that produced it. */
+export function transcriptShowsOwner(view: TranscriptView): boolean {
+  return view.owner?.kind === "run";
 }
 
 /** The exact bounded text the pane displays, reused by copy and download. */
@@ -122,8 +130,13 @@ export function transcriptPlainText(
   view: TranscriptView,
   clock: TranscriptClock = localTranscriptTime,
 ): string {
+  const withOwner = transcriptShowsOwner(view);
   return transcriptRows(view, clock)
-    .map((row) => `${row.time}\t${row.stream}\t${row.text}`)
+    .map((row) =>
+      withOwner
+        ? `${row.time}\t${transcriptOwnerLabel(row.owner)}\t${row.stream}\t${row.text}`
+        : `${row.time}\t${row.stream}\t${row.text}`,
+    )
     .join("\n");
 }
 

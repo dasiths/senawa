@@ -740,8 +740,14 @@ export function decodePortalTranscriptPage(input: string | unknown): PortalTrans
   for (const [index, record] of records.entries()) {
     if (record.repositoryId !== object.repositoryId || record.runId !== object.runId)
       fail("invalid-value", `$.records[${index}]`, "must match the page repository and run");
-    if (record.owner.kind !== owner.kind || record.owner.id !== owner.id)
+    // The run scope merges many capture owners, so its records keep the owner
+    // that produced them; capture never writes the run scope itself.
+    if (owner.kind === "run") {
+      if (record.owner.kind === "run")
+        fail("invalid-value", `$.records[${index}].owner`, "must name a capture owner");
+    } else if (record.owner.kind !== owner.kind || record.owner.id !== owner.id) {
       fail("invalid-value", `$.records[${index}].owner`, "must match the page owner");
+    }
     if (record.sequence <= prior)
       fail(
         "invalid-value",
@@ -868,6 +874,7 @@ function syncVector(value: unknown, path: string): PortalSyncVector {
     "workspaceRevision",
     "humanRevision",
     "portalRevision",
+    "transcriptRevision",
     "graphRevision",
     "lifecycleRevision",
   ]);
@@ -878,6 +885,7 @@ function syncVector(value: unknown, path: string): PortalSyncVector {
     "workspaceRevision",
     "humanRevision",
     "portalRevision",
+    "transcriptRevision",
     "lifecycleRevision",
   ])
     integer(object[key], `${path}.${key}`);

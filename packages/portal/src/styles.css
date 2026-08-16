@@ -805,6 +805,18 @@ button:disabled {
   padding: 1px 0;
 }
 
+.agent-terminal-row:has(.agent-terminal-owner) {
+  grid-template-columns: 72px minmax(0, 180px) 56px minmax(0, 1fr);
+}
+
+.agent-terminal-owner {
+  overflow: hidden;
+  color: #c8d2c2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
 .agent-terminal-time {
   color: #93a08d;
   font-variant-numeric: tabular-nums;
@@ -1465,6 +1477,14 @@ button:disabled {
 
   .agent-terminal-row {
     grid-template-columns: 62px minmax(0, 1fr);
+  }
+
+  .agent-terminal-row:has(.agent-terminal-owner) {
+    grid-template-columns: 62px minmax(0, 1fr);
+  }
+
+  .agent-terminal-owner {
+    grid-column: 2;
   }
 
   .agent-terminal-stream {

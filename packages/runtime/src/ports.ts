@@ -15,7 +15,7 @@ export type RuntimeSha256 = Sha256;
 
 export type AllocationKind = "approval" | "stream-event";
 
-export type PageQueryErrorCode = "cursor-ahead" | "event-replay-gap";
+export type PageQueryErrorCode = "cursor-ahead" | "event-replay-gap" | "scope-mismatch";
 
 export class PageQueryError extends Error {
   readonly code: PageQueryErrorCode;

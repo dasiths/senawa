@@ -6,6 +6,7 @@ import {
   transcriptOwnerLabel,
   transcriptPlainText,
   transcriptRows,
+  transcriptShowsOwner,
 } from "./transcript-view-model.js";
 
 export interface TranscriptPaneActions {
@@ -134,8 +135,12 @@ function log(
   for (const row of rows) {
     const line = element("div", `agent-terminal-row ${row.stream}`);
     line.dataset.sequence = String(row.sequence);
+    line.append(textElement("span", "agent-terminal-time", row.time));
+    if (transcriptShowsOwner(view)) {
+      line.dataset.owner = transcriptOwnerLabel(row.owner);
+      line.append(textElement("span", "agent-terminal-owner", transcriptOwnerLabel(row.owner)));
+    }
     line.append(
-      textElement("span", "agent-terminal-time", row.time),
       textElement("span", "agent-terminal-stream", row.stream),
       textElement("span", "agent-terminal-text", row.text),
     );

@@ -21,11 +21,18 @@ CREATE TABLE agent_transcript_lines (
   UNIQUE (run_key, run_sequence)
 ) STRICT;
 
+ALTER TABLE portal_run_revisions
+  ADD COLUMN transcript_revision INTEGER NOT NULL DEFAULT 0
+  CHECK (transcript_revision >= 0);
+
+-- Transcript capture owns a revision component of its own. It deliberately
+-- leaves portal_revision alone so an actively writing run never invalidates the
+-- bounded graph and overview assembly window, which requires vector equality.
 CREATE TRIGGER portal_revision_agent_transcript_insert
 AFTER INSERT ON agent_transcript_lines
 BEGIN
   UPDATE portal_run_revisions
-  SET portal_revision = portal_revision + 1
+  SET transcript_revision = transcript_revision + 1
   WHERE repository_id = (SELECT repository_id FROM runs WHERE run_key = NEW.run_key)
     AND run_id = (SELECT run_id FROM runs WHERE run_key = NEW.run_key);
 END;

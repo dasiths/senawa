@@ -7,6 +7,12 @@ export function selectedOverview(state: PortalState): PortalRunOverview | undefi
   return state.caches.overviews[runKey(state.selectedRepositoryId, state.selectedRunId)];
 }
 
+/**
+ * Compares every component the bounded assembly window depends on.
+ * `transcriptRevision` is deliberately excluded: agent output advances while a
+ * run writes, and including it would make an actively writing run permanently
+ * stale. `transcriptRevisionsEqual` covers that component on its own.
+ */
 export function vectorsEqual(left: PortalSyncVector, right: PortalSyncVector): boolean {
   return (
     left.workflowCursor === right.workflowCursor &&
@@ -18,6 +24,10 @@ export function vectorsEqual(left: PortalSyncVector, right: PortalSyncVector): b
     left.graphRevision === right.graphRevision &&
     left.lifecycleRevision === right.lifecycleRevision
   );
+}
+
+export function transcriptRevisionsEqual(left: PortalSyncVector, right: PortalSyncVector): boolean {
+  return left.transcriptRevision === right.transcriptRevision;
 }
 
 export function actionsLocked(state: PortalState): boolean {

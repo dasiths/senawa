@@ -10,7 +10,9 @@ import {
 import { allowanceCommandDraft, allowanceReviewIsCurrent } from "./allowance-review.js";
 import {
   answerDraftIdentity,
+  answerDraftRunPrefix,
   clearAnswerDrafts,
+  loadAnswerDrafts,
   pruneAnswerDrafts,
   readAnswerDraft,
   writeAnswerDraft,
@@ -29,7 +31,7 @@ import { pendingQuestionNeed } from "./question-attention.js";
 import { readRailLayout, saveRailLayout } from "./rail-layout.js";
 import { type PortalRenderActions, refreshQuestionAttention, renderPortal } from "./render.js";
 import { parsePortalHash, portalHash } from "./router.js";
-import { vectorsEqual } from "./selectors.js";
+import { transcriptRevisionsEqual, vectorsEqual } from "./selectors.js";
 import { sessionAccess } from "./session.js";
 import { PortalEventStream } from "./sse.js";
 import {
@@ -208,7 +210,7 @@ export class PortalApplication {
     if (changed) {
       this.#stream.close();
       this.#streamIdentity = undefined;
-      clearAnswerDrafts(sessionStorage);
+      this.#dropDepartedRunDrafts();
       this.#dispatch({ type: "select-run", repositoryId, runId });
     }
     if (
@@ -267,6 +269,12 @@ export class PortalApplication {
         vectorsEqual(current.sync, overviewA.sync) &&
         routeAlreadyFresh
       ) {
+        // Agent output advances outside the assembly window, so it is picked up
+        // here without re-running the whole bounded assembly.
+        if (!transcriptRevisionsEqual(current.sync, overviewA.sync)) {
+          this.#dispatch({ type: "overview", overview: overviewA });
+          void this.#syncTranscript();
+        }
         if (connectStream) {
           this.#ensureStream(identity.repositoryId, identity.runId, overviewA.sync.workflowCursor);
         }
@@ -898,6 +906,19 @@ export class PortalApplication {
       this.#state.humanNeeds
         .filter((need) => need.kind === "question")
         .map((need) => answerDraftIdentity(identity.repositoryId, identity.runId, need)),
+    );
+  }
+
+  /** Leaving a run drops only that run's drafts; other runs keep theirs. */
+  #dropDepartedRunDrafts(): void {
+    const departed = this.#selectedIdentity();
+    if (departed === undefined) return;
+    const prefix = answerDraftRunPrefix(departed.repositoryId, departed.runId);
+    pruneAnswerDrafts(
+      sessionStorage,
+      [...loadAnswerDrafts(sessionStorage).keys()].filter(
+        (draftIdentity) => !draftIdentity.startsWith(prefix),
+      ),
     );
   }
 

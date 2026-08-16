@@ -28,7 +28,9 @@ import {
 } from "@senawa/protocol";
 import {
   type AgentTranscriptLine,
+  type AgentTranscriptOwner,
   type AgentTranscriptPort,
+  AgentTranscriptRefusalError,
   type AssetReadResult,
   type ContextBrokerClient,
   evaluatePhaseOutputAttempt,
@@ -356,6 +358,68 @@ describe("CopilotSerialWorkerAdapter", () => {
     ]) {
       expect(captured).not.toContain(forbidden);
     }
+  });
+
+  it("continues a re-driven dispatch after the durable high-water mark", async () => {
+    const transcript = new RecordingTranscript();
+    const firstSdk = new FakeSdkPort();
+    firstSdk.onSend = complete("completed");
+    const first = harness(firstSdk, { transcript });
+    expect((await first.adapter.run(first.input)).status).toBe("completed");
+    const retained = transcript.lines.map(({ lineId }) => lineId);
+    expect(retained).toHaveLength(3);
+
+    // A host restart re-drives the same dispatch under a new wall clock, so the
+    // prior identities would collide if capture restarted its ordinal at one.
+    const secondSdk = new FakeSdkPort();
+    secondSdk.onSend = complete("completed");
+    const second = harness(secondSdk, { transcript });
+    expect(second.dispatch.dispatchId).toBe(first.dispatch.dispatchId);
+    second.broker.currentTime = "2026-08-13T01:00:00.000Z";
+    const redriven = await second.adapter.run(second.input);
+
+    expect(redriven.status).toBe("completed");
+    expect(redriven.transcriptRefusals).toBeUndefined();
+    expect(transcript.lines.map(({ lineId }) => lineId)).toEqual(
+      Array.from({ length: 6 }, (_, index) => `${first.dispatch.dispatchId}:${index + 1}`),
+    );
+    expect(transcript.lines.map(({ occurredAt }) => occurredAt)).toEqual([
+      ...Array.from({ length: 3 }, () => "2026-08-13T00:00:00.000Z"),
+      ...Array.from({ length: 3 }, () => "2026-08-13T01:00:00.000Z"),
+    ]);
+    // The very identity the seeded ordinal skipped is still refused on conflict.
+    expect(() =>
+      transcript.append({
+        repositoryId: first.dispatch.repositoryId,
+        runId: first.dispatch.runId,
+        owner: { kind: "dispatch", id: first.dispatch.dispatchId },
+        lineId: `${first.dispatch.dispatchId}:1`,
+        occurredAt: "2026-08-13T01:00:00.000Z",
+        stream: "system",
+        text: "session started",
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<AgentTranscriptRefusalError>>({ code: "line-conflict" }),
+    );
+    // An exact replay of a retained line stays idempotent.
+    const before = transcript.lines.length;
+    const replayed = required(transcript.lines[0]);
+    transcript.append(replayed);
+    expect(transcript.lines).toHaveLength(before);
+  });
+
+  it("reports refused transcript capture through the run result", async () => {
+    const failing = new RecordingTranscript(true);
+    const sdk = new FakeSdkPort();
+    sdk.onSend = complete("completed");
+    const fixture = harness(sdk, { transcript: failing });
+
+    const result = await fixture.adapter.run(fixture.input);
+
+    expect(result.status).toBe("completed");
+    // One refused seed read plus one refusal for every line capture attempted.
+    expect(result.transcriptRefusals).toBe(4);
+    expect(failing.lines).toHaveLength(0);
   });
 
   it("reports the exact ending status and survives a failing transcript sink", async () => {
@@ -986,9 +1050,11 @@ class CapturingBroker implements ContextBrokerClient {
   readonly submissions: WorkerSubmission[] = [];
   admission: SubmissionAdmissionResult["status"] = "accepted";
   readGate?: Promise<void>;
+  /** A host restart brings a new wall clock, which is what makes a re-drive collide. */
+  currentTime = "2026-08-13T00:00:00.000Z";
   readonly dependencies = {
     sha256,
-    currentTime: () => "2026-08-13T00:00:00.000Z",
+    currentTime: () => this.currentTime,
     issueGrantToken: () => Uint8Array.from({ length: 32 }, () => 7),
   };
 
@@ -1369,10 +1435,38 @@ class RecordingTranscript implements AgentTranscriptPort {
 
   constructor(private readonly failing = false) {}
 
+  /** Mirrors the durable rule: an exact replay is idempotent, a conflict is refused. */
   append(record: AgentTranscriptLine): void {
-    if (this.failing) throw new TypeError("Transcript sink is unavailable");
-    this.lines.push(record);
+    if (this.failing)
+      throw new AgentTranscriptRefusalError("unknown-run", "Transcript sink is unavailable");
+    const retained = this.lines.find(
+      (line) => sameOwner(line.owner, record.owner) && line.lineId === record.lineId,
+    );
+    if (retained === undefined) {
+      this.lines.push(record);
+      return;
+    }
+    if (
+      retained.occurredAt !== record.occurredAt ||
+      retained.stream !== record.stream ||
+      retained.text !== record.text
+    ) {
+      throw new AgentTranscriptRefusalError(
+        "line-conflict",
+        "Agent transcript line conflicts with prior content",
+      );
+    }
   }
+
+  latestSequence(_repositoryId: string, _runId: string, owner: AgentTranscriptOwner): number {
+    if (this.failing)
+      throw new AgentTranscriptRefusalError("unknown-run", "Transcript sink is unavailable");
+    return this.lines.filter((line) => sameOwner(line.owner, owner)).length;
+  }
+}
+
+function sameOwner(left: AgentTranscriptOwner, right: AgentTranscriptOwner): boolean {
+  return left.kind === right.kind && left.id === right.id;
 }
 
 class FakeWorkspaceFiles implements WorkspaceFilePort {

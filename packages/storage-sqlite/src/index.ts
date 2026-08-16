@@ -154,7 +154,9 @@ import {
 import {
   type AdmissionFacts,
   type AgentTranscriptLine,
+  type AgentTranscriptOwner,
   type AgentTranscriptPort,
+  AgentTranscriptRefusalError,
   type AssetReadInput,
   type AssetReadResult,
   assetReadWorstCaseBytes,
@@ -555,6 +557,7 @@ interface PortalRevisionRow {
   readonly workspace_revision: number;
   readonly human_revision: number;
   readonly portal_revision: number;
+  readonly transcript_revision: number;
 }
 
 interface PortalQuestionQueryRow {
@@ -4341,7 +4344,7 @@ export class SqlitePortalQueryAuthority {
     validatePortalOffset(after);
     validatePortalLimit(limit, TRANSCRIPT_LIMITS.maxRecordsPerPage);
     if (owner.kind === "run" && owner.id !== runId)
-      throw new PageQueryError("cursor-ahead", "Run transcript scope must name its own run");
+      throw new PageQueryError("scope-mismatch", "Run transcript scope must name its own run");
     const run = this.#database
       .prepare<[string, string], { run_key: string }>(
         "SELECT run_key FROM runs WHERE repository_id = ? AND run_id = ?",
@@ -4365,7 +4368,9 @@ export class SqlitePortalQueryAuthority {
         apiVersion: PROTOCOL_VERSION,
         repositoryId,
         runId,
-        owner: { kind: owner.kind, id: owner.id },
+        // The run scope keeps the capture owner of every line so a merged view
+        // never erases which dispatch, task, or phase produced it.
+        owner: row.owner === undefined ? { kind: owner.kind, id: owner.id } : { ...row.owner },
         sequence: row.sequence,
         occurredAt: row.occurred_at,
         stream: row.stream,
@@ -4403,12 +4408,23 @@ export class SqlitePortalQueryAuthority {
         .get(runKey)?.latest ?? 0;
     const floor = Math.max(after, latest - TRANSCRIPT_LIMITS.maxRetainedLinesPerOwner);
     return this.#database
-      .prepare<[string, number, number], PortalTranscriptRow>(
-        `SELECT run_sequence AS sequence, occurred_at, stream, text FROM agent_transcript_lines
+      .prepare<
+        [string, number, number],
+        PortalTranscriptRow & { readonly owner_kind: string; readonly owner_id: string }
+      >(
+        `SELECT run_sequence AS sequence, owner_kind, owner_id, occurred_at, stream, text
+         FROM agent_transcript_lines
          WHERE run_key = ? AND run_sequence > ?
          ORDER BY run_sequence LIMIT ?`,
       )
-      .all(runKey, floor, limit);
+      .all(runKey, floor, limit)
+      .map((row) => ({
+        sequence: row.sequence,
+        occurred_at: row.occurred_at,
+        stream: row.stream,
+        text: row.text,
+        owner: Object.freeze({ kind: row.owner_kind, id: row.owner_id }),
+      }));
   }
 
   #activityWindow(
@@ -4604,7 +4620,6 @@ export class SqlitePortalQueryAuthority {
       );
     }
     const dispatched = new Map<string, PortalTaskDispatchFacts>();
-    const matchedCurrent = new Set<string>();
     for (const row of this.#database
       .prepare<[string, string], PortalTaskDispatchRow>(
         `SELECT json_extract(b.canonical_context, '$.task.taskId') AS task_id,
@@ -4613,18 +4628,20 @@ export class SqlitePortalQueryAuthority {
                 d.dispatch_id AS dispatch_id,
                 b.context_digest AS context_digest
          FROM context_dispatches d JOIN context_bases b ON b.context_id = d.context_id
-         WHERE d.repository_id = ? AND d.run_id = ? ORDER BY d.rowid`,
+         WHERE d.repository_id = ? AND d.run_id = ? ORDER BY d.dispatch_id`,
       )
       .all(repositoryId, runId)) {
       if (row.task_id === null || row.generation === null) continue;
       const key = generationKey(row.task_id, row.generation);
-      // The accepted context digest names the current dispatch. Without a durable
-      // fence the newest registration is the only current candidate authority has.
-      const current = currentContextDigests.get(key) === row.context_digest;
-      if (matchedCurrent.has(key) && !current) continue;
-      if (current) matchedCurrent.add(key);
+      // A durable fence names the current context exactly, so a dispatch that
+      // does not match it is superseded and must never be published as current.
+      // Only an unfenced node falls back to the newest registration, which is
+      // then the only current candidate authority has.
+      const fence = currentContextDigests.get(key);
+      const current = fence === undefined || fence === row.context_digest;
+      if (!current && dispatched.get(key)?.dispatchId !== undefined) continue;
       dispatched.set(key, {
-        dispatchId: row.dispatch_id,
+        ...(current ? { dispatchId: row.dispatch_id } : {}),
         ...(row.role_key === null ? {} : { roleKey: row.role_key }),
       });
     }
@@ -4844,11 +4861,12 @@ export class SqlitePortalQueryAuthority {
           workspace_revision: number;
           human_revision: number;
           portal_revision: number;
+          transcript_revision: number;
         }
       >(
         `SELECT r.cursor, p.workflow_revision, p.context_revision,
                 p.runner_revision, p.workspace_revision, p.human_revision,
-                p.portal_revision
+                p.portal_revision, p.transcript_revision
          FROM runs r JOIN portal_run_revisions p
            ON p.repository_id = r.repository_id AND p.run_id = r.run_id
          WHERE r.repository_id = ? AND r.run_id = ?`,
@@ -4862,6 +4880,7 @@ export class SqlitePortalQueryAuthority {
       workspaceRevision: row.workspace_revision,
       humanRevision: row.human_revision,
       portalRevision: row.portal_revision,
+      transcriptRevision: row.transcript_revision,
       graphRevision,
       lifecycleRevision: row.workflow_revision,
     });
@@ -4871,7 +4890,8 @@ export class SqlitePortalQueryAuthority {
     const row = this.#database
       .prepare<[string, string], PortalRevisionRow>(
         `SELECT workflow_revision, context_revision, dataflow_revision, runner_revision,
-          task_frontier_revision, workspace_revision, human_revision, portal_revision
+          task_frontier_revision, workspace_revision, human_revision, portal_revision,
+          transcript_revision
          FROM portal_run_revisions WHERE repository_id = ? AND run_id = ?`,
       )
       .get(repositoryId, runId);
@@ -5341,7 +5361,7 @@ interface PortalTaskDispatchRow {
 }
 
 interface PortalTaskDispatchFacts {
-  readonly dispatchId: string;
+  readonly dispatchId?: string;
   readonly roleKey?: string;
 }
 
@@ -5350,6 +5370,8 @@ interface PortalTranscriptRow {
   readonly occurred_at: string;
   readonly stream: string;
   readonly text: string;
+  /** Present only for the run projection scope, which merges many capture owners. */
+  readonly owner?: Readonly<{ kind: string; id: string }>;
 }
 
 const NOT_STARTED_NODE_STATUS: PortalNodeStatus = Object.freeze({
@@ -9123,7 +9145,10 @@ export class SqliteContextBroker {
   appendTranscript(input: AgentTranscriptLine): AgentTranscriptAppendResult {
     const ownerKind: string = input.owner.kind;
     if (ownerKind === "run")
-      throw new TypeError("Agent transcript capture cannot write the run projection scope");
+      throw new AgentTranscriptRefusalError(
+        "invalid-scope",
+        "Agent transcript capture cannot write the run projection scope",
+      );
     validateOpaqueIdentity(input.owner.id);
     validateOpaqueIdentity(input.lineId);
     this.#database.exec("BEGIN IMMEDIATE");
@@ -9134,7 +9159,11 @@ export class SqliteContextBroker {
           "SELECT run_key FROM runs WHERE repository_id = ? AND run_id = ?",
         )
         .get(input.repositoryId, input.runId);
-      if (run === undefined) throw new TypeError("Agent transcript references an unknown run");
+      if (run === undefined)
+        throw new AgentTranscriptRefusalError(
+          "unknown-run",
+          "Agent transcript references an unknown run",
+        );
       const retainedReplay = this.#database
         .prepare<
           [string, string, string, string],
@@ -9151,7 +9180,10 @@ export class SqliteContextBroker {
           retainedReplay.stream !== input.stream ||
           retainedReplay.text !== input.text
         ) {
-          throw new TypeError("Agent transcript line conflicts with prior content");
+          throw new AgentTranscriptRefusalError(
+            "line-conflict",
+            "Agent transcript line conflicts with prior content",
+          );
         }
       }
       const sequence = retainedReplay?.sequence ?? this.#nextTranscriptSequence(run.run_key, input);
@@ -9218,14 +9250,47 @@ export class SqliteContextBroker {
     }
   }
 
+  /**
+   * Bounded durable high-water read that lets a restarted capture continue after
+   * the last retained line instead of colliding with it.
+   */
+  latestTranscriptSequence(
+    repositoryId: string,
+    runId: string,
+    owner: AgentTranscriptOwner,
+  ): number {
+    const ownerKind: string = owner.kind;
+    if (ownerKind === "run")
+      throw new AgentTranscriptRefusalError(
+        "invalid-scope",
+        "Agent transcript capture cannot read the run projection scope",
+      );
+    validateOpaqueIdentity(owner.id);
+    const run = this.#database
+      .prepare<[string, string], { run_key: string }>(
+        "SELECT run_key FROM runs WHERE repository_id = ? AND run_id = ?",
+      )
+      .get(repositoryId, runId);
+    if (run === undefined)
+      throw new AgentTranscriptRefusalError(
+        "unknown-run",
+        "Agent transcript references an unknown run",
+      );
+    return this.#latestOwnerSequence(run.run_key, owner);
+  }
+
   #nextTranscriptSequence(runKey: string, input: AgentTranscriptLine): number {
+    return this.#latestOwnerSequence(runKey, input.owner) + 1;
+  }
+
+  #latestOwnerSequence(runKey: string, owner: AgentTranscriptOwner): number {
     return (
-      (this.#database
+      this.#database
         .prepare<[string, string, string], { latest: number | null }>(
           `SELECT MAX(sequence) AS latest FROM agent_transcript_lines
            WHERE run_key = ? AND owner_kind = ? AND owner_id = ?`,
         )
-        .get(runKey, input.owner.kind, input.owner.id)?.latest ?? 0) + 1
+        .get(runKey, owner.kind, owner.id)?.latest ?? 0
     );
   }
 
@@ -9315,6 +9380,8 @@ export class SqliteContextBroker {
     this.assets = new SqliteContextAssetAuthority(this);
     this.transcript = Object.freeze({
       append: (record: AgentTranscriptLine) => void this.appendTranscript(record),
+      latestSequence: (repositoryId: string, runId: string, owner: AgentTranscriptOwner) =>
+        this.latestTranscriptSequence(repositoryId, runId, owner),
     });
     this.authority = Object.freeze({
       snapshot: () => this.#loadAuthority().snapshot(),

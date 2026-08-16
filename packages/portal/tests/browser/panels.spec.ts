@@ -93,12 +93,28 @@ test("restores an in-progress answer draft across a reload and clears it per que
   );
   await page.getByRole("dialog").press("Escape");
 
+  // Another run's draft must survive leaving the run that owns this one.
+  await page.evaluate((identity) => {
+    const drafts = JSON.parse(
+      sessionStorage.getItem("senawa.portal.answer-draft.v1") ?? "{}",
+    ) as Record<string, string>;
+    drafts[identity] = "other run draft";
+    sessionStorage.setItem("senawa.portal.answer-draft.v1", JSON.stringify(drafts));
+  }, `repository_other\u0000run_other\u0000submission_other\u0000digest_other`);
+
   await selectRun(page, runs.workspace);
   await expect
     .poll(() =>
-      page.evaluate(() => sessionStorage.getItem("senawa.portal.answer-draft.v1") ?? "cleared"),
+      page.evaluate(() =>
+        Object.keys(
+          JSON.parse(sessionStorage.getItem("senawa.portal.answer-draft.v1") ?? "{}") as Record<
+            string,
+            string
+          >,
+        ),
+      ),
     )
-    .toBe("cleared");
+    .toEqual([`repository_other\u0000run_other\u0000submission_other\u0000digest_other`]);
   expect(diagnostics.severe()).toEqual([]);
 });
 
