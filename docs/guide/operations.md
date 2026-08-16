@@ -309,6 +309,13 @@ available separately and a repository worker configured through
 `SENAWA_REPOSITORY_DIR`. The live lane is never part of default validation or
 packaging validation.
 
+## Git executable
+
+Worktree-mode integration runs Git through a bounded argument-vector port. The
+daemon resolves the executable from `SENAWA_GIT_EXECUTABLE` and falls back to
+`/usr/bin/git`. Set it when Git lives elsewhere on your host. Repository mode,
+the default, never invokes Git.
+
 ## Failure handling
 
 * An operational command against a stopped or unreachable service prints

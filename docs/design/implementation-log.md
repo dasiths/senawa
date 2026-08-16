@@ -58,7 +58,7 @@ Each phase records:
 | 14. Standard delivery workflow authoring | Complete | `cf08ebc` | Pushed |
 | 15. Consumer documentation and adoption journeys | Renumbered to 17 | Not applicable | Not applicable |
 | 16. Operational portal parity | Complete | `8610468` | Pushed |
-| 17. Design and consumer documentation | Not started | Pending | Pending |
+| 17. Design and consumer documentation | Complete | Pending | Pending |
 
 ## Decision D-001: Clean alpha implementation reset
 
@@ -8711,6 +8711,81 @@ Final delivery gates passed on 2026-08-16:
 * Transcript delivery uses an isolated revision component rather than a
   dedicated event frame. The pane observes new lines within one poll; a frame
   would lower that latency and is recorded as future work rather than a defect.
+
+## Phase 17 log
+
+### Information architecture
+
+The documentation splits into two sets that link to each other rather than
+repeating content:
+
+* `docs/design/` holds the design set: overview, architecture, authority model,
+  workflow model, dataflow, durability, and extending, indexed by its README
+  alongside the plan, this log, and production enhancements.
+* `docs/guide/` holds the consumer set: getting started, workflow authoring,
+  portal, worktree mode, operations, security, and troubleshooting.
+* `docs/reference/` keeps the existing CLI, local supervisor HTTP, and remote
+  control-plane references.
+* `README.md` becomes a concise entry point carrying the high-level design and
+  its diagrams, then linking into both sets.
+
+Rejected alternatives:
+
+* One combined documentation tree. Rejected because design readers and adopters
+  need different entry points, and mixing them made every page longer without
+  helping either audience.
+* Generated API references from source. Rejected because the alpha's stable
+  surface is the CLI, the workflow document, and the HTTP routes, all of which
+  are already hand-written references. Generated package documentation would
+  publish internal contracts as if they were stable.
+* Publishing to a documentation site. Rejected because it adds a build surface
+  the alpha does not need, and the link checker already validates the tree.
+
+### Deviations
+
+* The phase was renumbered from 15 to 17 and moved after Phase 16, because
+  documentation must describe final behavior and Phase 16 changed the portal
+  surface. No phase carries the number 15.
+* The prescribed commit message `docs: add consumer adoption guides` was
+  replaced by three focused commits for the design set, the consumer set, and
+  the review corrections, because the phase produced two independent sets and a
+  correction pass.
+* The plan's acceptance bullet asking the README to link examples is satisfied
+  by linking the guides that carry runnable examples. No `examples/` tree
+  exists, and inventing one would duplicate the guides.
+
+### Review
+
+Two independent review rounds ran against the documentation. The first found one
+P0, two P1, six P2, and five P3 defects, including a wrong portal bootstrap
+mechanism repeated in three guides, a stale reference paragraph claiming the
+browser application was unbuilt, two undocumented portal routes, a broken `init`
+example, an incomplete README dependency graph, a missing lifecycle edge, a
+wrong live-probe refusal order, and missing route tokens. All were corrected.
+
+The second round confirmed every prior finding closed and raised two blocking
+items: an unreachable `awaiting-completion` to `escalated` transition in the
+README diagram, and this missing log record. Both are now closed, together with
+three non-blocking items covering `SENAWA_GIT_EXECUTABLE`, the package exports
+claim, and escalation edge completeness.
+
+### Validation
+
+Passed on 2026-08-16:
+
+* Documentation links across 40 Markdown files
+* Biome across 299 files with 31 intentional prompt-template warnings
+* `git diff --check`
+* Every CLI command, configuration field, environment variable, dependency edge,
+  migration number, and portal behavior verified against source during review
+
+### Remaining risks
+
+* The getting-started journey is verified command by command against source
+  rather than executed end to end against a running service. The final pull
+  request gate repeats the complete offline and browser matrices.
+* Mermaid rendering is not checked on a publishing surface, because the alpha
+  publishes no documentation site.
 
 ## Entry template
 

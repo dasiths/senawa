@@ -173,10 +173,16 @@ stateDiagram-v2
     awaiting_approval --> awaiting_closure: human approved
     awaiting_closure --> closed
     closed --> [*]
-    awaiting_completion --> escalated: budget exhausted
-    awaiting_gate --> escalated: budget exhausted
-    awaiting_approval --> escalated: budget exhausted
+    awaiting_gate --> escalated: budget exhausted or blocked
+    awaiting_approval --> escalated: budget exhausted or blocked
+    gate_rejected --> escalated: budget exhausted or blocked
+    approval_rejected --> escalated: budget exhausted or blocked
+    awaiting_closure --> escalated: budget exhausted or blocked
 ```
+
+An escalation requires a current candidate, so `awaiting-completion` cannot
+escalate. [Workflow model](docs/design/workflow-model.md) carries the exact
+derivation rules.
 
 ### Where the branch stands
 
