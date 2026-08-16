@@ -215,8 +215,12 @@ function containment(edgeId: string, fromNodeId: string, toNodeId: string): Port
   return { edgeId, fromNodeId, toNodeId, kind: "containment" };
 }
 
-function dependency(edgeId: string, fromNodeId: string, toNodeId: string): PortalGraphEdge {
-  return { edgeId, fromNodeId, toNodeId, kind: "dependency" };
+/**
+ * Builds a dependency edge the way the kernel does: from the dependent node to
+ * the prerequisite it waits on. Callers name the pair in execution order.
+ */
+function dependency(edgeId: string, earlier: string, later: string): PortalGraphEdge {
+  return { edgeId, fromNodeId: later, toNodeId: earlier, kind: "dependency" };
 }
 
 function supersession(edgeId: string, fromNodeId: string, toNodeId: string): PortalGraphEdge {

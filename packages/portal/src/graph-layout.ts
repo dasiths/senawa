@@ -87,7 +87,7 @@ export function graphLayout(
   edges: readonly PortalGraphEdge[],
 ): GraphLayout {
   const nodeById = uniqueNodes(nodes);
-  const edgeList = uniqueEdges(edges, nodeById);
+  const edgeList = flowOriented(uniqueEdges(edges, nodeById));
   const containerById = containerAssignment(nodeById, ownerAssignment(nodeById, edgeList));
   const outer: string[] = [];
   const members = new Map<string, string[]>();
@@ -134,6 +134,24 @@ export function graphLayout(
     nodes: layoutNodes(nodeById, containerById, memberSets, absolute),
     edges: layoutEdges(edgeList, containerById, absolute),
   });
+}
+
+/**
+ * Orients edges so that "from" always precedes "to" in execution order.
+ *
+ * A `dependency` edge records that its source depends on its target, so it
+ * points from the later node to the earlier one. Layering reads every edge as
+ * "from precedes to", which is right for containment and backwards here, and
+ * left unswapped it renders the workflow in reverse.
+ */
+function flowOriented(edges: readonly PortalGraphEdge[]): readonly PortalGraphEdge[] {
+  return Object.freeze(
+    edges.map((edge) =>
+      edge.kind === "dependency"
+        ? Object.freeze({ ...edge, fromNodeId: edge.toNodeId, toNodeId: edge.fromNodeId })
+        : edge,
+    ),
+  );
 }
 
 function layoutNodes(
