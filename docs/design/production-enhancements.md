@@ -147,3 +147,41 @@ Acceptance test
 : Add an exact phase transition command, prove it refuses a stale graph
 revision, prove it cannot skip an unclosed phase, prove projections follow the
 current phase, and prove restart converges on the recorded current phase.
+
+## PE-005: The durable authority mirror rewrites whole-history state
+
+Observed evidence
+: `SqliteAuthority` and `SqliteContextBroker` hold the authority in memory and
+persist it as one canonical JSON blob per singleton row. Every command rewrites
+`authority_state`, and every context write rewrites `context_authority_state`
+and then deletes and reinserts ten normalized mirror tables in
+`#mirrorContextAuthority`.
+
+Current behavior
+: Correctness is sound. The blob is written inside the same immediate
+transaction that records the command, so a crash never leaves the mirror ahead
+of the authority. Cost, not correctness, is the limit.
+
+Risk and tradeoff
+: Write cost grows with total run history rather than with the size of the
+change. A long-lived repository therefore pays a rising cost per command, and no
+retention or compaction bounds the growth. Replacing the blob with an event log
+plus periodic snapshots changes the durable format and every recovery path.
+
+Deferral reason
+: The alpha targets single-repository local operation, where history stays small
+enough that whole-state writes are not the practical limit. Changing the durable
+representation is a redesign of the authority contract rather than a repair, and
+doing it without a migration and recovery proof would trade a known cost for an
+unknown correctness risk.
+
+Trigger
+: The first repository whose command latency or database size is dominated by
+history rather than by working state, or any deployment that must retain history
+beyond a single alpha evaluation.
+
+Acceptance test
+: Prove that a command's write cost is independent of accumulated history, that
+recovery from an event log plus snapshot reconstructs the same canonical state
+as the blob it replaces, that retention removes only settled history, and that
+an interrupted compaction leaves the authority readable at its prior revision.

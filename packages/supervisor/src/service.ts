@@ -227,10 +227,30 @@ export class SupervisorService {
 
   wake(): void {
     if (this.#state !== "running" || this.#pump !== undefined) return;
-    this.#pump = this.#runPump().finally(() => {
-      this.#pump = undefined;
-      if (this.#state === "running" && this.authority.listPendingWakes().length > 0) this.wake();
-    });
+    let failed = false;
+    this.#pump = this.#runPump()
+      .catch((error: unknown) => {
+        // wake() is called from synchronous notifier callbacks that discard its
+        // result, so a rejection here would surface as an unhandled rejection and
+        // terminate the daemon. Record the failure and let the next wake retry.
+        failed = true;
+        this.#reportBackgroundFailure("service.wake-pump-failed", error);
+      })
+      .finally(() => {
+        this.#pump = undefined;
+        if (failed) return;
+        if (this.#state === "running" && this.authority.listPendingWakes().length > 0) this.wake();
+      });
+  }
+
+  #reportBackgroundFailure(event: string, error: unknown): void {
+    try {
+      this.#log("error", event, "Supervisor background work failed", {
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    } catch {
+      // A failing log sink must not escalate back into an unhandled rejection.
+    }
   }
 
   async drain(): Promise<void> {

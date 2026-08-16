@@ -35,6 +35,46 @@ afterEach(() => {
 });
 
 describe("SupervisorService lifecycle", () => {
+  it("survives a failing wake pump without an unhandled rejection", async () => {
+    const root = mkdtempSync(join(tmpdir(), "senawa-wake-failure-"));
+    roots.add(root);
+    const authority = new SqliteSupervisorAuthority({
+      databasePath: join(root, "authority.db"),
+      assetDirectory: join(root, "assets"),
+      dependencies,
+    });
+    const service = new SupervisorService({
+      authority,
+      clock: { now: () => Date.parse(runtimeFixture.currentTime) },
+      ownerId: "owner_wake-failure",
+    });
+    await service.start();
+
+    // wake() is invoked from synchronous notifier callbacks that discard its
+    // result, so a rejecting pump would terminate the process rather than the run.
+    const rejections: unknown[] = [];
+    const capture = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", capture);
+    try {
+      vi.spyOn(authority, "listPendingWakes").mockImplementation(() => {
+        throw new Error("simulated cycle failure");
+      });
+      service.wake();
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(rejections).toEqual([]);
+      expect(await service.status()).toMatchObject({ lifecycle: "running" });
+    } finally {
+      process.off("unhandledRejection", capture);
+      vi.restoreAllMocks();
+    }
+
+    await service.drain();
+    await service.stop();
+  });
+
   it("exposes sanitized remote partition lag and degrades aggregate health", async () => {
     const root = mkdtempSync(join(tmpdir(), "senawa-remote-status-"));
     roots.add(root);

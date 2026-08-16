@@ -1,9 +1,25 @@
 import { readdir, readFile } from "node:fs/promises";
 import { builtinModules, isBuiltin } from "node:module";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import ts from "typescript";
 
 const NODE_BUILTINS = new Set(builtinModules.map((specifier) => specifier.replace(/^node:/u, "")));
+
+/**
+ * Matches reads of ambient time or randomness.
+ *
+ * A boundary check that lists only a few spellings is not an enforcement
+ * mechanism, because the next author reaches for an unlisted spelling and the
+ * check stays green. Every common way to read a clock or a random source
+ * belongs here, including the destructured and bare-callee forms. `Date.parse`
+ * is deliberately absent: it is a pure function of its argument.
+ */
+const AMBIENT_TIME_OR_RANDOM_PATTERN =
+  /(?:\b(?:Date\s*\.\s*now|new\s+Date\b|Math\s*\.\s*random|performance\s*\.\s*now|hrtime|(?:crypto\s*\.\s*)?(?:randomUUID|getRandomValues|randomBytes|randomInt)\s*\()|\{[^}]*\}\s*=\s*(?:Date|Math|crypto|performance)\b)/u;
+
+/** Matches ambient effects that are additionally forbidden inside the kernel. */
+const AMBIENT_EFFECT_PATTERN =
+  /\b(?:process\s*\.|globalThis\s*\.|fetch\s*\(|Worker\s*\(|setTimeout\s*\(|setInterval\s*\(|setImmediate\s*\(|queueMicrotask\s*\()/u;
 
 const packageFiles = await collect("packages");
 const appFiles = await collect("apps");
@@ -175,11 +191,17 @@ function checkSource(file, content) {
   if (isProtocol && content.includes("@senawa/kernel")) {
     findings.push(`${file}: protocol cannot import kernel behavior`);
   }
-  if (isKernel && /\b(?:Date\.now|Math\.random|process\.|fetch\s*\(|Worker\s*\()/u.test(content)) {
+  if (isProtocol && /@senawa\/[a-z0-9-]+/u.test(content)) {
+    findings.push(`${file}: protocol cannot import workspace packages`);
+  }
+  if (isKernel && !file.endsWith(".test.ts") && hasNondeterministicSource(content)) {
     findings.push(`${file}: kernel cannot observe runtime state or external effects`);
   }
-  if (isRuntime && /\b(?:Date\.now|Math\.random)\s*\(/u.test(content)) {
+  if (isRuntime && !file.endsWith(".test.ts") && hasAmbientTimeOrRandomSource(content)) {
     findings.push(`${file}: runtime must receive current time and identifier allocation`);
+  }
+  if (isPackage && !isBrowserSystemTest && hasRelativeCrossPackageImport(file, content)) {
+    findings.push(`${file}: packages cannot reach another package through a relative path`);
   }
   if (isRuntime && /@senawa\/(?!kernel(?:["'/]|$)|protocol(?:["'/]|$))[a-z0-9-]+/u.test(content)) {
     findings.push(`${file}: runtime may import only protocol and kernel packages`);
@@ -212,6 +234,46 @@ function checkSource(file, content) {
     findings.push(`${file}: kernel cannot import effect or adapter packages`);
   }
   return findings;
+}
+
+function hasAmbientTimeOrRandomSource(content) {
+  return AMBIENT_TIME_OR_RANDOM_PATTERN.test(content);
+}
+
+function hasNondeterministicSource(content) {
+  return hasAmbientTimeOrRandomSource(content) || AMBIENT_EFFECT_PATTERN.test(content);
+}
+
+/**
+ * Detects a relative import that escapes its own package.
+ *
+ * Every package rule above matches `@senawa/<name>` specifiers. Without this
+ * rule each of them is defeated by spelling the same dependency as
+ * `../../<package>/src/index.js`, so the specifier-based rules would describe a
+ * boundary rather than enforce one.
+ */
+function hasRelativeCrossPackageImport(file, content) {
+  const packageRoot = /^(packages\/[^/]+)\//u.exec(file)?.[1];
+  if (packageRoot === undefined) return false;
+  const source = ts.createSourceFile(
+    "boundary-probe.ts",
+    content,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.TS,
+  );
+  let found = false;
+  const visit = (node) => {
+    if (found) return;
+    const specifier = moduleSpecifier(node);
+    if (specifier?.startsWith(".")) {
+      const resolved = posix.normalize(posix.join(posix.dirname(file), specifier));
+      if (!resolved.startsWith(`${packageRoot}/`)) found = true;
+    }
+    if (!found) ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(source, visit);
+  return found;
 }
 
 function hasNodeRuntimeImport(content) {
@@ -298,6 +360,40 @@ function hasUnsupportedControlPlaneImport(content) {
 
 function verifyRules() {
   const cases = [
+    ["packages/kernel/src/bad.ts", "const at = new Date();", "cannot observe runtime state"],
+    [
+      "packages/kernel/src/bad.ts",
+      "const id = crypto.randomUUID();",
+      "cannot observe runtime state",
+    ],
+    ["packages/kernel/src/bad.ts", "const at = performance.now();", "cannot observe runtime state"],
+    [
+      "packages/kernel/src/bad.ts",
+      "setTimeout(() => undefined, 1);",
+      "cannot observe runtime state",
+    ],
+    ["packages/kernel/src/bad.ts", "const { now } = Date;\nnow();", "cannot observe runtime state"],
+    ["packages/runtime/src/bad.ts", "const id = randomUUID();", "must receive current time"],
+    [
+      "packages/protocol/src/bad.ts",
+      'import "@senawa/storage-sqlite";',
+      "cannot import workspace packages",
+    ],
+    [
+      "packages/protocol/src/bad.ts",
+      'import "@senawa/runtime";',
+      "cannot import workspace packages",
+    ],
+    [
+      "packages/runtime/src/bad.ts",
+      'import "../../storage-sqlite/src/index.js";',
+      "cannot reach another package through a relative path",
+    ],
+    [
+      "packages/portal/src/bad.ts",
+      'export { x } from "../../kernel/src/index.js";',
+      "cannot reach another package through a relative path",
+    ],
     ["packages/kernel/src/bad.ts", 'import "node:fs";', "cannot import Node modules"],
     ["packages/protocol/src/bad.ts", 'import "node:http";', "cannot import Node modules"],
     ["packages/portal/src/bad.ts", 'import "node:crypto";', "cannot import Node modules"],

@@ -8814,3 +8814,65 @@ Passed on 2026-08-16:
 
 ### Remaining risks
 ```
+## Decision D-095: Repair pre-merge review findings and make boundary enforcement real
+
+* Date: 2026-08-16
+* Status: Accepted for the final pull request
+* Phase: Final pull request
+* Decision: Four filesystem-capable reviews ran in parallel over the complete
+  57-commit branch: security, architecture, durability, and
+  documentation-with-test-honesty. Security and documentation returned no
+  critical or high findings. Architecture and durability returned findings that
+  were each verified against source before any change. Confirmed defects were
+  repaired; a confirmed cost characteristic was recorded as PE-005 instead.
+* Alternatives: Accept the two BLOCK verdicts and defer every finding to
+  follow-up work; or repair all findings including the durable format change.
+* Rationale: A review verdict is a claim, not a fact. Each finding was reproduced
+  against source first, which mattered: the durability review's proposed repair
+  to `deliverCompletionFact` contradicted an existing test that deliberately
+  requires an inline submission to fail loudly, so the containment was moved to
+  the background drain instead. Conversely the architecture review's central
+  claim held under test, and was proved by injecting each violation and watching
+  the strengthened checker catch what the previous checker missed.
+* Consequence: Repairs landed for the unhandled wake-pump rejection, the
+  supervisor connection's missing `synchronous = FULL`, outbox head-of-line
+  blocking, and process-identifier-derived runner identity. The boundary checker
+  now detects clock, random, timer, and ambient-effect reads in the kernel, any
+  workspace import in protocol, and relative cross-package imports; each of those
+  is covered by a self-test case. The whole-history durable mirror is recorded as
+  PE-005 rather than repaired, because changing the durable representation is an
+  authority redesign and not a pre-merge fix.
+
+### Findings verified and repaired
+
+| Finding | Verified defect | Repair |
+|---|---|---|
+| Unhandled wake-pump rejection | `wake()` assigned a floating promise while `#runCycle` rethrew every non-lease error, and no process handler existed | `wake()` catches, records the failure through the authority log, and suppresses the re-wake that would spin on a persistent failure |
+| Supervisor connection durability | `SqliteSupervisorAuthority` configured its own connection by hand and omitted `synchronous = FULL`, so acknowledged receipts were not power-loss durable | `configureWriteConnection` is exported and used, removing the duplicated configuration that allowed the drift |
+| Outbox head-of-line blocking | `deliverCompletionOutboxOnce` and `deliverPhaseOutputOutboxOnce` only ever attempted the lowest-sorted entry, and a throwing consumer escaped the drain | Both drains iterate pending entries in delivery order and contain a throwing consumer, while inline submission still fails loudly |
+| Runner identity reuse | `service-${process.pid}` seeded attempt identifiers and the attempt counter restarted at zero, so a recycled process identifier could mint a colliding attempt identifier and claim a prior process's effect as its own | The daemon derives a process-instance identifier that combines the process identifier with random bytes |
+| Boundary enforcement gaps | A five-token regex missed `new Date`, `crypto.randomUUID`, `performance.now`, timers, and destructured clock reads; protocol had no workspace-import rule; no rule constrained relative cross-package imports | All three rules were added and proved by injection; the self-test caught a gap in the new destructuring pattern before it shipped |
+
+### Findings assessed and not repaired
+
+| Finding | Assessment |
+|---|---|
+| Whole-history durable mirror | Confirmed as written, but it is a cost characteristic rather than a correctness defect: the blob is written inside the transaction that records the command. Recorded as PE-005 |
+| Unbounded table growth | Same class as PE-005 and folded into it, since both are resolved by the same retention and compaction work |
+| Adapter importing an adapter | Not a violation. `docs/design/architecture.md` sanctions `supervisor` to `storage-sqlite`, the manifest allowlist encodes it, and the supervisor is a host rather than a peer adapter |
+| `Date.parse` in kernel and runtime | Not a violation. It is a pure function of its argument, and it was removed from the detection pattern after it produced false positives |
+| Weak visual-regression assertions | Accurate, and already disclosed in this log. The browser matrix proves interaction, not pixels |
+
+### Validation
+
+* Frozen install, root build including native helpers and portal assets
+* Workspace typecheck with no errors
+* Complete offline suite: 104 files and 1,322 tests passed with 2 skipped
+  opt-in live tests
+* Biome across 299 files with 31 intentional prompt-template warnings
+* Architecture boundaries across 463 source files, with each new rule proved by
+  injecting a violation and observing detection
+* Documentation links across 40 Markdown files
+* Playwright matrix: 30 passed with 1 desktop-only test skipped
+* Installed alpha packaging journey without live-worker fallback
+* `git diff --check`

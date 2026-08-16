@@ -245,7 +245,7 @@ export async function startSenawaService(
       authority,
       broker: () => contextBroker,
       compiler: composition.amendmentCompiler ?? configurationAmendmentCompiler(dependencies),
-      ownerId: `amendment-bridge-${process.pid}`,
+      ownerId: `amendment-bridge-${processInstanceId()}`,
       currentTime: () => new Date().toISOString(),
     });
     const repositoryDirectory = environment.SENAWA_REPOSITORY_DIR;
@@ -445,7 +445,7 @@ export async function startSenawaService(
     service = new SupervisorService({
       authority,
       clock: { now: () => Date.now() },
-      ownerId: `service-${process.pid}`,
+      ownerId: `service-${processInstanceId()}`,
       listeners,
       sessionStoreHealth:
         sdkPool === undefined
@@ -701,6 +701,23 @@ function allocatedId(commandId: string, kind: string, ordinal: number): string {
     .digest("hex")
     .slice(0, 32);
   return kind === "approval" ? `approval_${digest}` : `${kind}-${digest}`;
+}
+
+let cachedProcessInstanceId: string | undefined;
+
+/**
+ * Returns an identifier unique to this process instance.
+ *
+ * Runner owner identifiers seed attempt identifiers, and attempt identifiers
+ * decide whether an in-flight effect belongs to the current runner. A process
+ * identifier alone is not unique over time: the operating system reuses it, and
+ * the attempt counter restarts at zero in every process, so a restarted daemon
+ * that inherits a recycled process identifier would mint attempt identifiers
+ * that collide with a previous process and claim its effects as its own.
+ */
+function processInstanceId(): string {
+  cachedProcessInstanceId ??= `${process.pid}-${randomBytes(8).toString("hex")}`;
+  return cachedProcessInstanceId;
 }
 
 function listener(

@@ -747,6 +747,42 @@ describe("SQLite context broker durability", () => {
     }
   });
 
+  it("contains a throwing outbox consumer inside the background drain", () => {
+    const harness = createSqliteContextBrokerHarness();
+    const original = harness.broker as SqliteContextBroker;
+    const databasePath = original.databasePath;
+    original.close();
+
+    const broker = new SqliteContextBroker({
+      databasePath,
+      dependencies: harness.broker.dependencies,
+      completionFacts: {
+        admitCompletionFact() {
+          throw new Error("consumer refused");
+        },
+      },
+    });
+    try {
+      // An inline submission still fails loudly, because reporting success for a
+      // fact that never published would lose it.
+      expect(() =>
+        broker.admitSubmission({
+          submission: contextCompletionSubmission(harness, "submission_drain-refused"),
+        }),
+      ).toThrow("consumer refused");
+
+      // The background drain must not rethrow. It runs on the supervisor pump,
+      // where an escaping error leaks the run lease and takes the daemon down.
+      expect(() => broker.deliverCompletionOutboxOnce()).not.toThrow();
+      expect(broker.deliverCompletionOutboxOnce()).toBe(false);
+      expect(broker.authority.snapshot().completionOutbox).toEqual([
+        expect.objectContaining({ submissionId: "submission_drain-refused", delivered: false }),
+      ]);
+    } finally {
+      broker.close();
+    }
+  });
+
   it("refuses reentrant same-instance completion outbox delivery", () => {
     const harness = createSqliteContextBrokerHarness();
     const original = harness.broker as SqliteContextBroker;

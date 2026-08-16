@@ -9487,6 +9487,9 @@ export class SqliteContextBroker {
     try {
       const pending = this.#loadAuthority().completionOutbox.get(submissionId);
       if (pending === undefined || pending.delivered) return false;
+      // A consumer failure propagates here on purpose: an inline submission must
+      // fail loudly rather than report success for a fact that never published.
+      // Background drains contain this throw themselves.
       if (this.#completionFacts.admitCompletionFact(pending.fact) === "deferred") return false;
       this.#database.exec("BEGIN IMMEDIATE");
       let committed = false;
@@ -9515,17 +9518,19 @@ export class SqliteContextBroker {
   }
 
   deliverCompletionOutboxOnce(): boolean {
-    const pending = [...this.#loadAuthority().completionOutbox.entries()]
-      .filter(([, fact]) => !fact.delivered)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))[0];
-    return pending === undefined ? false : this.deliverCompletionFact(pending[0]);
+    for (const submissionId of pendingOutboxSubmissionIds(this.#loadAuthority().completionOutbox)) {
+      if (drainOutboxEntry(() => this.deliverCompletionFact(submissionId))) return true;
+    }
+    return false;
   }
 
   deliverPhaseOutputOutboxOnce(): boolean {
-    const pending = [...this.#loadAuthority().phaseOutputOutbox.entries()]
-      .filter(([, fact]) => !fact.delivered)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))[0];
-    return pending === undefined ? false : this.deliverPhaseOutputFact(pending[0]);
+    for (const submissionId of pendingOutboxSubmissionIds(
+      this.#loadAuthority().phaseOutputOutbox,
+    )) {
+      if (drainOutboxEntry(() => this.deliverPhaseOutputFact(submissionId))) return true;
+    }
+    return false;
   }
 
   /** Reads exact canonical phase output bytes staged by an accepted submission. */
@@ -11172,7 +11177,46 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function configureWriteConnection(database: Database.Database, busyTimeoutMs: number): void {
+/**
+ * Lists undelivered outbox submission identifiers in deterministic delivery order.
+ *
+ * Drains iterate this list rather than attempting only its head. A fact whose
+ * consumer defers or throws stays pending indefinitely, and attempting only the
+ * lowest-sorted entry would let that one fact block delivery for every other run.
+ */
+function pendingOutboxSubmissionIds(
+  outbox: ReadonlyMap<string, { readonly delivered: boolean }>,
+): readonly string[] {
+  return [...outbox.entries()]
+    .filter(([, entry]) => !entry.delivered)
+    .map(([submissionId]) => submissionId)
+    .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+}
+
+/**
+ * Attempts one background outbox delivery without letting it abort the drain.
+ *
+ * Drains run on the supervisor's background pump. A consumer that throws must
+ * leave its fact pending for a later attempt rather than unwind through the
+ * pump, which would leak the run lease and take the daemon down with it.
+ */
+function drainOutboxEntry(deliver: () => boolean): boolean {
+  try {
+    return deliver();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Applies the durability and concurrency pragmas every writing connection must share.
+ *
+ * Every connection that writes to the authority database has to agree on these
+ * pragmas. A connection that omits `synchronous = FULL` acknowledges writes that
+ * a power loss can still discard, so this helper is exported to keep hosts
+ * outside this module from configuring a weaker connection by hand.
+ */
+export function configureWriteConnection(database: Database.Database, busyTimeoutMs: number): void {
   database.pragma(`busy_timeout = ${busyTimeoutMs}`);
   retrySqliteLock(() => database.pragma("journal_mode = WAL"), busyTimeoutMs);
   database.pragma("synchronous = FULL");

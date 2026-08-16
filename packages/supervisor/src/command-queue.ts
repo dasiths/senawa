@@ -15,7 +15,12 @@ import {
   validateOpaqueIdentity,
 } from "@senawa/protocol";
 import type { AdmissionFacts, RuntimeDependencies } from "@senawa/runtime";
-import { type LeaseGrant, SqliteAuthority, StaleLeaseFenceError } from "@senawa/storage-sqlite";
+import {
+  configureWriteConnection,
+  type LeaseGrant,
+  SqliteAuthority,
+  StaleLeaseFenceError,
+} from "@senawa/storage-sqlite";
 import Database from "better-sqlite3";
 import type {
   AmendmentReviewRecord,
@@ -139,10 +144,7 @@ export class SqliteSupervisorAuthority {
       this.#database = new Database(this.databasePath, {
         timeout: options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS,
       });
-      this.#database.pragma("journal_mode = WAL");
-      this.#database.pragma(`busy_timeout = ${options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS}`);
-      this.#database.pragma("foreign_keys = ON");
-      this.#database.pragma("trusted_schema = OFF");
+      configureWriteConnection(this.#database, options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS);
     } catch (error) {
       this.commandAuthority.close();
       throw error;

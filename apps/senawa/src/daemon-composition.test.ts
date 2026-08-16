@@ -215,7 +215,7 @@ describe("daemon worker composition", () => {
       taskScopes: [{ ...workerTaskScope(worker), claimsAccepted: true }],
       budgets: [{ unit: "model-millidollars", limit: 10 }],
       lease: {
-        owner: `service-${process.pid}`,
+        owner: started.service.ownerId,
         fence: 1,
         expiresAt: new Date(Date.now() + 30_000).toISOString(),
       },
