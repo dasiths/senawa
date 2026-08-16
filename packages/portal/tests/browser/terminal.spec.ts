@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import {
   assertDocumentFits,
   bootstrapPortal,
+  captureState,
   controlOrigin,
   journeyDispatchId,
   navigate,
@@ -41,6 +42,13 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   );
   await expect(page.locator(".agent-terminal-log")).toHaveCSS("white-space", "normal");
   await expect(page.locator(".agent-terminal-text").first()).toHaveCSS("white-space", "pre-wrap");
+
+  // The diagram with a selected node and its live output is the parity feature
+  // this branch restores, so it needs its own review evidence.
+  const mobile = testInfo.project.name === "mobile-chromium";
+  await captureState(page, "graph-diagram", mobile);
+  await page.locator(".agent-terminal-log").scrollIntoViewIfNeeded();
+  await captureState(page, "graph-terminal", mobile);
 
   const hostile = page.locator(".agent-terminal-row", {
     hasText: "hostile line <script>blocked()</script></div> stays inert",
