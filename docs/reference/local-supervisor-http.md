@@ -1,7 +1,7 @@
 ---
 title: Local Supervisor HTTP Reference
 description: Alpha Unix-socket and loopback HTTP transport and security contracts
-ms.date: 2026-08-14
+ms.date: 2026-08-16
 ms.topic: reference
 ---
 
@@ -30,7 +30,7 @@ Portal HTTP binds exactly to `127.0.0.1`. Wildcard and IPv6 listeners are not
 accepted. Requests require the exact address and port in `Host`, reject
 forwarding headers, and emit no CORS headers.
 
-## Workflow Routes
+## Workflow routes
 
 The shared handler exposes these exact routes:
 
@@ -48,6 +48,8 @@ The shared handler exposes these exact routes:
 * `GET /api/v1alpha1/repositories/{repositoryId}/runs?after={runId}&limit={count}`
 * `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/overview`
 * `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/graph`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/delivery?after={cursor}&limit={count}`
+* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/transcript/{ownerKind}/{ownerId}?after={cursor}&limit={count}`
 * `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/graph/nodes?revision={digest}&after={offset}&limit={count}`
 * `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/graph/edges?revision={digest}&after={offset}&limit={count}`
 * `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/records/{kind}/{digest}`
@@ -70,10 +72,15 @@ does not conflict with the query cursor.
 
 Portal discovery pages are lexically ordered and contain at most 100 entries.
 Graph node and edge pages require the exact graph revision and contain at most
-200 entries. Activity windows accept either `after` or `before`, never both,
-contain at most 100 entries, and remain ascending within each returned window.
-Artifact previews read at most 64 KiB and advertise the browser JSON viewer's
-500-node budget.
+200 entries. Delivery pages accept an integer `after` cursor and contain at most
+256 entries. Transcript pages address exactly one owner: `{ownerKind}` is
+`dispatch`, `task`, `phase`, or `run`, and any other value returns `404`. They
+accept an integer `after` cursor and contain at most 200 records. The `run` kind
+is a read-only projection that merges the durable dispatch, task, and phase rows
+of one run; capture never writes it. Activity windows accept either `after` or
+`before`, never both, contain at most 100 entries, and remain ascending within
+each returned window. Artifact previews read at most 64 KiB and advertise the
+browser JSON viewer's 500-node budget.
 
 The run overview contains workflow, context, runner, workspace, human, portal,
 graph, and lifecycle cursors. A client loads overview A, bounded resources, then
@@ -98,7 +105,7 @@ and a receipt `Location`. Other JSON responses use canonical protocol DTOs or a
 safe `ErrorEnvelope`. JSON responses set `Content-Type: application/json;
 charset=utf-8`, `X-Content-Type-Options: nosniff`, and `Cache-Control: no-store`.
 
-## Operational Routes
+## Operational routes
 
 Authenticated Unix-socket clients can use these exact routes:
 
@@ -137,7 +144,7 @@ other authority history have no automatic age or count pruning in this alpha.
 They remain immutable while referenced. Backup and export do not delete source
 history, and no retention interval is claimed for operator-created bundles.
 
-## Service Lifecycle
+## Service lifecycle
 
 The live lifecycle is `stopped`, `starting`, `running`, `draining`, `drained`,
 `stopping`, then `stopped`. A degraded health value overlays the current
@@ -174,7 +181,7 @@ call, including the final effect commit. Renewal failure aborts the worker and
 leaves the uncertain lease and durable effect claim for higher-fence takeover
 after expiry. Graceful completion stops renewal and releases the exact lease.
 
-## Copilot Worker Composition
+## Copilot worker composition
 
 Set `SENAWA_REPOSITORY_DIR` to an explicit repository directory to enable the
 production Copilot worker host. The daemon keeps the SDK working directory and
@@ -195,7 +202,7 @@ read. Asset ingress permits at most 256 MiB per object. SQLite applies the
 configured repository object-count and total-byte quotas in the same write
 transaction before it creates a staging file.
 
-## Portal Sessions
+## Portal sessions
 
 Authenticated IPC creates a portal bootstrap through
 `POST /api/v1alpha1/portal-sessions`. The response contains a loopback bootstrap
@@ -222,7 +229,7 @@ Session expiry terminates SSE and makes API, shell, and asset requests fail.
 Session lifetime is at most eight hours, and the supervisor admits at most
 1,024 active sessions. Expired sessions are purged before capacity checks.
 
-## Portal Static Assets
+## Portal static assets
 
 The app may inject a verified `PortalAssetSource` loaded from
 `SENAWA_PORTAL_MANIFEST`. The manifest and every asset must be canonical,
@@ -244,7 +251,7 @@ or IPC static route exists.
 When the manifest is missing or invalid, the loopback shell returns a typed
 `503` response. Daemon IPC and portal query APIs remain available.
 
-## Request Hardening
+## Request hardening
 
 The handler validates the raw origin-form target before decoding path segments.
 It rejects absolute form, network-path references, backslashes, null bytes,
@@ -265,7 +272,7 @@ contains at most 128 names and 64 KiB of aggregate UTF-8 names and values. A
 process stream is capped at 64 MiB, configured retries share a 1 GiB aggregate
 output budget, and active process and workspace capacity cannot exceed 32.
 
-## Server-Sent Events
+## Server-sent events
 
 SSE subscribes to the run notifier before its first bounded replay query, then
 performs immediate catch-up after registration. It reads pages of at most 256
@@ -286,7 +293,7 @@ When a write reports backpressure, the source waits for drain without queuing
 more frames. The queued frame becomes the last delivered cursor only after
 drain. A 30-second stall, request abort, or service stop closes the stream.
 
-## State Backup
+## State backup
 
 Combined state backups contain the SQLite authority bundle and an opaque SDK
 session-store bundle under one exact outer manifest. SDK traversal accepts only
@@ -315,6 +322,7 @@ fresh-root restore are app and storage operations rather than loopback routes.
 Restore requires a stopped service and absent runtime socket. Report exports
 are never accepted as restore sources.
 
-The protocol-only browser application and Playwright journeys remain Phase 11C
-and Phase 11D work. Phase 11B hosts only a future verified manifest and does not
-add a browser package or frontend.
+The browser application is implemented in `packages/portal` and served through
+the loopback shell and asset routes above. See the [portal
+guide](../guide/portal.md) for the console itself, and run `pnpm test:portal`
+for the Playwright browser journeys under `packages/portal/tests/browser`.

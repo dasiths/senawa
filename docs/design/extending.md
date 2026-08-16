@@ -78,8 +78,8 @@ Bind the adapter in the composition root and add a composition test alongside
 
 ## Adding a sensor
 
-A sensor usually needs no code. Sensors are declared data, executed by a bounded
-process host.
+Sensors are declared data rather than Senawa code. A bounded process host
+executes the declared argv.
 
 Add a `SensorDeclaration` to the `sensors` array of your workflow document. The
 declaration fixes argv (at least one element), working directory, timeout,

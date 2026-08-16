@@ -287,11 +287,22 @@ pnpm test:live-worker
 ```
 
 The runner sets `SENAWA_COPILOT_LIVE=1` itself and prints a cost and data
-warning before it starts. Without the acknowledgement it refuses:
+warning before it starts. It validates `SENAWA_COPILOT_TIMEOUT_MS` first, while
+`scripts/test-live-worker.mjs` is still loading and before it reads the
+acknowledgement:
 
 ```text
-Live worker testing can spend AI credits and send data. Set SENAWA_COPILOT_ACKNOWLEDGE_COST_AND_DATA=1 with the bounded live probe variables to continue.
+Error: Live Copilot probe requires SENAWA_COPILOT_TIMEOUT_MS
 ```
+
+With a positive timeout set and no acknowledgement, it refuses next:
+
+```text
+Error: Live worker testing can spend AI credits and send data. Set SENAWA_COPILOT_ACKNOWLEDGE_COST_AND_DATA=1 with the bounded live probe variables to continue.
+```
+
+`SENAWA_COPILOT_MODEL` and `SENAWA_COPILOT_MAX_AI_CREDITS` are read by the
+Vitest lane the runner spawns, so their absence surfaces after both checks pass.
 
 Live worker operation also requires `@github/copilot-sdk` version `1.0.9` to be
 available separately and a repository worker configured through

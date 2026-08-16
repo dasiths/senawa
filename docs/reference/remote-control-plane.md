@@ -1,7 +1,7 @@
 ---
 title: Remote Control-Plane Reference
 description: Alpha outbound connector, enrollment, trust, synchronization, and conformance limits
-ms.date: 2026-08-14
+ms.date: 2026-08-16
 ms.topic: reference
 ---
 
@@ -18,7 +18,7 @@ submits the attribution-free command through the existing local supervisor API.
 The local command service repeats authorization, expiry, graph, revision, exact
 object, repository, and run checks.
 
-## Production Configuration
+## Production configuration
 
 The connector is disabled by default. Enable it by setting both variables in the
 daemon environment:
@@ -55,7 +55,7 @@ binding policy digest. Role mappings, maximum authorization lease,
 classification ceiling, synchronization allowlist, and disconnected mode come
 from that snapshot. Endpoint and key fields never enter the snapshot.
 
-## Client HTTP Contract
+## Client HTTP contract
 
 The production adapter is an outbound JSON client for these paths beneath the
 derived endpoint:
@@ -99,7 +99,7 @@ A compatible service is responsible for implementing these routes, transport
 authentication, availability, retention, and production key enrollment. Senawa
 does not expose a production hosted server for them.
 
-## Cryptographic Binding
+## Cryptographic binding
 
 Ed25519 signatures cover fixed domain bytes followed by canonical unsigned
 content. The behavior-free protocol package exports the command-envelope,
@@ -113,7 +113,7 @@ The reference authority accepts command actor identity through a separate
 server-authenticated context. Extra actor data on the client request is ignored
 and cannot select accepted tenant, repository, principal, or transport.
 
-## Receipt And Synchronization State
+## Receipt and synchronization state
 
 The receipt chain contains five distinct stages:
 
@@ -166,7 +166,7 @@ cursor. If `synchronizationState` is false, all metadata streams are disabled
 and the wire report carries empty receipt, event, and projection arrays plus a
 zero, non-disclosing synchronization vector.
 
-## Reference And Conformance Limits
+## Reference and conformance limits
 
 The reference authority and simulator are deterministic under injected clock,
 identifier, key, and optional SHA-256 fixtures. They support exact duplicate,

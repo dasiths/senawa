@@ -212,8 +212,9 @@ http://127.0.0.1:44775/portal/bootstrap?token=imdOYE6TxlrLo-V-zfbPD99yQPAk6sFgwf
 
 Open that URL in a browser on the same host. The bootstrap capability is
 single-use, expires within 60 seconds, and redirects to `/portal/` while setting
-a host-only session cookie. Ask for a new URL whenever you need another session;
-reloading a consumed bootstrap URL downgrades the session to read-only.
+a host-only session cookie. Reloading a consumed bootstrap URL returns HTTP 401
+with `Portal bootstrap is invalid`, so navigate inside the console instead of
+reloading it. Run `senawa portal` again whenever you need another session.
 
 [Portal](portal.md) explains the run console, the workflow diagram, the agent
 output view, and the human decision surfaces.

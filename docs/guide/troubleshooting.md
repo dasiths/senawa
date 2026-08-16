@@ -6,7 +6,7 @@ ms.topic: troubleshooting
 ---
 
 This page covers what the alpha requires, what it deliberately does not do, and
-what the messages you are most likely to see actually mean.
+what its failure messages mean.
 
 ## Platform matrix
 
@@ -60,10 +60,22 @@ JSON syntax errors report a normalized category with a line and column:
 
 `senawa init` refuses any existing `.senawa` filesystem object and changes
 nothing. Move or remove the existing tree yourself, or pass a different project
-directory:
+directory that already exists:
 
 ```bash
+mkdir other-project
 senawa init other-project
+```
+
+```text
+other-project/.senawa: created
+```
+
+The project directory is never created for you. Without the `mkdir` step the
+command exits `1`:
+
+```text
+other-project/.senawa: unable to durably publish standard workflow (ENOENT)
 ```
 
 ### `unable to read workflow configuration (ENOENT)`
@@ -98,12 +110,12 @@ a JSON Pointer:
 - [unknown-reference] .senawa/workflow.json#/phases/0/input/schema: Phase input schema definition-inpt is not declared
 ```
 
-Fix all of them rather than the first. Codes you will meet most often are
-`unknown-reference`, `missing-field`, `invalid-field`, `unknown-field`,
+Fix all of them rather than the first. [Workflow authoring](workflow-authoring.md)
+explains the rule behind every code, including `unknown-reference`,
+`missing-field`, `invalid-field`, `unknown-field`,
 `mapping-destination-collision`, `phase-dependency-violation`,
 `current-item-not-allowed`, `undeclared-prompt-input`, `unused-prompt-input`,
-and `authority-widening`. [Workflow authoring](workflow-authoring.md) explains
-each rule.
+and `authority-widening`.
 
 ### `Operational command failed`
 
@@ -203,27 +215,43 @@ The portal asset manifest is missing or invalid. Daemon IPC and portal query
 APIs stay available. On an installed package the manifest is discovered relative
 to the `senawa` package; on a source build, `SENAWA_PORTAL_MANIFEST` selects it.
 
-### A reloaded portal tab is read-only
+### A reloaded bootstrap URL returns `Portal bootstrap is invalid`
 
 The bootstrap URL is a one-time capability. Reloading it replays a consumed
-token, so the session downgrades. Navigate inside the console, or run
-`senawa portal` again for a fresh session.
+token, and the supervisor answers HTTP 401 with this message instead of a
+session. Navigate inside the console rather than reloading the bootstrap URL,
+and run `senawa portal` for a fresh URL.
+
+### A portal tab is read-only
+
+A session carries one CSRF token and issues it once. The tab that claimed it
+keeps the token in `sessionStorage`, so reloading `/portal/` in that tab stays
+read-write. A second tab on the same session, or a tab whose session storage was
+cleared, finds the token already claimed and stays read-only. Run
+`senawa portal` for a fresh read-write session.
 
 ## Live model costs
 
 Nothing in this guide set spends credits by default. Costs apply only when you
 configure a repository worker or run the opt-in live probe.
 
-The live probe refuses to run without an explicit acknowledgement:
+The live probe validates `SENAWA_COPILOT_TIMEOUT_MS` first, while
+`scripts/test-live-worker.mjs` is still loading and before it reads the
+acknowledgement:
 
 ```text
-Live worker testing can spend AI credits and send data. Set SENAWA_COPILOT_ACKNOWLEDGE_COST_AND_DATA=1 with the bounded live probe variables to continue.
+Error: Live Copilot probe requires SENAWA_COPILOT_TIMEOUT_MS
 ```
 
-It also requires `SENAWA_COPILOT_MODEL`, a positive
-`SENAWA_COPILOT_MAX_AI_CREDITS`, and a positive `SENAWA_COPILOT_TIMEOUT_MS`, and
-it prints a cost and data warning before starting. Live tests are excluded from
-default and packaging validation.
+With a positive timeout set and no acknowledgement, it refuses next:
+
+```text
+Error: Live worker testing can spend AI credits and send data. Set SENAWA_COPILOT_ACKNOWLEDGE_COST_AND_DATA=1 with the bounded live probe variables to continue.
+```
+
+The probe then prints a cost and data warning and starts the Vitest lane, which
+requires `SENAWA_COPILOT_MODEL` and a positive `SENAWA_COPILOT_MAX_AI_CREDITS`.
+Live tests are excluded from default and packaging validation.
 
 Model routes carry their own `maxTurns`, `maxSubmissions`, and
 `maxMillidollars` ceilings, and every autonomous loop carries a finite budget

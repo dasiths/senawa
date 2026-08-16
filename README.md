@@ -1,6 +1,8 @@
 ---
 title: Senawa
 description: Deterministic workflow kernel and alpha command-line tooling
+ms.date: 2026-08-16
+ms.topic: overview
 ---
 
 Senawa is the deterministic workflow kernel of a consumer-defined software
@@ -39,6 +41,12 @@ with the [comprehensive plan](docs/design/implementation-plan.md) as the active
 architecture source and the [implementation
 log](docs/design/implementation-log.md) recording decisions.
 
+The repository carries no `examples/` tree. Every runnable example lives inside
+the consumer guides: [Getting started](docs/guide/getting-started.md) carries the
+end-to-end command sequence, [Workflow authoring](docs/guide/workflow-authoring.md)
+carries the configuration documents, and [Operations](docs/guide/operations.md)
+carries the service, backup, restore, and diagnostics sequences.
+
 ## High-level design
 
 Senawa executes consumer-defined workflows as a deterministic state machine.
@@ -63,7 +71,9 @@ Five rules shape the whole system:
 
 The kernel is pure and has no filesystem, process, network, database, Git,
 clock, random, worker, sensor, or UI dependency. Protocol carries contracts with
-no behavior. Only direct edges appear below.
+no behavior. Every edge below is a direct entry in the `dependencies` field of
+the source manifest. External dependencies are listed per component in
+[Architecture](docs/design/architecture.md).
 
 ```mermaid
 flowchart TD
@@ -76,24 +86,48 @@ flowchart TD
     supervisor["supervisor<br/>local control plane"]
     reporting["reporting<br/>reports and exports"]
     portal["portal<br/>browser client"]
+    testing["testing<br/>shared conformance suites"]
     cli["apps/senawa<br/>CLI composition root"]
     control["apps/control-plane<br/>reference server"]
 
     configuration --> kernel
+
     runtime --> kernel
     runtime --> protocol
-    storage --> runtime
+
     storage --> configuration
-    host --> runtime
+    storage --> kernel
+    storage --> protocol
+    storage --> runtime
+
     host --> configuration
-    supervisor --> storage
+    host --> kernel
+    host --> protocol
+    host --> runtime
+
+    supervisor --> protocol
     supervisor --> runtime
+    supervisor --> storage
+
+    reporting --> kernel
+    reporting --> protocol
     reporting --> runtime
+
+    testing --> kernel
+    testing --> protocol
+    testing --> runtime
+
     portal --> protocol
     control --> protocol
-    cli --> supervisor
+
+    cli --> configuration
     cli --> host
+    cli --> kernel
+    cli --> protocol
     cli --> reporting
+    cli --> runtime
+    cli --> storage
+    cli --> supervisor
 ```
 
 ### Command and effect lifecycle
@@ -133,7 +167,8 @@ stateDiagram-v2
     [*] --> awaiting_completion
     awaiting_completion --> awaiting_gate: every active task accounted
     awaiting_gate --> gate_rejected: blocking rule failed or unknown
-    awaiting_gate --> awaiting_approval: gate accepted
+    awaiting_gate --> awaiting_approval: gate accepted, approval required
+    awaiting_gate --> awaiting_closure: gate accepted, no approval required
     awaiting_approval --> approval_rejected: human rejected
     awaiting_approval --> awaiting_closure: human approved
     awaiting_closure --> closed
@@ -145,9 +180,10 @@ stateDiagram-v2
 
 ### Where the branch stands
 
-Phases 0 through 16 are delivered, ending with the browser run console. Phase 17
-adds the design and consumer documentation sets. Current status, acceptance
-criteria, and remaining work live in the [comprehensive
+Phases 0 through 14 and Phase 16 are delivered, ending with the browser run
+console. No phase carries the number 15; the former Phase 15 was renumbered to
+Phase 17, which adds the design and consumer documentation sets. Current status,
+acceptance criteria, and remaining work live in the [comprehensive
 plan](docs/design/implementation-plan.md).
 
 ## Development

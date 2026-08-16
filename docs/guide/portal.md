@@ -28,8 +28,14 @@ http://127.0.0.1:44775/portal/bootstrap?token=imdOYE6TxlrLo-V-zfbPD99yQPAk6sFgwf
 The capability is single-use and expires within 60 seconds. Consuming it
 redirects to `/portal/` and sets a host-only session cookie. A session lasts at
 most eight hours. Reloading the bootstrap URL replays a consumed token and
-downgrades the tab to read-only, so navigate inside the console instead of
-reloading it. Run `senawa portal` again for a fresh session.
+returns HTTP 401 with `Portal bootstrap is invalid`, so navigate inside the
+console instead of reloading it. Run `senawa portal` again for a fresh session.
+
+A session carries one CSRF token and issues it once. The tab that claimed it
+keeps the token in `sessionStorage`, so reloading `/portal/` in that tab stays
+read-write. A second tab on the same session, or a tab whose session storage was
+cleared, finds the token already claimed and stays read-only. Run
+`senawa portal` for a fresh read-write session.
 
 Without `SENAWA_PORTAL_PORT`, the service has no loopback listener and the
 command reports that the portal listener is not enabled.
@@ -54,18 +60,25 @@ close an open dialog or full-screen asset overlay.
 ## Views
 
 Eight views exist, each addressable by URL hash as
-`#/runs/{repositoryId}/{runId}/{view}`:
+`#/runs/{repositoryId}/{runId}/{view}`. The display name in the navigation rail
+is followed by the exact `{view}` token below:
 
-* Overview shows the run mode, phase, task, criterion, human need, and effect
-  counts, the authority vector, and the run control buttons.
-* Graph shows the workflow structure and the agent output view.
-* Delivery shows standard delivery metadata: phase outputs, fan-out evaluations,
-  and their digests and states.
-* Activity shows paged receipts and events.
-* Artifacts shows worker artifact metadata, bounded previews, and downloads.
-* Human needs shows the human queue with a filter.
-* Amendments shows amendment source, impact, and diff as inert bounded data.
-* Workspaces shows task workspaces and integration attempts.
+* Overview, `overview`, shows the run mode, phase, task, criterion, human need,
+  and effect counts, the authority vector, and the run control buttons.
+* Graph, `graph`, shows the workflow structure and the agent output view.
+* Delivery, `delivery`, shows standard delivery metadata: phase outputs, fan-out
+  evaluations, and their digests and states.
+* Activity, `activity`, shows paged receipts and events.
+* Artifacts, `artifacts`, shows worker artifact metadata, bounded previews, and
+  downloads.
+* Human needs, `needs`, shows the human queue with a filter.
+* Amendments, `amendments`, shows amendment source, impact, and diff as inert
+  bounded data.
+* Workspaces, `workspaces`, shows task workspaces and integration attempts.
+
+Human needs is the only display name that differs from its token. A hash with an
+unknown token, an unparsable repository or run identity, or a different segment
+count resolves to the overview with no run selected.
 
 A view assembles from an overview read, bounded resource reads, and a second
 overview read. Any change to the authority vector invalidates the assembly and

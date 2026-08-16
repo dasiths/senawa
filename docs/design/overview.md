@@ -17,10 +17,10 @@ reintroduce it.
 
 ## Deterministic authority
 
-The kernel is a pure decision function. It has no dependencies at all: the
-`dependencies` field of [packages/kernel/package.json](../../packages/kernel/package.json)
-is empty. It cannot read a clock, generate randomness, touch a filesystem, open
-a socket, or spawn a worker.
+The kernel is a pure decision function. It has no dependencies at all:
+[packages/kernel/package.json](../../packages/kernel/package.json) declares no
+`dependencies` field. It cannot read a clock, generate randomness, touch a
+filesystem, open a socket, or spawn a worker.
 
 The problem this solves is unreproducible decisions. When a decision function
 can read ambient state, two identical inputs can produce two different outcomes,
