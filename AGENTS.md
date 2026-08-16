@@ -2,15 +2,6 @@
 
 These instructions apply to the entire repository.
 
-## Source of truth
-
-* `docs/design/WIP/redesign-1/implementation-plan.md` governs the autonomous
-  implementation sequence and architecture.
-* `docs/design/WIP/redesign-1/implementation-log.md` records decisions,
-  deviations, validation, commits, and pushes.
-* Old implementation decisions, research, package boundaries, and persisted
-  formats do not constrain the implementation.
-
 ## Architecture boundaries
 
 * Keep the kernel deterministic and free of filesystem, process, network,
