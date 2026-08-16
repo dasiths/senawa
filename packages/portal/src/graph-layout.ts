@@ -137,6 +137,39 @@ export function graphLayout(
 }
 
 /**
+ * Orders nodes so prerequisites precede the nodes that depend on them.
+ *
+ * The diagram gets this ordering from layering. The table and tree render a
+ * plain list, so without this they show whatever order the authority paged the
+ * nodes in, which is digest order and unrelated to how the workflow runs.
+ */
+export function executionOrdered(
+  nodes: readonly PortalGraphNode[],
+  edges: readonly PortalGraphEdge[],
+): readonly PortalGraphNode[] {
+  const present = new Set(nodes.map(({ nodeId }) => nodeId));
+  const ranks = longestPathRanks(
+    nodes.map(({ nodeId }) => nodeId),
+    flowOriented(
+      edges.filter(
+        (edge) =>
+          edge.kind === "dependency" && present.has(edge.fromNodeId) && present.has(edge.toNodeId),
+      ),
+    ),
+  );
+  return Object.freeze(
+    nodes
+      .map((node, index) => ({ node, index }))
+      .sort(
+        (left, right) =>
+          (ranks.get(left.node.nodeId) ?? 0) - (ranks.get(right.node.nodeId) ?? 0) ||
+          left.index - right.index,
+      )
+      .map(({ node }) => node),
+  );
+}
+
+/**
  * Orients edges so that "from" always precedes "to" in execution order.
  *
  * A `dependency` edge records that its source depends on its target, so it

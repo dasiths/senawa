@@ -11,7 +11,7 @@ import { allowanceResult, allowanceReviewFromSource } from "./allowance-review.j
 import { type BoundedJsonNode, boundedJsonModel } from "./bounded-json.js";
 import { narrationBusy, narrationText } from "./command-narrator.js";
 import { focusGraphViewport, graphDiagramView } from "./graph-diagram.js";
-import { graphLayout } from "./graph-layout.js";
+import { executionOrdered, graphLayout } from "./graph-layout.js";
 import { type NodeToolbarAction, nodeToolbarView } from "./node-toolbar.js";
 import {
   attentionTitle,
@@ -695,9 +695,9 @@ function graphBody(
         },
       });
     case "table":
-      return graphTable(filtered, actions);
+      return graphTable(executionOrdered(filtered, edges), actions);
     case "tree":
-      return graphTree(filtered, actions);
+      return graphTree(executionOrdered(filtered, edges), actions);
   }
 }
 

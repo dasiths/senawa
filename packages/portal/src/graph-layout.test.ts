@@ -1,6 +1,27 @@
 import type { PortalGraphEdge, PortalGraphNode, PortalGraphNodeRunState } from "@senawa/protocol";
 import { describe, expect, it } from "vitest";
-import { type GraphLayout, graphLayout } from "./graph-layout.js";
+import { executionOrdered, type GraphLayout, graphLayout } from "./graph-layout.js";
+
+describe("execution ordering", () => {
+  it("orders prerequisites before the nodes that depend on them", () => {
+    // The authority pages nodes in digest order, which is unrelated to run order.
+    const paged = [task("node_research"), task("node_verify"), task("node_define")];
+    const ordered = executionOrdered(paged, [
+      dependency("edge_1", "node_define", "node_research"),
+      dependency("edge_2", "node_research", "node_verify"),
+    ]);
+    expect(ordered.map(({ nodeId }) => nodeId)).toEqual([
+      "node_define",
+      "node_research",
+      "node_verify",
+    ]);
+  });
+
+  it("keeps arrival order for nodes with no dependency between them", () => {
+    const paged = [task("node_b"), task("node_a")];
+    expect(executionOrdered(paged, []).map(({ nodeId }) => nodeId)).toEqual(["node_b", "node_a"]);
+  });
+});
 
 describe("deterministic graph layout", () => {
   it("stacks a linear dependency chain in one column", () => {
