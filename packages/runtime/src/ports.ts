@@ -13,7 +13,7 @@ import type {
 
 export type RuntimeSha256 = Sha256;
 
-export type AllocationKind = "approval" | "stream-event";
+export type AllocationKind = "approval" | "escalation" | "stream-event";
 
 export type PageQueryErrorCode = "cursor-ahead" | "event-replay-gap" | "scope-mismatch";
 

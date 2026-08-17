@@ -1,3 +1,4 @@
+import type { Escalation } from "@senawa/kernel";
 import {
   type AcceptedAccountingAssessment,
   type AmendmentApplication,
@@ -18,12 +19,14 @@ import {
   createAmendmentDecision,
   createAmendmentWithdrawal,
   createAuthorityDecision,
+  createEscalation,
   createPhaseCandidate,
   decideRunCommand,
   deriveCompletionRequirements,
   digestAccountingAssessment,
   digestRunEventContent,
   digestSelectedTaskSet,
+  escalationId,
   evaluateGate,
   eventId,
   type GateEvidence,
@@ -138,6 +141,7 @@ interface RuntimeRunRecords {
   readonly candidate?: PhaseCandidate;
   readonly gateEvidence?: GateEvidence;
   readonly authorityDecision?: AuthorityDecision;
+  readonly escalation?: Escalation;
   readonly closure?: PhaseClosure;
   readonly integrationBarrier?: IntegrationBarrier;
   readonly phaseLifecycles?: readonly RuntimePhaseLifecycleRecords[];
@@ -163,6 +167,7 @@ interface RuntimePhaseLifecycleRecords {
   readonly candidate?: PhaseCandidate;
   readonly gateEvidence?: GateEvidence;
   readonly authorityDecision?: AuthorityDecision;
+  readonly escalation?: Escalation;
   readonly closure?: PhaseClosure;
 }
 
@@ -680,6 +685,8 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
         return this.evaluateGate(command, run);
       case "record-authority-decision":
         return this.recordAuthorityDecision(command, admission, run);
+      case "create-escalation":
+        return this.createEscalation(command, admission, run);
       case "close-phase":
         return this.closePhase(command, run);
       case "start-phase-attempt":
@@ -1071,6 +1078,81 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     this.project(updated);
     run.records = updated;
     return canonicalValue(authorityDecision) as unknown as JsonValue;
+  }
+
+  /**
+   * Records that a phase cannot reach a gate and needs a human.
+   *
+   * Without this, a phase whose gates keep failing has no terminal move: it can
+   * neither close nor hand the problem over, so the run stalls silently. The
+   * escalation is derived from the authority's own records rather than from the
+   * caller, because an agent that could describe its own failure could also
+   * describe a different one.
+   */
+  private createEscalation(
+    command: CommandEnvelope,
+    admission: AdmissionFacts,
+    run: RuntimeAuthorityRun,
+  ): JsonValue {
+    const records = requiredRecords(run);
+    this.assertGraphRevision(command, records);
+    if (records.candidate === undefined || records.gateEvidence === undefined) {
+      throw new RuntimeRefusal(
+        "candidate-required",
+        "Escalation requires the gate evidence it is escalating",
+      );
+    }
+    if (records.escalation !== undefined) {
+      throw new RuntimeRefusal("escalation-exists", "Phase already has an escalation");
+    }
+    if (records.closure !== undefined) {
+      throw new RuntimeRefusal("closure-exists", "A closed phase cannot escalate");
+    }
+    // Escalating a passing gate would let an agent route around a decision it
+    // already won, so the evidence has to actually be a refusal.
+    if (records.gateEvidence.evaluation.decision !== "rejected") {
+      throw new RuntimeRefusal(
+        "invalid-escalation",
+        "Escalation requires gate evidence whose decision is rejected",
+      );
+    }
+    this.assertExactObject(command, records.candidate.candidateDigest);
+    const payload = exactObject(command.payload, "create-escalation payload", ["allowedResponses"]);
+    if (!Array.isArray(payload.allowedResponses) || payload.allowedResponses.length === 0) {
+      throw new RuntimeRefusal(
+        "invalid-escalation",
+        "Escalation must offer at least one allowed response",
+      );
+    }
+    const evidence = records.gateEvidence;
+    const escalation = createEscalation(
+      {
+        escalationId: escalationId(admission.allocateId("escalation", command)),
+        owner: {
+          kind: "phase",
+          phaseId: records.phase.phaseId,
+          definitionGeneration: records.phase.definitionGeneration,
+          contextRevisionDigest: records.candidate.graphRevisionDigest,
+        },
+        trigger: { kind: "blocked" },
+        contextDigest: records.candidate.inputBindingDigest,
+        candidateDigest: records.candidate.candidateDigest,
+        policyDigest: records.escalationPolicyDigest,
+        unresolvedCriterionIds: [],
+        failedReadingDigests: evidence.evaluation.readingDigests.filter((_digest, index) =>
+          isFailedRule(evidence.evaluation.blocking[index]),
+        ),
+        unknownReadingDigests: [],
+        attemptFacts: [],
+        allowedResponses: payload.allowedResponses as never,
+        timestamp: admission.currentTime,
+      },
+      this.dependencies.sha256,
+    );
+    const updated = updateCurrentPhase(records, { escalation });
+    this.project(updated);
+    run.records = updated;
+    return canonicalValue(escalation) as unknown as JsonValue;
   }
 
   private closePhase(command: CommandEnvelope, run: RuntimeAuthorityRun): JsonValue {
@@ -2971,4 +3053,9 @@ function exactObject(
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** True when a blocking rule did not evaluate to true, so it did not pass. */
+function isFailedRule(rule: { readonly result: unknown } | undefined): boolean {
+  return rule !== undefined && rule.result !== true;
 }
