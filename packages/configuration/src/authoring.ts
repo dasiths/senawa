@@ -168,18 +168,7 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
       .sort((left, right) => compare(left.key, right.key)),
     modelPolicies: [...agentsByKey.values()]
       .filter((agent) => phases.some((phase) => phase.agent === agent.key))
-      .map((agent) => ({
-        key: agent.key,
-        routes: [
-          {
-            provider: agent.provider,
-            model: agent.model,
-            maxTurns: 12,
-            maxSubmissions: 4,
-            maxMillidollars: 5_000,
-          },
-        ],
-      }))
+      .map((agent) => ({ key: agent.key, routes: agent.routes }))
       .sort((left, right) => compare(left.key, right.key)),
     sensors: [...sensorSet.values()]
       .map((sensor) => ({
@@ -219,10 +208,18 @@ interface AuthoredAgent {
   readonly key: string;
   readonly prompt: string;
   readonly provider: string;
-  readonly model: string;
+  readonly routes: readonly AuthoredRoute[];
   readonly session: string;
   readonly credits: number;
   readonly inputPaths: readonly string[];
+}
+
+interface AuthoredRoute {
+  readonly provider: string;
+  readonly model: string;
+  readonly maxTurns: number;
+  readonly maxSubmissions: number;
+  readonly maxMillidollars: number;
 }
 
 interface AuthoredPhase {
@@ -279,8 +276,8 @@ function readAgents(
       continue;
     }
     const prompt = requiredString(collector, input.agents.path, pointer, raw, "prompt");
-    const model = requiredString(collector, input.agents.path, pointer, raw, "model");
-    if (prompt === undefined || model === undefined) continue;
+    const routes = readRoutes(collector, input.agents.path, pointer, raw);
+    if (prompt === undefined || routes.length === 0) continue;
     const session = typeof raw.session === "string" ? raw.session : "run";
     if (!SESSION_SCOPES.has(session)) {
       add(
@@ -308,7 +305,7 @@ function readAgents(
       key,
       prompt,
       provider: typeof raw.provider === "string" ? raw.provider : "openai",
-      model,
+      routes,
       session,
       credits: typeof raw.credits === "number" && raw.credits > 0 ? raw.credits : 1,
       inputPaths: [...parsePromptTemplate(text).inputPaths].sort(compare),
@@ -447,6 +444,53 @@ function readGates(
     gates.set(key, { key, blocking, advisory });
   }
   return gates;
+}
+
+/**
+ * Reads an agent's model routes, in either the short or the expanded form.
+ *
+ * The expanded form exists so a run can fall back rather than stall when a model
+ * is unavailable or exhausts its own ceilings.
+ */
+function readRoutes(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+): readonly AuthoredRoute[] {
+  const provider = typeof raw.provider === "string" ? raw.provider : "openai";
+  const build = (value: Readonly<Record<string, unknown>>, model: string): AuthoredRoute => ({
+    provider: typeof value.provider === "string" ? value.provider : provider,
+    model,
+    maxTurns: typeof value.turns === "number" ? value.turns : 12,
+    maxSubmissions: typeof value.submissions === "number" ? value.submissions : 4,
+    maxMillidollars: typeof value.spend === "number" ? value.spend : 5_000,
+  });
+
+  if (typeof raw.model === "string") {
+    if (raw.models !== undefined) {
+      add(collector, "invalid-field", path, pointer, "Declare either model or models, not both");
+      return [];
+    }
+    return [build(raw, raw.model)];
+  }
+  if (!Array.isArray(raw.models)) {
+    add(collector, "missing-field", path, `${pointer}/model`, "model is required");
+    return [];
+  }
+  const routes: AuthoredRoute[] = [];
+  for (const [index, entry] of raw.models.entries()) {
+    const routePointer = `${pointer}/models/${index}`;
+    if (!isRecord(entry) || typeof entry.model !== "string") {
+      add(collector, "missing-field", path, `${routePointer}/model`, "model is required");
+      continue;
+    }
+    routes.push(build(entry, entry.model));
+  }
+  if (routes.length === 0) {
+    add(collector, "invalid-field", path, `${pointer}/models`, "Declare at least one route");
+  }
+  return routes;
 }
 
 function readGateRules(

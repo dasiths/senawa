@@ -65,6 +65,39 @@ describe("authored workflow lowering", () => {
     expect(result.snapshot?.graph.nodes.filter((node) => node.kind === "phase")).toHaveLength(2);
   });
 
+  it("keeps ordered model routes so a run can fall back rather than stall", () => {
+    const lowered = lowerAuthoredWorkflow({
+      ...authored(),
+      agents: {
+        path: "agents.yaml",
+        text: "definer:\n  prompt: prompts/definer.md\n  models:\n    - model: gpt-5\n      turns: 24\n    - model: gpt-5-mini\nverifier:\n  model: gpt-5\n  prompt: prompts/verifier.md\n",
+      },
+    });
+    expect(lowered.diagnostics).toEqual([]);
+    const policies = (
+      lowered.document as unknown as {
+        readonly modelPolicies: readonly { key: string; routes: unknown[] }[];
+      }
+    ).modelPolicies;
+    expect(policies.find(({ key }) => key === "definer")?.routes).toEqual([
+      expect.objectContaining({ model: "gpt-5", maxTurns: 24 }),
+      expect.objectContaining({ model: "gpt-5-mini", maxTurns: 12 }),
+    ]);
+  });
+
+  it("refuses an agent that declares both a model and a route list", () => {
+    const lowered = lowerAuthoredWorkflow({
+      ...authored(),
+      agents: {
+        path: "agents.yaml",
+        text: "definer:\n  prompt: prompts/definer.md\n  model: gpt-5\n  models:\n    - model: gpt-5-mini\nverifier:\n  model: gpt-5\n  prompt: prompts/verifier.md\n",
+      },
+    });
+    expect(lowered.diagnostics.map(({ message }) => message)).toContain(
+      "Declare either model or models, not both",
+    );
+  });
+
   it("gates on a measured value, not only on an exit code", () => {
     const lowered = lowerAuthoredWorkflow({
       ...authored(),
