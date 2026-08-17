@@ -28,6 +28,16 @@ const SESSION_SCOPES = new Set(["run", "phase", "element"]);
 const FAILURE_POLICIES = new Set(["continue", "fail-fast"]);
 const OUTPUT_SENSITIVITIES = new Set(["public", "internal", "confidential", "restricted"]);
 const EVIDENCE_MODES = new Set(["none", "task", "required-criteria", "all-satisfied"]);
+const ITERATE_OR_FAIL = new Set(["iterate", "fail"]);
+const ESCALATE_OR_FAIL = new Set(["escalate", "fail"]);
+const MAX_PHASE_ATTEMPTS = 20;
+const DEFAULT_ITERATION: AuthoredIteration = Object.freeze({
+  maximumAttempts: 3,
+  onGateRejected: "iterate",
+  onApprovalRejected: "iterate",
+  onUpstreamChanged: "iterate",
+  onExhausted: "escalate",
+});
 /** The kernel refuses a larger phase output, so authoring cannot promise one. */
 const MAX_OUTPUT_BYTES = 262_144;
 
@@ -217,6 +227,16 @@ interface AuthoredPhase {
   readonly forEach?: string;
   readonly onFailure: string;
   readonly completionEvidence: AuthoredCompletionEvidence;
+  readonly iteration: AuthoredIteration;
+  readonly approveRole?: string;
+}
+
+interface AuthoredIteration {
+  readonly maximumAttempts: number;
+  readonly onGateRejected: string;
+  readonly onApprovalRejected: string;
+  readonly onUpstreamChanged: string;
+  readonly onExhausted: string;
 }
 
 interface AuthoredCompletionEvidence {
@@ -336,6 +356,13 @@ function readPhases(
     add(collector, "missing-field", path, "/phases", "Workflow must declare a phases list");
     return undefined;
   }
+  const defaults = readIteration(
+    collector,
+    path,
+    "/defaults",
+    asDefaults(value),
+    DEFAULT_ITERATION,
+  );
   const phases: AuthoredPhase[] = [];
   const seen = new Set<string>();
   for (const [index, raw] of value.phases.entries()) {
@@ -393,6 +420,9 @@ function readPhases(
         );
       }
     }
+    const approve = raw.approve;
+    const approveRole =
+      isRecord(approve) && typeof approve.role === "string" ? approve.role : undefined;
     const onFailure = typeof raw.onFailure === "string" ? raw.onFailure : "fail-fast";
     if (!FAILURE_POLICIES.has(onFailure)) {
       add(
@@ -448,21 +478,78 @@ function readPhases(
       outputMaxBytes: output.maxBytes,
       ...(declaredInput === undefined ? {} : { input: declaredInput }),
       gates,
-      approve: raw.approve === true,
+      approve: raw.approve === true || isRecord(raw.approve),
       ...(forEach === undefined ? {} : { forEach }),
       onFailure,
       completionEvidence: readCompletionEvidence(collector, path, pointer, raw),
+      iteration: readIteration(collector, path, pointer, raw, defaults),
+      ...(approveRole === undefined ? {} : { approveRole }),
     });
   }
   return phases;
 }
 
 /**
- * Reads a phase output, in either the short or the expanded form.
+ * Reads the loop policy for one phase, falling back to the workflow defaults.
  *
- * The short form is a schema path, because most outputs need nothing else. The
- * expanded form exists so sensitivity and size are authorable rather than pinned.
+ * These were constants until now, which meant the loop the product is built
+ * around was the one thing an author could not describe.
  */
+/** The workflow-level defaults block, read with the same rules as a phase. */
+function asDefaults(value: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  return isRecord(value.defaults) ? value.defaults : {};
+}
+
+function readIteration(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+  defaults: AuthoredIteration,
+): AuthoredIteration {
+  const attempts = typeof raw.attempts === "number" ? raw.attempts : defaults.maximumAttempts;
+  if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > MAX_PHASE_ATTEMPTS) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      `${pointer}/attempts`,
+      `attempts must be between 1 and ${MAX_PHASE_ATTEMPTS}`,
+    );
+  }
+  const disposition = (key: string, fallback: string, allowed: ReadonlySet<string>): string => {
+    const value = raw[key];
+    if (value === undefined) return fallback;
+    if (typeof value !== "string" || !allowed.has(value)) {
+      add(
+        collector,
+        "invalid-field",
+        path,
+        `${pointer}/${key}`,
+        `${key} must be one of ${[...allowed].sort().join(", ")}`,
+      );
+      return fallback;
+    }
+    return value;
+  };
+  return {
+    maximumAttempts: attempts,
+    onGateRejected: disposition("onGateRejected", defaults.onGateRejected, ITERATE_OR_FAIL),
+    onApprovalRejected: disposition(
+      "onApprovalRejected",
+      defaults.onApprovalRejected,
+      ITERATE_OR_FAIL,
+    ),
+    onUpstreamChanged: disposition(
+      "onUpstreamChanged",
+      defaults.onUpstreamChanged,
+      ITERATE_OR_FAIL,
+    ),
+    onExhausted: disposition("onExhausted", defaults.onExhausted, ESCALATE_OR_FAIL),
+  };
+}
+
+/** Reads a phase output, in either the short or the expanded form. */
 function readOutput(
   collector: Collector,
   path: string,
@@ -626,18 +713,12 @@ function lowerPhase(
       },
     ],
     actions: [],
-    iteration: {
-      maximumAttempts: PHASE_ATTEMPT_LIMIT,
-      onGateRejected: "iterate",
-      onApprovalRejected: "iterate",
-      onUpstreamChanged: "iterate",
-      onExhausted: "escalate",
-    },
+    iteration: phase.iteration,
     exit: {
       requiredOutputs: [phase.name],
       ...(phase.gates.length > 0 ? { gate: `${phase.name}-gate` } : {}),
       approval: phase.approve
-        ? { policy: "required", authority: { role: "release-manager" } }
+        ? { policy: "required", authority: { role: phase.approveRole ?? "release-manager" } }
         : { policy: "none" },
     },
   };

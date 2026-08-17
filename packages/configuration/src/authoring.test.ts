@@ -65,6 +65,51 @@ describe("authored workflow lowering", () => {
     expect(result.snapshot?.graph.nodes.filter((node) => node.kind === "phase")).toHaveLength(2);
   });
 
+  it("takes the loop policy from the author, and the defaults when it is silent", () => {
+    const lowered = lowerAuthoredWorkflow(
+      authoredWithVerify(
+        "    output: schemas/verification.schema.json\n    attempts: 7\n    onGateRejected: fail\n",
+      ),
+    );
+    expect(lowered.diagnostics).toEqual([]);
+    const phases = (
+      lowered.document as unknown as { readonly phases: readonly Record<string, never>[] }
+    ).phases;
+    expect(phases[1]?.iteration).toEqual({
+      maximumAttempts: 7,
+      onGateRejected: "fail",
+      onApprovalRejected: "iterate",
+      onUpstreamChanged: "iterate",
+      onExhausted: "escalate",
+    });
+    // The phase that said nothing keeps the default loop.
+    expect(phases[0]?.iteration).toMatchObject({ maximumAttempts: 3, onGateRejected: "iterate" });
+  });
+
+  it("refuses a disposition it cannot honour", () => {
+    const lowered = lowerAuthoredWorkflow(
+      authoredWithVerify(
+        "    output: schemas/verification.schema.json\n    onExhausted: pretend\n",
+      ),
+    );
+    expect(lowered.diagnostics.map(({ pointer }) => pointer)).toContain("/phases/1/onExhausted");
+  });
+
+  it("routes approval to the role the author named", () => {
+    const lowered = lowerAuthoredWorkflow(
+      authoredWithVerify(
+        "    output: schemas/verification.schema.json\n    approve:\n      role: security-officer\n",
+      ),
+    );
+    expect(lowered.diagnostics).toEqual([]);
+    const phases = (
+      lowered.document as unknown as { readonly phases: readonly Record<string, never>[] }
+    ).phases;
+    expect(phases[1]?.exit).toMatchObject({
+      approval: { policy: "required", authority: { role: "security-officer" } },
+    });
+  });
+
   it("takes output sensitivity and size from the author", () => {
     const lowered = lowerAuthoredWorkflow(
       authoredWithVerify(
