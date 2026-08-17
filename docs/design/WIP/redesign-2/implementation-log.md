@@ -943,3 +943,51 @@ and names an explicit input schema because the phase now merges two sources.
 * Invariant this protects, stated once so a reviewer can check it: a blocking
   gate may rest only on readings, and only deterministic ones. Completion
   evidence feeds completion accounting and never a gate.
+
+## Phases 5 to 7 log
+
+### The operating contract is generated, not authored
+
+`renderPromptPack` now appends a `senawa-operating-contract` section derived from
+the dispatch's own capabilities and output declarations. The property worth
+stating is negative: the contract cannot offer an operation the dispatch does not
+carry, because it is built from the same capability list the broker checks. A
+test proves it using a fixture with no worker capability, where the contract
+reports completion as not permitted and never mentions asking a question.
+
+### Decision D-024: The complete verb reads files rather than taking a blob
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: `senawa worker complete --output <name>=<file> --evidence <kind>=<file>`
+  reads each named file under the workspace boundary and builds the request.
+* Rationale: an agent that had to construct the envelope would need the dispatch
+  identity and the submission digest, which is exactly the coupling D-019 removed
+  from prompts. Naming files is the smallest thing an agent can be asked to do.
+* Guards: the completion is refused when it carries no output, and when it names
+  the same output twice, because both mean the agent does not know what it
+  produced.
+
+### What Phases 6 and 7 changed about authoring
+
+Seven values that were pinned constants are now authored, each keeping its old
+value as the default so the concise form is unchanged:
+
+| Was pinned | Now authored as |
+|---|---|
+| `sensitivity: internal`, `maxBytes: 262144` | the expanded `output` form |
+| `evidencePolicy: none` | `completionEvidence` with mode and per-kind counts |
+| `maximumAttempts: 3` and four dispositions | `attempts` and `on*` per phase, with workflow `defaults` |
+| `role: release-manager` | `approve: { role }` |
+| gate rules as `equals /exitCode 0` | named gates with `exitCode`, `equals`, `atLeast`, `atMost`, `exists` |
+| sensor cwd, timeout, output limit, environment | per-sensor fields, with `PATH` always present |
+| one model route | `models` as an ordered fallback list |
+
+Two refusals are worth naming because they exist to stop a document promising
+something it cannot keep. Requiring evidence under a mode that collects none is
+refused, and a named gate whose blocking rules contain no deterministic reading
+is refused, which extends the anchor invariant from single sensors to composed
+rules.
+
+The target `.senawa` tree now compiles down to one remaining diagnostic, the
+unlowered fan-out, which is Phase 9.
