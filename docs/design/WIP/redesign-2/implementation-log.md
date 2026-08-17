@@ -812,3 +812,39 @@ dependency in this plan.
 * Adapter consequence: Phase 5 replaces separate `submit_phase_output` and
   `submit_completion` Copilot tools with `senawa_complete`, and replaces generic
   JSON submission as the primary CLI path with `senawa worker complete`.
+
+### Finding F-006: A real artifact nearly overflows the single-string ceiling
+
+* Date: 2026-08-17
+* Method: measured the 54 tracked artifacts under `.copilot-tracking`, which are
+  real research, plan, and change records produced by this project.
+* Distribution: median 21,575 bytes, p90 50,079, maximum 64,653, longest single
+  line 1,033.
+* Constraint: `PROTOCOL_LIMITS.maxStringLength` is 65,536 and
+  `PHASE_OUTPUT_LIMITS.maxOutputBytes` is 262,144.
+* Finding: the largest real research document is 98.6 percent of the maximum
+  size any single JSON string may carry. A schema that puts a research write-up
+  into one prose field therefore works until the first slightly longer document
+  and then refuses, and the refusal names a protocol limit rather than anything
+  the author did wrong.
+* Decision: long-form prose is referenced by `documentPath` and the phase output
+  carries structure. The document stays in the repository where it is diffable
+  and reviewable; the output carries what a later phase can act on.
+* Second consequence: schema limits were sized against a byte budget rather than
+  chosen by eye. Worst-case instances are now 32 to 91 percent of the output
+  ceiling, so no instance can be schema-valid and simultaneously too large. The
+  first draft exceeded the ceiling on four of five schemas, the plan output by
+  1,271 percent, because a per-task path list multiplied by the task count.
+
+### Finding F-007: The authored format cannot declare a shared schema
+
+* Date: 2026-08-17
+* Finding: cross-schema `$ref` resolves only against schemas some phase already
+  declares as an input or output. There is no way to declare a shared fragment,
+  so common definitions such as a repository path or an identity slug have
+  nowhere to live and were duplicated into each schema's `$defs`.
+* Impact: low today and rising with the number of schemas, because duplicated
+  definitions drift apart silently.
+* Action: Phase 6 owns output and schema authoring and should choose between a
+  `schemas:` declaration list in `workflow.yaml` and accepting local `$defs`
+  duplication as the intended style.

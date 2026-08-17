@@ -9,7 +9,6 @@
 # Defaults, applied unless an agent overrides them:
 #   provider: github-copilot
 #   session:  run          keeps one session across the phases this agent works
-#   credits:  1
 
 definer:
   prompt: prompts/definer.md
@@ -18,7 +17,6 @@ definer:
 researcher:
   prompt: prompts/researcher.md
   model: gpt-5
-  credits: 2
 
 planner:
   prompt: prompts/planner.md
@@ -27,10 +25,8 @@ planner:
   models:
     - model: gpt-5
       turns: 24
-      credits: 4
     - model: gpt-5-mini
       turns: 12
-      credits: 2
 
 implementor:
   prompt: prompts/implementor.md
@@ -38,11 +34,9 @@ implementor:
   # A fan-out member is an independent unit of work, so it starts clean rather
   # than inheriting a sibling's conversation.
   session: element
-  credits: 6
 
 verifier:
   prompt: prompts/verifier.md
   model: gpt-5
   # Keeps its session across attempts so a rejection is remembered on retry.
   session: run
-  credits: 2

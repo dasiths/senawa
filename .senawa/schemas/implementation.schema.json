@@ -2,27 +2,134 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:senawa:implementation",
   "title": "Implement member phase output",
+  "description": "What one member actually did. Shaped after real change records, which separate what was added from what was changed and from what was deliberately left out.",
   "type": "object",
-  "required": ["taskId", "summary"],
+  "required": [
+    "taskId",
+    "summary"
+  ],
   "properties": {
     "taskId": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 128,
+      "$ref": "#/$defs/slug",
       "description": "The task element this member carried out."
     },
-    "summary": { "type": "string", "minLength": 1, "maxLength": 65536 },
-    "changedPaths": {
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "added": {
       "type": "array",
-      "maxItems": 256,
-      "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      "maxItems": 15,
+      "items": {
+        "$ref": "#/$defs/change"
+      }
+    },
+    "changed": {
+      "type": "array",
+      "maxItems": 15,
+      "items": {
+        "$ref": "#/$defs/change"
+      }
+    },
+    "removed": {
+      "type": "array",
+      "maxItems": 15,
+      "items": {
+        "$ref": "#/$defs/change"
+      }
+    },
+    "excluded": {
+      "type": "array",
+      "maxItems": 12,
+      "description": "Work deliberately not done, so a reviewer does not mistake it for an oversight.",
+      "items": {
+        "type": "object",
+        "required": [
+          "item",
+          "reason"
+        ],
+        "properties": {
+          "item": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "additionalProperties": false
+      }
     },
     "deviations": {
       "type": "array",
-      "maxItems": 32,
+      "maxItems": 10,
       "description": "Where the task as written turned out to be wrong or impossible.",
-      "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      "items": {
+        "type": "object",
+        "required": [
+          "expected",
+          "actual",
+          "reason"
+        ],
+        "properties": {
+          "expected": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "actual": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "additionalProperties": false
+      }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "change": {
+      "type": "object",
+      "required": [
+        "description"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "paths": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "$ref": "#/$defs/repositoryPath"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+    }
+  }
 }

@@ -2,12 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:senawa:plan-input",
   "title": "Plan phase input",
-  "description": "Named here because the plan phase has two upstreams. Senawa binds each property to the upstream output that provides it.",
+  "description": "Named because the plan phase has two upstreams. Senawa binds each property to the upstream output that provides it, so the merge is declared rather than guessed.",
   "type": "object",
   "required": ["definition", "research"],
   "properties": {
-    "definition": { "type": "string", "minLength": 1, "maxLength": 65536 },
-    "research": { "type": "string", "minLength": 1, "maxLength": 65536 }
+    "definition": { "$ref": "urn:senawa:definition" },
+    "research": { "$ref": "urn:senawa:research" }
   },
   "additionalProperties": false
 }

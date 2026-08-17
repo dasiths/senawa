@@ -2,17 +2,83 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:senawa:plan",
   "title": "Plan phase output",
-  "description": "The tasks array is the collection the implement phase fans out over.",
+  "description": "An ordered set of independently verifiable tasks. The tasks array is the collection the implement phase fans out over, so it stays flat: grouping is expressed by group id rather than by nesting, because fan-out selects exactly one array.",
   "type": "object",
-  "required": ["tasks"],
+  "required": [
+    "summary",
+    "tasks"
+  ],
   "properties": {
-    "summary": { "type": "string", "minLength": 1, "maxLength": 65536 },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "documentPath": {
+      "$ref": "#/$defs/repositoryPath",
+      "description": "The full plan in the repository, where per-task detail lives."
+    },
+    "groups": {
+      "type": "array",
+      "maxItems": 20,
+      "description": "Workstreams. Tasks reference one by id. Grouping survives into the portal, where members are drawn inside their parent.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "title"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/slug"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "parallelizable": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether this group's tasks may run concurrently. v1 executes sequentially regardless; this records intent for when it does not."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
     "tasks": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 64,
-      "items": { "$ref": "urn:senawa:task" }
+      "maxItems": 36,
+      "description": "One element becomes one implement member phase, each running its own loop.",
+      "items": {
+        "$ref": "urn:senawa:task"
+      }
+    },
+    "successCriteria": {
+      "type": "array",
+      "maxItems": 20,
+      "description": "Conditions for the plan as a whole, distinct from per-task verification.",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024
+      }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+    }
+  }
 }

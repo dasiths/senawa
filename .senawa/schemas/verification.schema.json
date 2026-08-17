@@ -2,26 +2,96 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:senawa:verification",
   "title": "Verify phase output",
+  "description": "Whether the delivered work satisfies the definition, reported against the definition's acceptance ids rather than against the implementation's own account of itself.",
   "type": "object",
-  "required": ["verified", "summary"],
+  "required": [
+    "verified",
+    "summary",
+    "results"
+  ],
   "properties": {
     "verified": {
-      "type": "boolean",
-      "description": "Whether the delivered work satisfies the definition."
+      "type": "boolean"
     },
-    "summary": { "type": "string", "minLength": 1, "maxLength": 65536 },
-    "unmet": {
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "results": {
       "type": "array",
-      "maxItems": 32,
-      "description": "Acceptance conditions the definition asked for that were not delivered.",
-      "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      "minItems": 1,
+      "maxItems": 24,
+      "description": "One entry per acceptance condition the definition declared.",
+      "items": {
+        "type": "object",
+        "required": [
+          "acceptanceId",
+          "status"
+        ],
+        "properties": {
+          "acceptanceId": {
+            "$ref": "#/$defs/slug"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "met",
+              "unmet",
+              "not-assessable"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "additionalProperties": false
+      }
     },
     "unsupportedClaims": {
       "type": "array",
-      "maxItems": 32,
-      "description": "Claims made by the implementation that the code does not support.",
-      "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      "maxItems": 20,
+      "description": "Claims made by an earlier phase that the code does not support.",
+      "items": {
+        "type": "object",
+        "required": [
+          "claim",
+          "why"
+        ],
+        "properties": {
+          "claim": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 768
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 768
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "outOfScopeDelivered": {
+      "type": "array",
+      "maxItems": 20,
+      "description": "Delivered work the definition placed out of scope.",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 768
+      }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+    }
+  }
 }

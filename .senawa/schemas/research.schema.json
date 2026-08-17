@@ -2,29 +2,157 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:senawa:research",
   "title": "Research phase output",
+  "description": "What is true about the codebase today, with evidence for each claim. Sized so a worst-case instance stays inside the 262144 byte phase output ceiling. Long-form prose belongs in documentPath: no single JSON string may exceed 65536 bytes, and real research documents already reach 64653.",
   "type": "object",
-  "required": ["research", "findings"],
+  "required": [
+    "summary",
+    "findings"
+  ],
   "properties": {
-    "research": {
+    "summary": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 65536,
-      "description": "What is true about the codebase today."
+      "maxLength": 8192
+    },
+    "documentPath": {
+      "$ref": "#/$defs/repositoryPath",
+      "description": "The full research write-up in the repository, referenced rather than inlined."
+    },
+    "sources": {
+      "type": "array",
+      "maxItems": 24,
+      "description": "What was actually read. Provenance for the findings below.",
+      "items": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/repositoryPath"
+          },
+          "why": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
     },
     "findings": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 64,
+      "maxItems": 20,
+      "description": "Load-bearing facts, each traceable to code rather than to documentation.",
       "items": {
         "type": "object",
-        "required": ["claim", "evidence"],
+        "required": [
+          "claim",
+          "evidence"
+        ],
         "properties": {
-          "claim": { "type": "string", "minLength": 1, "maxLength": 1024 },
-          "evidence": {
+          "claim": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 1024,
-            "description": "The file, and where relevant the symbol, supporting the claim."
+            "maxLength": 1536
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "description": "Where the claim is verifiable. A claim with no evidence is an opinion.",
+            "items": {
+              "type": "object",
+              "required": [
+                "path"
+              ],
+              "properties": {
+                "path": {
+                  "$ref": "#/$defs/repositoryPath"
+                },
+                "symbol": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "startLine": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000
+                },
+                "endLine": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "impact": {
+            "type": "string",
+            "maxLength": 768,
+            "description": "Why this constrains the change."
+          },
+          "contradictsDefinition": {
+            "type": "boolean",
+            "description": "True when the definition assumed something this finding disproves."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "maxItems": 10,
+      "description": "Contract choices this research settles, so a later phase does not reopen them.",
+      "items": {
+        "type": "object",
+        "required": [
+          "decision",
+          "rationale"
+        ],
+        "properties": {
+          "decision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 768
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1536
+          },
+          "alternatives": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "risks": {
+      "type": "array",
+      "maxItems": 12,
+      "description": "Ways the change can fail, including failure modes gates should resist.",
+      "items": {
+        "type": "object",
+        "required": [
+          "risk"
+        ],
+        "properties": {
+          "risk": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 768
+          },
+          "mitigation": {
+            "type": "string",
+            "maxLength": 768
           }
         },
         "additionalProperties": false
@@ -32,9 +160,22 @@
     },
     "constraints": {
       "type": "array",
-      "maxItems": 32,
-      "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      "maxItems": 12,
+      "description": "What already works and must survive the change.",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 768
+      }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    }
+  }
 }

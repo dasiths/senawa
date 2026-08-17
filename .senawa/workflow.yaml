@@ -27,7 +27,11 @@ phases:
   - name: research
     agent: researcher
     needs: [define]
-    output: schemas/research.schema.json
+    output:
+      schema: schemas/research.schema.json
+      # 262144 is the hard ceiling for any phase output asset. Research is the
+      # largest artifact this workflow produces, so it is given the full budget.
+      maxBytes: 262144
 
   - name: plan
     agent: planner
@@ -35,7 +39,9 @@ phases:
     # Required only when a phase has more than one upstream: it names the shape
     # senawa binds those outputs into, so the merge is never guessed.
     input: schemas/plan-input.schema.json
-    output: schemas/plan.schema.json
+    output:
+      schema: schemas/plan.schema.json
+      maxBytes: 262144
     gates: [plan-shaped]
 
   - name: implement
@@ -65,7 +71,7 @@ phases:
       schema: schemas/verification.schema.json
       # Marks the asset so it is withheld from surfaces below this ceiling.
       sensitivity: confidential
-      maxBytes: 131072
+      maxBytes: 65536
     gates: [build, tests, coverage]
     # Verification failing is a real failure; retrying it would only hide it.
     onGateRejected: fail
