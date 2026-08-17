@@ -83,15 +83,15 @@ with itself.
 senawa start workflow.yaml input.json
   1. Senawa reads the workflow and starts the first phase with the given input
      and that phase's agent definition.
-    2. The agent works, discovers the completion contract, then calls Senawa's
-      complete operation with the declared output asset and evidence.
+  2. The agent works, discovers the completion contract, then calls senawa's
+     complete operation with the declared output asset and evidence.
   3. Senawa runs the phase's gates.
        pass -> completion is granted, the run advances
        fail -> senawa returns the reasons, and the agent tries again
-  4. The agent can self-check at any time with `senawa run-gates <workflow> <phase|task>`.
-    5. The agent discovers the required output shape by asking senawa for it. The
-      output is the asset carried by the complete request; it is not returned as
-      assistant chat text and is not uploaded in a separate protocol step.
+  4. The agent can self-check at any time with `senawa run-gates <phase|task>`.
+  5. The agent discovers the required output shape by asking senawa for it. The
+     output is the asset carried by the complete request; it is not returned as
+     assistant chat text and is not uploaded in a separate protocol step.
   6. An agent that cannot satisfy the conditions escalates rather than stalling.
   7. A phase such as plan can produce a collection, and a later phase fans out
      over it, each element running its own loop, then fans back in.
