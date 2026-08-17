@@ -116,7 +116,8 @@ describe("v1alpha2 prompt rendering", () => {
     [true, "true"],
     [null, "null"],
     [[2, 1], "[2,1]"],
-  ])("renders %j as canonical data", (value, expected) => {    const { context, dispatch } = fixture("Value: ${{ input.value }}", { value }, ["/value"]);
+  ])("renders %j as canonical data", (value, expected) => {
+    const { context, dispatch } = fixture("Value: ${{ input.value }}", { value }, ["/value"]);
     const text = new TextDecoder().decode(
       renderPromptPack(context, dispatch, sha256, DEFAULT_PROMPT_PACK_MAX_BYTES).utf8Bytes,
     );

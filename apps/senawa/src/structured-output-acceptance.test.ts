@@ -127,9 +127,7 @@ describe("Phase 14I structured output acceptance", () => {
       let rejectedResults: readonly CopilotSdkToolResult[] = [];
       try {
         register(rejected, fixture);
-        sdk.onSend = submitOutputs(publication, [
-          { toolCallId: "call_invalid", output: INVALID_OUTPUT },
-        ]);
+        sdk.onSend = submitOutputs([{ toolCallId: "call_invalid", output: INVALID_OUTPUT }]);
         const first = await adapter.run(runInput(fixture, rejected, sdk));
 
         expect(first.status).toBe("missing-completion");
@@ -166,7 +164,7 @@ describe("Phase 14I structured output acceptance", () => {
           output: ACCEPTED_OUTPUT,
           changeNotes: ["verified both generated tasks"],
         } as const;
-        sdk.onSend = submitOutputs(publication, [accepted]);
+        sdk.onSend = submitOutputs([accepted]);
         const second = await adapter.run(runInput(fixture, reopened, sdk));
 
         expect(second.status).toBe("missing-completion");
@@ -215,7 +213,7 @@ describe("Phase 14I structured output acceptance", () => {
         });
 
         sdk.clearToolResults();
-        sdk.onSend = submitOutputs(publication, [accepted]);
+        sdk.onSend = submitOutputs([accepted]);
         const replay = await adapter.run(runInput(fixture, reopened, sdk));
 
         expect(acceptancePayload(only(sdk.toolResults()))).toEqual({
@@ -251,12 +249,12 @@ describe("Phase 14I structured output acceptance", () => {
       const adapter = new CopilotSerialWorkerAdapter(sdk, sha256);
       const submission = { toolCallId: "call_valid", output: ACCEPTED_OUTPUT } as const;
 
-      sdk.onSend = submitOutputs(publication, [submission]);
+      sdk.onSend = submitOutputs([submission]);
       await adapter.run(runInput(fixture, broker, sdk));
       const accepted = acceptancePayload(only(sdk.toolResults()));
 
       sdk.clearToolResults();
-      sdk.onSend = submitOutputs(publication, [submission]);
+      sdk.onSend = submitOutputs([submission]);
       const replay = await adapter.run(runInput(fixture, broker, sdk));
       const replayResult = only(sdk.toolResults());
 
@@ -292,15 +290,11 @@ describe("Phase 14I structured output acceptance", () => {
       const sdk = new FakeSdkPort();
       const adapter = new CopilotSerialWorkerAdapter(sdk, sha256);
 
-      sdk.onSend = submitOutputs(publication, [
-        { toolCallId: "call_valid", output: ACCEPTED_OUTPUT },
-      ]);
+      sdk.onSend = submitOutputs([{ toolCallId: "call_valid", output: ACCEPTED_OUTPUT }]);
       await adapter.run(runInput(fixture, broker, sdk));
 
       sdk.clearToolResults();
-      sdk.onSend = submitOutputs(publication, [
-        { toolCallId: "call_conflict", output: CONFLICTING_OUTPUT },
-      ]);
+      sdk.onSend = submitOutputs([{ toolCallId: "call_conflict", output: CONFLICTING_OUTPUT }]);
       const conflicting = await adapter.run(runInput(fixture, broker, sdk));
       const refusal = only(sdk.toolResults());
 
@@ -343,15 +337,13 @@ describe("Phase 14I structured output acceptance", () => {
       register(broker, fixture);
       const sdk = new FakeSdkPort();
       const adapter = new CopilotSerialWorkerAdapter(sdk, sha256);
-      sdk.onSend = submitOutputs(publication, [
-        { toolCallId: "call_valid", output: ACCEPTED_OUTPUT },
-      ]);
+      sdk.onSend = submitOutputs([{ toolCallId: "call_valid", output: ACCEPTED_OUTPUT }]);
       await adapter.run(runInput(fixture, broker, sdk));
       expect(acceptancePayload(only(sdk.toolResults())).status).toBe("accepted");
 
       fenceTaskScope(broker, fixture);
       sdk.clearToolResults();
-      sdk.onSend = submitOutputs(publication, [{ toolCallId: "call_stale", output: STALE_OUTPUT }]);
+      sdk.onSend = submitOutputs([{ toolCallId: "call_stale", output: STALE_OUTPUT }]);
       const stale = await adapter.run(runInput(fixture, broker, sdk));
 
       // The fenced scope refuses the dispatch: the broker never admits a second output fact.
@@ -403,9 +395,7 @@ describe("Phase 14I structured output acceptance", () => {
       register(broker, fixture);
       const sdk = new FakeSdkPort();
       const adapter = new CopilotSerialWorkerAdapter(sdk, sha256);
-      sdk.onSend = submitOutputs(publication, [
-        { toolCallId: "call_hostile", output: HOSTILE_OUTPUT },
-      ]);
+      sdk.onSend = submitOutputs([{ toolCallId: "call_hostile", output: HOSTILE_OUTPUT }]);
 
       const run = await adapter.run(runInput(fixture, broker, sdk));
 
@@ -452,9 +442,7 @@ describe("Phase 14I structured output acceptance", () => {
         register(broker, fixture);
         const sdk = new FakeSdkPort();
         const adapter = new CopilotSerialWorkerAdapter(sdk, sha256);
-        sdk.onSend = submitOutputs(publication, [
-          { toolCallId: "call_secret", output: SECRET_OUTPUT },
-        ]);
+        sdk.onSend = submitOutputs([{ toolCallId: "call_secret", output: SECRET_OUTPUT }]);
 
         await adapter.run(runInput(fixture, broker, sdk));
 
@@ -503,9 +491,7 @@ describe("Phase 14I structured output acceptance", () => {
       register(broker, fixture);
       const sdk = new FakeSdkPort();
       const adapter = new CopilotSerialWorkerAdapter(sdk, sha256);
-      sdk.onSend = submitOutputs(publication, [
-        { toolCallId: "call_valid", output: ACCEPTED_OUTPUT },
-      ]);
+      sdk.onSend = submitOutputs([{ toolCallId: "call_valid", output: ACCEPTED_OUTPUT }]);
 
       const result = await adapter.run(runInput(fixture, broker, sdk));
 
@@ -629,7 +615,6 @@ class FakeSession implements CopilotSdkSessionPort {
 }
 
 function submitOutputs(
-  publication: OutputPublication,
   invocations: readonly PhaseOutputInvocation[],
 ): (config: CopilotSdkSessionConfig, session: FakeSession) => Promise<void> {
   return async (config, session) => {

@@ -12,7 +12,7 @@ import { SupervisorHttpHandler } from "./http-handler.js";
 import { type SupervisorHttpServerHandle, startUnixSupervisorServer } from "./http-server.js";
 import { loadOrCreateLocalCredential } from "./local-security.js";
 import type { WorkerApi } from "./worker-api.js";
-import { type WorkerCredentialScope, WorkerCredentialStore } from "./worker-credential.js";
+import { WorkerCredentialStore } from "./worker-credential.js";
 
 const CAPABILITIES = [
   "worker.submit.completion",
