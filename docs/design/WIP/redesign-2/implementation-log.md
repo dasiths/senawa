@@ -352,3 +352,22 @@ uid or a sandbox, which is beyond v1.
   withdrawing a token that was already read.
 * Full suite: 108 files and 1,340 tests passed with 2 skipped opt-in live tests.
 * Typecheck, boundaries across 481 files.
+
+### Phase 2 progress: a worker-facing surface exists
+
+Three routes now exist under `/api/v1alpha1/worker/{dispatchId}/`: `context`,
+`output-schema`, and `submissions`. They are deliberately a separate namespace
+from `/api/v1alpha1/commands`, which carries human authority. A worker route
+resolves to a dispatch, and the scoped credential resolves to the same dispatch,
+so the two must agree before anything is admitted.
+
+The route tests assert the negative case as well as the positive one: there is no
+route that resolves to approval, rejection, or any other human decision, so a
+worker cannot reach one by guessing a path.
+
+### Validation
+
+* 4 route tests including a refused human-authority path and a malformed
+  dispatch identity.
+* Full suite: 109 files and 1,344 tests passed with 2 skipped opt-in live tests.
+* Typecheck, boundaries across 483 files, documentation links across 50 files.

@@ -30,7 +30,7 @@ wherever that is possible.
 |---|---|---|
 | 0 | Settle the shape | Complete |
 | 1 | An authored workflow becomes a run | Complete |
-| 2 | One phase runs a real agent end to end | Not started |
+| 2 | One phase runs a real agent end to end | In progress |
 | 3 | The consumer command line | Not started |
 | 4 | Sensors, gates, and anchors | Not started |
 | 5 | Human decisions and escalation | Not started |
@@ -99,11 +99,11 @@ Acceptance:
 The centre of the plan. Close the dispatch gap and the worker channel together,
 because building the agent contract twice would be waste.
 
-* [ ] Build the dispatch driver: read the lifecycle projection for phases awaiting
+* [x] Build the dispatch driver: read the lifecycle projection for phases awaiting
   completion, evaluate input mappings, build the phase attempt, worker context,
   and dispatch, derive completion requirements from the graph, and call
   `registerDispatch` with an effect seed. Every primitive exists and is tested.
-* [ ] Give the worker a scoped identity by porting the context broker's existing
+* [x] Give the worker a scoped identity by porting the context broker's existing
   model — per-dispatch principal, capability set, exact binding, expiry — onto
   the command channel. A worker must not be able to approve, reject, mark done,
   steer, or end a run.

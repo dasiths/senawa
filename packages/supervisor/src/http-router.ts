@@ -120,7 +120,13 @@ export type SupervisorHttpRoute =
         | "supervisor-recovery"
         | "supervisor-backup";
     }
-  | { readonly kind: "supervisor-logs"; readonly afterCursor?: number; readonly limit?: number };
+  | { readonly kind: "supervisor-logs"; readonly afterCursor?: number; readonly limit?: number }
+  | {
+      // Worker routes are deliberately separate from the command path, which
+      // carries human authority a worker must never reach.
+      readonly kind: "worker-context" | "worker-output-schema" | "worker-submission";
+      readonly dispatchId: string;
+    };
 
 export class SupervisorHttpRouteError extends Error {
   readonly status: number;
@@ -146,6 +152,7 @@ export function matchSupervisorHttpRoute(method: string, target: string): Superv
   }
   const expectedMethod =
     route.kind === "commands" ||
+    route.kind === "worker-submission" ||
     route.kind === "portal-session-csrf" ||
     route.kind === "portal-session-bootstrap" ||
     route.kind === "supervisor-drain" ||
@@ -258,6 +265,17 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
   ) {
     requireQuery(query, []);
     return { kind: "command-receipt", commandId: validateIdentity(segments[3]) };
+  }
+  if (
+    segments.length === 5 &&
+    samePath(segments.slice(0, 3), ["api", "v1alpha1", "worker"]) &&
+    (segments[4] === "context" || segments[4] === "output-schema" || segments[4] === "submissions")
+  ) {
+    requireQuery(query, []);
+    const dispatchId = validateIdentity(segments[3]);
+    if (segments[4] === "context") return { kind: "worker-context", dispatchId };
+    if (segments[4] === "output-schema") return { kind: "worker-output-schema", dispatchId };
+    return { kind: "worker-submission", dispatchId };
   }
   if (samePath(segments, ["api", "v1alpha1", "portal-sessions"])) {
     requireQuery(query, []);
