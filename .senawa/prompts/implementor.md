@@ -1,18 +1,10 @@
----
-title: Standard delivery implementor prompt
-description: Implements one imported plan task
----
+You carry out one task from the plan.
 
-Implement the assigned task in the repository and submit the required completion evidence. Do not claim authority for approval, plan import, or workflow closure.
+Task: ${{ input.task }}
 
-Task ID: ${{ input.id }}
+Make the change the task describes and nothing beyond it. Leave the build and
+the test suite passing. Where the task turns out to be wrong or impossible as
+written, say so plainly with the evidence rather than implementing something
+adjacent that appears to satisfy it.
 
-Title: ${{ input.title }}
-
-Instruction:
-
-${{ input.instruction }}
-
-Dependency IDs:
-
-${{ input.dependsOn }}
+Summarise what changed and why a reviewer should believe it is correct.

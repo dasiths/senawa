@@ -1,0 +1,75 @@
+# Sensors measure the work. Gates are rules over what they measured.
+#
+# A blocking rule resists progress while its reading is red. An advisory rule is
+# recorded and shown but never refuses. Every blocking gate needs at least one
+# deterministic reading to anchor it, or the harness is only agreeing with
+# whoever submitted the work; senawa refuses such a gate when it is authored
+# rather than letting it pass vacuously at runtime.
+#
+# Sensor defaults, applied unless overridden:
+#   cwd:           .            the project root
+#   timeout:       5m
+#   deterministic: true
+#   env:           [PATH]       nothing else is inherited
+#   maxOutput:     64k          per stream
+#   attempts:      3
+
+sensors:
+  build:
+    run: pnpm build
+    timeout: 10m
+
+  tests:
+    run: pnpm test
+    timeout: 20m
+    # Anything not listed here is absent from the sensor's environment, so a
+    # credential in the operator's shell cannot leak into agent-reachable input.
+    env: [PATH, HOME, CI]
+
+  coverage:
+    run: pnpm test --coverage --reporter=json-summary
+    timeout: 20m
+    maxOutput: 256k
+
+  plan-lint:
+    run: node scripts/plan-lint.mjs
+    cwd: .
+    timeout: 2m
+
+  plan-critique:
+    run: node scripts/plan-critique.mjs
+    timeout: 5m
+    # A model-backed reading is an opinion. It may inform, but it may not anchor
+    # a blocking gate, and senawa refuses any attempt to make it do so.
+    deterministic: false
+
+gates:
+  plan-shaped:
+    blocking:
+      - sensor: plan-lint
+        exitCode: 0
+    advisory:
+      - sensor: plan-critique
+        field: /score
+        atLeast: 7
+
+  build:
+    blocking:
+      - sensor: build
+        exitCode: 0
+
+  tests:
+    blocking:
+      - sensor: tests
+        exitCode: 0
+
+  # Gating on a measured number rather than only on an exit status.
+  coverage:
+    blocking:
+      - sensor: coverage
+        field: /total/lines/pct
+        atLeast: 80
+    advisory:
+      - sensor: coverage
+        field: /total/branches/pct
+        atLeast: 70

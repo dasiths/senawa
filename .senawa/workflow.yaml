@@ -1,0 +1,73 @@
+# The workflow: which agent runs which phase, what each phase reads and writes,
+# and the conditions it must satisfy to pass.
+#
+# Senawa derives the data flow between phases. An author names schemas and
+# dependencies; senawa binds each named input property to the most recent
+# upstream output that provides it and generates the strict internal pointers.
+# There are no JSON Pointers in this file by design.
+
+name: senawa-delivery
+input: schemas/request.schema.json
+
+# Applied to every phase unless that phase overrides it. This is the middle
+# loop's policy: how many times a phase may try, and what happens each way it
+# can fail.
+defaults:
+  attempts: 3
+  onGateRejected: iterate
+  onApprovalRejected: iterate
+  onUpstreamChanged: iterate
+  onExhausted: escalate
+
+phases:
+  - name: define
+    agent: definer
+    output: schemas/definition.schema.json
+
+  - name: research
+    agent: researcher
+    needs: [define]
+    output: schemas/research.schema.json
+
+  - name: plan
+    agent: planner
+    needs: [define, research]
+    # Required only when a phase has more than one upstream: it names the shape
+    # senawa binds those outputs into, so the merge is never guessed.
+    input: schemas/plan-input.schema.json
+    output: schemas/plan.schema.json
+    gates: [plan-shaped]
+
+  - name: implement
+    agent: implementor
+    needs: [plan]
+    # Fan-out. One member phase per element of the named upstream collection,
+    # each running its own complete loop, then fanning back in.
+    forEach: plan.tasks
+    # A member reads one element rather than the whole collection.
+    input: schemas/task.schema.json
+    output: schemas/implementation.schema.json
+    gates: [build, tests]
+    attempts: 5
+    # Members that cannot pass do not block the ones that did.
+    onFailure: continue
+    # Completion is granted only against recorded evidence, not a claim.
+    evidence:
+      mode: task
+      require:
+        - kind: task-completion
+          min: 1
+
+  - name: verify
+    agent: verifier
+    needs: [implement]
+    output:
+      schema: schemas/verification.schema.json
+      # Marks the asset so it is withheld from surfaces below this ceiling.
+      sensitivity: confidential
+      maxBytes: 131072
+    gates: [build, tests, coverage]
+    # Verification failing is a real failure; retrying it would only hide it.
+    onGateRejected: fail
+    approve:
+      role: release-manager

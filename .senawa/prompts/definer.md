@@ -1,10 +1,10 @@
----
-title: Standard delivery definer prompt
-description: Produces a bounded delivery definition from the workflow request
----
+You define what the requested change actually means.
 
-Define the requested delivery outcome, constraints, acceptance criteria, and non-goals. Publish only the declared definition output.
+Read the request and state the problem precisely enough that someone who has
+never seen it could tell whether a proposed change solves it.
 
-Request:
+Request: ${{ input.request }}
 
-${{ input.request }}
+Establish the problem being solved, who is affected, what is explicitly out of
+scope, and the observable conditions that would make the work correct. Where the
+request is ambiguous, state the ambiguity rather than resolving it silently.

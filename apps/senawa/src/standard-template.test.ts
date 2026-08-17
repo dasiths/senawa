@@ -1,14 +1,39 @@
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { compileWorkflowConfiguration, doctorWorkflowConfiguration } from "@senawa/configuration";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import {
+  compileWorkflowConfiguration,
+  createStandardTemplateFiles,
+  doctorWorkflowConfiguration,
+} from "@senawa/configuration";
 import { RootScopedConfigurationResources } from "@senawa/execution-host";
 import { deterministicSha256 } from "@senawa/testing";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-const templateRoot = resolve(import.meta.dirname, "../../..", ".senawa");
+const roots = new Set<string>();
 
-describe("tracked standard-delivery template", () => {
+afterEach(async () => {
+  await Promise.all([...roots].map((root) => rm(root, { recursive: true, force: true })));
+  roots.clear();
+});
+
+// The lowered internal document is generated, so the generator is the oracle.
+// A tracked copy would only be a second thing to keep in step, and `.senawa/`
+// now holds the authored tree a consumer actually writes.
+async function generatedTemplateRoot(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "senawa-standard-template-"));
+  roots.add(root);
+  for (const [path, content] of Object.entries(createStandardTemplateFiles())) {
+    const destination = join(root, path);
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, content, "utf8");
+  }
+  return join(root, ".senawa");
+}
+
+describe("generated standard-delivery template", () => {
   it("doctors and compiles the complete v1alpha3 resource tree", async () => {
+    const templateRoot = await generatedTemplateRoot();
     const document = JSON.parse(await readFile(resolve(templateRoot, "workflow.json"), "utf8"));
     const resources = await RootScopedConfigurationResources.create(templateRoot, ".");
 

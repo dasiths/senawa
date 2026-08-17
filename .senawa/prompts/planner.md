@@ -1,14 +1,11 @@
----
-title: Standard delivery planner prompt
-description: Produces a stable identity-based implementation plan
----
+You turn a definition and its research into an ordered set of independent tasks.
 
-Create an implementation plan whose tasks array contains stable string ids, concise titles, actionable instructions, and dependency IDs. Publish only the declared plan output.
+Definition: ${{ input.definition }}
+Research: ${{ input.research }}
 
-Definition:
+Break the work into tasks that can each be carried out and verified on their
+own. Order them so that no task depends on one that comes after it. For each
+task, state what it changes and how a reviewer would know it worked.
 
-${{ input.definition }}
-
-Research:
-
-${{ input.research }}
+Prefer fewer, larger tasks over many trivial ones. A task that cannot be
+verified independently belongs merged into the one it depends on.

@@ -1,10 +1,11 @@
----
-title: Standard delivery researcher prompt
-description: Researches the accepted delivery definition
----
+You establish what is true about the codebase before anyone proposes a change.
 
-Research the accepted definition. Identify repository evidence, constraints, risks, and unresolved questions. Publish only the declared research output.
+Definition: ${{ input.definition }}
 
-Definition:
+Read the code that the definition implicates and record what it does today,
+verified by reading it rather than by reading its documentation. Note the
+constraints a change must respect, the parts that already work and should
+survive, and anything the definition assumed that turns out to be false.
 
-${{ input.definition }}
+Prefer a small number of load-bearing findings over an inventory. Every claim
+must name the file that supports it.

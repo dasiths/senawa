@@ -1,0 +1,48 @@
+# Agent definitions: one entry per persona.
+#
+# A prompt describes the assignment and nothing else. Senawa appends its own
+# operating contract to every rendered prompt at dispatch time, so no prompt
+# here names a senawa command, a dispatch identity, an output file, or how to
+# signal completion. Adding that text by hand would drift from the protocol and
+# could claim authority the dispatch does not carry.
+#
+# Defaults, applied unless an agent overrides them:
+#   provider: github-copilot
+#   session:  run          keeps one session across the phases this agent works
+#   credits:  1
+
+definer:
+  prompt: prompts/definer.md
+  model: gpt-5
+
+researcher:
+  prompt: prompts/researcher.md
+  model: gpt-5
+  credits: 2
+
+planner:
+  prompt: prompts/planner.md
+  # Expanded form: ordered routes tried in order. Use `model:` when one is enough.
+  # A route is abandoned when it exhausts its own ceilings, and the move is recorded.
+  models:
+    - model: gpt-5
+      turns: 24
+      credits: 4
+    - model: gpt-5-mini
+      turns: 12
+      credits: 2
+
+implementor:
+  prompt: prompts/implementor.md
+  model: gpt-5
+  # A fan-out member is an independent unit of work, so it starts clean rather
+  # than inheriting a sibling's conversation.
+  session: element
+  credits: 6
+
+verifier:
+  prompt: prompts/verifier.md
+  model: gpt-5
+  # Keeps its session across attempts so a rejection is remembered on retry.
+  session: run
+  credits: 2

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:senawa:implementation",
+  "title": "Implement member phase output",
+  "type": "object",
+  "required": ["taskId", "summary"],
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "The task element this member carried out."
+    },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 65536 },
+    "changedPaths": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+    },
+    "deviations": {
+      "type": "array",
+      "maxItems": 32,
+      "description": "Where the task as written turned out to be wrong or impossible.",
+      "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+    }
+  },
+  "additionalProperties": false
+}

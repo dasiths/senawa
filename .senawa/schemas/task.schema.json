@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:senawa:task",
+  "title": "One planned task",
+  "description": "One element of the plan's tasks collection, and the input to one implement member phase.",
+  "type": "object",
+  "required": ["id", "task", "verification"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Stable identity for this element. Senawa uses it to name the member phase and to detect changes across replans.",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,126}[a-z0-9]$"
+    },
+    "task": { "type": "string", "minLength": 1, "maxLength": 8192 },
+    "dependsOn": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "Other task ids in the same collection that must complete first.",
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+    },
+    "verification": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "How a reviewer would know this task worked."
+    }
+  },
+  "additionalProperties": false
+}

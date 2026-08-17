@@ -15,7 +15,6 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const files = createStandardTemplateFiles();
 
 stagePackagedTemplate();
-if (process.argv.includes("--tracked")) regenerateTrackedTemplate();
 
 function stagePackagedTemplate() {
   const parent = join(root, "apps", "senawa", "dist");
@@ -24,14 +23,6 @@ function stagePackagedTemplate() {
   const destination = join(parent, "template");
   rmSync(destination, { recursive: true, force: true });
   renameSync(staging, destination);
-}
-
-function regenerateTrackedTemplate() {
-  const staging = writeStagingTree(root);
-  const destination = join(root, ".senawa");
-  rmSync(destination, { recursive: true, force: true });
-  renameSync(join(staging, ".senawa"), destination);
-  rmSync(staging, { recursive: true, force: true });
 }
 
 function writeStagingTree(parent) {

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:senawa:plan",
+  "title": "Plan phase output",
+  "description": "The tasks array is the collection the implement phase fans out over.",
+  "type": "object",
+  "required": ["tasks"],
+  "properties": {
+    "summary": { "type": "string", "minLength": 1, "maxLength": 65536 },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "urn:senawa:task" }
+    }
+  },
+  "additionalProperties": false
+}

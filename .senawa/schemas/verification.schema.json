@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:senawa:verification",
+  "title": "Verify phase output",
+  "type": "object",
+  "required": ["verified", "summary"],
+  "properties": {
+    "verified": {
+      "type": "boolean",
+      "description": "Whether the delivered work satisfies the definition."
+    },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 65536 },
+    "unmet": {
+      "type": "array",
+      "maxItems": 32,
+      "description": "Acceptance conditions the definition asked for that were not delivered.",
+      "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+    },
+    "unsupportedClaims": {
+      "type": "array",
+      "maxItems": 32,
+      "description": "Claims made by the implementation that the code does not support.",
+      "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+    }
+  },
+  "additionalProperties": false
+}

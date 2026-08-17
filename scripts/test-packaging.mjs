@@ -94,14 +94,9 @@ try {
   assert(run(bin, ["doctor"], repository, environment).includes("valid"), "default doctor failed");
   const initializedTree = relativeFiles(join(repository, ".senawa"));
   const packagedTree = relativeFiles(join(modules, "senawa", "dist", "template", ".senawa"));
-  const trackedTree = relativeFiles(join(root, ".senawa"));
   assert(
     JSON.stringify(initializedTree) === JSON.stringify(packagedTree),
     "installed init bytes differ from packaged template",
-  );
-  assert(
-    JSON.stringify(initializedTree) === JSON.stringify(trackedTree),
-    "installed init bytes differ from tracked template",
   );
   const original = readFileSync(join(repository, ".senawa", "workflow.json"), "utf8");
   const overwrite = runResult(bin, ["init"], repository, environment);
