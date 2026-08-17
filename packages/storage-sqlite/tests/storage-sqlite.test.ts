@@ -2398,7 +2398,7 @@ describe("SQLite authority durability", () => {
         mappingPolicy: {
           dependencyPhases: [],
           declaredPhaseOutputs: [],
-          implementationEvidenceViews: [],
+          completionEvidenceViews: [],
           allowCurrentItem: false,
         },
       };
@@ -3785,7 +3785,10 @@ function supersedingGraph() {
           generation: runtimeFixture.task.definitionGeneration,
           parentId: runtimeFixture.phase.phaseId,
           source: { locator: "fixture://runtime", pointer: "/tasks/verify" },
-          completionPolicy: { criteria: [], evidencePolicy: { mode: "none", requirements: [] } },
+          completionPolicy: {
+            criteria: [],
+            completionEvidencePolicy: { mode: "none", requirements: [] },
+          },
         },
         {
           id: taskId("task_replacement"),
@@ -3793,7 +3796,10 @@ function supersedingGraph() {
           generation: definitionGeneration(runtimeFixture.task.definitionGeneration + 1),
           parentId: runtimeFixture.phase.phaseId,
           source: { locator: "fixture://runtime", pointer: "/tasks/replacement" },
-          completionPolicy: { criteria: [], evidencePolicy: { mode: "none", requirements: [] } },
+          completionPolicy: {
+            criteria: [],
+            completionEvidencePolicy: { mode: "none", requirements: [] },
+          },
           supersedes: [runtimeFixture.task.taskId],
         },
       ],
@@ -3858,7 +3864,7 @@ function startFixturePhaseAttempt(
     mappingPolicy: {
       dependencyPhases: [],
       declaredPhaseOutputs: [],
-      implementationEvidenceViews: [],
+      completionEvidenceViews: [],
       allowCurrentItem: false,
     },
   }).attempt;
@@ -4003,7 +4009,7 @@ function amendmentProposalInput(
           source: { locator: "fixture://amendment", pointer: "/tasks/package" },
           completionPolicy: {
             criteria: [],
-            evidencePolicy: { mode: "none" as const, requirements: [] },
+            completionEvidencePolicy: { mode: "none" as const, requirements: [] },
           },
         },
         criteria: [],
@@ -4045,7 +4051,7 @@ function amendmentConfigurationSnapshot(graph: ReturnType<typeof createRuntimeGr
     modelPolicies: empty,
     sensors: empty,
     gates: empty,
-    implementationEvidenceViews: empty,
+    completionEvidenceViews: empty,
     phaseDataflow: empty,
     forEach: empty,
     taskTemplates: empty,
@@ -4058,7 +4064,7 @@ function amendmentConfigurationSnapshot(graph: ReturnType<typeof createRuntimeGr
       modelPolicies: emptyDigest,
       sensors: emptyDigest,
       gates: emptyDigest,
-      implementationEvidenceViews: emptyDigest,
+      completionEvidenceViews: emptyDigest,
       phaseDataflow: emptyDigest,
       forEach: emptyDigest,
       taskTemplates: emptyDigest,
@@ -4422,7 +4428,7 @@ function contextCompletionSubmission(harness: ContextBrokerHarness, submissionId
     disposition: "completed",
     summary: "Completed durable SQLite context work",
     criteria: [{ criterionId: criterionId("criterion_done"), disposition: "satisfied" }],
-    evidence: [],
+    completionEvidence: [],
   };
   return {
     apiVersion: PROTOCOL_VERSION,
@@ -4670,7 +4676,7 @@ function completionPayload() {
       disposition: "completed" as const,
       summary: "Verified SQLite persistence journey",
       criteria: [{ criterionId: runtimeFixture.criterionId, disposition: "satisfied" as const }],
-      evidence: [],
+      completionEvidence: [],
     },
   };
 }

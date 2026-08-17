@@ -1,6 +1,7 @@
 import {
   type AmendmentProposal,
   type CanonicalValue,
+  type CompletionEvidencePolicy,
   type CompletionPolicy,
   type CriterionDefinitionInput,
   canonicalDigest,
@@ -11,7 +12,6 @@ import {
   createAmendmentProposal,
   criterionId,
   definitionGeneration,
-  type EvidencePolicy,
   type FanOutDiff,
   type FanOutEvaluation,
   type FanOutMember,
@@ -41,7 +41,7 @@ export interface GeneratedTaskAuthorityTemplate {
   readonly binding: CanonicalValue;
   readonly parentPhaseId: PhaseId;
   readonly criteria: readonly GeneratedCriterionTemplate[];
-  readonly evidencePolicy: EvidencePolicy;
+  readonly completionEvidencePolicy: CompletionEvidencePolicy;
 }
 
 export interface FanOutDiffDecision {
@@ -271,7 +271,7 @@ function taskOperation(
       criterionId: criterion.id,
       required: template.criteria[index]?.required ?? false,
     })),
-    evidencePolicy: template.evidencePolicy,
+    completionEvidencePolicy: template.completionEvidencePolicy,
   };
   const task: TaskDefinitionInput = {
     id: generatedTaskId,

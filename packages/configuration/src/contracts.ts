@@ -77,7 +77,7 @@ export interface WorkflowConfigurationDocument {
   readonly modelPolicies: readonly ModelPolicyDeclaration[];
   readonly sensors: readonly SensorDeclaration[];
   readonly gates: readonly GateDeclaration[];
-  readonly implementationEvidenceViews: readonly ImplementationEvidenceViewDeclaration[];
+  readonly completionEvidenceViews: readonly CompletionEvidenceViewDeclaration[];
   readonly forEach: readonly ForEachDeclaration[];
   readonly taskTemplates: readonly TaskTemplateDeclaration[];
   readonly phases: readonly PhaseDeclaration[];
@@ -139,7 +139,7 @@ export type MappingSourceDeclaration =
     }
   | { readonly kind: "current-item"; readonly pointer: string }
   | {
-      readonly kind: "implementation-evidence";
+      readonly kind: "completion-evidence";
       readonly phase: string;
       readonly view: string;
       readonly pointer: string;
@@ -239,7 +239,7 @@ export interface PhaseExitDeclaration {
   readonly approval: PhaseApprovalDeclaration;
 }
 
-export interface ImplementationEvidenceViewDeclaration {
+export interface CompletionEvidenceViewDeclaration {
   readonly key: string;
   readonly phase: string;
   readonly evidenceKinds: readonly unknown[];
@@ -347,7 +347,7 @@ export interface GateReadingAccessorDeclaration {
 
 export interface CompletionPolicyDeclaration {
   readonly criteria: readonly CriterionDeclaration[];
-  readonly evidencePolicy: EvidencePolicyDeclaration;
+  readonly completionEvidencePolicy: CompletionEvidencePolicyDeclaration;
 }
 
 export interface CriterionDeclaration {
@@ -357,13 +357,13 @@ export interface CriterionDeclaration {
   readonly input?: unknown;
 }
 
-export interface EvidencePolicyDeclaration {
+export interface CompletionEvidencePolicyDeclaration {
   readonly mode: "none" | "task" | "required-criteria" | "all-satisfied";
-  readonly requirements: readonly EvidenceRequirementDeclaration[];
+  readonly requirements: readonly CompletionEvidenceRequirementDeclaration[];
   readonly waiverAuthority?: unknown;
 }
 
-export interface EvidenceRequirementDeclaration {
+export interface CompletionEvidenceRequirementDeclaration {
   readonly kind: unknown;
   readonly minimumCount: number;
 }
@@ -492,7 +492,7 @@ export type ConfigurationComponentCategory =
   | "modelPolicies"
   | "sensors"
   | "gates"
-  | "implementationEvidenceViews"
+  | "completionEvidenceViews"
   | "phaseDataflow"
   | "forEach"
   | "taskTemplates";
@@ -514,7 +514,7 @@ export interface ConfigurationSnapshot {
   readonly modelPolicies: readonly ConfigurationRegistryEntry[];
   readonly sensors: readonly ConfigurationRegistryEntry[];
   readonly gates: readonly ConfigurationRegistryEntry[];
-  readonly implementationEvidenceViews: readonly ConfigurationRegistryEntry[];
+  readonly completionEvidenceViews: readonly ConfigurationRegistryEntry[];
   readonly phaseDataflow: readonly ConfigurationRegistryEntry[];
   readonly forEach: readonly ConfigurationRegistryEntry[];
   readonly taskTemplates: readonly ConfigurationRegistryEntry[];

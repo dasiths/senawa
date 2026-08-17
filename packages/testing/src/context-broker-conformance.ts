@@ -640,7 +640,7 @@ export function registerContextBrokerConformance(
           submissionId: "submission_leak-completion-evidence",
           completion: {
             ...completion.completion,
-            evidence: [
+            completionEvidence: [
               {
                 assetId: "asset_completion-leak",
                 kind: { type: "report" },
@@ -1300,7 +1300,7 @@ function registerBoundDispatch(
     completionRequirements: {
       task: dispatch.task,
       criteria: [{ criterionId: criterionId("criterion_done"), required: true }],
-      evidencePolicy: { mode: "none", requirements: [] },
+      completionEvidencePolicy: { mode: "none", requirements: [] },
     },
   });
   assetPort.put(required(context.assets[0]), bytes);
@@ -1440,7 +1440,7 @@ function completionSubmission(
         disposition: disposition === "blocked" ? "unsatisfied" : "satisfied",
       },
     ],
-    evidence: [],
+    completionEvidence: [],
   };
   return { ...submission(harness, submissionId, "completion", {}), completion };
 }

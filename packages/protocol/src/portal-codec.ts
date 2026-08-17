@@ -96,7 +96,7 @@ const NEED_KINDS = new Set<PortalHumanNeedKind>([
   "integration-rework",
   "ending-uncertain",
 ]);
-const ASSET_SOURCES = new Set<PortalArtifactSource>(["worker", "evidence", "installed"]);
+const ASSET_SOURCES = new Set<PortalArtifactSource>(["worker", "completion-evidence", "installed"]);
 const ASSET_AVAILABILITIES = new Set<PortalArtifactAvailability>([
   "metadata-only",
   "verified-stored",

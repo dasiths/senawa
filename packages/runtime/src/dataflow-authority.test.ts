@@ -91,7 +91,7 @@ describe("runtime dataflow authority", () => {
       mappingPolicy: {
         dependencyPhases: [consumerKey("research")],
         declaredPhaseOutputs: [{ phase: consumerKey("research"), output: consumerKey("result") }],
-        implementationEvidenceViews: [],
+        completionEvidenceViews: [],
         allowCurrentItem: false,
       },
     });
@@ -134,7 +134,7 @@ describe("runtime dataflow authority", () => {
       mappingPolicy: {
         dependencyPhases: [],
         declaredPhaseOutputs: [],
-        implementationEvidenceViews: [],
+        completionEvidenceViews: [],
         allowCurrentItem: false,
       },
     });

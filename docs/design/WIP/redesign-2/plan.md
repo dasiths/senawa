@@ -292,13 +292,13 @@ This phase closes the most consequential part of F-004.
 
 * [ ] Apply the D-023 rename in one pass, so nothing is renamed twice: the bare
   `evidence` identifier disappears in favour of `completionEvidence`, and
-  `implementationEvidenceViews` becomes `completionEvidenceViews` with a matching
+  `completionEvidenceViews` becomes `completionEvidenceViews` with a matching
   `completion-evidence` mapping kind. `GateEvidence` and `SensorReading` are
-  already qualified and do not move. **Not done: implementationEvidenceViews still appears 48 times in source. D-023 recorded the decision; the rename was never executed.**
+  already qualified and do not move. **Not done: completionEvidenceViews still appears 48 times in source. D-023 recorded the decision; the rename was never executed.**
 * [x] Add concise YAML for completion criteria and evidence policy, including
   `none`, `task`, `required-criteria`, and `all-satisfied`, per-kind minimum
   counts, and waiver authority where the internal contract supports it.
-* [ ] Add authored implementation-evidence views and derive their strict internal
+* [ ] Add authored completion-evidence views and derive their strict internal
   mappings. Authors name phases, outputs, and evidence kinds, not JSON Pointers. **Not done: authored in .senawa, not lowered.**
 * [x] Let an output declare schema, sensitivity, maximum bytes, and an optional
   repository path while retaining the current scalar schema form as shorthand.

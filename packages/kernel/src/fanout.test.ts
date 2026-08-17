@@ -131,7 +131,7 @@ function input(items: readonly ReturnType<typeof item>[]) {
     mappingPolicy: {
       dependencyPhases: [],
       declaredPhaseOutputs: [],
-      implementationEvidenceViews: [],
+      completionEvidenceViews: [],
       allowCurrentItem: true,
     },
     limits: {

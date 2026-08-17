@@ -33,7 +33,7 @@ with `unknown-field`:
   "modelPolicies": [],
   "sensors": [],
   "gates": [],
-  "implementationEvidenceViews": [],
+  "completionEvidenceViews": [],
   "forEach": [],
   "taskTemplates": [],
   "phases": []
@@ -265,7 +265,7 @@ Four source kinds exist:
   phase.
 * `current-item` reads the selected loop item, and is valid only inside a task
   template.
-* `implementation-evidence` reads a declared evidence view of a phase.
+* `completion-evidence` reads a declared evidence view of a phase.
 
 An empty `pointer` means the whole value, and an empty `destinationPointer`
 means the whole destination. The assembled value is validated against
@@ -568,7 +568,7 @@ downstream mapping:
 
 ```json
 {
-  "implementationEvidenceViews": [
+  "completionEvidenceViews": [
     {
       "key": "accepted-implementation",
       "phase": "implement",
@@ -580,7 +580,7 @@ downstream mapping:
 ```
 
 The `verify` phase of the standard tree maps this view into
-`/implementationEvidence` so verification reads accepted evidence rather than
+`/completionEvidence` so verification reads accepted evidence rather than
 model prose.
 
 ## Completion policy and evidence

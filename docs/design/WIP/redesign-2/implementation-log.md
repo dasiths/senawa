@@ -861,7 +861,7 @@ dependency in this plan.
   * `GateEvidence`: the gate definition, the sensor readings, and the evaluation
     over them. Senawa's own measurement record, which no agent supplies and which
     an escalation carries.
-  * `implementationEvidenceViews` and the `implementation-evidence` mapping
+  * `completionEvidenceViews` and the `completion-evidence` mapping
     source: how accepted completion evidence crosses a phase boundary, filtered
     by allowlisted kinds and capped by a sensitivity ceiling.
   * `findings[].evidence` in the target research schema: a citation to a file.

@@ -214,7 +214,7 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
           completionRequirements: {
             task: dispatch.task,
             criteria: [],
-            evidencePolicy: { mode: "none", requirements: [] },
+            completionEvidencePolicy: { mode: "none", requirements: [] },
           },
         });
         const result = await new CopilotSerialWorkerAdapter(port, sha256).run({
@@ -383,7 +383,7 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
           completionRequirements: {
             task: dispatch.task,
             criteria: [],
-            evidencePolicy: { mode: "none", requirements: [] },
+            completionEvidencePolicy: { mode: "none", requirements: [] },
           },
         });
         const result = await new CopilotSerialWorkerAdapter(port, sha256).run({

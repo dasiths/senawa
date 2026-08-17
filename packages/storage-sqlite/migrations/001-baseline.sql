@@ -496,7 +496,7 @@ CREATE TABLE phase_input_sources (
   binding_digest TEXT NOT NULL REFERENCES phase_input_bindings(binding_digest) ON DELETE CASCADE,
   mapping_key TEXT NOT NULL,
   source_kind TEXT NOT NULL CHECK (
-    source_kind IN ('workflow-input', 'phase-output', 'current-item', 'implementation-evidence')
+    source_kind IN ('workflow-input', 'phase-output', 'current-item', 'completion-evidence')
   ),
   source_binding_digest TEXT NOT NULL CHECK (length(source_binding_digest) = 64),
   selected_value_digest TEXT NOT NULL CHECK (length(selected_value_digest) = 64),

@@ -1163,7 +1163,7 @@ class WorkspaceCompletingSession implements CopilotSdkSessionPort {
         disposition: "completed",
         summary: "Completed scheduled worktree task",
         criteria: [{ criterionId: runtimeFixture.criterionId, disposition: "satisfied" }],
-        evidence: [],
+        completionEvidence: [],
       },
       { sessionId: this.sessionId, toolCallId: "completion", toolName: completion.name },
     );

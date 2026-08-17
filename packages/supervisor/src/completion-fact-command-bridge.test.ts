@@ -82,7 +82,7 @@ describe("CompletionFactCommandBridge", () => {
       disposition: "completed" as const,
       summary: "Accepted through completion bridge",
       criteria: [{ criterionId: runtimeFixture.criterionId, disposition: "satisfied" as const }],
-      evidence: [],
+      completionEvidence: [],
     };
     const fact = {
       submissionId: "submission_bridge-completion",

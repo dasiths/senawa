@@ -257,7 +257,7 @@ describe("worker submission codec", () => {
       disposition: "completed",
       summary: "Verified the bounded work.",
       criteria: [{ criterionId: "criterion_verified", disposition: "satisfied" }],
-      evidence: [],
+      completionEvidence: [],
     },
   } as const;
 
@@ -345,10 +345,13 @@ describe("worker submission codec", () => {
       kind: { type: "report" },
       descriptor: { digest: OTHER_DIGEST },
     };
-    expectProtocolError("invalid-value", "$.completion.evidence", () =>
+    expectProtocolError("invalid-value", "$.completion.completionEvidence", () =>
       decodeWorkerSubmission({
         ...completion,
-        completion: { ...completion.completion, evidence: [evidence, evidence] },
+        completion: {
+          ...completion.completion,
+          completionEvidence: [evidence, evidence],
+        },
       }),
     );
 

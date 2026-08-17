@@ -162,7 +162,7 @@ function completionPayload() {
       disposition: "completed" as const,
       summary: "Verified deterministic runtime journey",
       criteria: [{ criterionId: runtimeFixture.criterionId, disposition: "satisfied" as const }],
-      evidence: [],
+      completionEvidence: [],
     },
   };
 }
@@ -1413,7 +1413,7 @@ function amendmentProposal(graph: ReturnType<typeof createRuntimeGraph>, suffix:
             source: { locator: "fixture://amendment", pointer: `/tasks/${suffix}` },
             completionPolicy: {
               criteria: [],
-              evidencePolicy: { mode: "none", requirements: [] },
+              completionEvidencePolicy: { mode: "none", requirements: [] },
             },
           },
           criteria: [],

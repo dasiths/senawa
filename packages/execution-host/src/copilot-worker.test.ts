@@ -631,7 +631,7 @@ describe("CopilotSerialWorkerAdapter", () => {
 
     await expect(active).resolves.toMatchObject({ status: "aborted" });
     const output = await required(captured).handler(
-      { disposition: "completed", summary: "Late", criteria: [], evidence: [] },
+      { disposition: "completed", summary: "Late", criteria: [], completionEvidence: [] },
       {
         sessionId: fixture.dispatch.dispatchId,
         toolCallId: "late-completion",
@@ -664,7 +664,7 @@ describe("CopilotSerialWorkerAdapter", () => {
     );
 
     const output = await required(captured).handler(
-      { disposition: "completed", summary: "Late", criteria: [], evidence: [] },
+      { disposition: "completed", summary: "Late", criteria: [], completionEvidence: [] },
       {
         sessionId: fixture.dispatch.dispatchId,
         toolCallId: "abort-pending-completion",
@@ -1120,7 +1120,7 @@ class CapturingBroker implements ContextBrokerClient {
           {
             task,
             criteria: [],
-            evidencePolicy: { mode: "none", requirements: [] },
+            completionEvidencePolicy: { mode: "none", requirements: [] },
           },
           {
             ...submission.completion,
@@ -1381,7 +1381,7 @@ function complete(disposition: "completed" | "blocked") {
       disposition,
       summary: disposition === "blocked" ? "Blocked" : "Completed",
       criteria: [],
-      evidence: [],
+      completionEvidence: [],
     });
   };
 }
@@ -1411,7 +1411,12 @@ function toolArgs(name: string, fixture: ReturnType<typeof harness>): unknown {
     case "propose_amendment":
       return { summary: "Amendment", operations: "Add one task" };
     case "submit_completion":
-      return { disposition: "completed", summary: "Completed", criteria: [], evidence: [] };
+      return {
+        disposition: "completed",
+        summary: "Completed",
+        criteria: [],
+        completionEvidence: [],
+      };
     default:
       throw new Error(`Unknown fixture tool ${name}`);
   }

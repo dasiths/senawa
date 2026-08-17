@@ -148,7 +148,7 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
     mappingPolicy: {
       dependencyPhases: [],
       declaredPhaseOutputs: [],
-      implementationEvidenceViews: [],
+      completionEvidenceViews: [],
       allowCurrentItem: false,
     },
   });

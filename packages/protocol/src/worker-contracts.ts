@@ -99,7 +99,7 @@ export interface WorkerCriterionOutcome {
   readonly authorityFact?: JsonValue;
 }
 
-export interface WorkerEvidenceAttachment {
+export interface WorkerCompletionEvidenceItem {
   readonly assetId: OpaqueIdentity;
   readonly kind: JsonValue;
   readonly descriptor: JsonValue;
@@ -111,7 +111,7 @@ export interface WorkerCompletionPayload {
   readonly disposition: WorkerTerminalDisposition;
   readonly summary: string;
   readonly criteria: readonly WorkerCriterionOutcome[];
-  readonly evidence: readonly WorkerEvidenceAttachment[];
+  readonly completionEvidence: readonly WorkerCompletionEvidenceItem[];
   readonly replacementTask?: WorkerTaskGenerationReference;
 }
 

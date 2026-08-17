@@ -284,7 +284,7 @@ function seedHumanRun(
             disposition: "completed",
             summary: "Browser fixture completion",
             criteria: [{ criterionId: runtimeFixture.criterionId, disposition: "satisfied" }],
-            evidence: [],
+            completionEvidence: [],
           },
         },
         expectedDefinitionRevision: worker.dispatch.task.contextRevisionDigest,
@@ -726,7 +726,7 @@ function portalGraph(hostile = true) {
           source: { locator: "fixture://portal", pointer: "/tasks/verify" },
           completionPolicy: {
             criteria: [{ criterionId: runtimeFixture.criterionId, required: true }],
-            evidencePolicy: { mode: "none", requirements: [] },
+            completionEvidencePolicy: { mode: "none", requirements: [] },
           },
           input: hostile
             ? {
@@ -980,7 +980,7 @@ function amendmentInput(
           source: { locator: "fixture://amendment", pointer: "/tasks/package" },
           completionPolicy: {
             criteria: [],
-            evidencePolicy: { mode: "none" as const, requirements: [] },
+            completionEvidencePolicy: { mode: "none" as const, requirements: [] },
           },
         },
         criteria: [],
@@ -1022,7 +1022,7 @@ function configurationSnapshot(graph: ReturnType<typeof portalGraph>) {
     modelPolicies: empty,
     sensors: empty,
     gates: empty,
-    implementationEvidenceViews: empty,
+    completionEvidenceViews: empty,
     phaseDataflow: empty,
     forEach: empty,
     taskTemplates: empty,
@@ -1035,7 +1035,7 @@ function configurationSnapshot(graph: ReturnType<typeof portalGraph>) {
       modelPolicies: emptyDigest,
       sensors: emptyDigest,
       gates: emptyDigest,
-      implementationEvidenceViews: emptyDigest,
+      completionEvidenceViews: emptyDigest,
       phaseDataflow: emptyDigest,
       forEach: emptyDigest,
       taskTemplates: emptyDigest,

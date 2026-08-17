@@ -729,7 +729,7 @@ function register(broker: ContextBrokerClient, fixture: Fixture): void {
     completionRequirements: {
       task: fixture.dispatch.task,
       criteria: [{ criterionId: criterionId("criterion_verified"), required: true }],
-      evidencePolicy: { mode: "none", requirements: [] },
+      completionEvidencePolicy: { mode: "none", requirements: [] },
     },
   });
 }

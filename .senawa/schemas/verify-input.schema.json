@@ -4,7 +4,7 @@
   "title": "Verify phase input",
   "description": "Named because verify reads two sources: the implement members' outputs, and their accepted completion evidence through a declared evidence view.",
   "type": "object",
-  "required": ["implementation", "implementationEvidence"],
+  "required": ["implementation", "completionEvidence"],
   "properties": {
     "implementation": {
       "type": "array",
@@ -12,7 +12,7 @@
       "description": "One entry per implement member that produced an output.",
       "items": { "$ref": "urn:senawa:implementation" }
     },
-    "implementationEvidence": {
+    "completionEvidence": {
       "type": "array",
       "maxItems": 200,
       "description": "Attachments the members offered for their completion criteria, filtered to the allowlisted kinds and capped by the view's sensitivity ceiling. Senawa assembles this; an agent cannot widen it.",

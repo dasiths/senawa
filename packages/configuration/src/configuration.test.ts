@@ -612,7 +612,7 @@ function workflowFixture(): MutableWorkflowDocument {
     ],
     sensors: [],
     gates: [],
-    implementationEvidenceViews: [],
+    completionEvidenceViews: [],
     forEach: [],
     taskTemplates: [],
     phases: [phase("work")],
@@ -665,7 +665,7 @@ function task(key: string) {
     input: { request: "compile" },
     completionPolicy: {
       criteria: [{ key: "complete", generation: 1, required: true, input: null }],
-      evidencePolicy: { mode: "none" as const, requirements: [] },
+      completionEvidencePolicy: { mode: "none" as const, requirements: [] },
     },
   };
 }

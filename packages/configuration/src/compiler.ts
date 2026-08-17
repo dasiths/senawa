@@ -84,7 +84,7 @@ interface ParsedWorkflow {
   readonly modelPolicies: readonly ParsedModelPolicy[];
   readonly sensors: readonly ParsedSensor[];
   readonly gates: readonly ParsedGate[];
-  readonly implementationEvidenceViews: readonly ParsedImplementationEvidenceView[];
+  readonly completionEvidenceViews: readonly ParsedCompletionEvidenceView[];
   readonly forEach: readonly ParsedForEach[];
   readonly taskTemplates: readonly ParsedTaskTemplate[];
   readonly phases: readonly ParsedPhase[];
@@ -172,7 +172,7 @@ interface ParsedGate {
   readonly advisory: readonly GateRuleInput[];
 }
 
-interface ParsedImplementationEvidenceView {
+interface ParsedCompletionEvidenceView {
   readonly pointer: string;
   readonly key: string;
   readonly phase: string;
@@ -290,7 +290,7 @@ interface ParsedBudget {
 
 interface ParsedCompletionPolicy {
   readonly criteria: readonly ParsedCriterion[];
-  readonly evidencePolicy: ParsedEvidencePolicy;
+  readonly completionEvidencePolicy: ParsedCompletionEvidencePolicy;
 }
 
 interface ParsedCriterion {
@@ -300,7 +300,7 @@ interface ParsedCriterion {
   readonly input: CanonicalValue;
 }
 
-interface ParsedEvidencePolicy {
+interface ParsedCompletionEvidencePolicy {
   readonly mode: "none" | "task" | "required-criteria" | "all-satisfied";
   readonly requirements: readonly {
     readonly kind: CanonicalValue;
@@ -339,7 +339,7 @@ interface ValidatedRegistries {
   readonly modelPolicies: readonly ConfigurationRegistryEntry[];
   readonly sensors: readonly ConfigurationRegistryEntry[];
   readonly gates: readonly ConfigurationRegistryEntry[];
-  readonly implementationEvidenceViews: readonly ConfigurationRegistryEntry[];
+  readonly completionEvidenceViews: readonly ConfigurationRegistryEntry[];
   readonly phaseDataflow: readonly ConfigurationRegistryEntry[];
   readonly forEach: readonly ConfigurationRegistryEntry[];
   readonly taskTemplates: readonly ConfigurationRegistryEntry[];
@@ -359,7 +359,7 @@ const ROOT_FIELDS = [
   "modelPolicies",
   "sensors",
   "gates",
-  "implementationEvidenceViews",
+  "completionEvidenceViews",
   "forEach",
   "taskTemplates",
   "phases",
@@ -678,8 +678,8 @@ function parseDocument(
   const modelPolicies = parseModelPolicies(document.modelPolicies, collector);
   const sensors = parseSensors(document.sensors, collector);
   const gates = parseGates(document.gates, collector);
-  const implementationEvidenceViews = parseImplementationEvidenceViews(
-    document.implementationEvidenceViews,
+  const completionEvidenceViews = parseCompletionEvidenceViews(
+    document.completionEvidenceViews,
     collector,
   );
   const forEach = parseForEachRegistry(
@@ -698,7 +698,7 @@ function parseDocument(
     modelPolicies === undefined ||
     sensors === undefined ||
     gates === undefined ||
-    implementationEvidenceViews === undefined ||
+    completionEvidenceViews === undefined ||
     forEach === undefined ||
     taskTemplates === undefined ||
     phases === undefined
@@ -715,7 +715,7 @@ function parseDocument(
     modelPolicies,
     sensors,
     gates,
-    implementationEvidenceViews,
+    completionEvidenceViews,
     forEach,
     taskTemplates,
     phases,
@@ -1590,11 +1590,11 @@ function parseGateRules(
   return value as unknown as readonly GateRuleInput[];
 }
 
-function parseImplementationEvidenceViews(
+function parseCompletionEvidenceViews(
   value: CanonicalValue | undefined,
   collector: DiagnosticCollector,
-): readonly ParsedImplementationEvidenceView[] | undefined {
-  return parseArray(value, "/implementationEvidenceViews", collector, (item, pointer) => {
+): readonly ParsedCompletionEvidenceView[] | undefined {
+  return parseArray(value, "/completionEvidenceViews", collector, (item, pointer) => {
     const object = exactObject(
       item,
       pointer,
@@ -1640,7 +1640,7 @@ function parseImplementationEvidenceViews(
           phase,
           evidenceKinds,
           sensitivityCeiling:
-            sensitivityCeiling as ParsedImplementationEvidenceView["sensitivityCeiling"],
+            sensitivityCeiling as ParsedCompletionEvidenceView["sensitivityCeiling"],
         };
   });
 }
@@ -1813,7 +1813,7 @@ function parseMappingSource(
   const required =
     value.kind === "phase-output"
       ? ["kind", "phase", "output", "pointer"]
-      : value.kind === "implementation-evidence"
+      : value.kind === "completion-evidence"
         ? ["kind", "phase", "view", "pointer"]
         : ["kind", "pointer"];
   const object = exactObject(value, pointer, required, [], collector);
@@ -1845,13 +1845,13 @@ function parseMappingSource(
           pointer: object.pointer,
         };
   }
-  if (object.kind === "implementation-evidence") {
+  if (object.kind === "completion-evidence") {
     const phase = parseReference(object.phase, `${pointer}/phase`, collector);
     const view = parseReference(object.view, `${pointer}/view`, collector);
     return phase === undefined || view === undefined
       ? undefined
       : {
-          kind: "implementation-evidence",
+          kind: "completion-evidence",
           phase: consumerKey(phase),
           view: consumerKey(view),
           pointer: object.pointer,
@@ -2464,7 +2464,13 @@ function parseCompletionPolicy(
   pointer: string,
   collector: DiagnosticCollector,
 ): ParsedCompletionPolicy | undefined {
-  const object = exactObject(value, pointer, ["criteria", "evidencePolicy"], [], collector);
+  const object = exactObject(
+    value,
+    pointer,
+    ["criteria", "completionEvidencePolicy"],
+    [],
+    collector,
+  );
   if (object === undefined) return undefined;
   const criteria = parseArray(
     object.criteria,
@@ -2505,21 +2511,21 @@ function parseCompletionPolicy(
           };
     },
   );
-  const evidencePolicy = parseEvidencePolicy(
-    object.evidencePolicy,
-    `${pointer}/evidencePolicy`,
+  const completionEvidencePolicy = parseCompletionEvidencePolicy(
+    object.completionEvidencePolicy,
+    `${pointer}/completionEvidencePolicy`,
     collector,
   );
-  return criteria === undefined || evidencePolicy === undefined
+  return criteria === undefined || completionEvidencePolicy === undefined
     ? undefined
-    : { criteria, evidencePolicy };
+    : { criteria, completionEvidencePolicy };
 }
 
-function parseEvidencePolicy(
+function parseCompletionEvidencePolicy(
   value: CanonicalValue | undefined,
   pointer: string,
   collector: DiagnosticCollector,
-): ParsedEvidencePolicy | undefined {
+): ParsedCompletionEvidencePolicy | undefined {
   const object = exactObject(
     value,
     pointer,
@@ -2528,7 +2534,7 @@ function parseEvidencePolicy(
     collector,
   );
   if (object === undefined) return undefined;
-  let mode: ParsedEvidencePolicy["mode"] | undefined;
+  let mode: ParsedCompletionEvidencePolicy["mode"] | undefined;
   if (object.mode === "none") mode = "none";
   if (object.mode === "task") mode = "task";
   if (object.mode === "required-criteria") mode = "required-criteria";
@@ -2577,7 +2583,7 @@ function validateRegistries(
     parsed.modelPolicies,
     parsed.sensors,
     parsed.gates,
-    parsed.implementationEvidenceViews,
+    parsed.completionEvidenceViews,
   ]) {
     reportDuplicateKeys(registry, collector);
   }
@@ -2761,8 +2767,8 @@ function validateRegistries(
       }),
       sha256,
     ),
-    implementationEvidenceViews: registryEntries(
-      parsed.implementationEvidenceViews.map(({ pointer: _pointer, ...view }) => ({
+    completionEvidenceViews: registryEntries(
+      parsed.completionEvidenceViews.map(({ pointer: _pointer, ...view }) => ({
         key: view.key,
         value: {
           ...view,
@@ -2867,7 +2873,7 @@ function validateFanOutSemantics(parsed: ParsedWorkflow, collector: DiagnosticCo
             output: consumerKey(output.key),
           })),
         ),
-        implementationEvidenceViews: parsed.implementationEvidenceViews.map((view) => ({
+        completionEvidenceViews: parsed.completionEvidenceViews.map((view) => ({
           phase: consumerKey(view.phase),
           view: consumerKey(view.key),
         })),
@@ -2925,7 +2931,7 @@ function validatePhaseDataflowSemantics(
       output: consumerKey(output.key),
     })),
   );
-  const evidenceViews = parsed.implementationEvidenceViews.map((view) => ({
+  const evidenceViews = parsed.completionEvidenceViews.map((view) => ({
     phase: consumerKey(view.phase),
     view: consumerKey(view.key),
   }));
@@ -2938,7 +2944,7 @@ function validatePhaseDataflowSemantics(
       `Workflow input schema ${parsed.workflow.inputSchema} is not declared`,
     );
   }
-  for (const view of parsed.implementationEvidenceViews) {
+  for (const view of parsed.completionEvidenceViews) {
     if (!phaseByKey.has(view.phase)) {
       addDiagnostic(
         collector,
@@ -3037,7 +3043,7 @@ function validatePhaseDataflowSemantics(
       validateDataMappingDeclarations(phase.input.mappings, {
         dependencyPhases: transitivePhaseDependencies(phase, phaseByKey).map(consumerKey),
         declaredPhaseOutputs,
-        implementationEvidenceViews: evidenceViews,
+        completionEvidenceViews: evidenceViews,
         allowCurrentItem: false,
       });
     } catch (error) {
@@ -3180,7 +3186,7 @@ function registriesFromSnapshot(snapshot: ConfigurationSnapshot): ValidatedRegis
     modelPolicies: snapshot.modelPolicies,
     sensors: snapshot.sensors,
     gates: snapshot.gates,
-    implementationEvidenceViews: snapshot.implementationEvidenceViews,
+    completionEvidenceViews: snapshot.completionEvidenceViews,
     phaseDataflow: snapshot.phaseDataflow,
     forEach: snapshot.forEach,
     taskTemplates: snapshot.taskTemplates,
@@ -3205,7 +3211,7 @@ export function validateConfigurationSnapshot(
     "modelPolicies",
     "sensors",
     "gates",
-    "implementationEvidenceViews",
+    "completionEvidenceViews",
     "phaseDataflow",
     "forEach",
     "taskTemplates",
@@ -3235,9 +3241,9 @@ export function validateConfigurationSnapshot(
     modelPolicies: validateSnapshotRegistry(snapshot.modelPolicies, "modelPolicies", sha256),
     sensors: validateSnapshotRegistry(snapshot.sensors, "sensors", sha256),
     gates: validateSnapshotRegistry(snapshot.gates, "gates", sha256),
-    implementationEvidenceViews: validateSnapshotRegistry(
-      snapshot.implementationEvidenceViews,
-      "implementationEvidenceViews",
+    completionEvidenceViews: validateSnapshotRegistry(
+      snapshot.completionEvidenceViews,
+      "completionEvidenceViews",
       sha256,
     ),
     phaseDataflow: validateSnapshotRegistry(snapshot.phaseDataflow, "phaseDataflow", sha256),
@@ -3662,7 +3668,9 @@ function lowerWorkDeclaration(
         criterionId: criterionIdentity(workflowKey, phaseKey, work.key, criterion.key, sha256),
         required: criterion.required,
       })),
-      evidencePolicy: normalizeEvidencePolicy(work.completionPolicy.evidencePolicy),
+      completionEvidencePolicy: normalizeCompletionEvidencePolicy(
+        work.completionPolicy.completionEvidencePolicy,
+      ),
     },
   };
   const criteria = work.completionPolicy.criteria.map((criterion) => {
@@ -3704,7 +3712,9 @@ function normalizedWorkDefinition(work: ParsedWork): CanonicalValue {
       criteria: [...work.completionPolicy.criteria]
         .sort((left, right) => compareText(left.key, right.key))
         .map(({ key, generation, required, input }) => ({ key, generation, required, input })),
-      evidencePolicy: normalizeEvidencePolicy(work.completionPolicy.evidencePolicy),
+      completionEvidencePolicy: normalizeCompletionEvidencePolicy(
+        work.completionPolicy.completionEvidencePolicy,
+      ),
     },
   };
   return canonicalValue(
@@ -3753,7 +3763,7 @@ function normalizedPhaseDataflow(phase: ParsedPhase): CanonicalValue {
   });
 }
 
-function normalizeEvidencePolicy(policy: ParsedEvidencePolicy) {
+function normalizeCompletionEvidencePolicy(policy: ParsedCompletionEvidencePolicy) {
   const requirements = [...policy.requirements].sort((left, right) =>
     compareText(canonicalSerialize(left.kind), canonicalSerialize(right.kind)),
   );
@@ -3776,7 +3786,7 @@ function createConfigurationSnapshot(
     modelPolicies: registries.modelPolicies,
     sensors: registries.sensors,
     gates: registries.gates,
-    implementationEvidenceViews: registries.implementationEvidenceViews,
+    completionEvidenceViews: registries.completionEvidenceViews,
     phaseDataflow: registries.phaseDataflow,
     forEach: registries.forEach,
     taskTemplates: registries.taskTemplates,
@@ -3791,8 +3801,8 @@ function createConfigurationSnapshot(
     modelPolicies: canonicalDigest(canonicalValue(contentRegistries.modelPolicies), sha256),
     sensors: canonicalDigest(canonicalValue(contentRegistries.sensors), sha256),
     gates: canonicalDigest(canonicalValue(contentRegistries.gates), sha256),
-    implementationEvidenceViews: canonicalDigest(
-      canonicalValue(contentRegistries.implementationEvidenceViews),
+    completionEvidenceViews: canonicalDigest(
+      canonicalValue(contentRegistries.completionEvidenceViews),
       sha256,
     ),
     phaseDataflow: canonicalDigest(canonicalValue(contentRegistries.phaseDataflow), sha256),
@@ -4220,8 +4230,8 @@ function pointerForGraphDiagnostic(
     diagnostic.subject === undefined ? undefined : lowered.sourceById.get(diagnostic.subject.id);
   if (source === undefined) return "/workflow";
   if (diagnostic.field === "completionPolicy") return `${source.pointer}/completionPolicy`;
-  if (diagnostic.field === "evidencePolicy")
-    return `${source.pointer}/completionPolicy/evidencePolicy`;
+  if (diagnostic.field === "completionEvidencePolicy")
+    return `${source.pointer}/completionPolicy/completionEvidencePolicy`;
   return diagnostic.field === "dependsOn" ||
     diagnostic.field === "parentId" ||
     diagnostic.field === "source" ||

@@ -267,7 +267,7 @@ describe("authored workflow lowering", () => {
     ).phases;
     expect(phases[1]?.executor).toMatchObject({
       completionPolicy: {
-        evidencePolicy: {
+        completionEvidencePolicy: {
           mode: "task",
           requirements: [{ kind: "task-completion", minimumCount: 2 }],
         },

@@ -407,7 +407,10 @@ function workflowGraph(revision: 1 | 2): WorkflowGraph {
           parentId: phaseId("phase_execute"),
           source: { locator: "fixture://fixed", pointer: "/tasks/primary" },
           input: { action: "inspect" },
-          completionPolicy: { criteria: [], evidencePolicy: { mode: "none", requirements: [] } },
+          completionPolicy: {
+            criteria: [],
+            completionEvidencePolicy: { mode: "none", requirements: [] },
+          },
         },
         ...(revision === 2
           ? [
@@ -421,7 +424,7 @@ function workflowGraph(revision: 1 | 2): WorkflowGraph {
                 input: { action: "report" },
                 completionPolicy: {
                   criteria: [],
-                  evidencePolicy: { mode: "none" as const, requirements: [] },
+                  completionEvidencePolicy: { mode: "none" as const, requirements: [] },
                 },
               },
             ]

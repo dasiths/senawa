@@ -605,7 +605,7 @@ function configuredWorkflow(
   const original = required(phase.executor.work[0]);
   const completionPolicy = {
     ...original.completionPolicy,
-    evidencePolicy: {
+    completionEvidencePolicy: {
       mode: "task" as const,
       requirements: [{ kind: evidenceKind, minimumCount: 1 }],
     },
@@ -1236,7 +1236,7 @@ class DeterministicAcceptanceWorkers {
                 criterionId,
                 disposition: "satisfied" as const,
               })),
-              evidence: [
+              completionEvidence: [
                 {
                   assetId,
                   kind: evidenceKind,

@@ -43,7 +43,7 @@ export type MappingSource =
     }
   | { readonly kind: "current-item"; readonly pointer: string }
   | {
-      readonly kind: "implementation-evidence";
+      readonly kind: "completion-evidence";
       readonly phase: ConsumerKey;
       readonly view: ConsumerKey;
       readonly pointer: string;
@@ -78,7 +78,7 @@ export type MappingSourceBinding =
     }
   | {
       readonly source: Readonly<{
-        readonly kind: "implementation-evidence";
+        readonly kind: "completion-evidence";
         readonly phase: ConsumerKey;
         readonly view: ConsumerKey;
       }>;
@@ -92,7 +92,7 @@ export interface MappingEvaluationPolicy {
     readonly phase: ConsumerKey;
     readonly output: ConsumerKey;
   }>[];
-  readonly implementationEvidenceViews: readonly Readonly<{
+  readonly completionEvidenceViews: readonly Readonly<{
     readonly phase: ConsumerKey;
     readonly view: ConsumerKey;
   }>[];
@@ -221,7 +221,7 @@ export type DataflowErrorCode =
   | "mapping-source-missing"
   | "phase-dependency-violation"
   | "undeclared-phase-output"
-  | "implementation-evidence-not-allowed"
+  | "completion-evidence-not-allowed"
   | "current-item-not-allowed"
   | "source-binding-conflict";
 
@@ -800,12 +800,12 @@ function validateMappingSource(value: unknown): MappingSource {
     }
     return { kind: "phase-output", phase: value.phase, output: value.output, pointer };
   }
-  if (value.kind === "implementation-evidence") {
+  if (value.kind === "completion-evidence") {
     assertExactKeys(value, ["kind", "phase", "view", "pointer"]);
     if (!isConsumerKey(value.phase) || !isConsumerKey(value.view)) {
       fail("invalid-dataflow-record", "Implementation evidence source keys are invalid");
     }
-    return { kind: "implementation-evidence", phase: value.phase, view: value.view, pointer };
+    return { kind: "completion-evidence", phase: value.phase, view: value.view, pointer };
   }
   fail("invalid-dataflow-record", `Mapping source kind ${value.kind} is not supported`);
 }
@@ -854,13 +854,13 @@ function validateSourceBinding(value: unknown): MappingSourceBinding {
       value: canonical,
     };
   }
-  if (source.kind === "implementation-evidence") {
+  if (source.kind === "completion-evidence") {
     assertExactKeys(source, ["kind", "phase", "view"]);
     if (!isConsumerKey(source.phase) || !isConsumerKey(source.view)) {
       fail("invalid-dataflow-record", "Implementation evidence binding is invalid");
     }
     return {
-      source: { kind: "implementation-evidence", phase: source.phase, view: source.view },
+      source: { kind: "completion-evidence", phase: source.phase, view: source.view },
       sourceBindingDigest: value.sourceBindingDigest,
       value: canonical,
     };
@@ -872,7 +872,7 @@ function validateMappingPolicy(value: Readonly<Record<string, unknown>>): Mappin
   assertExactKeys(value, [
     "dependencyPhases",
     "declaredPhaseOutputs",
-    "implementationEvidenceViews",
+    "completionEvidenceViews",
     "allowCurrentItem",
   ]);
   if (!Array.isArray(value.dependencyPhases) || typeof value.allowCurrentItem !== "boolean") {
@@ -886,15 +886,12 @@ function validateMappingPolicy(value: Readonly<Record<string, unknown>>): Mappin
     return phase;
   });
   const declaredPhaseOutputs = validatePolicyPairs(value.declaredPhaseOutputs, "output");
-  const implementationEvidenceViews = validatePolicyPairs(
-    value.implementationEvidenceViews,
-    "view",
-  );
+  const completionEvidenceViews = validatePolicyPairs(value.completionEvidenceViews, "view");
   return {
     dependencyPhases,
     declaredPhaseOutputs: declaredPhaseOutputs as MappingEvaluationPolicy["declaredPhaseOutputs"],
-    implementationEvidenceViews:
-      implementationEvidenceViews as MappingEvaluationPolicy["implementationEvidenceViews"],
+    completionEvidenceViews:
+      completionEvidenceViews as MappingEvaluationPolicy["completionEvidenceViews"],
     allowCurrentItem: value.allowCurrentItem,
   };
 }
@@ -938,12 +935,12 @@ function validateMappingSourcePolicy(source: MappingSource, policy: MappingEvalu
     return;
   }
   if (
-    !policy.implementationEvidenceViews.some(
+    !policy.completionEvidenceViews.some(
       (item) => item.phase === source.phase && item.view === source.view,
     )
   ) {
     fail(
-      "implementation-evidence-not-allowed",
+      "completion-evidence-not-allowed",
       `Evidence view ${source.phase}/${source.view} is not allowlisted`,
     );
   }

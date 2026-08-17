@@ -15,7 +15,7 @@ const CATEGORIES: readonly ConfigurationComponentCategory[] = Object.freeze([
   "modelPolicies",
   "sensors",
   "gates",
-  "implementationEvidenceViews",
+  "completionEvidenceViews",
   "phaseDataflow",
   "forEach",
   "taskTemplates",

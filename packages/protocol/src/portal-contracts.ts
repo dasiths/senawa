@@ -355,7 +355,7 @@ export interface PortalQuestionPage {
   readonly questions: readonly PortalQuestionRecord[];
 }
 
-export type PortalArtifactSource = "worker" | "evidence" | "installed";
+export type PortalArtifactSource = "worker" | "completion-evidence" | "installed";
 export type PortalArtifactAvailability = "metadata-only" | "verified-stored";
 
 export interface PortalArtifactMetadata {

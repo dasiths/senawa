@@ -31,29 +31,29 @@ export interface CriterionRequirement {
   readonly required: boolean;
 }
 
-export interface EvidenceRequirement {
+export interface CompletionEvidenceRequirement {
   readonly kind: CanonicalValue;
   readonly minimumCount: number;
 }
 
-export type EvidencePolicyMode = "none" | "task" | "required-criteria" | "all-satisfied";
+export type CompletionEvidencePolicyMode = "none" | "task" | "required-criteria" | "all-satisfied";
 
-export interface EvidencePolicy {
-  readonly mode: EvidencePolicyMode;
-  readonly requirements: readonly EvidenceRequirement[];
+export interface CompletionEvidencePolicy {
+  readonly mode: CompletionEvidencePolicyMode;
+  readonly requirements: readonly CompletionEvidenceRequirement[];
   readonly waiverAuthority?: CanonicalValue;
 }
 
 export interface CompletionPolicy {
   readonly criteria: readonly CriterionRequirement[];
-  readonly evidencePolicy: EvidencePolicy;
+  readonly completionEvidencePolicy: CompletionEvidencePolicy;
 }
 
 export interface CompletionRequirements extends CompletionPolicy {
   readonly task: TaskGenerationReference;
 }
 
-export interface EvidenceAttachment {
+export interface CompletionEvidenceItem {
   readonly assetId: AssetId;
   readonly kind: CanonicalValue;
   readonly descriptor: CanonicalValue;
@@ -71,11 +71,11 @@ export interface CompletionSubmission {
   readonly disposition: TerminalDisposition;
   readonly summary: string;
   readonly criteria: readonly CriterionOutcome[];
-  readonly evidence: readonly EvidenceAttachment[];
+  readonly completionEvidence: readonly CompletionEvidenceItem[];
   readonly replacementTask?: TaskGenerationReference;
 }
 
-export interface EvidenceRequirementAssessment {
+export interface CompletionEvidenceAssessment {
   readonly kind: CanonicalValue;
   readonly minimumCount: number;
   readonly attachmentCount: number;
@@ -86,15 +86,15 @@ export interface CriterionAssessment {
   readonly criterionId: CriterionId;
   readonly required: boolean;
   readonly disposition: CriterionDisposition;
-  readonly evidence: readonly EvidenceRequirementAssessment[];
-  readonly evidenceSatisfied: boolean;
+  readonly completionEvidence: readonly CompletionEvidenceAssessment[];
+  readonly completionEvidenceSatisfied: boolean;
 }
 
 export interface AccountingAssessment {
   readonly submission: CompletionSubmission;
   readonly criteria: readonly CriterionAssessment[];
-  readonly taskEvidence: readonly EvidenceRequirementAssessment[];
-  readonly evidencePolicySatisfied: boolean;
+  readonly taskEvidence: readonly CompletionEvidenceAssessment[];
+  readonly completionEvidenceSatisfied: boolean;
 }
 
 export type CompletionAccountingErrorCode =
@@ -108,7 +108,7 @@ export type CompletionAccountingErrorCode =
   | "required-skip"
   | "invalid-waiver"
   | "invalid-supersession"
-  | "duplicate-evidence";
+  | "duplicate-completionEvidence";
 
 export class CompletionAccountingError extends Error {
   readonly code: CompletionAccountingErrorCode;
@@ -231,7 +231,7 @@ function assessCompletionSnapshots(
     if (requirement === undefined) {
       fail("unknown-criterion", `Criterion ${outcome.criterionId} is not declared for the task`);
     }
-    assertCriterionOutcome(requirement, outcome, validatedRequirements.evidencePolicy);
+    assertCriterionOutcome(requirement, outcome, validatedRequirements.completionEvidencePolicy);
     outcomesByCriterion.set(outcome.criterionId, outcome);
   }
 
@@ -241,25 +241,28 @@ function assessCompletionSnapshots(
     }
   }
 
-  assertEvidenceReferences(validatedSubmission.evidence, requirementsByCriterion);
+  assertEvidenceReferences(validatedSubmission.completionEvidence, requirementsByCriterion);
   const taskEvidence =
-    validatedRequirements.evidencePolicy.mode === "task"
-      ? assessEvidenceRequirements(
-          validatedRequirements.evidencePolicy.requirements,
-          validatedSubmission.evidence.filter((attachment) => attachment.criterionId === undefined),
+    validatedRequirements.completionEvidencePolicy.mode === "task"
+      ? assessCompletionEvidenceRequirements(
+          validatedRequirements.completionEvidencePolicy.requirements,
+          validatedSubmission.completionEvidence.filter(
+            (attachment) => attachment.criterionId === undefined,
+          ),
         )
       : [];
 
   const criterionAssessments = validatedRequirements.criteria.map((requirement) => {
     const outcome = outcomesByCriterion.get(requirement.criterionId) as CriterionOutcome;
     const evidenceRequired =
-      (validatedRequirements.evidencePolicy.mode === "required-criteria" && requirement.required) ||
-      (validatedRequirements.evidencePolicy.mode === "all-satisfied" &&
+      (validatedRequirements.completionEvidencePolicy.mode === "required-criteria" &&
+        requirement.required) ||
+      (validatedRequirements.completionEvidencePolicy.mode === "all-satisfied" &&
         outcome.disposition === "satisfied");
-    const evidence = evidenceRequired
-      ? assessEvidenceRequirements(
-          validatedRequirements.evidencePolicy.requirements,
-          validatedSubmission.evidence.filter(
+    const completionEvidence = evidenceRequired
+      ? assessCompletionEvidenceRequirements(
+          validatedRequirements.completionEvidencePolicy.requirements,
+          validatedSubmission.completionEvidence.filter(
             (attachment) => attachment.criterionId === requirement.criterionId,
           ),
         )
@@ -268,8 +271,8 @@ function assessCompletionSnapshots(
       criterionId: requirement.criterionId,
       required: requirement.required,
       disposition: outcome.disposition,
-      evidence,
-      evidenceSatisfied: evidence.every((assessment) => assessment.satisfied),
+      completionEvidence,
+      completionEvidenceSatisfied: completionEvidence.every((assessment) => assessment.satisfied),
     };
   });
 
@@ -277,9 +280,9 @@ function assessCompletionSnapshots(
     submission: validatedSubmission,
     criteria: criterionAssessments,
     taskEvidence,
-    evidencePolicySatisfied:
+    completionEvidenceSatisfied:
       taskEvidence.every((assessment) => assessment.satisfied) &&
-      criterionAssessments.every((assessment) => assessment.evidenceSatisfied),
+      criterionAssessments.every((assessment) => assessment.completionEvidenceSatisfied),
   }) as unknown as AccountingAssessment;
 }
 
@@ -299,19 +302,19 @@ function validateRequirements(value: unknown): CompletionRequirements {
   assertExactKeys(
     value,
     "requirements",
-    ["task", "criteria", "evidencePolicy"],
+    ["task", "criteria", "completionEvidencePolicy"],
     "invalid-requirements",
   );
   taskReference(value.task, "requirements.task", "invalid-requirements");
   validatePolicy(
-    { criteria: value.criteria, evidencePolicy: value.evidencePolicy },
+    { criteria: value.criteria, completionEvidencePolicy: value.completionEvidencePolicy },
     "requirements",
   );
   return value as unknown as CompletionRequirements;
 }
 
 function validatePolicy(value: unknown, path: string): CompletionPolicy {
-  assertExactKeys(value, path, ["criteria", "evidencePolicy"], "invalid-requirements");
+  assertExactKeys(value, path, ["criteria", "completionEvidencePolicy"], "invalid-requirements");
   if (!Array.isArray(value.criteria)) {
     fail("invalid-requirements", `${path}.criteria must be an array`);
   }
@@ -330,11 +333,11 @@ function validatePolicy(value: unknown, path: string): CompletionPolicy {
     }
     seenCriteria.add(criterion.criterionId);
   });
-  evidencePolicy(value.evidencePolicy, `${path}.evidencePolicy`);
+  completionEvidencePolicy(value.completionEvidencePolicy, `${path}.completionEvidencePolicy`);
   return value as unknown as CompletionPolicy;
 }
 
-function evidencePolicy(value: unknown, path: string): EvidencePolicy {
+function completionEvidencePolicy(value: unknown, path: string): CompletionEvidencePolicy {
   assertAllowedKeys(
     value,
     path,
@@ -354,7 +357,11 @@ function evidencePolicy(value: unknown, path: string): EvidencePolicy {
     fail("invalid-requirements", "Evidence policy requirements must be an array", path);
   }
   if (value.mode === "none" && value.requirements.length !== 0) {
-    fail("invalid-requirements", "The none evidence policy cannot declare requirements", path);
+    fail(
+      "invalid-requirements",
+      "The none completionEvidence policy cannot declare requirements",
+      path,
+    );
   }
   if (value.mode !== "none" && value.requirements.length === 0) {
     fail(
@@ -384,12 +391,12 @@ function evidencePolicy(value: unknown, path: string): EvidencePolicy {
     if (seenKinds.has(serializedKind)) {
       fail(
         "invalid-requirements",
-        `${requirementPath}.kind duplicates another evidence requirement`,
+        `${requirementPath}.kind duplicates another completionEvidence requirement`,
         requirementPath,
       );
     }
     seenKinds.add(serializedKind);
-    return requirement as unknown as EvidenceRequirement;
+    return requirement as unknown as CompletionEvidenceRequirement;
   });
 
   return Object.hasOwn(value, "waiverAuthority")
@@ -401,7 +408,7 @@ function validateSubmission(value: unknown): CompletionSubmission {
   assertAllowedKeys(
     value,
     "submission",
-    ["task", "disposition", "summary", "criteria", "evidence"],
+    ["task", "disposition", "summary", "criteria", "completionEvidence"],
     ["replacementTask"],
     "invalid-submission",
   );
@@ -412,14 +419,14 @@ function validateSubmission(value: unknown): CompletionSubmission {
   if (typeof value.summary !== "string" || value.summary.trim().length === 0) {
     fail("invalid-submission", "Submission summary must be a non-empty string");
   }
-  if (!Array.isArray(value.criteria) || !Array.isArray(value.evidence)) {
-    fail("invalid-submission", "Submission criteria and evidence must be arrays");
+  if (!Array.isArray(value.criteria) || !Array.isArray(value.completionEvidence)) {
+    fail("invalid-submission", "Submission criteria and completionEvidence must be arrays");
   }
   const criteria = value.criteria.map((outcome, index) =>
     criterionOutcome(outcome, `submission.criteria[${index}]`),
   );
-  const evidence = value.evidence.map((attachment, index) =>
-    evidenceAttachment(attachment, `submission.evidence[${index}]`),
+  const completionEvidence = value.completionEvidence.map((attachment, index) =>
+    evidenceAttachment(attachment, `submission.completionEvidence[${index}]`),
   );
 
   const hasReplacement = Object.hasOwn(value, "replacementTask");
@@ -440,14 +447,20 @@ function validateSubmission(value: unknown): CompletionSubmission {
       disposition: value.disposition,
       summary: value.summary,
       criteria,
-      evidence,
+      completionEvidence,
       replacementTask,
     };
   }
   if (hasReplacement) {
     fail("invalid-supersession", "Only a superseded submission may name a replacement task");
   }
-  return { task, disposition: value.disposition, summary: value.summary, criteria, evidence };
+  return {
+    task,
+    disposition: value.disposition,
+    summary: value.summary,
+    criteria,
+    completionEvidence,
+  };
 }
 
 function taskReference(
@@ -488,7 +501,7 @@ function criterionOutcome(value: unknown, path: string): CriterionOutcome {
   return value as unknown as CriterionOutcome;
 }
 
-function evidenceAttachment(value: unknown, path: string): EvidenceAttachment {
+function evidenceAttachment(value: unknown, path: string): CompletionEvidenceItem {
   assertAllowedKeys(
     value,
     path,
@@ -502,13 +515,13 @@ function evidenceAttachment(value: unknown, path: string): EvidenceAttachment {
   if (Object.hasOwn(value, "criterionId") && !isCriterionId(value.criterionId)) {
     fail("invalid-submission", `${path}.criterionId must be a criterion identity`);
   }
-  return value as unknown as EvidenceAttachment;
+  return value as unknown as CompletionEvidenceItem;
 }
 
 function assertCriterionOutcome(
   requirement: CriterionRequirement,
   outcome: CriterionOutcome,
-  policy: EvidencePolicy,
+  policy: CompletionEvidencePolicy,
 ): void {
   if (requirement.required && outcome.disposition === "skipped") {
     fail("required-skip", `Required criterion ${requirement.criterionId} cannot be skipped`);
@@ -533,13 +546,16 @@ function assertCriterionOutcome(
 }
 
 function assertEvidenceReferences(
-  attachments: readonly EvidenceAttachment[],
+  attachments: readonly CompletionEvidenceItem[],
   criteria: ReadonlyMap<CriterionId, CriterionRequirement>,
 ): void {
   const assetIds = new Set<AssetId>();
   for (const attachment of attachments) {
     if (assetIds.has(attachment.assetId)) {
-      fail("duplicate-evidence", `Evidence asset ${attachment.assetId} is attached more than once`);
+      fail(
+        "duplicate-completionEvidence",
+        `Evidence asset ${attachment.assetId} is attached more than once`,
+      );
     }
     assetIds.add(attachment.assetId);
     if (attachment.criterionId !== undefined && !criteria.has(attachment.criterionId)) {
@@ -551,10 +567,10 @@ function assertEvidenceReferences(
   }
 }
 
-function assessEvidenceRequirements(
-  requirements: readonly EvidenceRequirement[],
-  attachments: readonly EvidenceAttachment[],
-): EvidenceRequirementAssessment[] {
+function assessCompletionEvidenceRequirements(
+  requirements: readonly CompletionEvidenceRequirement[],
+  attachments: readonly CompletionEvidenceItem[],
+): CompletionEvidenceAssessment[] {
   return requirements.map((requirement) => {
     const expectedKind = canonicalSerialize(requirement.kind);
     const attachmentCount = attachments.filter(

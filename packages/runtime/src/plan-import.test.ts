@@ -262,7 +262,7 @@ function createFixture(items: readonly ReturnType<typeof item>[]) {
       mappingPolicy: {
         dependencyPhases: [],
         declaredPhaseOutputs: [],
-        implementationEvidenceViews: [],
+        completionEvidenceViews: [],
         allowCurrentItem: true,
       },
       limits: {
@@ -297,7 +297,7 @@ function createFixture(items: readonly ReturnType<typeof item>[]) {
         binding: templateBinding,
         parentPhaseId: PHASE_ID,
         criteria: [],
-        evidencePolicy: { mode: "none" as const, requirements: [] },
+        completionEvidencePolicy: { mode: "none" as const, requirements: [] },
       },
     },
   };

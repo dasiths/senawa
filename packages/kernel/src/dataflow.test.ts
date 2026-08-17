@@ -74,7 +74,7 @@ describe("data mappings", () => {
     const policy = {
       dependencyPhases: [consumerKey("research")],
       declaredPhaseOutputs: [{ phase: consumerKey("research"), output: consumerKey("result") }],
-      implementationEvidenceViews: [],
+      completionEvidenceViews: [],
       allowCurrentItem: false,
     };
 
@@ -171,13 +171,13 @@ describe("data mappings", () => {
         sha256,
       ),
     );
-    expectDataflowError("implementation-evidence-not-allowed", () =>
+    expectDataflowError("completion-evidence-not-allowed", () =>
       evaluateDataMappings(
         [
           {
             ...mapping("evidence", "/evidence"),
             source: {
-              kind: "implementation-evidence",
+              kind: "completion-evidence",
               phase: consumerKey("implement"),
               view: consumerKey("accepted"),
               pointer: "",
@@ -314,7 +314,7 @@ function emptyPolicy() {
   return {
     dependencyPhases: [],
     declaredPhaseOutputs: [],
-    implementationEvidenceViews: [],
+    completionEvidenceViews: [],
     allowCurrentItem: false,
   };
 }

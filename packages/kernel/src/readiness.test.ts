@@ -156,7 +156,7 @@ function taskDefinition(idValue: string, dependencies: string[], supersedes: str
         required: true,
       },
     ],
-    evidencePolicy: { mode: "none", requirements: [] },
+    completionEvidencePolicy: { mode: "none", requirements: [] },
   };
   return {
     id,

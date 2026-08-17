@@ -5,13 +5,13 @@ import {
   assessCompletionAccounting,
   CompletionAccountingError,
   type CompletionAccountingErrorCode,
+  type CompletionEvidenceItem,
+  type CompletionEvidencePolicyMode,
+  type CompletionEvidenceRequirement,
   type CompletionRequirements,
   type CompletionSubmission,
   type CriterionOutcome,
   type CriterionRequirement,
-  type EvidenceAttachment,
-  type EvidencePolicyMode,
-  type EvidenceRequirement,
   reassessCompletionAccounting,
   type TaskGenerationReference,
   type TerminalDisposition,
@@ -22,14 +22,14 @@ import { assetId, criterionId, definitionGeneration, taskId } from "./identity.j
 const CONTEXT_DIGEST = sha256Digest("a".repeat(64));
 
 describe("completion accounting", () => {
-  it("snapshots one complete criterion account and returns immutable evidence accounting", () => {
+  it("snapshots one complete criterion account and returns immutable completionEvidence accounting", () => {
     const requirements = requiredCriterionRequirements("task");
     const submission = completedSubmission();
 
     const assessment = assessCompletionAccounting(requirements, submission);
     submission.summary = "mutated";
-    submission.evidence[0] = {
-      ...required(submission.evidence[0]),
+    submission.completionEvidence[0] = {
+      ...required(submission.completionEvidence[0]),
       descriptor: canonicalValue({ command: "mutated" }),
     };
 
@@ -42,7 +42,7 @@ describe("completion accounting", () => {
         satisfied: true,
       },
     ]);
-    expect(assessment.evidencePolicySatisfied).toBe(true);
+    expect(assessment.completionEvidenceSatisfied).toBe(true);
     expect(Object.isFrozen(assessment)).toBe(true);
     expect(Object.isFrozen(assessment.submission)).toBe(true);
     expect(Object.isFrozen(assessment.criteria)).toBe(true);
@@ -56,7 +56,7 @@ describe("completion accounting", () => {
       const submission = {
         ...base,
         disposition,
-        evidence: [],
+        completionEvidence: [],
         ...(disposition === "superseded"
           ? {
               replacementTask: {
@@ -130,7 +130,10 @@ describe("completion accounting", () => {
     });
 
     expectAccountingError("duplicate-criterion", () =>
-      assessCompletionAccounting(requirements, { ...completedSubmission(), evidence: [] }),
+      assessCompletionAccounting(requirements, {
+        ...completedSubmission(),
+        completionEvidence: [],
+      }),
     );
     expectAccountingError("duplicate-criterion", () =>
       validateCompletionRequirements(requirements),
@@ -239,20 +242,20 @@ describe("completion accounting", () => {
     );
   });
 
-  it("reports no evidence obligations for the none policy", () => {
+  it("reports no completionEvidence obligations for the none policy", () => {
     const assessment = assessCompletionAccounting(requiredCriterionRequirements("none"), {
       ...completedSubmission(),
-      evidence: [],
+      completionEvidence: [],
     });
 
     expect(assessment.taskEvidence).toEqual([]);
-    expect(assessment.criteria[0]?.evidence).toEqual([]);
-    expect(assessment.evidencePolicySatisfied).toBe(true);
+    expect(assessment.criteria[0]?.completionEvidence).toEqual([]);
+    expect(assessment.completionEvidenceSatisfied).toBe(true);
   });
 
-  it("counts task evidence by canonical kind and reports unmet minimums", () => {
+  it("counts task completionEvidence by canonical kind and reports unmet minimums", () => {
     const requirements = requiredCriterionRequirements("task");
-    requirements.evidencePolicy.requirements[0] = {
+    requirements.completionEvidencePolicy.requirements[0] = {
       kind: canonicalValue({ name: "test-report", version: 1 }),
       minimumCount: 2,
     };
@@ -265,59 +268,59 @@ describe("completion accounting", () => {
       attachmentCount: 1,
       satisfied: false,
     });
-    expect(assessment.evidencePolicySatisfied).toBe(false);
+    expect(assessment.completionEvidenceSatisfied).toBe(false);
   });
 
-  it("requires criterion evidence for each required criterion under required-criteria", () => {
+  it("requires criterion completionEvidence for each required criterion under required-criteria", () => {
     const { requirements, submission } = twoCriterionFixture("required-criteria");
     submission.criteria[0] = {
       criterionId: criterionId("criterion_tests"),
       disposition: "unsatisfied",
     };
-    submission.evidence = [criterionEvidence("asset_required", "criterion_tests")];
+    submission.completionEvidence = [criterionEvidence("asset_required", "criterion_tests")];
 
     const assessment = assessCompletionAccounting(requirements, submission);
 
-    expect(assessment.criteria[0]?.evidenceSatisfied).toBe(true);
-    expect(assessment.criteria[0]?.evidence[0]?.attachmentCount).toBe(1);
-    expect(assessment.criteria[1]?.evidence).toEqual([]);
-    expect(assessment.evidencePolicySatisfied).toBe(true);
+    expect(assessment.criteria[0]?.completionEvidenceSatisfied).toBe(true);
+    expect(assessment.criteria[0]?.completionEvidence[0]?.attachmentCount).toBe(1);
+    expect(assessment.criteria[1]?.completionEvidence).toEqual([]);
+    expect(assessment.completionEvidenceSatisfied).toBe(true);
   });
 
-  it("requires evidence for every satisfied criterion under all-satisfied", () => {
+  it("requires completionEvidence for every satisfied criterion under all-satisfied", () => {
     const { requirements, submission } = twoCriterionFixture("all-satisfied");
-    submission.evidence = [criterionEvidence("asset_required", "criterion_tests")];
+    submission.completionEvidence = [criterionEvidence("asset_required", "criterion_tests")];
 
     const assessment = assessCompletionAccounting(requirements, submission);
 
-    expect(assessment.criteria[0]?.evidenceSatisfied).toBe(true);
-    expect(assessment.criteria[1]?.evidenceSatisfied).toBe(false);
-    expect(assessment.evidencePolicySatisfied).toBe(false);
+    expect(assessment.criteria[0]?.completionEvidenceSatisfied).toBe(true);
+    expect(assessment.criteria[1]?.completionEvidenceSatisfied).toBe(false);
+    expect(assessment.completionEvidenceSatisfied).toBe(false);
   });
 
-  it("rejects duplicate evidence assets and evidence for unknown criteria", () => {
+  it("rejects duplicate completionEvidence assets and completionEvidence for unknown criteria", () => {
     const duplicate = completedSubmission();
-    duplicate.evidence.push({ ...required(duplicate.evidence[0]) });
-    expectAccountingError("duplicate-evidence", () =>
+    duplicate.completionEvidence.push({ ...required(duplicate.completionEvidence[0]) });
+    expectAccountingError("duplicate-completionEvidence", () =>
       assessCompletionAccounting(requiredCriterionRequirements("task"), duplicate),
     );
 
     const unknown = completedSubmission();
-    unknown.evidence[0] = criterionEvidence("asset_unknown", "criterion_unknown");
+    unknown.completionEvidence[0] = criterionEvidence("asset_unknown", "criterion_unknown");
     expectAccountingError("unknown-criterion", () =>
       assessCompletionAccounting(requiredCriterionRequirements("task"), unknown),
     );
   });
 
-  it("rejects invalid evidence policies and duplicate canonical kinds", () => {
+  it("rejects invalid completionEvidence policies and duplicate canonical kinds", () => {
     const empty = requiredCriterionRequirements("task");
-    empty.evidencePolicy.requirements = [];
+    empty.completionEvidencePolicy.requirements = [];
     expectAccountingError("invalid-requirements", () =>
       assessCompletionAccounting(empty, completedSubmission()),
     );
 
     const duplicate = requiredCriterionRequirements("task");
-    duplicate.evidencePolicy.requirements.push({
+    duplicate.completionEvidencePolicy.requirements.push({
       kind: canonicalValue({ version: 1, name: "test-report" }),
       minimumCount: 2,
     });
@@ -383,10 +386,10 @@ describe("completion accounting", () => {
     expect(reassessCompletionAccounting(requirements, assessment)).toEqual(assessment);
 
     const forged = {
-      submission: { ...assessment.submission, criteria: [], evidence: [] },
+      submission: { ...assessment.submission, criteria: [], completionEvidence: [] },
       criteria: [],
       taskEvidence: [],
-      evidencePolicySatisfied: true,
+      completionEvidenceSatisfied: true,
     } as AccountingAssessment;
     expectAccountingError("invalid-assessment", () =>
       reassessCompletionAccounting(requirements, forged),
@@ -415,7 +418,7 @@ describe("completion accounting", () => {
 });
 
 function requiredCriterionRequirements(
-  mode: CompletionRequirements["evidencePolicy"]["mode"],
+  mode: CompletionRequirements["completionEvidencePolicy"]["mode"],
 ): MutableCompletionRequirements {
   return {
     task: {
@@ -424,7 +427,7 @@ function requiredCriterionRequirements(
       contextRevisionDigest: CONTEXT_DIGEST,
     },
     criteria: [{ criterionId: criterionId("criterion_tests"), required: true }],
-    evidencePolicy: {
+    completionEvidencePolicy: {
       mode,
       requirements:
         mode === "none"
@@ -457,7 +460,7 @@ function twoCriterionFixture(mode: "required-criteria" | "all-satisfied"): {
   return { requirements, submission };
 }
 
-function criterionEvidence(assetToken: string, criterionToken: string): EvidenceAttachment {
+function criterionEvidence(assetToken: string, criterionToken: string): CompletionEvidenceItem {
   return {
     assetId: assetId(assetToken),
     kind: canonicalValue({ name: "test-report", version: 1 }),
@@ -476,7 +479,7 @@ function completedSubmission(): MutableCompletionSubmission {
     disposition: "completed",
     summary: "Checks passed",
     criteria: [{ criterionId: criterionId("criterion_tests"), disposition: "satisfied" }],
-    evidence: [
+    completionEvidence: [
       {
         assetId: assetId("asset_report"),
         kind: canonicalValue({ name: "test-report", version: 1 }),
@@ -502,9 +505,9 @@ function expectAccountingError(
 interface MutableCompletionRequirements {
   task: TaskGenerationReference;
   criteria: CriterionRequirement[];
-  evidencePolicy: {
-    mode: EvidencePolicyMode;
-    requirements: EvidenceRequirement[];
+  completionEvidencePolicy: {
+    mode: CompletionEvidencePolicyMode;
+    requirements: CompletionEvidenceRequirement[];
     waiverAuthority?: CanonicalValue;
   };
 }
@@ -514,7 +517,7 @@ interface MutableCompletionSubmission {
   disposition: TerminalDisposition;
   summary: string;
   criteria: CriterionOutcome[];
-  evidence: EvidenceAttachment[];
+  completionEvidence: CompletionEvidenceItem[];
   replacementTask?: TaskGenerationReference;
 }
 

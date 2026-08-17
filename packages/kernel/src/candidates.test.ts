@@ -98,7 +98,7 @@ describe("phase candidates", () => {
       integrationBarrierDigest: INTEGRATION_DIGEST,
       gatePolicyDigest: gate.policyDigest,
     });
-    expect(candidate.evidencePolicyDigest).toBe(
+    expect(candidate.completionEvidencePolicyDigest).toBe(
       canonicalDigest(
         canonicalValue({
           completionRequirements: deriveCompletionRequirements(
@@ -150,32 +150,32 @@ describe("phase candidates", () => {
 
     const callerPolicy = {
       ...candidateInput(gate.policyDigest),
-      evidencePolicyDigest: OTHER_DIGEST,
+      completionEvidencePolicyDigest: OTHER_DIGEST,
     };
     expectCandidateError("invalid-candidate", () =>
       createPhaseCandidate(callerPolicy as PhaseCandidateInput, deterministicSha256),
     );
 
     const candidate = createPhaseCandidate(candidateInput(gate.policyDigest), deterministicSha256);
-    const wrongPolicy = { ...candidate, evidencePolicyDigest: OTHER_DIGEST };
+    const wrongPolicy = { ...candidate, completionEvidencePolicyDigest: OTHER_DIGEST };
     expectCandidateError("policy-mismatch", () =>
       validatePhaseCandidate(wrongPolicy, deterministicSha256),
     );
   });
 
-  it("rejects a recomputed assessment that omits required criteria and evidence", () => {
+  it("rejects a recomputed assessment that omits required criteria and completionEvidence", () => {
     const gate = emptyGate();
     const forged = candidateInput(gate.policyDigest);
     const accepted = required(forged.acceptedAccountingAssessments[0]);
     const forgedRequirements: CompletionRequirements = {
       task: accepted.assessment.submission.task,
       criteria: [],
-      evidencePolicy: { mode: "none", requirements: [] },
+      completionEvidencePolicy: { mode: "none", requirements: [] },
     };
     const assessment = assessCompletionAccounting(forgedRequirements, {
       ...accepted.assessment.submission,
       criteria: [],
-      evidence: [],
+      completionEvidence: [],
     });
     accepted.assessment = assessment;
     accepted.assessmentDigest = digestAccountingAssessment(assessment, deterministicSha256);
@@ -272,7 +272,7 @@ describe("phase candidates", () => {
     const original = required(inconsistent.acceptedAccountingAssessments[0]).assessment;
     const forged = {
       ...original,
-      evidencePolicySatisfied: false,
+      completionEvidenceSatisfied: false,
     } as AccountingAssessment;
     inconsistent.acceptedAccountingAssessments[0] = {
       assessment: forged,
@@ -288,7 +288,7 @@ describe("phase candidates", () => {
       ...accepted.assessment,
       submission: {
         ...accepted.assessment.submission,
-        evidence: [
+        completionEvidence: [
           {
             assetId: assetId("asset_forged"),
             kind: canonicalValue({ kind: "report" }),
@@ -674,7 +674,7 @@ describe("phase closure", () => {
     );
   });
 
-  it("rejects fabricated acceptance with a recomputed digest and incomplete source evidence", () => {
+  it("rejects fabricated acceptance with a recomputed digest and incomplete source completionEvidence", () => {
     const definition = defineGate(
       {
         key: consumerKey("source-bound-gate"),
@@ -888,7 +888,7 @@ function candidateGraph(revision: 1 | 2): WorkflowGraph {
           source: { locator: "fixture://candidate", pointer: "/tasks/old-alpha" },
           completionPolicy: {
             criteria: [],
-            evidencePolicy: { mode: "none", requirements: [] },
+            completionEvidencePolicy: { mode: "none", requirements: [] },
           },
         },
         {
@@ -900,7 +900,7 @@ function candidateGraph(revision: 1 | 2): WorkflowGraph {
           source: { locator: "fixture://candidate", pointer: "/tasks/alpha" },
           completionPolicy: {
             criteria: [{ criterionId: criterionId("criterion_alpha"), required: true }],
-            evidencePolicy: { mode: "none", requirements: [] },
+            completionEvidencePolicy: { mode: "none", requirements: [] },
           },
         },
         {
@@ -911,7 +911,7 @@ function candidateGraph(revision: 1 | 2): WorkflowGraph {
           source: { locator: "fixture://candidate", pointer: "/tasks/beta" },
           completionPolicy: {
             criteria: [{ criterionId: criterionId("criterion_beta"), required: true }],
-            evidencePolicy: {
+            completionEvidencePolicy: {
               mode: "required-criteria",
               requirements: [{ kind: canonicalValue({ kind: "report" }), minimumCount: 1 }],
             },
@@ -960,7 +960,7 @@ function assessmentFor(
   const requirements: CompletionRequirements = {
     task,
     criteria: [{ criterionId: criterion, required: true }],
-    evidencePolicy:
+    completionEvidencePolicy:
       taskToken === "task_beta"
         ? {
             mode: "required-criteria",
@@ -973,8 +973,8 @@ function assessmentFor(
     disposition: "completed",
     summary: `Completed ${taskToken}`,
     criteria: [{ criterionId: criterion, disposition: "satisfied" }],
-    evidence:
-      requirements.evidencePolicy.mode === "none"
+    completionEvidence:
+      requirements.completionEvidencePolicy.mode === "none"
         ? []
         : [
             {
@@ -1005,7 +1005,7 @@ function assessmentWith(
       disposition: taskDisposition,
       summary: "Negative accounting fixture",
       criteria: [{ criterionId: criterion, disposition: criterionDisposition }],
-      evidence: [],
+      completionEvidence: [],
     }),
   };
 }

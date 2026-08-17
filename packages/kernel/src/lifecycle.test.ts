@@ -79,7 +79,7 @@ const GRAPH = compileWorkflowGraph(
         source: { locator: "fixture://lifecycle", pointer: "/tasks/verify" },
         completionPolicy: {
           criteria: [{ criterionId: criterionId("criterion_release-ready"), required: true }],
-          evidencePolicy: { mode: "none", requirements: [] },
+          completionEvidencePolicy: { mode: "none", requirements: [] },
         },
       },
     ],
@@ -662,7 +662,7 @@ function createCandidate(gatePolicyDigest: ReturnType<typeof sha256Digest>): Pha
     disposition: "completed",
     summary: "Verified release",
     criteria: [{ criterionId: criterion, disposition: "satisfied" }],
-    evidence: [],
+    completionEvidence: [],
   };
   const assessment = assessCompletionAccounting(requirements, submission);
   const accepted = {

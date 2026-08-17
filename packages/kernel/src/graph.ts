@@ -166,7 +166,7 @@ export type GraphCompilationErrorCode =
 
 export type GraphCompilationDiagnosticField =
   | "completionPolicy"
-  | "evidencePolicy"
+  | "completionEvidencePolicy"
   | "dependsOn"
   | "parentId"
   | "supersedes"
@@ -1086,7 +1086,9 @@ function compileCompletionPolicy(value: unknown): CompletionPolicy {
   } catch (error) {
     if (error instanceof CompletionAccountingError) {
       throw new GraphCompilationError("invalid-completion-policy", error.message, {
-        field: error.path?.includes(".evidencePolicy") ? "evidencePolicy" : "completionPolicy",
+        field: error.path?.includes(".completionEvidencePolicy")
+          ? "completionEvidencePolicy"
+          : "completionPolicy",
       });
     }
     throw error;

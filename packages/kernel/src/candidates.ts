@@ -9,11 +9,11 @@ import {
 } from "./canonical.js";
 import type {
   AccountingAssessment,
+  CompletionEvidenceAssessment,
+  CompletionEvidenceItem,
   CompletionRequirements,
   CriterionAssessment,
   CriterionOutcome,
-  EvidenceAttachment,
-  EvidenceRequirementAssessment,
   TaskGenerationReference,
 } from "./completion.js";
 import {
@@ -74,7 +74,7 @@ export interface PhaseCandidateInput {
 }
 
 export interface PhaseCandidate extends PhaseCandidateInput {
-  readonly evidencePolicyDigest: Sha256Digest;
+  readonly completionEvidencePolicyDigest: Sha256Digest;
   readonly candidateDigest: Sha256Digest;
 }
 
@@ -328,7 +328,7 @@ export function closePhase(input: PhaseClosureInput, sha256: Sha256): PhaseClosu
   } catch {
     fail(
       "invalid-gate-evaluation",
-      "Gate evidence must match its exact definition, readings, and candidate",
+      "Gate completionEvidence must match its exact definition, readings, and candidate",
     );
   }
   if (gateEvidence.definition.policyDigest !== candidate.gatePolicyDigest) {
@@ -396,7 +396,7 @@ function phaseCandidateContent(
       "acceptedAccountingAssessments",
       "dependencyBarrierDigest",
       "gatePolicyDigest",
-      ...(includesDigest ? ["evidencePolicyDigest"] : []),
+      ...(includesDigest ? ["completionEvidencePolicyDigest"] : []),
       ...(includesDigest ? ["candidateDigest"] : []),
     ],
     ["integrationBarrierDigest"],
@@ -411,7 +411,7 @@ function phaseCandidateContent(
     "selectedTaskSetDigest",
     "dependencyBarrierDigest",
     "gatePolicyDigest",
-    ...(includesDigest ? ["evidencePolicyDigest"] : []),
+    ...(includesDigest ? ["completionEvidencePolicyDigest"] : []),
   ]);
   if (value.graphRevisionDigest !== graph.revisionDigest) {
     fail("graph-mismatch", "graphRevisionDigest does not match the supplied workflow graph");
@@ -441,16 +441,19 @@ function phaseCandidateContent(
     sha256,
   );
   const requirements = deriveRequirementsFromGraph(graph, tasks);
-  const computedEvidencePolicyDigest = canonicalDigest(
+  const computedCompletionEvidencePolicyDigest = canonicalDigest(
     canonicalValue({
       completionRequirements: requirements,
     }),
     sha256,
   );
-  if (includesDigest && computedEvidencePolicyDigest !== value.evidencePolicyDigest) {
+  if (
+    includesDigest &&
+    computedCompletionEvidencePolicyDigest !== value.completionEvidencePolicyDigest
+  ) {
     fail(
       "policy-mismatch",
-      "evidencePolicyDigest does not match the sorted exact completion requirements",
+      "completionEvidencePolicyDigest does not match the sorted exact completion requirements",
     );
   }
   if (!Array.isArray(value.requiredOutputPublications)) {
@@ -495,7 +498,7 @@ function phaseCandidateContent(
     tasks,
     acceptedAccountingAssessments,
     dependencyBarrierDigest: value.dependencyBarrierDigest as Sha256Digest,
-    evidencePolicyDigest: computedEvidencePolicyDigest,
+    completionEvidencePolicyDigest: computedCompletionEvidencePolicyDigest,
     gatePolicyDigest: value.gatePolicyDigest as Sha256Digest,
   } as const;
   return Object.hasOwn(value, "integrationBarrierDigest")
@@ -781,7 +784,7 @@ function deriveRequirementsFromGraph(
       return {
         task,
         criteria: definition.completionPolicy.criteria,
-        evidencePolicy: definition.completionPolicy.evidencePolicy,
+        completionEvidencePolicy: definition.completionPolicy.completionEvidencePolicy,
       };
     }),
   ) as unknown as readonly CompletionRequirements[];
@@ -791,8 +794,11 @@ function assertAcceptedAccountingAssessment(assessment: AccountingAssessment, pa
   if (assessment.submission.disposition !== "completed") {
     fail("unaccepted-accounting-assessment", `${path} must contain a completed task disposition`);
   }
-  if (!assessment.evidencePolicySatisfied) {
-    fail("unaccepted-accounting-assessment", `${path} does not satisfy its evidence policy`);
+  if (!assessment.completionEvidenceSatisfied) {
+    fail(
+      "unaccepted-accounting-assessment",
+      `${path} does not satisfy its completionEvidence policy`,
+    );
   }
   const unresolved = assessment.criteria.find(
     (criterion) =>
@@ -812,7 +818,7 @@ function validateAccountingAssessment(value: unknown): AccountingAssessment {
   assertExactKeys(
     value,
     "accounting assessment",
-    ["submission", "criteria", "taskEvidence", "evidencePolicySatisfied"],
+    ["submission", "criteria", "taskEvidence", "completionEvidenceSatisfied"],
     "invalid-accounting-assessment",
   );
   const submission = completionSubmission(value.submission);
@@ -825,8 +831,8 @@ function validateAccountingAssessment(value: unknown): AccountingAssessment {
   const taskEvidence = value.taskEvidence.map((item, index) =>
     evidenceRequirementAssessment(item, `accounting assessment.taskEvidence[${index}]`),
   );
-  if (typeof value.evidencePolicySatisfied !== "boolean") {
-    fail("invalid-accounting-assessment", "evidencePolicySatisfied must be a boolean");
+  if (typeof value.completionEvidenceSatisfied !== "boolean") {
+    fail("invalid-accounting-assessment", "completionEvidenceSatisfied must be a boolean");
   }
 
   const outcomeByCriterion = new Map<string, CriterionOutcome>();
@@ -836,7 +842,7 @@ function validateAccountingAssessment(value: unknown): AccountingAssessment {
     }
     outcomeByCriterion.set(outcome.criterionId, outcome);
   }
-  for (const attachment of submission.evidence) {
+  for (const attachment of submission.completionEvidence) {
     if (attachment.criterionId !== undefined && !outcomeByCriterion.has(attachment.criterionId)) {
       fail(
         "invalid-accounting-assessment",
@@ -847,7 +853,7 @@ function validateAccountingAssessment(value: unknown): AccountingAssessment {
   assertUniqueEvidenceKinds(taskEvidence, "accounting assessment.taskEvidence");
   assertEvidenceCounts(
     taskEvidence,
-    submission.evidence.filter((attachment) => attachment.criterionId === undefined),
+    submission.completionEvidence.filter((attachment) => attachment.criterionId === undefined),
     "accounting assessment.taskEvidence",
   );
   const assessmentIds = new Set<string>();
@@ -874,9 +880,11 @@ function validateAccountingAssessment(value: unknown): AccountingAssessment {
       fail("invalid-accounting-assessment", "Required waived criteria need authority facts");
     }
     assertEvidenceCounts(
-      assessment.evidence,
-      submission.evidence.filter((attachment) => attachment.criterionId === assessment.criterionId),
-      `Criterion ${assessment.criterionId} evidence`,
+      assessment.completionEvidence,
+      submission.completionEvidence.filter(
+        (attachment) => attachment.criterionId === assessment.criterionId,
+      ),
+      `Criterion ${assessment.criterionId} completionEvidence`,
     );
   }
   if (
@@ -885,16 +893,16 @@ function validateAccountingAssessment(value: unknown): AccountingAssessment {
   ) {
     fail("invalid-accounting-assessment", "Every submitted criterion needs one assessment");
   }
-  const evidencePolicySatisfied =
+  const completionEvidenceSatisfied =
     taskEvidence.every((item) => item.satisfied) &&
-    criteria.every((item) => item.evidenceSatisfied);
-  if (evidencePolicySatisfied !== value.evidencePolicySatisfied) {
+    criteria.every((item) => item.completionEvidenceSatisfied);
+  if (completionEvidenceSatisfied !== value.completionEvidenceSatisfied) {
     fail(
       "invalid-accounting-assessment",
-      "evidencePolicySatisfied does not match the recorded evidence assessments",
+      "completionEvidenceSatisfied does not match the recorded completionEvidence assessments",
     );
   }
-  return { submission, criteria, taskEvidence, evidencePolicySatisfied };
+  return { submission, criteria, taskEvidence, completionEvidenceSatisfied };
 }
 
 function completionSubmission(value: unknown): AccountingAssessment["submission"] {
@@ -910,7 +918,7 @@ function completionSubmission(value: unknown): AccountingAssessment["submission"
       "disposition",
       "summary",
       "criteria",
-      "evidence",
+      "completionEvidence",
       ...(superseded ? ["replacementTask"] : []),
     ],
     "invalid-accounting-assessment",
@@ -922,17 +930,20 @@ function completionSubmission(value: unknown): AccountingAssessment["submission"
   if (typeof value.summary !== "string" || value.summary.trim().length === 0) {
     fail("invalid-accounting-assessment", "Assessment submission summary must be non-empty");
   }
-  if (!Array.isArray(value.criteria) || !Array.isArray(value.evidence)) {
-    fail("invalid-accounting-assessment", "Submission criteria and evidence must be arrays");
+  if (!Array.isArray(value.criteria) || !Array.isArray(value.completionEvidence)) {
+    fail(
+      "invalid-accounting-assessment",
+      "Submission criteria and completionEvidence must be arrays",
+    );
   }
   const criteria = value.criteria.map((item, index) =>
     criterionOutcome(item, `accounting assessment submission.criteria[${index}]`),
   );
-  const evidence = value.evidence.map((item, index) =>
-    evidenceAttachment(item, `accounting assessment submission.evidence[${index}]`),
+  const completionEvidence = value.completionEvidence.map((item, index) =>
+    evidenceAttachment(item, `accounting assessment submission.completionEvidence[${index}]`),
   );
   const assetIds = new Set<string>();
-  for (const attachment of evidence) {
+  for (const attachment of completionEvidence) {
     if (assetIds.has(attachment.assetId)) {
       fail("invalid-accounting-assessment", `Evidence asset ${attachment.assetId} is duplicated`);
     }
@@ -951,11 +962,17 @@ function completionSubmission(value: unknown): AccountingAssessment["submission"
       disposition: value.disposition,
       summary: value.summary,
       criteria,
-      evidence,
+      completionEvidence,
       replacementTask,
     };
   }
-  return { task, disposition: value.disposition, summary: value.summary, criteria, evidence };
+  return {
+    task,
+    disposition: value.disposition,
+    summary: value.summary,
+    criteria,
+    completionEvidence,
+  };
 }
 
 function criterionOutcome(value: unknown, path: string): CriterionOutcome {
@@ -975,7 +992,7 @@ function criterionOutcome(value: unknown, path: string): CriterionOutcome {
   return value as unknown as CriterionOutcome;
 }
 
-function evidenceAttachment(value: unknown, path: string): EvidenceAttachment {
+function evidenceAttachment(value: unknown, path: string): CompletionEvidenceItem {
   assertAllowedKeys(
     value,
     path,
@@ -989,59 +1006,59 @@ function evidenceAttachment(value: unknown, path: string): EvidenceAttachment {
   if (Object.hasOwn(value, "criterionId") && !isCriterionId(value.criterionId)) {
     fail("invalid-accounting-assessment", `${path}.criterionId must be a criterion identity`);
   }
-  return value as unknown as EvidenceAttachment;
+  return value as unknown as CompletionEvidenceItem;
 }
 
 function criterionAssessment(value: unknown, path: string): CriterionAssessment {
   assertExactKeys(
     value,
     path,
-    ["criterionId", "required", "disposition", "evidence", "evidenceSatisfied"],
+    ["criterionId", "required", "disposition", "completionEvidence", "completionEvidenceSatisfied"],
     "invalid-accounting-assessment",
   );
   if (
     !isCriterionId(value.criterionId) ||
     typeof value.required !== "boolean" ||
     !isCriterionDisposition(value.disposition) ||
-    !Array.isArray(value.evidence) ||
-    typeof value.evidenceSatisfied !== "boolean"
+    !Array.isArray(value.completionEvidence) ||
+    typeof value.completionEvidenceSatisfied !== "boolean"
   ) {
     fail("invalid-accounting-assessment", `${path} is not a valid criterion assessment`);
   }
-  const evidence = value.evidence.map((item, index) =>
-    evidenceRequirementAssessment(item, `${path}.evidence[${index}]`),
+  const completionEvidence = value.completionEvidence.map((item, index) =>
+    evidenceRequirementAssessment(item, `${path}.completionEvidence[${index}]`),
   );
-  assertUniqueEvidenceKinds(evidence, `${path}.evidence`);
-  const evidenceSatisfied = evidence.every((item) => item.satisfied);
-  if (evidenceSatisfied !== value.evidenceSatisfied) {
-    fail("invalid-accounting-assessment", `${path}.evidenceSatisfied is inconsistent`);
+  assertUniqueEvidenceKinds(completionEvidence, `${path}.completionEvidence`);
+  const completionEvidenceSatisfied = completionEvidence.every((item) => item.satisfied);
+  if (completionEvidenceSatisfied !== value.completionEvidenceSatisfied) {
+    fail("invalid-accounting-assessment", `${path}.completionEvidenceSatisfied is inconsistent`);
   }
   return {
     criterionId: value.criterionId,
     required: value.required,
     disposition: value.disposition,
-    evidence,
-    evidenceSatisfied,
+    completionEvidence,
+    completionEvidenceSatisfied,
   };
 }
 
 function assertUniqueEvidenceKinds(
-  assessments: readonly EvidenceRequirementAssessment[],
+  assessments: readonly CompletionEvidenceAssessment[],
   path: string,
 ): void {
   const kinds = new Set<string>();
   for (const assessment of assessments) {
     const kind = canonicalSerialize(assessment.kind);
     if (kinds.has(kind)) {
-      fail("invalid-accounting-assessment", `${path} contains a duplicate evidence kind`);
+      fail("invalid-accounting-assessment", `${path} contains a duplicate completionEvidence kind`);
     }
     kinds.add(kind);
   }
 }
 
 function assertEvidenceCounts(
-  assessments: readonly EvidenceRequirementAssessment[],
-  attachments: readonly EvidenceAttachment[],
+  assessments: readonly CompletionEvidenceAssessment[],
+  attachments: readonly CompletionEvidenceItem[],
   path: string,
 ): void {
   for (const assessment of assessments) {
@@ -1055,10 +1072,7 @@ function assertEvidenceCounts(
   }
 }
 
-function evidenceRequirementAssessment(
-  value: unknown,
-  path: string,
-): EvidenceRequirementAssessment {
+function evidenceRequirementAssessment(value: unknown, path: string): CompletionEvidenceAssessment {
   assertExactKeys(
     value,
     path,
@@ -1070,7 +1084,7 @@ function evidenceRequirementAssessment(
     !isNonnegativeSafeInteger(value.attachmentCount) ||
     typeof value.satisfied !== "boolean"
   ) {
-    fail("invalid-accounting-assessment", `${path} has invalid evidence counts`);
+    fail("invalid-accounting-assessment", `${path} has invalid completionEvidence counts`);
   }
   const satisfied = value.attachmentCount >= value.minimumCount;
   if (satisfied !== value.satisfied) {

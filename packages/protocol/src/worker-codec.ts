@@ -16,12 +16,12 @@ import type {
   ContextGrantEnvelope,
   WorkerAmendmentProposalSubmission,
   WorkerAssetSubmission,
+  WorkerCompletionEvidenceItem,
   WorkerCompletionPayload,
   WorkerCompletionSubmission,
   WorkerCriterionDisposition,
   WorkerCriterionOutcome,
   WorkerDiscoverySubmission,
-  WorkerEvidenceAttachment,
   WorkerPhaseOutputSubmission,
   WorkerQuestionSubmission,
   WorkerSubmission,
@@ -566,7 +566,7 @@ function completionPayload(value: unknown, path: string): WorkerCompletionPayloa
   const object = exactObject(
     value,
     path,
-    ["task", "disposition", "summary", "criteria", "evidence"],
+    ["task", "disposition", "summary", "criteria", "completionEvidence"],
     ["replacementTask"],
   );
   const task = taskReference(object.task, `${path}.task`);
@@ -580,16 +580,17 @@ function completionPayload(value: unknown, path: string): WorkerCompletionPayloa
   const criteria = boundedArray(object.criteria, `${path}.criteria`).map((entry, index) =>
     criterionOutcome(entry, `${path}.criteria[${index}]`),
   );
-  const evidence = boundedArray(object.evidence, `${path}.evidence`).map((entry, index) =>
-    evidenceAttachment(entry, `${path}.evidence[${index}]`),
-  );
+  const completionEvidence = boundedArray(
+    object.completionEvidence,
+    `${path}.completionEvidence`,
+  ).map((entry, index) => evidenceAttachment(entry, `${path}.completionEvidence[${index}]`));
   assertUnique(
     criteria.map(({ criterionId }) => criterionId),
     `${path}.criteria`,
   );
   assertUnique(
-    evidence.map(({ assetId }) => assetId),
-    `${path}.evidence`,
+    completionEvidence.map(({ assetId }) => assetId),
+    `${path}.completionEvidence`,
   );
   const hasReplacement = Object.hasOwn(object, "replacementTask");
   if ((object.disposition === "superseded") !== hasReplacement)
@@ -599,7 +600,7 @@ function completionPayload(value: unknown, path: string): WorkerCompletionPayloa
     disposition: object.disposition as WorkerTerminalDisposition,
     summary: object.summary as string,
     criteria: Object.freeze(criteria),
-    evidence: Object.freeze(evidence),
+    completionEvidence: Object.freeze(completionEvidence),
     ...(hasReplacement
       ? { replacementTask: taskReference(object.replacementTask, `${path}.replacementTask`) }
       : {}),
@@ -621,7 +622,7 @@ function criterionOutcome(value: unknown, path: string): WorkerCriterionOutcome 
   });
 }
 
-function evidenceAttachment(value: unknown, path: string): WorkerEvidenceAttachment {
+function evidenceAttachment(value: unknown, path: string): WorkerCompletionEvidenceItem {
   const object = exactObject(value, path, ["assetId", "kind", "descriptor"], ["criterionId"]);
   identity(object.assetId, `${path}.assetId`, "asset_");
   if (Object.hasOwn(object, "criterionId"))

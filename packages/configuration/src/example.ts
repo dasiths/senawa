@@ -76,7 +76,7 @@ export function createExampleWorkflowConfiguration(): WorkflowConfigurationDocum
         advisory: [],
       },
     ],
-    implementationEvidenceViews: [],
+    completionEvidenceViews: [],
     forEach: [],
     taskTemplates: [],
     phases: [
@@ -121,7 +121,7 @@ export function createExampleWorkflowConfiguration(): WorkflowConfigurationDocum
                     input: null,
                   },
                 ],
-                evidencePolicy: { mode: "none", requirements: [] },
+                completionEvidencePolicy: { mode: "none", requirements: [] },
               },
             },
           ],

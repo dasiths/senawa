@@ -920,7 +920,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     const submission = exactObject(
       payload.submission,
       "completion submission",
-      ["task", "disposition", "summary", "criteria", "evidence"],
+      ["task", "disposition", "summary", "criteria", "completionEvidence"],
       ["replacementTask"],
     );
     const task = parseTaskReference(submission.task);

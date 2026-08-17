@@ -60,7 +60,7 @@ export function createStandardWorkflowConfiguration(): WorkflowConfigurationDocu
       {
         key: "verifier",
         path: "prompts/verifier.md",
-        inputPaths: ["/definition", "/implementationEvidence", "/research", "/tasks"],
+        inputPaths: ["/definition", "/completionEvidence", "/research", "/tasks"],
       },
     ],
     schemas: [
@@ -118,7 +118,7 @@ export function createStandardWorkflowConfiguration(): WorkflowConfigurationDocu
       gate("research-valid", "research"),
       gate("verification-valid", "verify"),
     ],
-    implementationEvidenceViews: [
+    completionEvidenceViews: [
       {
         key: "accepted-implementation",
         phase: "implement",
@@ -248,14 +248,14 @@ export function createStandardWorkflowConfiguration(): WorkflowConfigurationDocu
             "/definition",
           ),
           mapping(
-            "implementation-evidence",
+            "completion-evidence",
             {
-              kind: "implementation-evidence",
+              kind: "completion-evidence",
               phase: "implement",
               view: "accepted-implementation",
               pointer: "",
             },
-            "/implementationEvidence",
+            "/completionEvidence",
           ),
           mapping(
             "research",
@@ -302,7 +302,7 @@ export function createStandardWorkflowResources(): Readonly<Record<string, strin
     "prompts/verifier.md": prompt(
       "Standard delivery verifier prompt",
       "Verifies accepted outputs and implementation evidence",
-      "Verify the implementation against the accepted definition, research, plan, and implementation evidence. Publish only the declared verification output.\n\nDefinition:\n\n${{ input.definition }}\n\nResearch:\n\n${{ input.research }}\n\nPlanned tasks:\n\n${{ input.tasks }}\n\nImplementation evidence:\n\n${{ input.implementationEvidence }}",
+      "Verify the implementation against the accepted definition, research, plan, and implementation evidence. Publish only the declared verification output.\n\nDefinition:\n\n${{ input.definition }}\n\nResearch:\n\n${{ input.research }}\n\nPlanned tasks:\n\n${{ input.tasks }}\n\nImplementation evidence:\n\n${{ input.completionEvidence }}",
     ),
     "schemas/definition-input.schema.json": schemaText(
       "definition-input",
@@ -348,10 +348,10 @@ export function createStandardWorkflowResources(): Readonly<Record<string, strin
     ),
     "schemas/verification-input.schema.json": schemaText("verification-input", {
       type: "object",
-      required: ["definition", "implementationEvidence", "research", "tasks"],
+      required: ["definition", "completionEvidence", "research", "tasks"],
       properties: {
         definition: { type: "string", minLength: 1, maxLength: 32_768 },
-        implementationEvidence: {},
+        completionEvidence: {},
         research: { type: "string", minLength: 1, maxLength: 65_536 },
         tasks: { type: "array", minItems: 1, maxItems: 64 },
       },
@@ -423,7 +423,7 @@ function output(key: string, schema: string, path: string, maxBytes: number) {
 function completionPolicy(key: string, evidenceMode: "none" | "task") {
   return {
     criteria: [{ key, generation: 1, required: true, input: null }],
-    evidencePolicy:
+    completionEvidencePolicy:
       evidenceMode === "none"
         ? { mode: "none", requirements: [] }
         : { mode: "task", requirements: [{ kind: "task-completion", minimumCount: 1 }] },

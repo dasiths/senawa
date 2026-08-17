@@ -713,11 +713,11 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
             digest: policyDigest,
             references: [reference("related", "graph-task", definition.id)],
             scalars: scalars({
-              evidenceMode: policy.evidencePolicy.mode,
+              evidenceMode: policy.completionEvidencePolicy.mode,
               waiverAuthorityDigest:
-                policy.evidencePolicy.waiverAuthority === undefined
+                policy.completionEvidencePolicy.waiverAuthority === undefined
                   ? undefined
-                  : this.#digestValue(policy.evidencePolicy.waiverAuthority),
+                  : this.#digestValue(policy.completionEvidencePolicy.waiverAuthority),
             }),
           }),
         );
@@ -734,7 +734,7 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
             }),
           );
         }
-        policy.evidencePolicy.requirements.forEach((requirement, index) => {
+        policy.completionEvidencePolicy.requirements.forEach((requirement, index) => {
           const kindDigest = this.#digestValue(requirement.kind);
           output.push(
             record({

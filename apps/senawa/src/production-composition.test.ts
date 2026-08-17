@@ -801,7 +801,7 @@ class CompletingSession implements CopilotSdkSessionPort {
         disposition: "completed",
         summary: "Completed by fake Copilot SDK",
         criteria: [{ criterionId: runtimeFixture.criterionId, disposition: "satisfied" }],
-        evidence: [],
+        completionEvidence: [],
       },
       { sessionId: this.sessionId, toolCallId: "completion", toolName: tool.name },
     );

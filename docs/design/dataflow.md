@@ -78,7 +78,7 @@ Four source kinds exist:
 * `workflow-input` with a pointer into the workflow input value.
 * `phase-output` with a phase key, an output key, and a pointer.
 * `current-item` with a pointer, valid only inside a fan-out generated task.
-* `implementation-evidence` with a phase key, a view key, and a pointer.
+* `completion-evidence` with a phase key, a view key, and a pointer.
 
 `evaluateDataMappings` resolves each source through
 `valueAtJsonPointer`, writes the selected value at the destination pointer, and

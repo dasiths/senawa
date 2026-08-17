@@ -309,7 +309,10 @@ const BASE_INPUT: NormalizedWorkflowInput = {
       generation: definitionGeneration(1),
       parentId: phaseId("phase_build"),
       source: { locator: "fixture://base", pointer: "/phases/build/work/compile" },
-      completionPolicy: { criteria: [], evidencePolicy: { mode: "none", requirements: [] } },
+      completionPolicy: {
+        criteria: [],
+        completionEvidencePolicy: { mode: "none", requirements: [] },
+      },
     },
   ],
   criteria: [],
@@ -344,7 +347,7 @@ function addTask(key: string, phase: string, id = taskId(`task_${key}`)) {
       input: canonicalValue({ command: key }),
       completionPolicy: {
         criteria: [{ criterionId: criterion, required: true }],
-        evidencePolicy: { mode: "none" as const, requirements: [] },
+        completionEvidencePolicy: { mode: "none" as const, requirements: [] },
       },
     },
     criteria: [

@@ -107,7 +107,7 @@ describe("built supervisor service and thin CLI", () => {
                     input: { instruction: "Continue unrelated work" },
                     completionPolicy: {
                       criteria: [],
-                      evidencePolicy: { mode: "none", requirements: [] },
+                      completionEvidencePolicy: { mode: "none", requirements: [] },
                     },
                   },
                 ],
@@ -381,7 +381,7 @@ describe("built supervisor service and thin CLI", () => {
               input: { instruction: "Review the release" },
               completionPolicy: {
                 criteria: [],
-                evidencePolicy: { mode: "none", requirements: [] },
+                completionEvidencePolicy: { mode: "none", requirements: [] },
               },
             },
           },
@@ -959,7 +959,7 @@ function blackboxCompletionSubmission(
         criterionId,
         disposition: "satisfied" as const,
       })),
-      evidence: [],
+      completionEvidence: [],
     },
   };
 }

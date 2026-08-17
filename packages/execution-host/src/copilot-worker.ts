@@ -1120,14 +1120,14 @@ function submissionPayload(
       },
     };
   }
-  const value = exactObject(args, ["disposition", "summary", "criteria", "evidence"]);
+  const value = exactObject(args, ["disposition", "summary", "criteria", "completionEvidence"]);
   return {
     completion: {
       task: dispatch.task,
       disposition: value.disposition,
       summary: value.summary,
       criteria: value.criteria,
-      evidence: value.evidence,
+      completionEvidence: value.completionEvidence,
     },
   };
 }
@@ -1421,11 +1421,11 @@ const COMPLETION_SCHEMA = closedObject(
       maxItems: WORKER_PROTOCOL_LIMITS.maxCompletionItems,
       items: CRITERION_SCHEMA,
     },
-    evidence: {
+    completionEvidence: {
       type: "array",
       maxItems: WORKER_PROTOCOL_LIMITS.maxCompletionItems,
       items: EVIDENCE_SCHEMA,
     },
   },
-  ["disposition", "summary", "criteria", "evidence"],
+  ["disposition", "summary", "criteria", "completionEvidence"],
 );

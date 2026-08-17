@@ -126,7 +126,7 @@ describe("workflow graph compilation", () => {
     const secondInput = softwareDeliveryFixture();
     required(
       secondInput.executableWork.find((task) => task.id === taskId("task_test")),
-    ).completionPolicy.evidencePolicy = {
+    ).completionPolicy.completionEvidencePolicy = {
       mode: "required-criteria",
       requirements: [{ kind: canonicalValue({ kind: "test-report" }), minimumCount: 1 }],
     };
@@ -803,7 +803,7 @@ interface MutableWorkflowInput {
 interface MutableTaskDefinitionInput extends Omit<TaskDefinitionInput, "completionPolicy"> {
   completionPolicy: {
     criteria: Array<{ criterionId: ReturnType<typeof criterionId>; required: boolean }>;
-    evidencePolicy: TaskDefinitionInput["completionPolicy"]["evidencePolicy"];
+    completionEvidencePolicy: TaskDefinitionInput["completionPolicy"]["completionEvidencePolicy"];
   };
 }
 
@@ -881,7 +881,7 @@ function softwareDeliveryFixture(): MutableWorkflowInput {
         input: { environment: { clean: true, shard: 1 }, command: "test" },
         completionPolicy: {
           criteria: [{ criterionId: criterionId("criterion_tests-pass"), required: true }],
-          evidencePolicy: { mode: "none", requirements: [] },
+          completionEvidencePolicy: { mode: "none", requirements: [] },
         },
       },
       {
@@ -952,7 +952,7 @@ function incidentResponseFixture(): MutableWorkflowInput {
         input: { action: "isolate-failure" },
         completionPolicy: {
           criteria: [{ criterionId: criterionId("criterion_contained"), required: true }],
-          evidencePolicy: { mode: "none", requirements: [] },
+          completionEvidencePolicy: { mode: "none", requirements: [] },
         },
       },
       {
@@ -982,7 +982,7 @@ function source(fixture: string, pointer: string) {
 }
 
 function emptyCompletionPolicy() {
-  return { criteria: [], evidencePolicy: { mode: "none" as const, requirements: [] } };
+  return { criteria: [], completionEvidencePolicy: { mode: "none" as const, requirements: [] } };
 }
 
 function required<Value>(value: Value | undefined): Value {

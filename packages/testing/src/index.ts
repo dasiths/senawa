@@ -118,7 +118,7 @@ export function createRuntimeGraph(revision = 1) {
           source: { locator: "fixture://runtime", pointer: "/tasks/verify" },
           completionPolicy: {
             criteria: [{ criterionId: runtimeFixture.criterionId, required: true }],
-            evidencePolicy: { mode: "none", requirements: [] },
+            completionEvidencePolicy: { mode: "none", requirements: [] },
           },
           input: { revision },
         },

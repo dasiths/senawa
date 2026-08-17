@@ -196,7 +196,7 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
         };
       })
       .sort((left, right) => compare(left.key, right.key)),
-    implementationEvidenceViews: [],
+    completionEvidenceViews: [],
     forEach: phases
       .filter((phase) => phase.forEach !== undefined)
       .map((phase) => {
@@ -233,7 +233,7 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
         repositoryChanges: "allowed",
         completionPolicy: {
           criteria: [{ key: `${phase.name}-produced`, generation: 1, required: true, input: null }],
-          evidencePolicy: {
+          completionEvidencePolicy: {
             mode: phase.completionEvidence.mode,
             requirements: phase.completionEvidence.require.map((requirement) => ({
               kind: requirement.kind,
@@ -1053,7 +1053,7 @@ function lowerPhase(
               criteria: [
                 { key: `${phase.name}-produced`, generation: 1, required: true, input: null },
               ],
-              evidencePolicy: {
+              completionEvidencePolicy: {
                 mode: phase.completionEvidence.mode,
                 requirements: phase.completionEvidence.require.map((requirement) => ({
                   kind: requirement.kind,

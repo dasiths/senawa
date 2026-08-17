@@ -466,11 +466,11 @@ describe("Phase 14F standard delivery acceptance", () => {
         status: "closed",
       });
 
-      const evidence = canonicalValue({
+      const completionEvidence = canonicalValue({
         acceptedTasks: production.assessments.map(({ assessment }) => ({
           taskId: assessment.submission.task.taskId,
           disposition: assessment.submission.disposition,
-          evidenceCount: assessment.submission.evidence.length,
+          evidenceCount: assessment.submission.completionEvidence.length,
         })),
       });
       const verification = canonicalValue({
@@ -494,12 +494,12 @@ describe("Phase 14F standard delivery acceptance", () => {
           outputSource(required(accepted.get("define")), definition),
           {
             source: {
-              kind: "implementation-evidence" as const,
+              kind: "completion-evidence" as const,
               phase: consumerKey("implement"),
               view: consumerKey("accepted-implementation"),
             },
             sourceBindingDigest: implementation.closureDigest,
-            value: evidence,
+            value: completionEvidence,
           },
           outputSource(required(accepted.get("research")), research),
           outputSource(plan, planValue),
@@ -664,7 +664,7 @@ interface SnapshotTaskTemplate {
   readonly dependencyIdentityPointer: string;
   readonly completionPolicy: {
     readonly criteria: GeneratedTaskAuthorityTemplate["criteria"];
-    readonly evidencePolicy: GeneratedTaskAuthorityTemplate["evidencePolicy"];
+    readonly completionEvidencePolicy: GeneratedTaskAuthorityTemplate["completionEvidencePolicy"];
   };
 }
 
@@ -724,7 +724,7 @@ function startPhase(
           output: consumerKey(key),
         })),
       ),
-      implementationEvidenceViews: snapshot.implementationEvidenceViews.map((entry) => ({
+      completionEvidenceViews: snapshot.completionEvidenceViews.map((entry) => ({
         phase: consumerKey(registryValue<SnapshotEvidenceView>(entry).phase),
         view: consumerKey(registryValue<SnapshotEvidenceView>(entry).key),
       })),
@@ -934,7 +934,7 @@ function closeAgentPhase(input: {
       criterionId,
       disposition: "satisfied" as const,
     })),
-    evidence: [],
+    completionEvidence: [],
   });
   return closePhaseAuthority(
     input.supervisor,
@@ -1154,7 +1154,7 @@ function evaluatePlan(
       mappingPolicy: {
         dependencyPhases: [],
         declaredPhaseOutputs: [],
-        implementationEvidenceViews: [],
+        completionEvidenceViews: [],
         allowCurrentItem: true,
       },
       limits: definitionValue.limits,
@@ -1184,7 +1184,7 @@ function generatedAuthorityTemplate(snapshot: ConfigurationSnapshot) {
     binding: entry.value,
     parentPhaseId: phaseNode(snapshot, "implement").definition.id,
     criteria: value.completionPolicy.criteria,
-    evidencePolicy: value.completionPolicy.evidencePolicy,
+    completionEvidencePolicy: value.completionPolicy.completionEvidencePolicy,
   };
 }
 
@@ -1214,7 +1214,7 @@ function snapshotWithGraph(
     modelPolicies: snapshot.modelPolicies,
     sensors: snapshot.sensors,
     gates: snapshot.gates,
-    implementationEvidenceViews: snapshot.implementationEvidenceViews,
+    completionEvidenceViews: snapshot.completionEvidenceViews,
     phaseDataflow: snapshot.phaseDataflow,
     forEach: snapshot.forEach,
     taskTemplates: snapshot.taskTemplates,
@@ -1485,7 +1485,7 @@ class GeneratedWorkers implements AsyncEffectHost {
         `${identity}.txt`,
         `${identity}\n`,
       );
-      const bytes = new TextEncoder().encode(`evidence:${identity}`);
+      const bytes = new TextEncoder().encode(`completionEvidence:${identity}`);
       const assetId = `asset_standard-${identity}`;
       const contentDigest = deterministicSha256.digest(bytes);
       this.authority.putAsset(bytes, "text/plain");
@@ -1508,7 +1508,7 @@ class GeneratedWorkers implements AsyncEffectHost {
               byteLength: bytes.byteLength,
               mediaType: "text/plain",
               sensitivity: "internal",
-              summary: `Generated ${identity} evidence`,
+              summary: `Generated ${identity} completionEvidence`,
             },
           },
         }).status,
@@ -1534,7 +1534,7 @@ class GeneratedWorkers implements AsyncEffectHost {
                 criterionId,
                 disposition: "satisfied",
               })),
-              evidence: [
+              completionEvidence: [
                 {
                   assetId,
                   kind: canonicalValue("task-completion"),
