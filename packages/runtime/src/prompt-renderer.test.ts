@@ -25,6 +25,21 @@ const sha256: Sha256 = {
 };
 const digest = (character: string) => sha256Digest(character.repeat(64));
 
+function section(
+  context: unknown,
+  dispatch: unknown,
+  kind: string,
+): { readonly value?: unknown; readonly lines?: readonly string[] } {
+  const pack = JSON.parse(
+    new TextDecoder().decode(
+      renderPromptPack(context, dispatch, sha256, DEFAULT_PROMPT_PACK_MAX_BYTES).utf8Bytes,
+    ),
+  ) as { sections: { kind: string; value?: unknown; lines?: readonly string[] }[] };
+  const found = pack.sections.find((candidate) => candidate.kind === kind);
+  if (found === undefined) throw new Error(`prompt pack has no ${kind} section`);
+  return found;
+}
+
 describe("v1alpha2 prompt rendering", () => {
   it("renders deterministic quoted prompt and canonical structured input sections", () => {
     const { context, dispatch } = fixture(
@@ -51,6 +66,7 @@ describe("v1alpha2 prompt rendering", () => {
       "configured-system-prompt",
       "untrusted-input",
       "capabilities",
+      "senawa-operating-contract",
       "senawa-authority-reminder",
     ]);
     const configured = pack.sections[2]?.quotedText ?? "";
@@ -63,13 +79,44 @@ describe("v1alpha2 prompt rendering", () => {
     expect(untrusted.match(/SENAWA_INPUT 1 \/request/gu)).toHaveLength(1);
   });
 
+  it("derives the operating contract from the exact dispatch", () => {
+    const { context, dispatch } = fixture("Do it: ${{ input.request }}", { request: "x" }, [
+      "/request",
+    ]);
+    const contract = section(context, dispatch, "senawa-operating-contract");
+    const value = contract.value as {
+      completion: { atomic: boolean; permitted: boolean; requiredOutputs: unknown[] };
+      selfCheck: { spendsAttempt: boolean };
+      mayAskQuestion: boolean;
+    };
+
+    expect(value.completion.atomic).toBe(true);
+    expect(value.selfCheck.spendsAttempt).toBe(false);
+    // This fixture carries no worker capability, so the contract must not offer
+    // operations the broker would refuse.
+    expect(value.completion.permitted).toBe(false);
+    expect(value.mayAskQuestion).toBe(false);
+    expect(value.completion.requiredOutputs).toEqual([]);
+  });
+
+  it("states what the agent may not do, and never offers an absent capability", () => {
+    const { context, dispatch } = fixture("Do it: ${{ input.request }}", { request: "x" }, [
+      "/request",
+    ]);
+    const spoken = (section(context, dispatch, "senawa-operating-contract").lines ?? []).join(" ");
+
+    expect(spoken).toContain("calling senawa");
+    expect(spoken).toContain("cannot approve");
+    expect(spoken).toContain("costs no attempt");
+    expect(spoken).not.toContain("Ask a question");
+  });
+
   it.each([
     [42, "42"],
     [true, "true"],
     [null, "null"],
     [[2, 1], "[2,1]"],
-  ])("renders %j as canonical data", (value, expected) => {
-    const { context, dispatch } = fixture("Value: ${{ input.value }}", { value }, ["/value"]);
+  ])("renders %j as canonical data", (value, expected) => {    const { context, dispatch } = fixture("Value: ${{ input.value }}", { value }, ["/value"]);
     const text = new TextDecoder().decode(
       renderPromptPack(context, dispatch, sha256, DEFAULT_PROMPT_PACK_MAX_BYTES).utf8Bytes,
     );

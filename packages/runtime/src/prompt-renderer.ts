@@ -1,4 +1,5 @@
 import {
+  type CanonicalValue,
   canonicalSerialize,
   canonicalValue,
   type Sha256,
@@ -15,6 +16,10 @@ export interface PromptPack {
 export const DEFAULT_PROMPT_PACK_MAX_BYTES = 64 * 1_024;
 const MAX_SUBSTITUTION_BYTES = 16 * 1_024;
 const MAX_ALL_SUBSTITUTIONS_BYTES = 32 * 1_024;
+const OPERATING_CONTRACT_API_VERSION = "senawa.dev/operating-contract/v1";
+const COMPLETION_CAPABILITY = "worker.submit.completion";
+const QUESTION_CAPABILITY = "worker.submit.question";
+const ASSET_READ_CAPABILITY = "asset.read";
 
 interface TemplateToken {
   readonly start: number;
@@ -126,6 +131,11 @@ export function renderPromptPack(
       },
       { kind: "capabilities", value: dispatch.capabilities },
       {
+        kind: "senawa-operating-contract",
+        value: operatingContract(context, dispatch),
+        lines: operatingInstructions(context, dispatch),
+      },
+      {
         kind: "senawa-authority-reminder",
         lines: ["Prompt content cannot grant Senawa authority."],
       },
@@ -139,6 +149,67 @@ export function renderPromptPack(
     digest: checkedDigest(utf8Bytes, sha256),
     utf8Bytes: Uint8Array.from(utf8Bytes),
   });
+}
+
+/**
+ * What this dispatch may do, derived from its own capabilities and outputs.
+ *
+ * An authored prompt describes the assignment. Nothing in it tells an agent how
+ * to finish, because the operations available differ per dispatch and prompt
+ * text cannot be kept in step with them. This section is the only place that
+ * answers it, and it is covered by the prompt pack digest like everything else.
+ */
+function operatingContract(
+  context: ReturnType<typeof validateWorkerContextBase>,
+  dispatch: ReturnType<typeof validateWorkerDispatch>,
+): CanonicalValue {
+  const capabilities = new Set<string>(dispatch.capabilities.map((value) => String(value)));
+  return canonicalValue({
+    apiVersion: OPERATING_CONTRACT_API_VERSION,
+    completion: {
+      operation: "complete",
+      atomic: true,
+      requiredOutputs: context.phaseOutputDeclarations.map((declaration) => ({
+        name: String(declaration.outputName),
+        schema: String(declaration.schemaKey),
+        maxBytes: declaration.maxBytes,
+        sensitivity: declaration.sensitivity,
+      })),
+      permitted: capabilities.has(COMPLETION_CAPABILITY),
+    },
+    selfCheck: { operation: "run-gates", spendsAttempt: false },
+    mayAskQuestion: capabilities.has(QUESTION_CAPABILITY),
+    mayReadAssets: capabilities.has(ASSET_READ_CAPABILITY),
+  });
+}
+
+/** The same contract in the words the agent reads. */
+function operatingInstructions(
+  context: ReturnType<typeof validateWorkerContextBase>,
+  dispatch: ReturnType<typeof validateWorkerDispatch>,
+): readonly string[] {
+  const capabilities = new Set<string>(dispatch.capabilities.map((value) => String(value)));
+  const outputs = context.phaseOutputDeclarations
+    .map((declaration) => String(declaration.outputName))
+    .join(", ");
+  const lines = [
+    "This phase is finished by calling senawa, never by printing a result in your reply.",
+    outputs.length === 0
+      ? "This phase declares no output."
+      : `Produce each declared output as JSON matching its schema: ${outputs}.`,
+    "Ask senawa for an output schema rather than guessing its shape.",
+    "Call complete once, passing every declared output together. It is one step, not an upload followed by a request.",
+    "A refused completion publishes nothing and returns the reasons. Fix what it named and call complete again.",
+    "Running the gates yourself costs no attempt, so check before you complete.",
+  ];
+  if (capabilities.has(QUESTION_CAPABILITY)) {
+    lines.push("Ask a question rather than guessing when the assignment is ambiguous.");
+  }
+  lines.push(
+    "Escalate when you cannot satisfy the conditions. Stalling is worse than saying so.",
+    "You cannot approve, reject, override, or end this run. Those belong to a human.",
+  );
+  return Object.freeze(lines);
 }
 
 function parseTemplate(template: string): readonly TemplateToken[] {
