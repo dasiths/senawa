@@ -118,7 +118,7 @@ mapping reads accepted values only.
 ## The structured agent output loop
 
 An agent submits a phase output through a generated tool rather than by writing a
-file. `submit_phase_output` is built in
+file. `senawa_complete` is built in
 [packages/execution-host/src/copilot-worker.ts](../../packages/execution-host/src/copilot-worker.ts)
 from the declared output slot, and its parameter schema is generated from the
 declared output schema itself, with `$schema` and `$id` stripped and a size note
@@ -154,7 +154,7 @@ used is the maximum of the durable count and the process-local count.
 ```mermaid
 sequenceDiagram
     participant Model
-    participant Tool as submit_phase_output
+    participant Tool as senawa_complete
     participant Ledger as phase_output_attempts
     participant Broker as Context broker
 

@@ -68,10 +68,8 @@ const sha256: Sha256 = {
 };
 const GRANT_TOKEN = "A".repeat(43);
 const ALL_CAPABILITIES = Object.freeze(Object.values(WORKER_CAPABILITIES));
-// The base harness supplies no accepted output schema, so the output tool stays closed.
-const GRANTED_WORKER_TOOL_NAMES = Object.freeze(
-  COPILOT_WORKER_TOOL_NAMES.filter((name) => name !== "submit_phase_output"),
-);
+// Completion carries its outputs, so the base harness still offers every tool.
+const GRANTED_WORKER_TOOL_NAMES = COPILOT_WORKER_TOOL_NAMES;
 const OUTPUT_SCHEMA = canonicalValue({
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: "https://senawa.test/worker/verification-output",
@@ -214,7 +212,7 @@ describe("CopilotSerialWorkerAdapter", () => {
     });
     await filtered.adapter.run(filtered.input);
     expect(required(filteredSdk.createCalls[0]).tools.map(({ name }) => name)).toEqual([
-      "submit_completion",
+      "senawa_complete",
     ]);
   });
 
@@ -325,7 +323,7 @@ describe("CopilotSerialWorkerAdapter", () => {
       "session started",
       "tool propose_asset failure",
       "tool record_discovery refused",
-      "tool submit_completion success",
+      "tool senawa_complete success",
       "session ended completed",
     ]);
     for (const line of transcript.lines) {
@@ -575,7 +573,7 @@ describe("CopilotSerialWorkerAdapter", () => {
     const outputs: CopilotSdkToolResult[] = [];
     sdk.onSend = async (config, session) => {
       const read = required(config.tools.find(({ name }) => name === "senawa_read_asset"));
-      const completion = required(config.tools.find(({ name }) => name === "submit_completion"));
+      const completion = required(config.tools.find(({ name }) => name === "senawa_complete"));
       outputs.push(
         await invoke(read, session.sessionId, "cross-binding", {
           assetBindingId: "asset-binding_ungranted",
@@ -622,7 +620,7 @@ describe("CopilotSerialWorkerAdapter", () => {
     const fixture = harness(sdk, { signal: controller.signal });
     let captured: CopilotSdkTool | undefined;
     sdk.onSend = async (config) => {
-      captured = required(config.tools.find(({ name }) => name === "submit_completion"));
+      captured = required(config.tools.find(({ name }) => name === "senawa_complete"));
       await new Promise<void>(() => {});
     };
     const active = fixture.adapter.run(fixture.input);
@@ -635,7 +633,7 @@ describe("CopilotSerialWorkerAdapter", () => {
       {
         sessionId: fixture.dispatch.dispatchId,
         toolCallId: "late-completion",
-        toolName: "submit_completion",
+        toolName: "senawa_complete",
       },
     );
 
@@ -653,7 +651,7 @@ describe("CopilotSerialWorkerAdapter", () => {
       releaseAbort = resolve;
     });
     sdk.onSend = async (config) => {
-      captured = required(config.tools.find(({ name }) => name === "submit_completion"));
+      captured = required(config.tools.find(({ name }) => name === "senawa_complete"));
       await new Promise<void>(() => {});
     };
     const active = fixture.adapter.run(fixture.input);
@@ -668,7 +666,7 @@ describe("CopilotSerialWorkerAdapter", () => {
       {
         sessionId: fixture.dispatch.dispatchId,
         toolCallId: "abort-pending-completion",
-        toolName: "submit_completion",
+        toolName: "senawa_complete",
       },
     );
     expect(output.resultType).toBe("failure");
@@ -825,17 +823,29 @@ describe("CopilotSerialWorkerAdapter", () => {
     const fixture = harness(sdk, { phaseOutput: true });
     const outputs: CopilotSdkToolResult[] = [];
     sdk.onSend = async (config, session) => {
-      const tool = required(
-        config.tools.find((candidate) => candidate.name === "submit_phase_output"),
-      );
+      const tool = required(config.tools.find((candidate) => candidate.name === "senawa_complete"));
       expectClosedObjectSchemas(tool.parameters as Readonly<Record<string, unknown>>);
       outputs.push(
-        await invoke(tool, session.sessionId, "call_invalid", { output: { verified: "yes" } }),
+        await invoke(tool, session.sessionId, "call_invalid", {
+          disposition: "completed",
+          summary: "Completed",
+          criteria: [],
+          completionEvidence: [],
+          outputs: { verification: { verified: "yes" } },
+        }),
         await invoke(tool, session.sessionId, "call_extra", {
-          output: { verified: true, summary: "ok", extra: 1 },
+          disposition: "completed",
+          summary: "Completed",
+          criteria: [],
+          completionEvidence: [],
+          outputs: { verification: { verified: true, summary: "ok", extra: 1 } },
         }),
         await invoke(tool, session.sessionId, "call_valid", {
-          output: { verified: true, summary: "Both generated tasks completed" },
+          disposition: "completed",
+          summary: "Completed",
+          criteria: [],
+          completionEvidence: [],
+          outputs: { verification: { verified: true, summary: "Both generated tasks completed" } },
           changeNotes: ["edited alpha.txt"],
         }),
       );
@@ -843,7 +853,8 @@ describe("CopilotSerialWorkerAdapter", () => {
 
     const result = await fixture.adapter.run(fixture.input);
 
-    expect(result.status).toBe("missing-completion");
+    // The corrected call carries the output and the completion together.
+    expect(result.status).toBe("completed");
     expect(outputs.map(({ resultType }) => resultType)).toEqual(["failure", "failure", "success"]);
     const firstFailure = JSON.parse(required(outputs[0]).textResultForLlm) as {
       readonly code: string;
@@ -860,7 +871,9 @@ describe("CopilotSerialWorkerAdapter", () => {
       "accepted",
     ]);
     expect(fixture.broker.installedOutputs).toHaveLength(1);
-    const submission = required(fixture.broker.submissions.at(-1));
+    const submission = required(
+      fixture.broker.submissions.find(({ type }) => type === "phase-output"),
+    );
     if (submission.type !== "phase-output") throw new Error("Expected a phase output submission");
     expect(submission.output).toMatchObject({
       outputName: "verification",
@@ -879,17 +892,25 @@ describe("CopilotSerialWorkerAdapter", () => {
     const fixture = harness(sdk, { phaseOutput: true });
     const outputs: CopilotSdkToolResult[] = [];
     sdk.onSend = async (config, session) => {
-      const tool = required(
-        config.tools.find((candidate) => candidate.name === "submit_phase_output"),
-      );
+      const tool = required(config.tools.find((candidate) => candidate.name === "senawa_complete"));
       for (const attempt of ["one", "two", "three", "four"]) {
         outputs.push(
-          await invoke(tool, session.sessionId, `call_${attempt}`, { output: { verified: "no" } }),
+          await invoke(tool, session.sessionId, `call_${attempt}`, {
+            disposition: "completed",
+            summary: "Completed",
+            criteria: [],
+            completionEvidence: [],
+            outputs: { verification: { verified: "no" } },
+          }),
         );
       }
       outputs.push(
         await invoke(tool, session.sessionId, "call_valid", {
-          output: { verified: true, summary: "late" },
+          disposition: "completed",
+          summary: "Completed",
+          criteria: [],
+          completionEvidence: [],
+          outputs: { verification: { verified: true, summary: "late" } },
         }),
       );
     };
@@ -911,20 +932,51 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect(fixture.broker.submissions).toHaveLength(0);
   });
 
+  it("publishes nothing when a completion carries an invalid output", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk, { phaseOutput: true });
+    let refusal: CopilotSdkToolResult | undefined;
+    sdk.onSend = async (config, session) => {
+      const tool = required(config.tools.find(({ name }) => name === "senawa_complete"));
+      refusal = await invoke(tool, session.sessionId, "call_partial", {
+        disposition: "completed",
+        summary: "Completed",
+        criteria: [],
+        completionEvidence: [],
+        outputs: { verification: { verified: "not a boolean" } },
+      });
+    };
+
+    const result = await fixture.adapter.run(fixture.input);
+
+    expect(required(refusal).resultType).toBe("failure");
+    expect(JSON.parse(required(refusal).textResultForLlm).code).toBe("output-schema-invalid");
+    // Neither half of the request may survive a refusal.
+    expect(fixture.broker.installedOutputs).toHaveLength(0);
+    expect(fixture.broker.submissions).toHaveLength(0);
+    expect(result.status).toBe("missing-completion");
+  });
+
   it("refuses phase output larger than its declared ceiling", async () => {
     const sdk = new FakeSdkPort();
     const fixture = harness(sdk, { phaseOutput: true });
     const outputs: CopilotSdkToolResult[] = [];
     sdk.onSend = async (config, session) => {
-      const tool = required(
-        config.tools.find((candidate) => candidate.name === "submit_phase_output"),
-      );
+      const tool = required(config.tools.find((candidate) => candidate.name === "senawa_complete"));
       outputs.push(
         await invoke(tool, session.sessionId, "call_large", {
-          output: { verified: true, summary: "x".repeat(8_000) },
+          disposition: "completed",
+          summary: "Completed",
+          criteria: [],
+          completionEvidence: [],
+          outputs: { verification: { verified: true, summary: "x".repeat(8_000) } },
         }),
         await invoke(tool, session.sessionId, "call_unknown_key", {
-          output: { verified: true, summary: "ok" },
+          disposition: "completed",
+          summary: "Completed",
+          criteria: [],
+          completionEvidence: [],
+          outputs: { verification: { verified: true, summary: "ok" } },
           unexpected: true,
         }),
       );
@@ -934,7 +986,7 @@ describe("CopilotSerialWorkerAdapter", () => {
 
     expect(
       outputs.map(({ textResultForLlm }) => JSON.parse(textResultForLlm).code as string),
-    ).toEqual(["output-too-large", "output-arguments-invalid"]);
+    ).toEqual(["output-too-large", "completion-arguments-invalid"]);
     expect(fixture.broker.installedOutputs).toHaveLength(0);
   });
 
@@ -945,7 +997,7 @@ describe("CopilotSerialWorkerAdapter", () => {
     await fixture.adapter.run(fixture.input);
 
     const tool = required(
-      required(sdk.createCalls[0]).tools.find(({ name }) => name === "submit_phase_output"),
+      required(sdk.createCalls[0]).tools.find(({ name }) => name === "senawa_complete"),
     );
     expectClosedObjectSchemas(tool.parameters);
     const parameters = JSON.stringify(tool.parameters);
@@ -963,7 +1015,9 @@ describe("CopilotSerialWorkerAdapter", () => {
       expect(parameters).not.toContain(forbidden);
     }
     const properties = required(tool.parameters.properties) as Readonly<Record<string, unknown>>;
-    const output = required(properties.output) as Readonly<Record<string, unknown>>;
+    const outputs = required(properties.outputs) as Readonly<Record<string, unknown>>;
+    const nested = required(outputs.properties) as Readonly<Record<string, unknown>>;
+    const output = required(nested.verification) as Readonly<Record<string, unknown>>;
     expect(Object.hasOwn(output, "$schema")).toBe(false);
     expect(Object.hasOwn(output, "$id")).toBe(false);
     expect(output).toMatchObject({ type: "object", additionalProperties: false });
@@ -1376,7 +1430,7 @@ function workerMappedInput() {
 
 function complete(disposition: "completed" | "blocked") {
   return async (config: CopilotSdkSessionConfig, session: FakeSession): Promise<void> => {
-    const tool = required(config.tools.find(({ name }) => name === "submit_completion"));
+    const tool = required(config.tools.find(({ name }) => name === "senawa_complete"));
     await invoke(tool, session.sessionId, `completion-${disposition}`, {
       disposition,
       summary: disposition === "blocked" ? "Blocked" : "Completed",
@@ -1410,7 +1464,7 @@ function toolArgs(name: string, fixture: ReturnType<typeof harness>): unknown {
       return { summary: "Discovery", details: "Details" };
     case "propose_amendment":
       return { summary: "Amendment", operations: "Add one task" };
-    case "submit_completion":
+    case "senawa_complete":
       return {
         disposition: "completed",
         summary: "Completed",

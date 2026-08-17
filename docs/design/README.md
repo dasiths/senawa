@@ -31,7 +31,7 @@ Read in this order for a first pass.
   escalation, the derived phase lifecycle, and additive amendments.
 * [Dataflow](dataflow.md) covers workflow input binding, phase attempts, JSON
   Pointer input mapping, schema-validated phase outputs, the
-  `submit_phase_output` correction loop, schema-selected fan-out, reviewed plan
+  `senawa_complete` correction loop, schema-selected fan-out, reviewed plan
   import, and iteration.
 * [Durability](durability.md) covers the thirteen migrations, the current schema
   version, content addressing, transaction boundaries, crash-recovery

@@ -167,7 +167,7 @@ describe("Phase 14I structured output acceptance", () => {
         sdk.onSend = submitOutputs([accepted]);
         const second = await adapter.run(runInput(fixture, reopened, sdk));
 
-        expect(second.status).toBe("missing-completion");
+        expect(second.status).toBe("completed");
         const acceptedResult = only(sdk.toolResults());
         expect(acceptedResult.resultType).toBe("success");
         expect(acceptancePayload(acceptedResult)).toEqual({ status: "accepted", replayed: false });
@@ -182,14 +182,18 @@ describe("Phase 14I structured output acceptance", () => {
           mediaType: "application/json",
           sensitivity: "internal",
         });
-        expect(only(second.submissions)).toMatchObject({
+        expect(
+          only(second.submissions.filter(({ type }) => type === "phase-output")),
+        ).toMatchObject({
           type: "phase-output",
           status: "accepted",
           replayed: false,
         });
         expect(reopened.hasCanonicalOutputAsset(descriptorFor(ACCEPTED_OUTPUT))).toBe(true);
 
-        const submissionId = only(second.submissions).submissionId;
+        const submissionId = only(
+          second.submissions.filter(({ type }) => type === "phase-output"),
+        ).submissionId;
         expect(only(outbox)).toMatchObject({ submissionId, delivered: true });
         expect(only(publication.facts)).toMatchObject({
           submissionId,
@@ -220,7 +224,9 @@ describe("Phase 14I structured output acceptance", () => {
           status: "accepted",
           replayed: true,
         });
-        expect(only(replay.submissions)).toMatchObject({ submissionId, replayed: true });
+        expect(
+          only(replay.submissions.filter(({ type }) => type === "phase-output")),
+        ).toMatchObject({ submissionId, replayed: true });
         expect(reopened.deliverPhaseOutputFact(submissionId)).toBe(false);
         expect(publication.facts).toHaveLength(1);
         expect(publications(publication)).toHaveLength(1);
@@ -261,7 +267,10 @@ describe("Phase 14I structured output acceptance", () => {
       expect(accepted).toEqual({ status: "accepted", replayed: false });
       expect(replayResult.resultType).toBe("success");
       expect(acceptancePayload(replayResult)).toEqual({ status: "accepted", replayed: true });
-      expect(only(replay.submissions)).toMatchObject({ status: "accepted", replayed: true });
+      expect(only(replay.submissions.filter(({ type }) => type === "phase-output"))).toMatchObject({
+        status: "accepted",
+        replayed: true,
+      });
       const outbox = broker.authority.snapshot().phaseOutputOutbox;
       expect(outbox).toHaveLength(1);
       expect(only(outbox).fact.output.contentDigest).toBe(
@@ -402,7 +411,10 @@ describe("Phase 14I structured output acceptance", () => {
       const result = only(sdk.toolResults());
       expect(result.resultType).toBe("success");
       expect(acceptancePayload(result)).toEqual({ status: "accepted", replayed: false });
-      expect(only(run.submissions)).toMatchObject({ type: "phase-output", status: "accepted" });
+      expect(only(run.submissions.filter(({ type }) => type === "phase-output"))).toMatchObject({
+        type: "phase-output",
+        status: "accepted",
+      });
       for (const marker of [INJECTION_TEXT, "</SENAWA_UNTRUSTED_INPUT_END>"]) {
         expect(result.textResultForLlm).not.toContain(marker);
         expect(JSON.stringify(broker.authority.snapshot())).not.toContain(marker);
@@ -499,7 +511,7 @@ describe("Phase 14I structured output acceptance", () => {
         status: "accepted",
         replayed: false,
       });
-      expect(only(result.submissions).status).toBe("accepted");
+      expect(result.submissions.map(({ status }) => status)).toEqual(["accepted", "accepted"]);
       expect(productionPort).not.toHaveBeenCalled();
       expect(sdk).not.toBeInstanceOf(ProductionCopilotSdkPort);
       expect(sdk.resumeCalls).toHaveLength(1);
@@ -618,12 +630,20 @@ function submitOutputs(
   invocations: readonly PhaseOutputInvocation[],
 ): (config: CopilotSdkSessionConfig, session: FakeSession) => Promise<void> {
   return async (config, session) => {
-    const tool = required(config.tools.find(({ name }) => name === "submit_phase_output"));
+    const tool = required(config.tools.find(({ name }) => name === "senawa_complete"));
     for (const invocation of invocations) {
+      // Completion carries the output, so it must also satisfy the phase's criteria.
+      const completion = {
+        disposition: "completed",
+        summary: "Completed",
+        criteria: [{ criterionId: "criterion_verified", disposition: "satisfied" }],
+        completionEvidence: [],
+        outputs: { [OUTPUT_NAME]: invocation.output },
+      };
       const args =
         invocation.changeNotes === undefined
-          ? { output: invocation.output }
-          : { output: invocation.output, changeNotes: invocation.changeNotes };
+          ? completion
+          : { ...completion, changeNotes: invocation.changeNotes };
       session.sdk.results.push(
         await tool.handler(args, {
           sessionId: session.sessionId,

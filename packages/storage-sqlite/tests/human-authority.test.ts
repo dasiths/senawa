@@ -835,7 +835,7 @@ describe("SQLite Phase 11B portal query authority", () => {
     });
     expect(
       broker.appendTranscript(
-        transcriptLine({ lineId: "capture:2", text: "tool submit_completion success" }),
+        transcriptLine({ lineId: "capture:2", text: "tool senawa_complete success" }),
       ),
     ).toEqual({ sequence: 2, retained: 2, replayed: false });
     expect(
@@ -924,7 +924,7 @@ describe("SQLite Phase 11B portal query authority", () => {
     expect(firstPage).toMatchObject({ after: 0, nextAfter: 2, hasMore: true });
     expect(firstPage.records.map(({ sequence, text }) => [sequence, text])).toEqual([
       [1, "session started"],
-      [2, "tool submit_completion success"],
+      [2, "tool senawa_complete success"],
     ]);
     const secondPage = portal.listTranscript(
       runtimeFixture.repositoryId,

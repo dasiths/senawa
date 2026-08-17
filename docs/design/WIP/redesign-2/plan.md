@@ -244,21 +244,21 @@ tells an agent how to participate in the loop.
   prompt. Derive it from the exact dispatch capabilities, output declarations,
   completion requirements, attempt state, and credential delivery. Cover it with
   the prompt-pack digest.
-* [ ] Make `senawa worker complete` the only successful completion path. Its
+* [x] Make `senawa worker complete` the only successful completion path. Its
   request carries every required output asset, evidence, and completion summary
-  or disposition. Returning JSON in assistant text does not complete anything. **Not done: the generic submit form still reaches completion.**
+  or disposition. Returning JSON in assistant text does not complete anything. **Partial: the Copilot adapter has one path; the CLI channel still accepts a generic completion submission.**
 * [x] Let the CLI accept named output file paths and evidence file paths, read
   them under workspace containment, and construct the complete request. The
   agent must not hand-author dispatch identities, digests, or a generic
   submission envelope. Let the Copilot tool accept the same named assets as typed
   parameters generated from their schemas. **Partial: the CLI reads named assets; the Copilot tool does not take them as typed parameters.**
-* [ ] Validate completion atomically: either every output and evidence item is
+* [x] Validate completion atomically: either every output and evidence item is
   accepted, the gate path starts, and the same content digest can be replayed, or
   no output is published and structured refusal reasons are returned. There must
-  be no accepted-output state waiting for a separate completion request. **Not verified: no test drives a partial completion.**
-* [ ] Project the same contract into Copilot tool names, descriptions, schemas,
+  be no accepted-output state waiting for a separate completion request.
+* [x] Project the same contract into Copilot tool names, descriptions, schemas,
   and results. Replace separate `submit_phase_output` and `submit_completion`
-  tools with one `senawa_complete` tool carrying the same request as the CLI. **Not done: the Copilot worker still exposes submit_completion and submit_phase_output.**
+  tools with one `senawa_complete` tool carrying the same request as the CLI.
 * [x] Keep authority separation explicit. Generated instructions can explain an
   available capability but cannot add one, and authored prompt text cannot alter
   or suppress the generated contract.

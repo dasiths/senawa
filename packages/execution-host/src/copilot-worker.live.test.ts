@@ -46,8 +46,8 @@ const PHASE_OUTPUT_PROMPT_TEMPLATE = Object.freeze({
   key: "phase-output-prompt",
   path: "prompts/phase-output.md",
   utf8:
-    "Call submit_phase_output exactly once with verified set to true and summary set to one short sentence. " +
-    "Then call submit_completion.\n",
+    "Call senawa_complete exactly once with verified set to true and summary set to one short sentence. " +
+    "Then call senawa_complete.\n",
 });
 const LIVE_OUTPUT_SCHEMA = canonicalValue({
   $schema: "https://json-schema.org/draft/2020-12/schema",

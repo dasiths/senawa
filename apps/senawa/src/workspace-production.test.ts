@@ -1157,7 +1157,7 @@ class WorkspaceCompletingSession implements CopilotSdkSessionPort {
       { sessionId: this.sessionId, toolCallId: "write", toolName: write.name },
     );
     if (written.resultType !== "success") throw new Error("Workspace write was refused");
-    const completion = required(this.config.tools.find(({ name }) => name === "submit_completion"));
+    const completion = required(this.config.tools.find(({ name }) => name === "senawa_complete"));
     const submitted = await completion.handler(
       {
         disposition: "completed",

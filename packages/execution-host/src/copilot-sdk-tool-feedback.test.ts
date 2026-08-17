@@ -63,7 +63,7 @@ function probeSession(recorded: PendingToolCall[]): {
         }
       )._executeToolAndRespond(
         `request_${toolCallId}`,
-        "submit_phase_output",
+        "senawa_complete",
         toolCallId,
         args,
         handler,
@@ -119,14 +119,14 @@ describe("Phase 14G Copilot SDK custom-tool feedback probe", () => {
 
   it("preserves raw JSON Schema parameters and the handler through defineTool", () => {
     const handler = () => ({ resultType: "success", textResultForLlm: "{}" });
-    const tool = defineTool("submit_phase_output", {
+    const tool = defineTool("senawa_complete", {
       description: "probe",
       parameters: acceptedOutputSchema as unknown as Record<string, unknown>,
       handler,
       skipPermission: true,
       defer: "never",
     });
-    expect(tool.name).toBe("submit_phase_output");
+    expect(tool.name).toBe("senawa_complete");
     expect(tool.parameters).toBe(acceptedOutputSchema);
     expect(tool.handler).toBe(handler);
     expect(tool.defer).toBe("never");

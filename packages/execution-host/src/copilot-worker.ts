@@ -51,8 +51,7 @@ export const COPILOT_WORKER_TOOL_NAMES = Object.freeze([
   "propose_asset",
   "record_discovery",
   "propose_amendment",
-  "submit_completion",
-  "submit_phase_output",
+  "senawa_complete",
 ] as const);
 export const COPILOT_WORKSPACE_TOOL_NAMES = Object.freeze([
   "senawa_list_workspace",
@@ -487,32 +486,16 @@ function createTools(
     );
   }
   if (capabilities.has(WORKER_CAPABILITIES.completion)) {
-    tools.push(
-      submissionTool(
-        "submit_completion",
-        COMPLETION_SCHEMA,
-        input,
-        context,
-        dispatch,
-        selection,
-        sha256,
-        state,
-        scope,
-        "completion",
-      ),
-    );
-  }
-  if (capabilities.has(WORKER_CAPABILITIES.phaseOutput)) {
-    const declaration = context.phaseOutputDeclarations[0];
-    const contract = declaration && input.phaseOutputSchemas?.get(String(declaration.outputName));
-    if (declaration !== undefined && contract !== undefined) {
-      tools.push(
-        phaseOutputTool(input, context, dispatch, selection, sha256, state, scope, {
-          declaration,
-          contract,
-        }),
-      );
+    const slots: PhaseOutputSlot[] = [];
+    if (capabilities.has(WORKER_CAPABILITIES.phaseOutput)) {
+      for (const declaration of context.phaseOutputDeclarations) {
+        const contract = input.phaseOutputSchemas?.get(String(declaration.outputName));
+        if (contract !== undefined) slots.push({ declaration, contract });
+      }
     }
+    tools.push(
+      completeTool(input, context, dispatch, selection, sha256, state, scope, Object.freeze(slots)),
+    );
   }
   return Object.freeze(tools);
 }
@@ -753,7 +736,12 @@ interface PhaseOutputSlot {
   readonly contract: RuntimeSchemaContract;
 }
 
-function phaseOutputTool(
+/**
+ * The one successful completion path. Every declared output is validated before
+ * any of them is admitted, so a refused completion never leaves an accepted
+ * output waiting for a second request.
+ */
+function completeTool(
   input: CopilotWorkerRunInput,
   context: WorkerContextBase,
   dispatch: WorkerDispatch,
@@ -761,42 +749,211 @@ function phaseOutputTool(
   sha256: Sha256,
   state: RunState,
   scope: RunScope,
-  slot: PhaseOutputSlot,
+  slots: readonly PhaseOutputSlot[],
 ): CopilotSdkTool {
-  const outputName = String(slot.declaration.outputName);
-  const maxBytes = Math.min(slot.declaration.maxBytes, PHASE_OUTPUT_LIMITS.maxOutputBytes);
+  const names = slots.map((slot) => String(slot.declaration.outputName));
   return tool(
-    "submit_phase_output",
-    `Submit the accepted "${outputName}" phase output for validation and publication.`,
-    phaseOutputParameters(slot.contract, maxBytes),
+    "senawa_complete",
+    names.length === 0
+      ? "Ask Senawa to grant completion for this phase. Senawa decides whether the work is done."
+      : `Ask Senawa to grant completion, carrying every required output: ${names.join(", ")}. Senawa decides whether the work is done.`,
+    completeParameters(slots),
     scope,
     async (args, invocation) => {
       try {
-        return await submitPhaseOutput(
-          { input, context, dispatch, selection, sha256, state, scope, slot },
-          args,
-          invocation,
-          outputName,
-          maxBytes,
+        let completion: Readonly<Record<string, unknown>>;
+        let outputs: Readonly<Record<string, unknown>>;
+        let notes: unknown;
+        try {
+          const wrapper = exactObject(
+            args,
+            ["disposition", "summary", "criteria", "completionEvidence"],
+            slots.length === 0 ? [] : ["outputs", "changeNotes"],
+          );
+          completion = {
+            disposition: wrapper.disposition,
+            summary: wrapper.summary,
+            criteria: wrapper.criteria,
+            completionEvidence: wrapper.completionEvidence,
+          };
+          outputs = slots.length === 0 ? {} : exactObject(wrapper.outputs, names, []);
+          notes = wrapper.changeNotes;
+        } catch {
+          return failure("completion-arguments-invalid");
+        }
+        for (const slot of slots) {
+          const name = String(slot.declaration.outputName);
+          const identity = {
+            attemptId: derivedIdentity("attempt", dispatch.dispatchId, invocation, sha256),
+            dispatchId: dispatch.dispatchId,
+            outputName: name,
+            invocation,
+          };
+          const durable = input.broker.countRejectedPhaseOutputAttempts?.(
+            dispatch.dispatchId,
+            name,
+          );
+          const rejected = Math.max(durable ?? 0, state.rejectedPhaseOutputs);
+          if (rejected >= PHASE_OUTPUT_LIMITS.maxAttempts) {
+            return outputFailure("output-attempt-budget-exhausted", []);
+          }
+          const refusal = checkOutput(slot, outputs[name]);
+          if (refusal !== undefined) {
+            return recordRejected(input, state, sha256, identity, refusal.reason, refusal.findings);
+          }
+        }
+        for (const slot of slots) {
+          const name = String(slot.declaration.outputName);
+          const accepted = await submitPhaseOutput(
+            { input, context, dispatch, selection, sha256, state, scope, slot },
+            { output: outputs[name], ...(notes === undefined ? {} : { changeNotes: notes }) },
+            scopedInvocation(invocation, `output:${name}`),
+            name,
+            Math.min(slot.declaration.maxBytes, PHASE_OUTPUT_LIMITS.maxOutputBytes),
+          );
+          if (accepted.resultType !== "success") return accepted;
+        }
+        return admitCompletion(
+          { input, context, dispatch, selection, sha256, state },
+          completion,
+          slots.length === 0 ? invocation : scopedInvocation(invocation, "completion"),
         );
       } catch {
         // A throwing handler would send raw exception text to the model.
-        return recordRejected(
-          input,
-          state,
-          sha256,
-          {
-            attemptId: derivedIdentity("attempt", dispatch.dispatchId, invocation, sha256),
-            dispatchId: dispatch.dispatchId,
-            outputName,
-            invocation,
-          },
-          "output-refused",
-          [],
-        );
+        return failure("completion-refused");
       }
     },
   );
+}
+
+/** One tool call makes several submissions, so each needs its own derived identity. */
+function scopedInvocation(
+  invocation: CopilotSdkToolInvocation,
+  scope: string,
+): CopilotSdkToolInvocation {
+  return { ...invocation, toolName: `${invocation.toolName}#${scope}` };
+}
+
+/** Validates one output without admitting it, so every output is checked first. */
+function checkOutput(
+  slot: PhaseOutputSlot,
+  value: unknown,
+):
+  | { readonly reason: string; readonly findings: readonly Readonly<Record<string, string>>[] }
+  | undefined {
+  const maxBytes = Math.min(slot.declaration.maxBytes, PHASE_OUTPUT_LIMITS.maxOutputBytes);
+  try {
+    assertBoundedArgument(value, maxBytes);
+  } catch {
+    return { reason: "output-too-large", findings: [] };
+  }
+  let canonical: CanonicalValue;
+  try {
+    canonical = canonicalValue(value);
+  } catch {
+    return { reason: "output-arguments-invalid", findings: [] };
+  }
+  if (canonicalBytes(canonical).byteLength > maxBytes) {
+    return { reason: "output-too-large", findings: [] };
+  }
+  const findings = validateSchemaInstance(
+    slot.contract.schema,
+    canonical,
+    slot.contract.externalSchemas.map(({ id, schema }) => ({ id, schema })),
+  );
+  if (findings.length === 0) return undefined;
+  return {
+    reason: "output-schema-invalid",
+    findings: findings.map(({ pointer, schemaPointer, keyword }) => ({
+      instancePointer: pointer,
+      ...(schemaPointer === undefined ? {} : { schemaPointer }),
+      ...(keyword === undefined ? {} : { keyword }),
+    })),
+  };
+}
+
+function admitCompletion(
+  bound: {
+    readonly input: CopilotWorkerRunInput;
+    readonly context: WorkerContextBase | undefined;
+    readonly dispatch: WorkerDispatch;
+    readonly selection: WorkerModelRouteSelection;
+    readonly sha256: Sha256;
+    readonly state: RunState;
+  },
+  args: Readonly<Record<string, unknown>>,
+  invocation: CopilotSdkToolInvocation,
+): CopilotSdkToolResult {
+  const { input, context, dispatch, selection, sha256, state } = bound;
+  const submissionId = derivedIdentity("submission", dispatch.dispatchId, invocation, sha256);
+  if (!state.submissionIds.has(submissionId)) {
+    if (state.submissionCount >= selection.limits.maxSubmissions) {
+      return failure("submission-limit-reached");
+    }
+    state.submissionIds.add(submissionId);
+    state.submissionCount += 1;
+  }
+  const payload = submissionPayload("completion", args, context, dispatch);
+  const result = input.broker.admitSubmission({
+    submission: {
+      apiVersion: PROTOCOL_VERSION,
+      submissionId,
+      repositoryId: dispatch.repositoryId,
+      runId: dispatch.runId,
+      dispatchId: dispatch.dispatchId,
+      task: dispatch.task,
+      contextId: dispatch.contextId,
+      contextDigest: dispatch.contextDigest,
+      principalId: dispatch.worker.principalId,
+      type: "completion",
+      ...payload,
+    },
+  });
+  state.submissions.push(result);
+  if (result.status === "accepted" && result.completionFact !== undefined) {
+    state.completionDisposition = (payload.completion as CompletionSubmission).disposition;
+  }
+  return success({ status: result.status, replayed: result.replayed });
+}
+
+function completeParameters(slots: readonly PhaseOutputSlot[]): Readonly<Record<string, unknown>> {
+  if (slots.length === 0) return COMPLETION_SCHEMA;
+  const properties: Record<string, unknown> = {};
+  for (const slot of slots) {
+    const schema = slot.contract.schema as Readonly<Record<string, unknown>>;
+    const guidance: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(schema)) {
+      if (key !== "$schema" && key !== "$id") guidance[key] = value;
+    }
+    const maxBytes = Math.min(slot.declaration.maxBytes, PHASE_OUTPUT_LIMITS.maxOutputBytes);
+    properties[String(slot.declaration.outputName)] = {
+      ...guidance,
+      description: `Accepted "${String(slot.declaration.outputName)}" output. Canonical JSON must not exceed ${maxBytes} bytes.`,
+    };
+  }
+  const base = COMPLETION_SCHEMA as {
+    readonly properties: Readonly<Record<string, unknown>>;
+    readonly required: readonly string[];
+  };
+  return Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: [...base.required, "outputs"],
+    properties: {
+      ...base.properties,
+      outputs: Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        required: slots.map((slot) => String(slot.declaration.outputName)),
+        properties,
+      }),
+      changeNotes: {
+        type: "array",
+        maxItems: PHASE_OUTPUT_LIMITS.maxChangeNotes,
+        items: stringSchema(PHASE_OUTPUT_LIMITS.maxChangeNoteLength),
+      },
+    },
+  });
 }
 
 async function submitPhaseOutput(
@@ -1030,33 +1187,6 @@ function outputFailure(
   return Object.freeze({
     resultType: "failure",
     textResultForLlm: JSON.stringify({ status: "rejected", code, findings }),
-  });
-}
-
-function phaseOutputParameters(
-  contract: RuntimeSchemaContract,
-  maxBytes: number,
-): Readonly<Record<string, unknown>> {
-  const schema = contract.schema as Readonly<Record<string, unknown>>;
-  const guidance: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(schema)) {
-    if (key !== "$schema" && key !== "$id") guidance[key] = value;
-  }
-  return Object.freeze({
-    type: "object",
-    additionalProperties: false,
-    required: ["output"],
-    properties: {
-      output: {
-        ...guidance,
-        description: `Accepted phase output. Canonical JSON must not exceed ${maxBytes} bytes.`,
-      },
-      changeNotes: {
-        type: "array",
-        maxItems: PHASE_OUTPUT_LIMITS.maxChangeNotes,
-        items: stringSchema(PHASE_OUTPUT_LIMITS.maxChangeNoteLength),
-      },
-    },
   });
 }
 

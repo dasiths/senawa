@@ -794,7 +794,7 @@ class CompletingSession implements CopilotSdkSessionPort {
   ) {}
 
   async sendAndWait(): Promise<void> {
-    const tool = this.config.tools.find(({ name }) => name === "submit_completion");
+    const tool = this.config.tools.find(({ name }) => name === "senawa_complete");
     if (tool === undefined) throw new Error("Completion tool is missing");
     const result = await tool.handler(
       {

@@ -1150,3 +1150,37 @@ removed:
   test that caught this asserted the resource reader was never called.
 * The snapshot validator's version check is the only one left, so its test now
   supplies a future version rather than a retired one.
+
+## D-028: one Copilot tool, and why the first attempt was reverted
+
+`submit_phase_output` and `submit_completion` are replaced by `senawa_complete`,
+which carries the completion fields and an `outputs` object with one property per
+declared output, generated from that output's schema. This is the Copilot half of
+D-021; the CLI half landed in Phase 5.
+
+Atomicity is real rather than asserted. Every output is validated against its
+schema, byte ceiling, and canonical form before any of them is admitted, so a
+refused completion publishes nothing. A test now drives that case directly: a
+completion carrying a schema-invalid output installs no asset, admits no
+submission, and leaves the dispatch awaiting completion.
+
+Two things this uncovered:
+
+* One tool call now makes several submissions, and every submission identity was
+  derived from the dispatch and the tool invocation alone. The completion and the
+  phase output therefore derived the same identity and the second was refused as
+  a duplicate. Identities are now scoped per output and for the completion, and
+  only when there is something to disambiguate, so a completion with no outputs
+  keeps the identity it had.
+* The old design let an output be accepted while completion was refused. That is
+  exactly the state D-021 set out to remove, but several acceptance tests encoded
+  it: they submitted an output, asserted acceptance, and expected the run to end
+  as `missing-completion`. Those assertions now expect a completed run, and the
+  ones that read `only(submissions)` read the phase output specifically, because
+  a run makes two submissions where it used to make one.
+
+The first attempt at this change was reverted rather than committed. The merged
+tool was correct but five acceptance tests failed for a reason not yet
+understood, and guessing at fixture changes to make them pass would have been
+worse than stopping. The cause was ordinary once found: that harness requires a
+criterion to be satisfied, and the migration had passed empty criteria.

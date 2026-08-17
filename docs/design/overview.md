@@ -73,7 +73,7 @@ An agent never changes authority. It submits. The tool surface in
 [packages/execution-host/src/copilot-worker.ts](../../packages/execution-host/src/copilot-worker.ts)
 is seven authority tools plus four workspace tools. The submitting tools
 (`submit_question`, `propose_asset`, `record_discovery`, `propose_amendment`,
-`submit_completion`, `submit_phase_output`) all route through the context
+`senawa_complete`) all route through the context
 broker, which admits, defers, or refuses. `senawa_read_asset` reads only what a
 grant permits, and every read attempt is audited.
 
