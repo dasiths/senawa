@@ -1637,7 +1637,11 @@ async function temporaryRepository(): Promise<TemporaryRepository> {
   const repositoryRoot = join(root, "repository");
   const home = join(root, "home");
   await mkdir(home);
-  const command = new BoundedGitCommandPort({ gitExecutable: "/usr/bin/git", isolatedHome: home });
+  const command = new BoundedGitCommandPort({
+    gitExecutable: "/usr/bin/git",
+    isolatedHome: home,
+    additionalSubcommands: ["init", "commit", "cat-file", "show", "checkout", "branch"],
+  });
   const git = async (args: readonly string[], cwd = repositoryRoot) => {
     const result = await command.run({ rootDirectory: cwd, args, timeoutMs: 10_000 });
     if (result.exitCode !== 0 || result.signal !== null || result.timedOut || result.cancelled)

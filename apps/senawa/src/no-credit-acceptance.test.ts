@@ -1747,7 +1747,11 @@ async function temporaryRepository(): Promise<TemporaryRepository> {
   const home = join(root, "git-home");
   const targetRef = "refs/heads/senawa/integration";
   await Promise.all([mkdir(ownedRoot), mkdir(home)]);
-  const command = new BoundedGitCommandPort({ gitExecutable: "/usr/bin/git", isolatedHome: home });
+  const command = new BoundedGitCommandPort({
+    gitExecutable: "/usr/bin/git",
+    isolatedHome: home,
+    additionalSubcommands: ["init", "commit", "cat-file", "show", "checkout", "branch"],
+  });
   const git = async (args: readonly string[], commandRoot = repositoryRoot) => {
     if (!containsPath(root, commandRoot)) {
       throw new Error("Acceptance fixture Git commands must stay inside its temporary root");

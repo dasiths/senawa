@@ -60,11 +60,14 @@ export class BoundedGitCommandPort implements GitCommandPort {
   readonly gitExecutable: string;
   readonly isolatedHome: string;
   readonly terminationGraceMs: number;
+  readonly #allowedSubcommands: ReadonlySet<string>;
 
   constructor(input: {
     readonly gitExecutable: string;
     readonly isolatedHome: string;
     readonly terminationGraceMs?: number;
+    /** Extra subcommands a test fixture needs to build a repository. */
+    readonly additionalSubcommands?: readonly string[];
   }) {
     if (!isAbsolute(input.gitExecutable) || input.gitExecutable.includes("\0")) {
       throw new TypeError("Git executable must be an absolute NUL-free path");
@@ -79,10 +82,14 @@ export class BoundedGitCommandPort implements GitCommandPort {
     this.gitExecutable = input.gitExecutable;
     this.isolatedHome = input.isolatedHome;
     this.terminationGraceMs = terminationGraceMs;
+    this.#allowedSubcommands =
+      input.additionalSubcommands === undefined
+        ? ALLOWED_GIT_SUBCOMMANDS
+        : new Set([...ALLOWED_GIT_SUBCOMMANDS, ...input.additionalSubcommands]);
   }
 
   async run(request: GitCommandRequest): Promise<GitCommandResult> {
-    validateRequest(request);
+    validateRequest(request, this.#allowedSubcommands);
     const environment = buildEnvironment(this.isolatedHome, request.identity);
     const outcome = await measureExecutableSensor({
       rootDirectory: request.rootDirectory,
@@ -117,6 +124,31 @@ export class BoundedGitCommandPort implements GitCommandPort {
   }
 }
 
+/**
+ * Git subcommands the harness itself issues.
+ *
+ * Read-only inspection plus the worktree lifecycle. Anything that fetches,
+ * pushes, or rewrites history is absent by design.
+ */
+const ALLOWED_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "add",
+  "check-ref-format",
+  "commit-tree",
+  "config",
+  "diff",
+  "hash-object",
+  "help",
+  "ls-files",
+  "ls-tree",
+  "merge-tree",
+  "rev-parse",
+  "status",
+  "update-index",
+  "update-ref",
+  "worktree",
+  "write-tree",
+]);
+
 export class GitCommandHostError extends Error {
   readonly code: string;
 
@@ -127,9 +159,22 @@ export class GitCommandHostError extends Error {
   }
 }
 
-function validateRequest(request: GitCommandRequest): void {
+function validateRequest(
+  request: GitCommandRequest,
+  allowed: ReadonlySet<string>,
+): void {
   if (request.args.some((argument) => typeof argument !== "string" || argument.includes("\0"))) {
     throw new TypeError("Git arguments must be NUL-free strings");
+  }
+  // The safety of this port rested on having no untrusted caller. Once a
+  // consumer-authored sensor can reach git, the subcommand has to be bounded
+  // here rather than by who happens to be calling.
+  const subcommand = request.args[0];
+  if (subcommand === undefined || !allowed.has(subcommand)) {
+    throw new GitCommandHostError(
+      "subcommand-denied",
+      `Git subcommand ${subcommand ?? "(absent)"} is not permitted`,
+    );
   }
   if (!boundedInteger(request.timeoutMs, MAX_TIMER_MILLISECONDS)) {
     throw new TypeError("Git timeout must be a positive supported timer integer");

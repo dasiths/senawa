@@ -51,7 +51,11 @@ describe("BoundedGitCommandPort", () => {
 async function commandPort(root: string): Promise<BoundedGitCommandPort> {
   const home = join(root, "home");
   await mkdir(home);
-  return new BoundedGitCommandPort({ gitExecutable, isolatedHome: home });
+  return new BoundedGitCommandPort({
+    gitExecutable,
+    isolatedHome: home,
+    additionalSubcommands: ["init", "commit", "cat-file", "show", "checkout", "branch"],
+  });
 }
 
 async function temporaryRoot(): Promise<string> {

@@ -67,7 +67,18 @@ async function initializeTemporaryGitRepository(
   const home = join(root, "isolated-home");
   await Promise.all([mkdir(ownedRoot), mkdir(home)]);
   const command = new AuditedGitCommandPort(
-    new BoundedGitCommandPort({ gitExecutable: GIT_EXECUTABLE, isolatedHome: home }),
+    new BoundedGitCommandPort({
+      gitExecutable: GIT_EXECUTABLE,
+      isolatedHome: home,
+      additionalSubcommands: [
+        "init",
+        "commit",
+        "cat-file",
+        "show",
+        "checkout",
+        "branch",
+      ],
+    }),
   );
   const senawaBefore = await senawaWorktrees(command);
   const run = async (rootDirectory: string, args: readonly string[]): Promise<string> => {
