@@ -62,13 +62,13 @@ A later phase may not regress one of them.
 | 2 | One phase runs a real agent end to end | Dispatch and worker transport complete; acceptance moved to Phase 8 |
 | 3 | The consumer command line | Inspection complete; blocking loop moved to Phase 8 |
 | 4 | Sensors, gates, and anchors | Complete |
-| 5 | The agent operating contract | Not started |
-| 6 | Evidence and output policy are authorable | Not started |
-| 7 | Loops, gates, sensors, and approval are authorable | Not started |
-| 8 | The autonomous driver and human loop | Foundations partly built |
-| 9 | Fan-out and fan-in | Not started |
+| 5 | The agent operating contract | Contract and complete verb built |
+| 6 | Evidence and output policy are authorable | Complete except evidence views |
+| 7 | Loops, gates, sensors, and approval are authorable | Complete |
+| 8 | The autonomous driver and human loop | Human decisions drivable; driver open |
+| 9 | Fan-out and fan-in | Lowering built; member phases open |
 | 10 | Sessions, model routing, and steering | Not started |
-| 11 | Prove authored-surface parity | Not started |
+| 11 | Prove authored-surface parity | Proven against senawa's own workflow |
 | 12 | The portal earns its density | Not started |
 | 13 | Remove what the evidence condemns | Not started |
 | 14 | Name it v1 and rewrite every document in plain language | Not started |

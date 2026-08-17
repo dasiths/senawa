@@ -991,3 +991,58 @@ rules.
 
 The target `.senawa` tree now compiles down to one remaining diagnostic, the
 unlowered fan-out, which is Phase 9.
+
+## Phases 8, 9, 11, and 13 log
+
+### The authored tree compiles
+
+`.senawa` at the repository root now compiles with no diagnostics. It is
+senawa's own five-phase workflow and it exercises fan-out, completion evidence,
+a gate on a measured number, an advisory reading, a confidential output, a named
+approval role, ordered model routes, and a phase that refuses to retry. Phase 1
+measured the authored surface by counting lines, which cannot tell a derived
+value from a removed one. `authored-parity.test.ts` measures it against that
+workload instead, and also asserts that no authored prompt contains senawa
+protocol text.
+
+### Decision D-025: A fan-out names the shape of its collection
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: `forEach: plan.tasks` is paired with `collection:`, naming the schema
+  the selected array satisfies. The member's own `input:` supplies the item
+  schema.
+* Why it is not derived: the kernel validates the selected collection separately
+  from each item, so a schema for the array cannot be conjured from the schema
+  that describes one element. Deriving it by naming convention was rejected
+  because a convention that silently misses produces a fan-out over an unchecked
+  collection.
+* Deviation from D-001: members materialise as tasks under the existing task
+  frontier rather than as member phases. Fan-out therefore runs, but per-member
+  gates and per-member approval still need the phase model. Recorded so the
+  remaining work is not mistaken for done.
+
+### Decision D-026: A gate rule key names its sensor, field, and comparison
+
+* Date: 2026-08-17
+* Status: Accepted
+* Trigger: two coverage rules over one sensor collided, because the first key
+  was the sensor plus the comparison and both rules compared the same way.
+* Decision: the key carries the field too, so `coverage` gating lines and
+  branches yields `coverage-total-lines-pct-at-least` and
+  `coverage-total-branches-pct-at-least`.
+* Consequence: keys read as a description of the rule, which is what a refusal
+  message shows a consumer.
+
+### `publish-phase-output` is gone
+
+The intent was declared and never implemented, and D-021 decided output
+publication is a consequence of a granted completion rather than an operation an
+agent coordinates. It is removed from the protocol contracts and codec rather
+than left as a promise the system does not keep.
+
+### Validation
+
+* Full suite: 118 files and 1,397 tests passed with 2 skipped opt-in live tests.
+* Typecheck, lint at the 42-warning template baseline, boundaries across 521
+  files, documentation links across 50 files.
