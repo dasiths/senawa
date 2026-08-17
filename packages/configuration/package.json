@@ -24,6 +24,7 @@
   "dependencies": {
     "@senawa/kernel": "workspace:*",
     "ajv": "8.18.0",
-    "json-schema-traverse": "1.0.0"
+    "json-schema-traverse": "1.0.0",
+    "yaml": "2.6.1"
   }
 }

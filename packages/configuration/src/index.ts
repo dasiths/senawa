@@ -1,3 +1,4 @@
+export * from "./authoring.js";
 export * from "./compiler.js";
 export * from "./contracts.js";
 export * from "./diagnostics.js";

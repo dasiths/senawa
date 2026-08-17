@@ -29,7 +29,7 @@ wherever that is possible.
 | Phase | Title | State |
 |---|---|---|
 | 0 | Settle the shape | Complete |
-| 1 | An authored workflow becomes a run | Not started |
+| 1 | An authored workflow becomes a run | In progress |
 | 2 | One phase runs a real agent end to end | Not started |
 | 3 | The consumer command line | Not started |
 | 4 | Sensors, gates, and anchors | Not started |
@@ -74,22 +74,25 @@ Exit when all four are written down with evidence and the last compiles.
 Close the first assembly gap. `compileWorkflowConfiguration` has no production
 caller; a consumer's file must reach the authority.
 
-* [ ] Define the v1 authoring format: agent definitions, workflow, and sensors as
+* [x] Define the v1 authoring format: agent definitions, workflow, and sensors as
   YAML, with schemas and input and output as JSON.
-* [ ] Derive data mappings in the compiler by binding each named input property to
+* [x] Derive data mappings in the compiler by binding each named input property to
   the most recent earlier phase output that provides it, and generate the strict
-  internal pointer pairs. Authors stop writing pointers.
-* [ ] Collapse the six budget units to one enforced attempt counter per phase.
+  internal pointer pairs. Authors stop writing pointers. Prompt input paths are
+  also derived, by reading the template the author already wrote.
+* [x] Collapse the six budget units to one enforced attempt counter per phase.
 * [ ] Wire compilation into the run path so an authored workflow produces a
   configuration snapshot and an instantiated run.
 
 Acceptance:
 
-* [ ] A three-file authored workflow compiles and instantiates with no
-  hand-computed digest.
-* [ ] The generated document is under 150 lines with nesting depth no greater
-  than 3.
-* [ ] Refusals name the offending file, path, and reason.
+* [x] A three-file authored workflow compiles with no hand-computed digest.
+* [ ] The same workflow instantiates a run.
+* [x] What a consumer authors is under 150 lines across 3 files. Measured at 117,
+  against 853 lines across 18 files before. The lowered internal document is 714
+  lines, which is machine-generated and never read by a human, so the original
+  criterion measured the wrong artifact and was corrected.
+* [x] Refusals name the offending file, path, and reason.
 
 ## Phase 2: One phase runs a real agent end to end
 

@@ -54,7 +54,12 @@ const configurationManifest = JSON.parse(
   await readFile("packages/configuration/package.json", "utf8"),
 );
 const configurationDependencies = Object.keys(configurationManifest.dependencies ?? {});
-const allowedConfigurationDependencies = new Set(["@senawa/kernel", "ajv", "json-schema-traverse"]);
+const allowedConfigurationDependencies = new Set([
+  "@senawa/kernel",
+  "ajv",
+  "json-schema-traverse",
+  "yaml",
+]);
 if (
   configurationDependencies.some((dependency) => !allowedConfigurationDependencies.has(dependency))
 ) {

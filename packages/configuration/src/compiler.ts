@@ -346,14 +346,9 @@ interface ValidatedRegistries {
   readonly gateKeysByPhase: ReadonlyMap<string, readonly string[]>;
 }
 
-const REQUIRED_WORK_BUDGETS: readonly BudgetUnit[] = Object.freeze([
-  "work-attempt",
-  "dispatch-failure",
-  "sensor-retry",
-  "review-iteration",
-  "integration-attempt",
-  "rebase-attempt",
-]);
+// Only the review iteration loop is enforced at runtime. Requiring the other
+// five units made every phase declare limits nothing reads.
+const REQUIRED_WORK_BUDGETS: readonly BudgetUnit[] = Object.freeze(["review-iteration"]);
 const ROOT_FIELDS = [
   "apiVersion",
   "kind",

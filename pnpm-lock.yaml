@@ -75,6 +75,9 @@ importers:
       json-schema-traverse:
         specifier: 1.0.0
         version: 1.0.0
+      yaml:
+        specifier: 2.6.1
+        version: 2.6.1
 
   packages/execution-host:
     dependencies:
@@ -1349,6 +1352,11 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha1-tSQ9jz7BqjXxNkYFvA0QNuMKtp8=, tarball: https://ms-feed-17.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/wrappy/-/wrappy-1.0.2.tgz}
 
+  yaml@2.6.1:
+    resolution: {integrity: sha1-QvKxuokgPzdGCVctU0n7hoZQB3M=, tarball: https://ms-feed-17.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/yaml/-/yaml-2.6.1.tgz}
+    engines: {node: '>= 14'}
+    hasBin: true
+
   yaml@2.8.1:
     resolution: {integrity: sha1-GHCqArYx9+gyi5P4vFdPrF1sTXk=, tarball: https://ms-feed-12.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/yaml/-/yaml-2.8.1.tgz}
     engines: {node: '>= 14.6'}
@@ -2259,6 +2267,8 @@ snapshots:
       stackback: 0.0.2
 
   wrappy@1.0.2: {}
+
+  yaml@2.6.1: {}
 
   yaml@2.8.1:
     optional: true

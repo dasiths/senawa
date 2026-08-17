@@ -2,33 +2,35 @@ name: standard-delivery
 description: Define, research, plan, implement, and verify a change.
 
 # The shape of the request this workflow accepts.
-input: schemas/request.json
+input: schemas/request.schema.json
 
 phases:
   - name: define
     agent: definer
-    output: schemas/definition.json
+    output: schemas/definition.schema.json
     # No `needs`, so this phase sees only the workflow input.
     approve: true
 
   - name: research
     agent: researcher
     needs: [define]
-    output: schemas/research.json
+    output: schemas/research.schema.json
 
   - name: plan
     agent: planner
     needs: [define, research]
-    output: schemas/plan.json
+    input: schemas/plan-input.schema.json
+    output: schemas/plan.schema.json
     approve: true
 
   - name: implement
     agent: implementor
     needs: [plan]
     # Fan out over a collection an earlier phase computed. One member phase per
-    # element, grouped under this phase.
-    forEach: plan.tasks
-    output: schemas/implementation.json
+    # element, grouped under this phase. Enabled when Phase 6 lowers fan-out;
+    # until then the compiler refuses it rather than dropping the collection.
+    # forEach: plan.tasks
+    output: schemas/implementation.schema.json
     gates: [build, tests]
     # continue: keep going with the members that passed
     # fail-fast: stop the phase on the first failure
@@ -37,6 +39,7 @@ phases:
   - name: verify
     agent: verifier
     needs: [implement]
-    output: schemas/verification.json
+    input: schemas/verification.schema.json
+    output: schemas/verification.schema.json
     gates: [build, tests, lint]
     approve: true

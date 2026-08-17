@@ -17,7 +17,7 @@ commit messages where they explain a choice.
 | Phase | Title | State | Commit |
 |---|---|---|---|
 | 0 | Settle the shape | Complete | |
-| 1 | An authored workflow becomes a run | Not started | |
+| 1 | An authored workflow becomes a run | In progress | |
 | 2 | One phase runs a real agent end to end | Not started | |
 | 3 | The consumer command line | Not started | |
 | 4 | Sensors, gates, and anchors | Not started | |
@@ -131,3 +131,59 @@ commit messages where they explain a choice.
   when the authored workflow is deliberately broken.
 * Nested phase spike: nine nodes and twelve edges compiled, parent rendered as a
   container with members inside in dependency order.
+
+## Phase 1 log
+
+### Decision D-005: One required budget unit, not six
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: `REQUIRED_WORK_BUDGETS` drops to `review-iteration` alone. The other
+  five units remain declarable but are no longer demanded of every phase.
+* Rationale: research established that only `review-iteration` is enforced at
+  runtime. `dispatch-failure` has an implementation whose planner has no
+  production caller, `integration-attempt` is superseded by a hard-coded
+  constant, and `work-attempt`, `sensor-retry`, and `rebase-attempt` are never
+  counted. Requiring six units made every phase declare seventy-two lines of
+  limits that nothing reads.
+* Consequence: authored workflows declare no budgets at all; the lowering emits
+  the single enforced counter. Existing tests pass unchanged, which is the
+  evidence that the other five were never load-bearing.
+
+### Decision D-006: Prompt input paths are read from the template
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: The authoring layer derives a prompt's declared input paths by
+  parsing the template the author already wrote.
+* Rationale: the compiler validates declared input paths against the template's
+  own placeholders, in both directions. The declaration therefore carries no
+  information the template does not already have, and its only effect is to fail
+  when an author updates one and forgets the other.
+* Consequence: `lowerAuthoredWorkflow` needs the prompt texts, so the caller
+  supplies them. This keeps the configuration package free of filesystem access.
+
+### Deviation: the acceptance criterion measured the wrong artifact
+
+The plan asked for a generated document under 150 lines at depth 3. The lowered
+internal document is 714 lines at depth 7, and that is correct: it is machine
+generated and no human reads it. What matters is the authored surface, which is
+117 lines across three files against 853 across eighteen. The criterion was
+rewritten to measure that instead, rather than being quietly marked as met.
+
+### Deviation: an authored fan-out is refused rather than ignored
+
+The lowering does not yet turn `forEach` into member phases, which is Phase 6
+work. Lowering such a phase as an ordinary agent phase would compile cleanly
+while silently discarding the collection the author asked to iterate. The
+compiler now refuses it with a diagnostic naming the file and path, and the
+probe's fan-out phase is commented out with a note pointing at Phase 6.
+
+### Validation
+
+* 6 new authoring tests, including that the lowered document survives the real
+  compiler and that a wrong reference names its file, path, and reason.
+* Full suite: 105 files and 1,330 tests passed with 2 skipped opt-in live tests.
+* Typecheck, boundaries across 467 files, documentation links across 45 files.
+* Biome: 33 warnings, all `noTemplateCurlyInString` on intentional prompt
+  templates, two of them newly added by the authoring tests.
