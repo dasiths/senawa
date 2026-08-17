@@ -20,11 +20,11 @@ import { assertSecretSafePositiveProjection } from "../packages/reporting/dist/i
 import { assertReleaseFileSecretSafe } from "./release-secret-scanner.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const output = join(root, "dist", "alpha");
+const output = join(root, "dist", "release");
 const packageOutput = join(output, "packages");
 const stagingOutput = join(output, ".staging");
 const npmCache = join(output, ".npm-cache");
-const version = "0.1.0-alpha.0";
+const version = "1.0.0";
 const packages = [
   ["@senawa/protocol", "packages/protocol"],
   ["@senawa/kernel", "packages/kernel"],
@@ -73,7 +73,7 @@ writeFileSync(
   join(output, "package.json"),
   `${JSON.stringify(
     {
-      name: "senawa-alpha-install",
+      name: "senawa-release-install",
       version,
       private: true,
       engines: { node: ">=22.12.0" },
@@ -84,7 +84,7 @@ writeFileSync(
   )}\n`,
 );
 const manifest = {
-  apiVersion: "senawa.dev/alpha-bundle/v1alpha1",
+  apiVersion: "senawa.dev/release-bundle/v1",
   version,
   platform: { os: "linux", cpu: "x64", libc: "glibc", minimumGlibc: "2.34" },
   packages: records,

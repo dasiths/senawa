@@ -116,16 +116,13 @@ try {
       JSON.stringify(initializedTree),
     "explicit init bytes differ from default init",
   );
-  assert(
-    run(bin, ["--version"], repository, environment).trim() === "0.1.0-alpha.0",
-    "version failed",
-  );
+  assert(run(bin, ["--version"], repository, environment).trim() === "1.0.0", "version failed");
   assert(
     run(bin, ["service", "--help"], repository, environment).includes("service start|run"),
     "service help failed",
   );
   assert(
-    run(bin, ["service", "--version"], repository, environment).trim() === "0.1.0-alpha.0",
+    run(bin, ["service", "--version"], repository, environment).trim() === "1.0.0",
     "service version failed",
   );
   assert(!existsSync(join(modules, ".bin", "senawa-service")), "unexpected service bin exists");

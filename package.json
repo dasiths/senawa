@@ -1,6 +1,6 @@
 {
   "name": "senawa-workspace",
-  "version": "0.1.0-alpha.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.34.5",
@@ -14,7 +14,7 @@
     "docs:links": "node scripts/check-markdown-links.mjs",
     "format": "biome format --write .",
     "lint": "biome check .",
-    "package:alpha": "node scripts/package-alpha.mjs",
+    "package:release": "node scripts/package-release.mjs",
     "test": "vitest run --passWithNoTests",
     "test:live-worker": "node scripts/test-live-worker.mjs",
     "test:packaging": "node scripts/test-packaging.mjs",

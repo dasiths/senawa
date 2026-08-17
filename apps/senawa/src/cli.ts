@@ -8,7 +8,7 @@ import {
 import { PROTOCOL_LIMITS } from "@senawa/protocol";
 import { assertSecretSafePositiveProjection } from "@senawa/reporting";
 
-export const SENAWA_VERSION = "0.1.0-alpha.0";
+export const SENAWA_VERSION = "1.0.0";
 export const DEFAULT_WORKFLOW_PATH = ".senawa/workflow.json";
 export const MAX_CLI_INPUT_BYTES = PROTOCOL_LIMITS.maxWireBytes;
 
