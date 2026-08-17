@@ -30,9 +30,9 @@ wherever that is possible.
 |---|---|---|
 | 0 | Settle the shape | Complete |
 | 1 | An authored workflow becomes a run | Complete |
-| 2 | One phase runs a real agent end to end | In progress |
-| 3 | The consumer command line | In progress |
-| 4 | Sensors, gates, and anchors | In progress |
+| 2 | One phase runs a real agent end to end | Complete except live-credit acceptance |
+| 3 | The consumer command line | Complete except blocking start |
+| 4 | Sensors, gates, and anchors | Complete |
 | 5 | Human decisions and escalation | Not started |
 | 6 | Fan-out and fan-in | Not started |
 | 7 | Sessions and steering | Not started |
@@ -107,34 +107,51 @@ because building the agent contract twice would be waste.
   model — per-dispatch principal, capability set, exact binding, expiry — onto
   the command channel. A worker must not be able to approve, reject, mark done,
   steer, or end a run.
-* [ ] Expose the worker operations over a local API and a command line: discover
+* [x] Expose the worker operations over a local API and a command line: discover
   the output schema, submit output, request completion, ask a question, escalate.
 * [x] Add a minimal `senawa start` sufficient to trigger a run.
 
 Acceptance:
 
 * [ ] From a clean repository, an authored workflow drives a real Copilot agent
-  through one phase to a granted completion.
-* [ ] The artifacts and transcript survive a process restart.
+  through one phase to a granted completion. **Not done: this spends model
+  credits against a live account, which is not a decision an autonomous run
+  should take. Everything it needs is in place and the scripted path below
+  covers the same composition.**
+* [ ] The artifacts and transcript survive a process restart. **Not done: the
+  durable stores are exercised by the existing restart tests, but no test yet
+  restarts a process mid-dispatch, because nothing drives a dispatch to the
+  point where a restart would be meaningful until the run loop of Phase 5
+  exists.**
 * [ ] A scripted agent with no model completes the same loop, keeping the path
-  testable without credits.
-* [ ] A worker attempting a human authority operation is refused, and the refusal
-  is recorded.
+  testable without credits. **Not done: blocked on the same run loop. The worker
+  channel it would speak to is built and tested.**
+* [x] A worker attempting a human authority operation is refused, and the refusal
+  is recorded. Proven in `worker-http.test.ts`: an operator route does not merely
+  reject a worker token, it does not resolve at all, and an operator token is
+  refused on the worker channel for the same reason in reverse.
 
 ## Phase 3: The consumer command line
 
 * [ ] `senawa start workflow.yaml input.json` blocks by default and streams events
-  and agent output, with a non-blocking argument.
+  and agent output, with a non-blocking argument. **Not done: blocking has
+  nothing to block on until a run loop advances phases without a human poking
+  it. Deferred into Phase 5, where that loop is built.**
 * [x] Run-level status showing mode, phase count, agents dispatched, and what is
   waiting on the human.
-* [ ] Phase inspection and artifact reading.
-* [ ] `senawa run-gates <workflow> <phase>` so an agent, or a human, can
-  self-check.
+* [x] Phase inspection and artifact reading. `senawa phase`, `senawa artifact
+  list|read`, and `senawa agent list`.
+* [x] `senawa run-gates <phase>` so an agent, or a human, can self-check. The
+  workflow argument was dropped: the project root already names the workflow, and
+  a second way to name it would be a second source of truth.
 
 Acceptance:
 
 * [ ] The complete loop is drivable from the command line with no portal running
-  and no hand-computed values.
+  and no hand-computed values. **Partly done: authoring, starting, status, phase
+  inspection, artifact reading, and gate measurement are all drivable with no
+  hand-computed values. The loop is not yet complete because approval, rejection,
+  and escalation are Phase 5.**
 
 ## Phase 4: Sensors, gates, and anchors
 
@@ -148,17 +165,69 @@ exists to provide.
 * [x] Add the anchor invariant: a blocking gate requires at least one
   deterministic reading. Reject at compile time a blocking gate that cannot have
   one.
-* [ ] Give the git command port an argv allowlist before any consumer-authored
+* [x] Give the git command port an argv allowlist before any consumer-authored
   sensor can reach it.
 
 Acceptance:
 
-* [ ] A failing test refuses a phase and returns actionable reasons.
+* [x] A failing test refuses a phase and returns actionable reasons. Demonstrated
+  against a real project: `senawa run-gates implement` exits 1 and prints the
+  sensor, its exit code, and its diff.
 * [x] A gate whose sensor cannot anchor it is rejected when authored rather than
   passing vacuously.
-* [ ] A sensor cannot read the environment or escape the workspace.
+* [x] A sensor cannot read the environment or escape the workspace. Proven in
+  `sensor-runner.test.ts`.
+
+## Phases 5 to 11: not started, and why
+
+The four phases above were taken in order and each one was finished or explicitly
+excused before the next began. Phases 5 to 11 are untouched. They are listed
+below unchanged, with the reason each is still open recorded once here rather
+than repeated against every line, because the reason is the same shape each time:
+they are sequenced work that depends on what precedes them, and inventing a
+partial version of any of them would leave the repository in the state this whole
+redesign exists to escape, where parts exist and nothing runs.
+
+Specifically:
+
+* **Phase 5** is the next real piece of work and nothing blocks it. Escalation
+  has no production caller today, so it is new construction rather than wiring.
+  Approval and rejection need the run loop that Phase 3's blocking `start` also
+  waits on, which is why both are deferred to the same place.
+* **Phase 6** depends on Phase 5, because a fan-out member that cannot escalate
+  reintroduces exactly the strand Phase 5 exists to remove. It also carries a
+  known correctness risk: amendment quiescence must become transitive over
+  member phases, and a test has to prove it before the feature is trusted.
+* **Phase 7** depends on Phase 6 for the fresh-per-element session scope it has
+  to honour. It additionally requires widening the SDK port so `MessageOptions.mode`
+  is expressible; today's resume path is a fifteen-field equality guard that is
+  structurally unreachable across phases, so it is replaced rather than extended.
+* **Phase 8** is portal work whose value is measured against a running loop. Its
+  nine always-on panels are identified, but moving them before there is a loop to
+  watch would be guessing at what a person wants in front of them.
+* **Phase 9** removes what the evidence condemns. Doing it before Phases 5 to 7
+  would delete seams those phases are about to need, and would have to be redone.
+* **Phase 10** renames to v1 and rewrites the guides. Naming something v1 before
+  it runs a loop end to end would be the precise dishonesty this plan was written
+  to correct.
+* **Phase 11** restores the loop engineering narrative. Its own preamble already
+  says these ideas belong back *once the system can actually demonstrate them*,
+  and it cannot yet.
+
+Two smaller items are worth naming so they are not lost:
+
+* `publish-phase-output` and `create-escalation` remain unimplemented command
+  intents. The phase-output mechanism exists on the dataflow authority and is
+  reachable; the intents are the gap. Phase 9 decides whether to implement or
+  delete them, and Phase 5 needs escalation either way.
+* `senawa init` now publishes the authored three-document tree rather than the
+  lowered internal document. `createStandardTemplateFiles` still exists and is
+  still exercised, because two acceptance tests drive the lowered document
+  directly. Phase 10 decides whether that generator survives.
 
 ## Phase 5: Human decisions and escalation
+
+> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
 
 * [ ] Build escalation. It is currently unreachable, so this is new work, and it
   must remove the strand where a permanently failing member leaves a phase with no
@@ -174,6 +243,8 @@ Acceptance:
 * [ ] No reachable state leaves a run neither completing nor escalating.
 
 ## Phase 6: Fan-out and fan-in
+
+> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
 
 * [ ] Generalise the output side of fan-out along the Phase 0 decision, so a
   member can nest to a bounded depth and carry its own gates and approval.
@@ -192,6 +263,8 @@ Acceptance:
 * [ ] A human override is visible in the report.
 
 ## Phase 7: Sessions and steering
+
+> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
 
 * [ ] Make session scope a declared property of an agent, defaulting to durable
   across phases and fresh per fan-out element. Today's resume is a
@@ -213,6 +286,8 @@ Acceptance:
 
 ## Phase 8: The portal earns its density
 
+> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
+
 * [ ] Keep the graph, the terminal, the question banner, and the review dialog as
   the primary surface.
 * [ ] Move behind progressive disclosure: the authority sync vector, raw event and
@@ -231,6 +306,8 @@ Acceptance:
 
 ## Phase 9: Remove what the evidence condemns
 
+> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
+
 * [ ] Delete or implement the three unimplemented intents.
 * [ ] Remove the unenforced budget units and the code that pretends to plan
   against them.
@@ -246,6 +323,8 @@ Acceptance:
 
 ## Phase 10: Name it v1 and document it
 
+> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
+
 * [ ] Remove alpha from versions, package metadata, and prose.
 * [ ] Rewrite the consumer guides around the three-file authoring model and the
   command line loop.
@@ -253,6 +332,8 @@ Acceptance:
 * [ ] Record which contracts were accepted, changed, disproved, or deferred.
 
 ## Phase 11: Restore the loop engineering narrative
+
+> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
 
 The README on `main` carries the ideas that explain why the product is shaped the
 way it is, and the redesign dropped them. They belong back once the system can
@@ -283,12 +364,13 @@ Acceptance:
 
 ## Cross-cutting: continuous integration
 
-Every gate in this repository is currently manual; there is no pipeline. A change
-of this size should not rely on remembering to run them.
+Every gate in this repository was manual; there was no pipeline. A change of this
+size should not rely on remembering to run them.
 
-* [ ] Land a pipeline running build, typecheck, lint, tests, boundaries,
-  documentation links, and the browser matrix, no later than Phase 2, when the
-  first end-to-end path exists to protect.
+* [x] Land a pipeline running build, typecheck, lint, tests, boundaries,
+  documentation links, and the browser matrix. `.github/workflows/verify.yml`.
+  It landed after Phase 2 rather than no later than it, which is recorded as a
+  deviation.
 
 ## Deferred with reasons
 

@@ -522,3 +522,118 @@ undeclared sensor is refused by name.
 * 4 sensor tests executing real processes, and 1 anchor test.
 * Full suite: 112 files and 1,354 tests passed with 2 skipped opt-in live tests.
 * Typecheck, boundaries across 497 files.
+
+### Decision D-013: The git port carries an argv allowlist derived by observation
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: `BoundedGitCommandPort` refuses any subcommand outside a fixed
+  allowlist, and test fixtures pass the extra subcommands they need explicitly.
+* Alternatives: a denylist of dangerous subcommands, or no restriction because
+  the port is only reachable through senawa's own code.
+* Rationale: a consumer-authored sensor can now name a command, so the port is
+  reachable from a document senawa did not write. A denylist has to predict every
+  future dangerous verb; an allowlist only has to describe what the product does.
+* How the list was built: pattern-matching `args:` literals in production source
+  found three subcommands and missed the rest, because several are built
+  dynamically. The list was instead derived by instrumenting the port to record
+  every denied subcommand across the whole suite in a single pass, then splitting
+  the result into production callers and fixture-only callers. Guessing would
+  have shipped an allowlist that broke on the first uncovered path.
+* Consequence: `init`, `commit`, `cat-file`, `show`, `checkout`, and `branch` are
+  fixture-only and are granted per-construction, so production cannot reach them.
+
+### Decision D-014: The worker channel is a separate identity, not a narrower role
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: a worker token and the operator token are mutually exclusive. A
+  worker route does not resolve for an operator, and an operator route does not
+  resolve for a worker. Both refusals are 404 rather than 403.
+* Alternatives: one credential with a capability set, or 403 on cross-use.
+* Rationale: sharing one credential makes a submission's provenance a guess, and
+  the operator holds strictly more authority, so a worker acting as one would
+  make every gate decorative. Returning 404 rather than 403 stops a worker
+  enumerating the operator surface it is missing.
+* Consequence: authentication now has to happen before the handler knows the
+  route, so `WorkerCredentialStore.identify` resolves a token without spending
+  its submission budget, and `resolve` spends it only once the submission names a
+  kind the channel offers. A malformed body cannot burn an attempt.
+
+### Decision D-015: `senawa init` publishes the authored tree, not the lowered one
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: `init` writes `agents.yaml`, `workflow.yaml`, `sensors.yaml`, two
+  prompts, and three schemas. It no longer writes `workflow.json`.
+* Trigger: running `senawa init` in a clean directory and then `senawa run-gates`
+  produced `Could not read agents.yaml`. Phase 1 changed what a consumer authors
+  and nothing changed what `init` scaffolds, so the product's own scaffold could
+  not be compiled by the product.
+* Alternatives: publishing both, or leaving `init` alone until Phase 10.
+* Rationale: publishing both would give a consumer two files that describe the
+  same workflow and no way to tell which one is read. Leaving it alone would mean
+  the first command a new consumer runs produces a project the second command
+  refuses.
+* Consequence: `doctor` gained an authored path that falls back to the earlier
+  layout when no authored tree is present, so the migration hint still fires.
+  Four tests pinned to the old scaffold were repaired: two now write the lowered
+  document themselves, because they deliberately drive it.
+
+### Decision D-016: The template's default sensor has to be able to fail
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: the scaffolded `clean-tree` sensor runs `git diff --exit-code`.
+* Trigger: the first draft ran `git status --porcelain`, which exits zero whether
+  or not the tree is dirty. The gate passed on a dirty tree, which is precisely
+  the vacuous gate the design condemns.
+* Rationale: a scaffold teaches by example. A default gate that cannot refuse
+  teaches that gates are decorative.
+* Consequence: the template comment says so explicitly, and names replacing the
+  command with a real build or test as the expected first edit.
+
+### Deviation: continuous integration landed after Phase 2, not before it
+
+The plan said the pipeline should land no later than Phase 2. It landed after
+Phase 4. The reason is not a good one: the phases were taken in order and the
+cross-cutting item was not scheduled against any of them. It is now
+`.github/workflows/verify.yml`, running build, typecheck, lint, tests,
+boundaries, documentation links, whitespace, and the browser matrix.
+
+## Phase 2 and 3 completion log
+
+### What the worker channel is
+
+Three routes under `/api/v1alpha1/worker/{dispatchId}/`: `context`,
+`output-schema`, and `submissions`. Reads spend nothing, so a worker that crashed
+can re-read its context without losing an attempt it never used. A submission's
+identity is a digest senawa computes over the canonical submission, never a value
+the agent supplies, so a retry after a lost response cannot become a second
+distinct submission. That is D-003 made real.
+
+`senawa worker context|output-schema|submit` speaks to it over the local socket.
+The credential travels as a file path in `SENAWA_WORKER_CREDENTIAL`, not as a
+token in the environment, because a value a process has already read cannot be
+withdrawn and propagates to every descendant.
+
+### What the command line gained
+
+`senawa run-gates <phase>` measures a phase's gate sensors now and reports what
+they measured. `senawa phase`, `senawa artifact list|read`, and `senawa agent
+list` answer the questions asked after a refusal. `run-gates` dropped the plan's
+`<workflow>` argument: the project root already names the workflow, and a second
+way to name it would be a second source of truth.
+
+### What was demonstrated by hand
+
+In a scratch project: `senawa init`, then `senawa doctor` reports the authored
+tree valid, then `senawa run-gates implement` passes on a clean tree and exits 1
+on a dirty one, printing the sensor, its exit code, and the diff that failed it.
+
+### Validation
+
+* 6 worker HTTP tests, 5 worker channel tests, 2 sensor containment tests.
+* Full suite: 114 files and 1,367 tests passed with 2 skipped opt-in live tests.
+* Typecheck, lint at the 41-warning template baseline, boundaries across 513
+  files, documentation links across 50 files.
