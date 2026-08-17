@@ -484,6 +484,131 @@ internal model. The analysis must test that rather than assume it.
   grants permission, and is never required.
 * Research and proposals live in `docs/design/WIP/redesign-2`.
 
+## Canonical behaviours
+
+Every row is something senawa has to do, and something a test can check. Cite the
+id from a plan item, a test name, or a review comment instead of restating the
+row.
+
+Only working code satisfies a row. A document that agrees with a row proves
+nothing.
+
+The last column says where the behaviour came from, so nobody drops it later
+without knowing what it was for. Ids use two letters, so a behaviour is never
+mistaken for a decision or a finding, which use `D-` and `F-` in the
+implementation log.
+
+### Authoring
+
+| ID | Senawa must | Settled by |
+|---|---|---|
+| AU-01 | Turn the three YAML files into a runnable workflow, or refuse and name the file, the place, and the reason | Phase 1 |
+| AU-02 | Work out how data moves between phases, so nobody hand-writes a JSON Pointer | D-004 |
+| AU-03 | Reject a blocking gate built on a sensor that can disagree with itself, when it is written rather than when it runs | D-012 |
+| AU-04 | Ask the author to name the input shape when a phase reads from more than one earlier phase | Phase 1 |
+| AU-05 | Refuse anything it cannot compile, instead of compiling it and quietly dropping part of it | F-004 |
+| AU-06 | Let the author change any default, or record why they cannot | F-004 |
+| AU-07 | Create a project with `init`, and check that same project with `doctor` | D-015 |
+| AU-08 | Ship a starter gate that can actually fail, so nobody learns that gates are decoration | D-016 |
+
+### Dispatch and the agent contract
+
+| ID | Senawa must | Settled by |
+|---|---|---|
+| DP-01 | Add its own instructions to every prompt, telling the agent how to finish | D-019 |
+| DP-02 | Treat the author's prompt as words, never as permission | README |
+| DP-03 | Offer only what this job is allowed to do, and drop the rest from the prompt, the commands, and the tools | D-019 |
+| DP-04 | Never accept work the scheduler will silently ignore | F-001 |
+| DP-05 | Give a script and a model the same rules, only in a different shape | D-019 |
+
+### Completion
+
+| ID | Senawa must | Settled by |
+|---|---|---|
+| CO-01 | Take the output, the evidence, and the verdict in a single complete call | D-021 |
+| CO-02 | Work out the submission id itself, so a repeated call cannot become a second submission | D-003 |
+| CO-03 | Save nothing when it refuses, so a failed try leaves the phase untouched | D-021 |
+| CO-04 | Ignore JSON printed in chat, because only a complete call counts | D-021 |
+| CO-05 | Read the evidence files during that same call, so evidence for a refused try is never kept | D-022 |
+| CO-06 | Charge no attempt for reading, or for a request it rejects as malformed | D-014 |
+
+### Sensors and gates
+
+| ID | Senawa must | Settled by |
+|---|---|---|
+| GA-01 | Tie every reading to the exact command that produced it | Phase 4 |
+| GA-02 | Let only repeatable measurements block a phase | D-023 |
+| GA-03 | Treat a missing measurement as a failure, never as a pass | README |
+| GA-04 | Keep a sensor out of the wider environment and out of the rest of the disk | Phase 4 |
+| GA-05 | Say which rule failed, what it wanted, and what it got | Phase 4 |
+| GA-06 | Let an agent test itself as often as it likes, for free | Brief |
+
+### Trying again and giving up
+
+| ID | Senawa must | Settled by |
+|---|---|---|
+| IT-01 | Hand the next try the reasons the last one failed | D-018 |
+| IT-02 | Take the retry limit and the failure handling from the workflow file | F-004 |
+| IT-03 | Escalate or fail when the tries run out, whichever the author chose | F-004 |
+| IT-04 | Build the escalation from what it measured, not from the agent's story about it | D-017 |
+| IT-05 | Refuse an escalation that leaves the human no options to choose from | D-017 |
+| IT-06 | Never leave a run stuck with nothing to do and no way out | Research |
+
+### Human decisions
+
+| ID | Senawa must | Settled by |
+|---|---|---|
+| HU-01 | Ask for a reason when a human rejects, and lock that reason to the decision | D-018 |
+| HU-02 | Record who decided, when, and why | Brief |
+| HU-03 | Keep approving, rejecting, and overriding out of any agent's reach | D-014 |
+| HU-04 | Show every override in the history and the report, never hide one | Brief |
+
+### Fan-out
+
+| ID | Senawa must | Settled by |
+|---|---|---|
+| FO-01 | Give each item its own phase, with its own gates, approval, and escalation | D-001, D-002 |
+| FO-02 | Let the author say what happens when some items fail and others pass | Brief |
+| FO-03 | Keep each item's identity stable, so a re-plan can tell a new item from a changed one | Research |
+| FO-04 | Look inside nested items too when it fences work during a change | D-002 |
+| FO-05 | Cap how deep items can nest, and refuse anything deeper when it is written | Brief |
+
+### Sessions
+
+| ID | Senawa must | Settled by |
+|---|---|---|
+| SS-01 | Keep an agent's memory across the phases it works, but start each fanned-out item fresh | Brief |
+| SS-02 | Report a lost session as a real event, not a quiet restart | Brief |
+| SS-03 | Record which session and which turn produced each piece of work | Brief |
+| SS-04 | Stop an agent's context growing without limit | Brief |
+
+### Security
+
+| ID | Senawa must | Settled by |
+|---|---|---|
+| SC-01 | Give each job its own credential, in a file that can be taken away mid-run | D-010 |
+| SC-02 | Keep worker and operator apart, and refuse one on the other's routes without revealing them | D-014 |
+| SC-03 | Allow only the git commands it knows about | D-013 |
+| SC-04 | Stop sensitive output reaching anywhere cleared for less | Phase 6 |
+| SC-05 | Limit what a worker's identity can do, while saying plainly that it cannot stop a worker who reads files it should not | F-003 |
+
+### Determinism and restart
+
+| ID | Senawa must | Settled by |
+|---|---|---|
+| RC-01 | Keep the kernel free of clocks, randomness, and anything it was not given | README |
+| RC-02 | Write down what it intends before acting, and check the result before saving it | README |
+| RC-03 | Pick up exactly where it stopped, without redoing accepted work | README |
+| RC-04 | Promise the same replay, not the same model output | Brief |
+
+### Watching a run
+
+| ID | Senawa must | Settled by |
+|---|---|---|
+| OB-01 | Let a person do everything from the command line, with the portal optional | Constraints |
+| OB-02 | Show the workflow and the working agent first, and keep detail one step away | Brief |
+| OB-03 | Label what it measured differently from what the agent handed in | D-023 |
+
 ## What done looks like
 
 A consumer can author three YAML files and a JSON input, run one command, and
