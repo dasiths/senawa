@@ -371,3 +371,26 @@ worker cannot reach one by guessing a path.
   dispatch identity.
 * Full suite: 109 files and 1,344 tests passed with 2 skipped opt-in live tests.
 * Typecheck, boundaries across 483 files, documentation links across 50 files.
+
+### Phase 2 progress: the whole start path is one call
+
+`startAuthoredRun` takes a project directory and a request and returns a
+dispatched phase: compile the three authored documents, instantiate the run, bind
+the request against the root phase's declared input schema, and dispatch. After
+it returns, the scheduler has work it can see.
+
+Deriving the workflow input schema needed a correction. There is no `workflow`
+field on a `ConfigurationSnapshot`, so the schema the request binds against is
+read from the root phase's own declared input. That is the right source anyway:
+the root phase is by definition the one that reads the workflow input, so a
+separate declaration could only disagree with it.
+
+The test asserts the dispatch carries an effect seed, because a dispatch without
+one is skipped by the scheduler in silence and the run strands with no error.
+
+### Validation
+
+* 2 start tests: the full path from authored files to a durable dispatch, and a
+  request the workflow input schema refuses.
+* Full suite: 110 files and 1,346 tests passed with 2 skipped opt-in live tests.
+* Typecheck, boundaries across 487 files.
