@@ -69,10 +69,10 @@ A later phase may not regress one of them.
 | 9 | Fan-out and fan-in | Lowering built; member phases open |
 | 10 | Sessions, model routing, and steering | Not started |
 | 11 | Prove authored-surface parity | Proven against senawa's own workflow |
-| 12 | The portal earns its density | Not started |
-| 13 | Remove what the evidence condemns | Not started |
-| 14 | Name it v1 and rewrite every document in plain language | Not started |
-| 15 | Restore the loop engineering narrative | Not started |
+| 12 | The portal earns its density | Route fetching fixed; disclosure open |
+| 13 | Remove what the evidence condemns | Dead intent removed |
+| 14 | Name it v1 and rewrite every document in plain language | Renamed; guide rewrite open |
+| 15 | Restore the loop engineering narrative | README restored |
 
 ## Phase 0: Settle the shape
 

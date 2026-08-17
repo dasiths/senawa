@@ -1046,3 +1046,45 @@ than left as a promise the system does not keep.
 * Full suite: 118 files and 1,397 tests passed with 2 skipped opt-in live tests.
 * Typecheck, lint at the 42-warning template baseline, boundaries across 521
   files, documentation links across 50 files.
+
+## Phases 12, 14, and 15 log
+
+### The portal stopped fetching what it did not show
+
+`#loadResources` fetched human needs, events, and receipts on every route change.
+Only needs are used everywhere, because they drive the attention banner. Events
+and receipts feed the activity route alone, so every other route paid for two
+requests it discarded. They are now fetched only where they are shown. The
+browser suite covers this: 32 tests pass, including the activity paging journey.
+
+### v1 naming
+
+Every package is 1.0.0, the packaging script and its output directory are named
+for a release rather than an alpha, and the word is gone from the README and the
+guide index.
+
+The protocol identifiers `senawa.dev/...` that carry `v1alphaN` are deliberately
+unchanged. They are content-addressed API versions embedded in digests,
+migrations, and stored records, no author ever writes one, and renaming them
+would invalidate every persisted record to change a string a consumer never sees.
+Recorded here so the omission is a decision rather than an oversight.
+
+### The README carries the loops again
+
+The three loops are named with who runs each and over what period, and sensor,
+gate, anchor, and backpressure are each defined where a reader first meets them.
+The design links point at the v1 brief and plan rather than the redesign-1 set
+they still referenced.
+
+### What remains
+
+* The autonomous driver: nothing yet advances a phase from dispatch through
+  gate evaluation to closure without a human issuing each command. This is the
+  single largest open item, and the Phase 2 live, restart, and scripted
+  acceptances all wait on it.
+* Fan-out members are tasks rather than phases, so per-member gates and approval
+  are not yet expressible. Recorded as a deviation from D-001 in the Phase 9 log.
+* Completion evidence views, so a later phase can read an earlier phase's
+  accepted evidence.
+* Sessions, steering, and portal progressive disclosure.
+* The consumer guides still describe the earlier authoring model.
