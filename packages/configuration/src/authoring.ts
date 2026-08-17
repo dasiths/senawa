@@ -26,6 +26,10 @@ export interface AuthoredLoweringResult {
 const WORKFLOW_API_VERSION = "senawa.dev/workflow/v1alpha3";
 const SESSION_SCOPES = new Set(["run", "phase", "element"]);
 const FAILURE_POLICIES = new Set(["continue", "fail-fast"]);
+const OUTPUT_SENSITIVITIES = new Set(["public", "internal", "confidential", "restricted"]);
+const EVIDENCE_MODES = new Set(["none", "task", "required-criteria", "all-satisfied"]);
+/** The kernel refuses a larger phase output, so authoring cannot promise one. */
+const MAX_OUTPUT_BYTES = 262_144;
 
 /** The single attempt counter that replaces the six declared budget units (D-005). */
 const PHASE_ATTEMPT_LIMIT = 3;
@@ -205,11 +209,19 @@ interface AuthoredPhase {
   readonly session: string;
   readonly needs: readonly string[];
   readonly output: string;
+  readonly outputSensitivity: string;
+  readonly outputMaxBytes: number;
   readonly input?: string;
   readonly gates: readonly string[];
   readonly approve: boolean;
   readonly forEach?: string;
   readonly onFailure: string;
+  readonly completionEvidence: AuthoredCompletionEvidence;
+}
+
+interface AuthoredCompletionEvidence {
+  readonly mode: string;
+  readonly require: readonly { readonly kind: string; readonly min: number }[];
 }
 
 function readAgents(
@@ -334,7 +346,7 @@ function readPhases(
     }
     const name = requiredString(collector, path, pointer, raw, "name");
     const agent = requiredString(collector, path, pointer, raw, "agent");
-    const output = requiredString(collector, path, pointer, raw, "output");
+    const output = readOutput(collector, path, pointer, raw);
     if (name === undefined || agent === undefined || output === undefined) continue;
     if (seen.has(name)) {
       add(collector, "duplicate-key", path, `${pointer}/name`, `Phase ${name} is declared twice`);
@@ -431,15 +443,126 @@ function readPhases(
       agent,
       session: agents.get(agent)?.session ?? "run",
       needs,
-      output,
+      output: output.schema,
+      outputSensitivity: output.sensitivity,
+      outputMaxBytes: output.maxBytes,
       ...(declaredInput === undefined ? {} : { input: declaredInput }),
       gates,
       approve: raw.approve === true,
       ...(forEach === undefined ? {} : { forEach }),
       onFailure,
+      completionEvidence: readCompletionEvidence(collector, path, pointer, raw),
     });
   }
   return phases;
+}
+
+/**
+ * Reads a phase output, in either the short or the expanded form.
+ *
+ * The short form is a schema path, because most outputs need nothing else. The
+ * expanded form exists so sensitivity and size are authorable rather than pinned.
+ */
+function readOutput(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+): { schema: string; sensitivity: string; maxBytes: number } | undefined {
+  const value = raw.output;
+  if (typeof value === "string") {
+    return { schema: value, sensitivity: "internal", maxBytes: MAX_OUTPUT_BYTES };
+  }
+  if (!isRecord(value)) {
+    add(collector, "missing-field", path, `${pointer}/output`, "output is required");
+    return undefined;
+  }
+  const schema = requiredString(collector, `${pointer}/output`, "", value, "schema");
+  if (schema === undefined) return undefined;
+  const sensitivity = typeof value.sensitivity === "string" ? value.sensitivity : "internal";
+  if (!OUTPUT_SENSITIVITIES.has(sensitivity)) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      `${pointer}/output/sensitivity`,
+      `Sensitivity must be one of ${[...OUTPUT_SENSITIVITIES].sort().join(", ")}`,
+    );
+  }
+  const maxBytes = typeof value.maxBytes === "number" ? value.maxBytes : MAX_OUTPUT_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_OUTPUT_BYTES) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      `${pointer}/output/maxBytes`,
+      `An output may be at most ${MAX_OUTPUT_BYTES} bytes`,
+    );
+  }
+  return { schema, sensitivity, maxBytes };
+}
+
+/** Reads the completion evidence policy, defaulting to requiring none. */
+function readCompletionEvidence(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+): AuthoredCompletionEvidence {
+  const value = raw.completionEvidence;
+  if (value === undefined) return { mode: "none", require: [] };
+  if (!isRecord(value)) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      `${pointer}/completionEvidence`,
+      "completionEvidence must be a mapping",
+    );
+    return { mode: "none", require: [] };
+  }
+  const mode = typeof value.mode === "string" ? value.mode : "none";
+  if (!EVIDENCE_MODES.has(mode)) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      `${pointer}/completionEvidence/mode`,
+      `Mode must be one of ${[...EVIDENCE_MODES].sort().join(", ")}`,
+    );
+  }
+  const declared = Array.isArray(value.require) ? value.require : [];
+  const require: { kind: string; min: number }[] = [];
+  for (const [index, entry] of declared.entries()) {
+    const itemPointer = `${pointer}/completionEvidence/require/${index}`;
+    if (!isRecord(entry)) {
+      add(collector, "invalid-field", path, itemPointer, "Each requirement must be a mapping");
+      continue;
+    }
+    const kind = typeof entry.kind === "string" ? entry.kind : undefined;
+    if (kind === undefined || kind.length === 0) {
+      add(collector, "missing-field", path, `${itemPointer}/kind`, "kind is required");
+      continue;
+    }
+    const min = typeof entry.min === "number" ? entry.min : 1;
+    if (!Number.isSafeInteger(min) || min < 1) {
+      add(collector, "invalid-field", path, `${itemPointer}/min`, "min must be a positive integer");
+      continue;
+    }
+    require.push({ kind, min });
+  }
+  // Requiring evidence while the mode collects none would read as a promise the
+  // gate never keeps, so it is refused where it is written.
+  if (mode === "none" && require.length > 0) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      `${pointer}/completionEvidence/mode`,
+      "Mode none collects no evidence, so it cannot carry requirements",
+    );
+  }
+  return { mode, require };
 }
 
 function lowerPhase(
@@ -484,7 +607,13 @@ function lowerPhase(
       resumeAcrossAttempts: phase.session !== "element",
       completionPolicy: {
         criteria: [{ key: `${phase.name}-produced`, generation: 1, required: true, input: null }],
-        evidencePolicy: { mode: "none", requirements: [] },
+        evidencePolicy: {
+          mode: phase.completionEvidence.mode,
+          requirements: phase.completionEvidence.require.map((requirement) => ({
+            kind: requirement.kind,
+            minimumCount: requirement.min,
+          })),
+        },
       },
     },
     outputs: [
@@ -492,8 +621,8 @@ function lowerPhase(
         key: phase.name,
         schema: schemaKey(phase.output),
         path: `outputs/${phase.name}.json`,
-        maxBytes: 262_144,
-        sensitivity: "internal",
+        maxBytes: phase.outputMaxBytes,
+        sensitivity: phase.outputSensitivity,
       },
     ],
     actions: [],

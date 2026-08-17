@@ -65,6 +65,64 @@ describe("authored workflow lowering", () => {
     expect(result.snapshot?.graph.nodes.filter((node) => node.kind === "phase")).toHaveLength(2);
   });
 
+  it("takes output sensitivity and size from the author", () => {
+    const lowered = lowerAuthoredWorkflow(
+      authoredWithVerify(
+        "    output:\n      schema: schemas/verification.schema.json\n      sensitivity: confidential\n      maxBytes: 4096\n",
+      ),
+    );
+    expect(lowered.diagnostics).toEqual([]);
+    const phases = (
+      lowered.document as unknown as { readonly phases: readonly Record<string, never>[] }
+    ).phases;
+    expect(phases[1]?.outputs).toEqual([
+      expect.objectContaining({ sensitivity: "confidential", maxBytes: 4096 }),
+    ]);
+  });
+
+  it("refuses an output larger than the kernel will accept", () => {
+    const lowered = lowerAuthoredWorkflow(
+      authoredWithVerify(
+        "    output:\n      schema: schemas/verification.schema.json\n      maxBytes: 999999\n",
+      ),
+    );
+    expect(lowered.diagnostics.map(({ pointer }) => pointer)).toContain(
+      "/phases/1/output/maxBytes",
+    );
+  });
+
+  it("takes the completion evidence policy from the author", () => {
+    const lowered = lowerAuthoredWorkflow(
+      authoredWithVerify(
+        "    output: schemas/verification.schema.json\n    completionEvidence:\n      mode: task\n      require:\n        - kind: task-completion\n          min: 2\n",
+      ),
+    );
+    expect(lowered.diagnostics).toEqual([]);
+    const phases = (
+      lowered.document as unknown as { readonly phases: readonly Record<string, never>[] }
+    ).phases;
+    expect(phases[1]?.executor).toMatchObject({
+      completionPolicy: {
+        evidencePolicy: {
+          mode: "task",
+          requirements: [{ kind: "task-completion", minimumCount: 2 }],
+        },
+      },
+    });
+  });
+
+  it("refuses requirements under a mode that collects no evidence", () => {
+    const lowered = lowerAuthoredWorkflow(
+      authoredWithVerify(
+        "    output: schemas/verification.schema.json\n    completionEvidence:\n      mode: none\n      require:\n        - kind: task-completion\n",
+      ),
+    );
+    // Promising evidence a gate never collects would read as a guarantee.
+    expect(lowered.diagnostics.map(({ pointer }) => pointer)).toContain(
+      "/phases/1/completionEvidence/mode",
+    );
+  });
+
   it("derives prompt input paths from the template rather than the author", () => {
     const document = lowerAuthoredWorkflow(authored()).document as
       | { readonly prompts: readonly { readonly key: string; readonly inputPaths: string[] }[] }
@@ -172,6 +230,17 @@ function authored() {
     workflow: { path: "workflow.yaml", text: WORKFLOW },
     sensors: { path: "sensors.yaml", text: SENSORS },
     prompts: PROMPTS,
+  };
+}
+
+/** The same project with one phase's body replaced, for policy cases. */
+function authoredWithVerify(body: string) {
+  return {
+    ...authored(),
+    workflow: {
+      path: "workflow.yaml",
+      text: `${WORKFLOW.slice(0, WORKFLOW.indexOf("  - name: verify"))}  - name: verify\n    agent: verifier\n    needs: [define]\n${body}`,
+    },
   };
 }
 
