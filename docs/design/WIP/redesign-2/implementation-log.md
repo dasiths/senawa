@@ -313,3 +313,42 @@ Three traps the specification called out were live and are now closed in code:
   is the failure that arrives far from its cause.
 * Full suite: 107 files and 1,334 tests passed with 2 skipped opt-in live tests.
 * Typecheck, boundaries across 477 files.
+
+### Decision D-010: A worker holds a per-dispatch credential delivered as a file
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: `WorkerCredentialStore` mints a 32-byte token per dispatch, written
+  to a mode 0600 file under the private runtime directory, scoped to one
+  repository, run, dispatch, context, and principal, with an explicit capability
+  list, an expiry, and a submission budget. The worker receives the file path.
+* Alternatives: passing the token in an environment variable or in argv, or
+  letting the worker use the operator credential.
+* Rationale: a worker must never hold the operator credential, because that would
+  let it approve its own phase and make every gate decorative. Of the delivery
+  mechanisms, a file is the only one that can be withdrawn from a process that
+  has already started: an environment variable cannot be taken back and
+  propagates to every descendant, and argv is world-readable through the process
+  table. The file also reuses the existing private-directory and private-file
+  checks rather than inventing new ones.
+* Consequence: revocation is an unlink plus a map deletion, and it is covered by
+  a test that asserts a previously valid token stops working.
+
+### Finding F-003: The scheme bounds the worker, not the machine
+
+Worth stating plainly rather than leaving implied. The scoped credential bounds
+what the worker's own identity can do. It does not stop a worker that can read
+arbitrary files from reading the operator credential, which sits at a predictable
+path with mode 0600 owned by the same user. Today the SDK worker cannot do that
+because it has no shell and no general file read. A worker command line reopens
+that capability, so the honest statement is that this scheme prevents privilege
+by identity, not privilege by theft. Narrowing that further needs a different
+uid or a sandbox, which is beyond v1.
+
+### Validation
+
+* 6 credential tests: private file mode, capability permitted and denied,
+  unknown token refused, submission budget exhaustion, expiry, and revocation
+  withdrawing a token that was already read.
+* Full suite: 108 files and 1,340 tests passed with 2 skipped opt-in live tests.
+* Typecheck, boundaries across 481 files.
