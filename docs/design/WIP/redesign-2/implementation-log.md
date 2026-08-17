@@ -218,3 +218,54 @@ temporary directory rather than from fixtures.
   file and path; a missing authored document is refused by the allowlist.
 * Full suite: 106 files and 1,333 tests passed with 2 skipped opt-in live tests.
 * Typecheck, boundaries across 473 files, documentation links across 50 files.
+
+## Phase 2 log
+
+### Finding F-001: Multi-phase progression is blocked, and Phase 2 is honestly one phase
+
+Research into the dispatch seam surfaced a dependency the plan did not account
+for. A run's current phase is fixed at instantiation and no implemented intent
+advances it: `start-phase-attempt` and `publish-phase-output` are declared in the
+protocol but fall through to `unsupported-intent`, and completion submission
+asserts the task belongs to the active phase. A second phase therefore cannot be
+dispatched in the same run today.
+
+Phase 2 can still deliver what it promises, because it promises one phase end to
+end. Multi-phase progression is a real prerequisite for Phase 5 and Phase 6, and
+belongs with the escalation work rather than being discovered there. This is the
+same limit recorded as PE-004 in redesign-1, now with a concrete consequence.
+
+### Decision D-008: Agent roles carry the protocol capabilities
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: the authored lowering grants every agent role the three worker
+  submission capabilities alongside its own `<agent>-work` capability.
+* Rationale: the broker denies a submission whose capability is absent from the
+  dispatch, and a dispatch cannot widen what its context granted. A role-only
+  capability list registers, renders, schedules, and dispatches successfully, and
+  then fails at the agent's first submission with a capability denial. The
+  failure arrives far from its cause, so the fix belongs where the capability set
+  is built.
+* Consequence: authors do not declare capabilities. If a workflow later needs a
+  narrower agent, that becomes an explicit authored field rather than the default.
+
+### Finding F-002: A worker credential reopens a path the SDK worker had closed
+
+The recommended delivery for a scoped worker credential is a mode 0600 file whose
+path travels in an environment variable, reusing the existing private runtime
+directory helpers. It is revocable by unlinking, does not propagate implicitly to
+descendants, and never appears in the process table.
+
+The residual risk is worth stating plainly. The machine-wide operator credential
+sits at a predictable path with mode 0600 owned by the same user the worker runs
+as. Today the agent cannot read it because it has no shell and no general file
+read tool. A worker command line necessarily reopens that capability, so the
+scoped credential bounds what the worker's *own* identity can do while leaving
+same-uid theft of the operator credential unaddressed. Phase 2 must not claim
+otherwise.
+
+Two smaller findings recorded for the phase that implements this: capability
+denials are currently recorded nowhere, unlike asset-read denials which produce a
+full audit receipt; and the durable event decoder has a closed name allowlist, so
+any new denial event must be registered there or snapshot replay fails.

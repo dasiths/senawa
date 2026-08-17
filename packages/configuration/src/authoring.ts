@@ -31,6 +31,20 @@ const FAILURE_POLICIES = new Set(["continue", "fail-fast"]);
 const PHASE_ATTEMPT_LIMIT = 3;
 const AGENT_BUDGETS = Object.freeze([{ unit: "review-iteration", limit: PHASE_ATTEMPT_LIMIT }]);
 
+/**
+ * What every agent needs to talk back to senawa.
+ *
+ * The broker denies a submission whose capability is absent from the dispatch,
+ * and a dispatch cannot widen what its context granted. Omitting these produces
+ * a run that registers, renders, schedules, and dispatches, then fails at the
+ * agent's first submission.
+ */
+const AGENT_CAPABILITIES = Object.freeze([
+  "worker.submit.completion",
+  "worker.submit.phase-output",
+  "worker.submit.question",
+]);
+
 interface Collector {
   readonly diagnostics: ConfigurationDiagnostic[];
 }
@@ -117,7 +131,7 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
       .map((agent) => ({
         key: agent.key,
         kind: "agent",
-        capabilities: [`${agent.key}-work`],
+        capabilities: [...AGENT_CAPABILITIES, `${agent.key}-work`].sort(compare),
         prompt: agent.key,
         modelPolicy: agent.key,
       }))
