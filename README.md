@@ -1,7 +1,7 @@
 ---
 title: Senawa
-description: Deterministic workflow kernel and alpha command-line tooling
-ms.date: 2026-08-16
+description: Deterministic workflow kernel and v1 command-line tooling
+ms.date: 2026-08-17
 ms.topic: overview
 ---
 
@@ -10,17 +10,57 @@ factory. It executes consumer-defined workflows as an auditable state machine on
 your own host, with a local supervisor, a SQLite authority, and a browser run
 console.
 
-The repository is in an alpha implementation reset. Start with
-[Getting started](docs/guide/getting-started.md).
+Start with [Getting started](docs/guide/getting-started.md).
+
+## The three loops
+
+Senawa runs three nested loops, and almost every design choice follows from
+which loop a decision belongs to.
+
+The **inner loop** is one agent working alone on one phase. It reads its
+assignment, does the work, and asks to finish. It repeats until it satisfies the
+conditions or says it cannot. It runs for minutes.
+
+The **middle loop** is the deterministic driver. It dispatches a phase, measures
+the result, and either grants completion or hands back reasons. No model runs
+this loop, which is what makes it repeatable. It runs for the length of a run.
+
+The **outer loop** is the human. They define what better means, review at the
+points they declared, and change the workflow when it is producing the wrong
+thing. It runs for as long as the project does.
+
+The property that makes this worth building is that **completion is granted, not
+claimed**. An agent asks to finish; the harness decides.
+
+## The vocabulary
+
+A **sensor** measures a property of the work by running a real command, and
+returns a reading.
+
+A **gate** is a rule over readings that resists progress while they are red. A
+blocking rule refuses; an advisory rule is recorded and shown.
+
+An **anchor** is a deterministic reading that cannot be argued with. Every
+blocking gate needs one, or the harness is only agreeing with whoever submitted
+the work. Senawa refuses a blocking gate with no anchor when it is written, not
+when it runs.
+
+**Backpressure** is what the gates provide. An agent that cannot pass does not
+get to continue by insisting, and it cannot lower the bar it is measured
+against.
+
+Four things keep this honest: deterministic sensors that execute real code, a
+journal no agent can write, a frozen set the optimizer cannot weaken, and a
+human who decides what better means.
 
 ## Documentation
 
 * [Consumer guide](docs/guide/README.md) is the index for everything below.
-* [Getting started](docs/guide/getting-started.md) installs the alpha, creates a
+* [Getting started](docs/guide/getting-started.md) installs senawa, creates a
   workflow tree, starts the service, opens the portal, submits a command, and
   shuts down without spending model credits.
-* [Workflow authoring](docs/guide/workflow-authoring.md) documents every field
-  of `.senawa/workflow.json`.
+* [Workflow authoring](docs/guide/workflow-authoring.md) documents the authored
+  workflow tree.
 * [Portal](docs/guide/portal.md) documents the run console, its workflow
   diagram, and its human decision surfaces.
 * [Worktree mode](docs/guide/worktree-mode.md) documents the optional isolated
@@ -37,9 +77,10 @@ the [local supervisor HTTP reference](docs/reference/local-supervisor-http.md),
 and the [remote control-plane reference](docs/reference/remote-control-plane.md).
 
 The [design set](docs/design/README.md) explains why the system behaves this way,
-with the [comprehensive plan](docs/design/WIP/redesign-1/implementation-plan.md)
-as the active architecture source and the [implementation
-log](docs/design/WIP/redesign-1/implementation-log.md) recording decisions.
+with the [v1 brief](docs/design/WIP/redesign-2/brief.md) carrying the canonical
+behaviours, the [plan](docs/design/WIP/redesign-2/plan.md) as the active source,
+and the [implementation log](docs/design/WIP/redesign-2/implementation-log.md)
+recording decisions.
 
 The repository carries no `examples/` tree. Every runnable example lives inside
 the consumer guides: [Getting started](docs/guide/getting-started.md) carries the
@@ -187,7 +228,7 @@ derivation rules.
 ### Where the branch stands
 
 Every implementation phase is delivered. Phases 0 through 14 built the kernel
-through the packaged alpha and standard delivery authoring, Phase 16 added the
+through packaged delivery and standard authoring, Phase 16 added the
 browser run console, and Phase 17 added the design and consumer documentation
 sets. No phase carries the number 15; the former Phase 15 was renumbered to
 Phase 17 so documentation could describe final behavior. Acceptance criteria and
@@ -202,21 +243,21 @@ pnpm build
 pnpm typecheck
 pnpm lint
 pnpm test
-pnpm package:alpha
+pnpm package:release
 pnpm test:packaging
 pnpm check:boundaries
 pnpm docs:links
 ```
 
-The alpha execution host targets Linux x64 with glibc 2.34 or newer. Builds
+The execution host targets Linux x64 with glibc 2.34 or newer. Builds
 require a C17 compiler available as `cc` and package the resulting
 `senawa-process-supervisor` and `senawa-workspace-files` executables under
 `@senawa/execution-host/dist`. Installed packages use those prebuilt helpers;
 installation and runtime sensor execution never invoke a compiler.
 
-`pnpm package:alpha` builds a deterministic local bundle under `dist/alpha`.
+`pnpm package:release` builds a deterministic local bundle under `dist/release`.
 The bundle contains the public `senawa` package and exact local tarballs for its
-internal workspace dependencies. It is a local alpha verification lane, not a
+internal workspace dependencies. It is a local verification lane, not a
 registry publication command. `pnpm test:packaging` copies the bundle to an
 operating-system temporary directory, installs it there, and verifies init,
 doctor, service, portal, platform metadata, dependency versions, inventories,
@@ -233,7 +274,7 @@ validation.
 
 ## CLI
 
-The alpha ships one public executable, `senawa`. It creates and validates
+Senawa ships one public executable, `senawa`. It creates and validates
 workflow configuration, owns the local supervisor lifecycle, submits workflow
 commands, reads durable receipts, events, and projections, reviews amendments,
 mints portal sessions, and performs backup, restore, integrity, diagnostics, and

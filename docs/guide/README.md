@@ -1,20 +1,20 @@
 ---
 title: Senawa Consumer Guide
-description: Index of the Senawa alpha adoption, authoring, operations, and troubleshooting guides
+description: Index of the Senawa adoption, authoring, operations, and troubleshooting guides
 ms.date: 2026-08-16
 ms.topic: overview
 ---
 
 The consumer set explains how to adopt, configure, operate, and troubleshoot the
-Senawa alpha without reading implementation history or source code.
+Senawa without reading implementation history or source code.
 
-Senawa is alpha software. Every page here describes behavior that the delivered
+Every page here describes behavior that the delivered
 implementation proves. Optional, opt-in, and deferred behavior is labelled where
 it appears.
 
 ## Start here
 
-* [Getting started](getting-started.md) installs the alpha, creates a workflow
+* [Getting started](getting-started.md) installs senawa, creates a workflow
   tree with `senawa init`, validates it with `senawa doctor`, starts the local
   supervisor, opens the portal, submits a command, reads receipts and events,
   and shuts down. The whole journey runs without model credits.
@@ -44,14 +44,14 @@ it appears.
 * [Security](security.md) distinguishes principals, roles, capabilities, grants,
   approvals, proposal-only agents, stale results, local transport trust, remote
   control-plane trust, and what never leaves the host.
-* [Troubleshooting and limits](troubleshooting.md) covers the alpha platform
+* [Troubleshooting and limits](troubleshooting.md) covers the platform
   matrix, required native build tools, JSON-only configuration, explicit
   live-model costs, common failures with their exact messages, and unsupported
   or deferred behavior.
 
 ## References
 
-* [CLI reference](../reference/cli.md) is the complete alpha command surface.
+* [CLI reference](../reference/cli.md) is the complete command surface.
 * [Local supervisor HTTP](../reference/local-supervisor-http.md) is the exact
   route, transport, and local security boundary.
 * [Remote control plane](../reference/remote-control-plane.md) is the optional
@@ -75,4 +75,4 @@ tells you why the system behaves that way.
 * [Extending Senawa](../design/extending.md) covers adapters, sensors, workers,
   and transports.
 * [Production enhancements](../design/WIP/redesign-1/production-enhancements.md) records
-  deferred hardening that the alpha does not claim as delivered.
+  deferred hardening that v1 does not claim as delivered.
