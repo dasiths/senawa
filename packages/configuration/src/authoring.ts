@@ -31,6 +31,14 @@ const EVIDENCE_MODES = new Set(["none", "task", "required-criteria", "all-satisf
 const ITERATE_OR_FAIL = new Set(["iterate", "fail"]);
 const ESCALATE_OR_FAIL = new Set(["escalate", "fail"]);
 const MAX_PHASE_ATTEMPTS = 20;
+/** The comparisons an author may write, and the internal operator each becomes. */
+const GATE_COMPARISONS = Object.freeze([
+  { key: "exitCode", operator: "equals", defaultPointer: "/exitCode" },
+  { key: "equals", operator: "equals", defaultPointer: undefined },
+  { key: "atLeast", operator: "greater-than-or-equal", defaultPointer: undefined },
+  { key: "atMost", operator: "less-than-or-equal", defaultPointer: undefined },
+  { key: "exists", operator: "exists", defaultPointer: undefined },
+] as const);
 const DEFAULT_ITERATION: AuthoredIteration = Object.freeze({
   maximumAttempts: 3,
   onGateRejected: "iterate",
@@ -105,7 +113,15 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
 
   const agentsByKey = readAgents(collector, input, agents);
   const sensorSet = readSensors(collector, input.sensors.path, sensors);
-  const phases = readPhases(collector, input.workflow.path, workflow, agentsByKey, sensorSet);
+  const gateSet = readGates(collector, input.sensors.path, sensors, sensorSet);
+  const phases = readPhases(
+    collector,
+    input.workflow.path,
+    workflow,
+    agentsByKey,
+    sensorSet,
+    gateSet,
+  );
   const name = requiredString(collector, input.workflow.path, "/name", workflow, "name");
   const workflowInput = requiredString(collector, input.workflow.path, "/input", workflow, "input");
   if (name === undefined || workflowInput === undefined || phases === undefined) {
@@ -169,30 +185,26 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
       .map((sensor) => ({
         key: sensor.key,
         argv: sensor.argv,
-        cwd: ".",
-        timeoutMs: 300_000,
-        maxStdoutBytes: 65_536,
-        maxStderrBytes: 65_536,
-        inheritedEnvironment: ["PATH"],
+        cwd: sensor.cwd,
+        timeoutMs: sensor.timeoutMs,
+        maxStdoutBytes: sensor.maxOutputBytes,
+        maxStderrBytes: sensor.maxOutputBytes,
+        inheritedEnvironment: [...new Set(sensor.environment)].sort(compare),
         maxAttempts: 3,
         maxReconciliationAttempts: 2,
       }))
       .sort((left, right) => compare(left.key, right.key)),
     gates: phases
       .filter((phase) => phase.gates.length > 0)
-      .map((phase) => ({
-        key: `${phase.name}-gate`,
-        phase: phase.name,
-        blocking: phase.gates.map((sensor) => ({
-          key: `${sensor}-passes`,
-          condition: {
-            operator: "equals",
-            accessor: { sensorKey: sensor, pointer: "/exitCode" },
-            expected: 0,
-          },
-        })),
-        advisory: [],
-      }))
+      .map((phase) => {
+        const referenced = phase.gates.map((name) => gateSet.get(name) ?? implicitGate(name));
+        return {
+          key: `${phase.name}-gate`,
+          phase: phase.name,
+          blocking: referenced.flatMap((gate) => gate.blocking).map(lowerGateRule),
+          advisory: referenced.flatMap((gate) => gate.advisory).map(lowerGateRule),
+        };
+      })
       .sort((left, right) => compare(left.key, right.key)),
     implementationEvidenceViews: [],
     forEach: [],
@@ -309,6 +321,193 @@ interface AuthoredSensor {
   readonly key: string;
   readonly argv: readonly string[];
   readonly deterministic: boolean;
+  readonly cwd: string;
+  readonly timeoutMs: number;
+  readonly maxOutputBytes: number;
+  readonly environment: readonly string[];
+}
+
+/** Accepts a plain count, or a duration such as 10m, and refuses anything else. */
+function readDuration(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  value: unknown,
+  fallback: number,
+): number {
+  if (value === undefined) return fallback;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
+  if (typeof value === "string") {
+    const match = /^(\d+)(ms|s|m|h|k)?$/u.exec(value.trim());
+    const amount = match === undefined || match === null ? Number.NaN : Number(match[1]);
+    const unit = match?.[2] ?? "ms";
+    const scale: Readonly<Record<string, number>> = {
+      ms: 1,
+      s: 1_000,
+      m: 60_000,
+      h: 3_600_000,
+      k: 1_024,
+    };
+    const factor = scale[unit];
+    if (Number.isSafeInteger(amount) && amount > 0 && factor !== undefined) return amount * factor;
+  }
+  add(
+    collector,
+    "invalid-field",
+    path,
+    pointer,
+    "Expected a positive count or a duration like 10m",
+  );
+  return fallback;
+}
+
+interface AuthoredGateRule {
+  readonly key: string;
+  readonly sensorKey: string;
+  readonly pointer: string;
+  readonly operator: string;
+  readonly expected: unknown;
+}
+
+interface AuthoredGate {
+  readonly key: string;
+  readonly blocking: readonly AuthoredGateRule[];
+  readonly advisory: readonly AuthoredGateRule[];
+}
+
+/** A phase may name a sensor directly, which means that sensor must exit zero. */
+function implicitGate(sensorKey: string): AuthoredGate {
+  return {
+    key: sensorKey,
+    blocking: [
+      {
+        key: `${sensorKey}-passes`,
+        sensorKey,
+        pointer: "/exitCode",
+        operator: "equals",
+        expected: 0,
+      },
+    ],
+    advisory: [],
+  };
+}
+
+function lowerGateRule(rule: AuthoredGateRule): unknown {
+  return {
+    key: rule.key,
+    condition: {
+      operator: rule.operator,
+      accessor: { sensorKey: rule.sensorKey, pointer: rule.pointer },
+      expected: rule.expected,
+    },
+  };
+}
+
+/**
+ * Reads named gates, so a rule can measure something other than an exit code.
+ *
+ * The author names the reading field; the strict internal pointer is generated.
+ */
+function readGates(
+  collector: Collector,
+  path: string,
+  value: unknown,
+  sensors: ReadonlyMap<string, AuthoredSensor>,
+): ReadonlyMap<string, AuthoredGate> {
+  const gates = new Map<string, AuthoredGate>();
+  if (!isRecord(value) || value.gates === undefined) return gates;
+  if (!isRecord(value.gates)) {
+    add(collector, "invalid-field", path, "/gates", "Gates must be a mapping");
+    return gates;
+  }
+  for (const [key, raw] of Object.entries(value.gates)) {
+    const pointer = `/gates/${key}`;
+    if (!isRecord(raw)) {
+      add(collector, "invalid-gate", path, pointer, "Gate must be a mapping");
+      continue;
+    }
+    const blocking = readGateRules(collector, path, `${pointer}/blocking`, raw.blocking, sensors);
+    const advisory = readGateRules(collector, path, `${pointer}/advisory`, raw.advisory, sensors);
+    if (blocking.length === 0) {
+      add(collector, "invalid-gate", path, pointer, "A gate needs at least one blocking rule");
+      continue;
+    }
+    // A blocking gate with no deterministic reading is the harness agreeing with
+    // itself, so it is refused where it is written.
+    if (!blocking.some((rule) => sensors.get(rule.sensorKey)?.deterministic === true)) {
+      add(
+        collector,
+        "invalid-gate",
+        path,
+        pointer,
+        `Gate ${key} has no deterministic reading to anchor it`,
+      );
+      continue;
+    }
+    gates.set(key, { key, blocking, advisory });
+  }
+  return gates;
+}
+
+function readGateRules(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  value: unknown,
+  sensors: ReadonlyMap<string, AuthoredSensor>,
+): readonly AuthoredGateRule[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    add(collector, "invalid-gate", path, pointer, "Rules must be a list");
+    return [];
+  }
+  const rules: AuthoredGateRule[] = [];
+  for (const [index, raw] of value.entries()) {
+    const rulePointer = `${pointer}/${index}`;
+    if (!isRecord(raw)) {
+      add(collector, "invalid-gate", path, rulePointer, "Rule must be a mapping");
+      continue;
+    }
+    const sensorKey = typeof raw.sensor === "string" ? raw.sensor : undefined;
+    if (sensorKey === undefined) {
+      add(collector, "missing-field", path, `${rulePointer}/sensor`, "sensor is required");
+      continue;
+    }
+    if (!sensors.has(sensorKey)) {
+      add(
+        collector,
+        "unknown-reference",
+        path,
+        `${rulePointer}/sensor`,
+        `Unknown sensor ${sensorKey}`,
+      );
+      continue;
+    }
+    const comparison = GATE_COMPARISONS.find((candidate) => raw[candidate.key] !== undefined);
+    if (comparison === undefined) {
+      add(
+        collector,
+        "invalid-gate",
+        path,
+        rulePointer,
+        `A rule needs one of ${GATE_COMPARISONS.map(({ key }) => key).join(", ")}`,
+      );
+      continue;
+    }
+    const field = typeof raw.field === "string" ? raw.field : comparison.defaultPointer;
+    if (field === undefined) {
+      add(collector, "missing-field", path, `${rulePointer}/field`, "field is required");
+      continue;
+    }
+    rules.push({
+      key: `${sensorKey}-${comparison.key}`,
+      sensorKey,
+      pointer: field.startsWith("/") ? field : `/${field}`,
+      operator: comparison.operator,
+      expected: raw[comparison.key],
+    });
+  }
+  return rules;
 }
 
 function readSensors(
@@ -340,7 +539,15 @@ function readSensors(
       add(collector, "invalid-sensor", path, `${pointer}/run`, "Sensor command is empty");
       continue;
     }
-    sensors.set(key, { key, argv, deterministic: raw.deterministic !== false });
+    sensors.set(key, {
+      key,
+      argv,
+      deterministic: raw.deterministic !== false,
+      cwd: typeof raw.cwd === "string" ? raw.cwd : ".",
+      timeoutMs: readDuration(collector, path, `${pointer}/timeout`, raw.timeout, 300_000),
+      maxOutputBytes: readDuration(collector, path, `${pointer}/maxOutput`, raw.maxOutput, 65_536),
+      environment: Array.isArray(raw.env) ? ["PATH", ...raw.env.filter(isString)] : ["PATH"],
+    });
   }
   return sensors;
 }
@@ -351,6 +558,7 @@ function readPhases(
   value: unknown,
   agents: ReadonlyMap<string, AuthoredAgent>,
   sensors: ReadonlyMap<string, AuthoredSensor>,
+  gateSet: ReadonlyMap<string, AuthoredGate>,
 ): readonly AuthoredPhase[] | undefined {
   if (!isRecord(value) || !Array.isArray(value.phases)) {
     add(collector, "missing-field", path, "/phases", "Workflow must declare a phases list");
@@ -397,6 +605,7 @@ function readPhases(
     }
     const gates = Array.isArray(raw.gates) ? raw.gates.filter(isString) : [];
     for (const [gateIndex, gate] of gates.entries()) {
+      if (gateSet.has(gate)) continue;
       const sensor = sensors.get(gate);
       if (sensor === undefined) {
         add(
@@ -404,7 +613,7 @@ function readPhases(
           "unknown-reference",
           path,
           `${pointer}/gates/${gateIndex}`,
-          `Unknown sensor ${gate}`,
+          `Unknown gate or sensor ${gate}`,
         );
         continue;
       }

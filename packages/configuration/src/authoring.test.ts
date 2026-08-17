@@ -65,6 +65,51 @@ describe("authored workflow lowering", () => {
     expect(result.snapshot?.graph.nodes.filter((node) => node.kind === "phase")).toHaveLength(2);
   });
 
+  it("gates on a measured value, not only on an exit code", () => {
+    const lowered = lowerAuthoredWorkflow({
+      ...authored(),
+      sensors: {
+        path: "sensors.yaml",
+        text: `${SENSORS}  coverage:\n    run: pnpm test --coverage\n    deterministic: true\n\ngates:\n  quality:\n    blocking:\n      - sensor: coverage\n        field: /total/lines/pct\n        atLeast: 80\n    advisory:\n      - sensor: tests\n        exitCode: 0\n`,
+      },
+      workflow: {
+        path: "workflow.yaml",
+        text: WORKFLOW.replace("gates: [tests]", "gates: [quality]"),
+      },
+    });
+    expect(lowered.diagnostics).toEqual([]);
+    const gates = (
+      lowered.document as unknown as {
+        readonly gates: readonly { readonly blocking: unknown[]; readonly advisory: unknown[] }[];
+      }
+    ).gates;
+    expect(gates[0]?.blocking).toEqual([
+      {
+        key: "coverage-atLeast",
+        condition: {
+          operator: "greater-than-or-equal",
+          accessor: { sensorKey: "coverage", pointer: "/total/lines/pct" },
+          expected: 80,
+        },
+      },
+    ]);
+    expect(gates[0]?.advisory).toHaveLength(1);
+  });
+
+  it("refuses a named gate that no deterministic reading can anchor", () => {
+    const lowered = lowerAuthoredWorkflow({
+      ...authored(),
+      sensors: {
+        path: "sensors.yaml",
+        text: `${SENSORS}  opinion:\n    run: node critique.mjs\n    deterministic: false\n\ngates:\n  vibes:\n    blocking:\n      - sensor: opinion\n        atLeast: 7\n        field: /score\n`,
+      },
+    });
+    // Blocking on an opinion is the harness agreeing with whoever submitted.
+    expect(lowered.diagnostics.map(({ message }) => message)).toContain(
+      "Gate vibes has no deterministic reading to anchor it",
+    );
+  });
+
   it("takes the loop policy from the author, and the defaults when it is silent", () => {
     const lowered = lowerAuthoredWorkflow(
       authoredWithVerify(
@@ -200,7 +245,7 @@ describe("authored workflow lowering", () => {
         code: "unknown-reference",
         locator: "workflow.yaml",
         pointer: "/phases/1/gates/0",
-        message: "Unknown sensor absent-sensor",
+        message: "Unknown gate or sensor absent-sensor",
       },
     ]);
   });
