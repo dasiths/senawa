@@ -269,3 +269,47 @@ Two smaller findings recorded for the phase that implements this: capability
 denials are currently recorded nowhere, unlike asset-read denials which produce a
 full audit receipt; and the durable event decoder has a closed name allowlist, so
 any new denial event must be registered there or snapshot replay fails.
+
+### Decision D-009: The credit ceiling is a dispatch input, not a workflow field
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: `maxAiCredits` is supplied when a dispatch is built rather than
+  declared on an authored model route.
+* Rationale: an attempt to let an authored agent declare `credits` was refused by
+  the compiler with `unknown-field` at `/modelPolicies/0/routes/0/maxAiCredits`.
+  The route contract has no such field, and widening it to carry a spend ceiling
+  would put a cost control inside a document that is otherwise about routing.
+* Consequence: the ceiling belongs on the command that starts a run, where a
+  human is deciding to spend. Phase 3 should expose it as an argument. Until then
+  the driver defaults to a ceiling of one credit, which is deliberately small:
+  the zero it first used was refused because a ceiling of nothing is not a
+  ceiling.
+
+### Phase 2 progress: the dispatch driver exists
+
+`dispatchPhase` composes the fifteen steps that were never composed: it starts a
+phase attempt through the dataflow authority, builds the worker context, renders
+the prompt pack against a provisional dispatch, rebuilds the dispatch with the
+rendered digest, selects a model route, derives completion requirements, and
+registers the dispatch with a task scope fence and an effect seed.
+
+Three traps the specification called out were live and are now closed in code:
+
+* A dispatch built from role capabilities alone can do nothing, because the
+  broker denies every submission whose capability the dispatch lacks. The context
+  and the dispatch carry the identical list.
+* Omitting the effect seed registers a dispatch the scheduler silently skips,
+  stranding the run with no error anywhere. The seed is not optional here.
+* The prompt pack digest is an input to the dispatch, and the dispatch is an
+  input to rendering the pack, so the first dispatch exists only to render
+  against and is discarded.
+
+### Validation
+
+* A new end-to-end test compiles an authored project, instantiates a run, binds
+  the workflow input, and registers a dispatch, then reads it back from the
+  broker. It asserts the protocol capabilities are present, because their absence
+  is the failure that arrives far from its cause.
+* Full suite: 107 files and 1,334 tests passed with 2 skipped opt-in live tests.
+* Typecheck, boundaries across 477 files.

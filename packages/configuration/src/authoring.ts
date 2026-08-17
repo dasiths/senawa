@@ -195,6 +195,7 @@ interface AuthoredAgent {
   readonly provider: string;
   readonly model: string;
   readonly session: string;
+  readonly credits: number;
   readonly inputPaths: readonly string[];
 }
 
@@ -265,6 +266,7 @@ function readAgents(
       provider: typeof raw.provider === "string" ? raw.provider : "openai",
       model,
       session,
+      credits: typeof raw.credits === "number" && raw.credits > 0 ? raw.credits : 1,
       inputPaths: [...parsePromptTemplate(text).inputPaths].sort(compare),
     });
   }
