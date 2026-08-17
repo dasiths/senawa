@@ -90,6 +90,12 @@ export interface SubmitAmendmentProposalPayload {
   readonly proposal: JsonValue;
 }
 
+/** Advances a run to the phase named here, once its dependencies have closed. */
+export interface StartPhaseAttemptPayload {
+  readonly phaseId: string;
+  readonly definitionGeneration: number;
+}
+
 export interface RecordPhaseAttemptTransitionPayload {
   readonly attemptDigest: string;
   readonly transitionDigest: string;

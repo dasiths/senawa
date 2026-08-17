@@ -26,6 +26,7 @@ import {
   type RecordPhaseAttemptTransitionPayload,
   type RunControlPayload,
   type RunIdentity,
+  type StartPhaseAttemptPayload,
   type SubmitAmendmentProposalPayload,
   type SupervisorAdmissionFacts,
   type SupervisorAllocationFact,
@@ -299,6 +300,22 @@ export function decodeRunControlPayload(input: string | unknown): RunControlPayl
 
 export function encodeRunControlPayload(input: unknown): string {
   return canonicalStringify(decodeRunControlPayload(input));
+}
+
+export function decodeStartPhaseAttemptPayload(input: string | unknown): StartPhaseAttemptPayload {
+  const object = exactObject(decodeWireValue(input), "$", ["phaseId", "definitionGeneration"]);
+  identity(object.phaseId, "$.phaseId");
+  if (
+    typeof object.definitionGeneration !== "number" ||
+    !Number.isSafeInteger(object.definitionGeneration) ||
+    object.definitionGeneration < 1
+  ) {
+    fail("invalid-value", "$.definitionGeneration", "must be a positive safe integer");
+  }
+  return Object.freeze({
+    phaseId: object.phaseId as string,
+    definitionGeneration: object.definitionGeneration as number,
+  });
 }
 
 export function decodeRecordPhaseAttemptTransitionPayload(

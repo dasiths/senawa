@@ -70,6 +70,7 @@ import {
   decodeRecordFanOutDiffDecisionPayload,
   decodeRecordIntegrationBarrierPayload,
   decodeRecordPhaseAttemptTransitionPayload,
+  decodeStartPhaseAttemptPayload,
   decodeSubmitAmendmentProposalPayload,
   decodeWithdrawAmendmentProposalPayload,
   type ErrorEnvelope,
@@ -681,6 +682,8 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
         return this.recordAuthorityDecision(command, admission, run);
       case "close-phase":
         return this.closePhase(command, run);
+      case "start-phase-attempt":
+        return this.startPhaseAttempt(command, run);
       case "record-phase-attempt-transition":
         return canonicalValue(decodeRecordPhaseAttemptTransitionPayload(command.payload));
       case "import-plan":
@@ -1111,6 +1114,91 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     this.project(updated);
     run.records = updated;
     return canonicalValue(closure) as unknown as JsonValue;
+  }
+
+  /**
+   * Moves the run to its next phase.
+   *
+   * Without this a run's phase was fixed at instantiation, so a workflow could
+   * only ever execute its first phase. Advancing archives the closed phase and
+   * clears the per-phase records, because the next phase must build its own
+   * candidate, evidence, and decision rather than inheriting them.
+   */
+  private startPhaseAttempt(command: CommandEnvelope, run: RuntimeAuthorityRun): JsonValue {
+    const records = requiredRecords(run);
+    this.assertGraphRevision(command, records);
+    const payload = decodeStartPhaseAttemptPayload(command.payload);
+    if (records.closure === undefined) {
+      throw new RuntimeRefusal("closure-required", "A run advances only from a closed phase");
+    }
+    const graph = currentGraph(records, this.dependencies.sha256);
+    const target = graph.nodes.find(
+      (node) =>
+        node.kind === "phase" &&
+        node.definition.id === payload.phaseId &&
+        node.definition.generation === payload.definitionGeneration,
+    );
+    if (target === undefined || target.kind !== "phase") {
+      throw new RuntimeRefusal("unknown-phase", "The graph declares no such phase generation");
+    }
+    if (
+      target.definition.id === records.phase.phaseId &&
+      target.definition.generation === records.phase.definitionGeneration
+    ) {
+      throw new RuntimeRefusal("phase-already-current", "The run is already on that phase");
+    }
+    const closed = new Set(
+      (records.phaseLifecycles ?? [])
+        .filter((lifecycle) => lifecycle.closure !== undefined)
+        .map((lifecycle) => lifecycle.phase.phaseId),
+    );
+    closed.add(records.phase.phaseId);
+    if (closed.has(target.definition.id)) {
+      throw new RuntimeRefusal("phase-already-closed", "That phase has already closed");
+    }
+    const unmet = target.definition.dependsOn.filter((dependency) => !closed.has(dependency));
+    if (unmet.length > 0) {
+      throw new RuntimeRefusal(
+        "dependencies-open",
+        `Phase depends on ${unmet.length} phase${unmet.length === 1 ? "" : "s"} that have not closed`,
+      );
+    }
+    const archived = updateCurrentPhase(records, {});
+    // The next phase builds its own candidate, evidence, and decision, so the
+    // closed phase's records are dropped rather than carried forward.
+    const {
+      candidate: _candidate,
+      gateEvidence: _gateEvidence,
+      authorityDecision: _authorityDecision,
+      closure: _closure,
+      integrationBarrier: _integrationBarrier,
+      ...carried
+    } = archived;
+    const advanced: RuntimeRunRecords = {
+      ...carried,
+      phase: {
+        phaseId: target.definition.id,
+        definitionGeneration: target.definition.generation,
+      },
+      phaseLifecycles: [
+        ...(archived.phaseLifecycles ?? []),
+        {
+          phase: {
+            phaseId: target.definition.id,
+            definitionGeneration: target.definition.generation,
+          },
+          approvalPolicy: records.approvalPolicy,
+          escalationPolicyDigest: records.escalationPolicyDigest,
+          assessments: [],
+        },
+      ],
+    };
+    this.project(advanced);
+    run.records = advanced;
+    return canonicalValue({
+      phaseId: target.definition.id,
+      definitionGeneration: target.definition.generation,
+    }) as unknown as JsonValue;
   }
 
   private submitAmendmentProposal(

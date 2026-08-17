@@ -451,3 +451,37 @@ so the command line and the portal cannot disagree about what is pending.
 
 * Full suite: 110 files and 1,346 tests passed with 2 skipped opt-in live tests.
 * Typecheck, boundaries across 491 files.
+
+### Decision D-011: `start-phase-attempt` advances the run
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: the declared but unimplemented `start-phase-attempt` intent now moves
+  a run to a named phase, resolving F-001.
+* Alternatives: adding a new intent name, or letting `close-phase` advance
+  implicitly.
+* Rationale: the intent already existed in the protocol with the right meaning
+  and no implementation, so naming a second one would leave a dead intent behind.
+  Implicit advancement inside `close-phase` was rejected because closing and
+  advancing are separate authority decisions: a human may want a phase closed and
+  the run held.
+* Consequence: advancing archives the closed phase into the lifecycle history and
+  drops the per-phase records by omission rather than setting them undefined,
+  because the next phase must build its own candidate, gate evidence, and
+  decision rather than inherit them.
+
+Four refusals keep it honest, each with its own code: advancing from an open
+phase, naming a phase the graph does not declare, re-entering the current phase,
+and advancing into a phase whose dependencies have not closed. The open-phase
+refusal arrives before the graph is consulted, so an unknown phase name cannot be
+used to probe the graph from an unclosed state.
+
+F-001 is resolved for the authority. A driver that advances after closure, and
+the `publish-phase-output` intent that carries an accepted output forward, remain
+for Phase 5.
+
+### Validation
+
+* 3 advancement tests covering the refusals.
+* Full suite: 111 files and 1,349 tests passed with 2 skipped opt-in live tests.
+* Typecheck, boundaries across 493 files.
