@@ -47,9 +47,12 @@ phases:
   - name: implement
     agent: implementor
     needs: [plan]
-    # Fan-out. One member phase per element of the named upstream collection,
-    # each running its own complete loop, then fanning back in.
+    # Fan-out. One member per element of the named upstream collection, each
+    # running its own loop, then fanning back in.
     forEach: plan.tasks
+    # The kernel validates the selected collection on its own, so its shape is
+    # named rather than guessed from the item schema.
+    collection: schemas/task-collection.schema.json
     # A member reads one element rather than the whole collection.
     input: schemas/task.schema.json
     output: schemas/implementation.schema.json

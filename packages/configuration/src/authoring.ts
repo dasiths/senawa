@@ -132,6 +132,7 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
   for (const phase of phases) {
     schemaPaths.add(phase.output);
     if (phase.input !== undefined) schemaPaths.add(phase.input);
+    if (phase.forEach !== undefined) schemaPaths.add(phase.forEach.collection);
   }
 
   const document = canonicalValue({
@@ -196,8 +197,52 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
       })
       .sort((left, right) => compare(left.key, right.key)),
     implementationEvidenceViews: [],
-    forEach: [],
-    taskTemplates: [],
+    forEach: phases
+      .filter((phase) => phase.forEach !== undefined)
+      .map((phase) => {
+        const fanOut = phase.forEach as NonNullable<AuthoredPhase["forEach"]>;
+        return {
+          key: `${phase.name}-items`,
+          source: { kind: "phase-output", phase: fanOut.phase, output: fanOut.phase },
+          pointer: `/${fanOut.field}`,
+          collectionSchema: schemaKey(fanOut.collection),
+          itemSchema: schemaKey(phase.input ?? fanOut.collection),
+          identityPointer: "/id",
+          limits: {
+            maxSelectedItems: 64,
+            maxTotalTasks: 256,
+            // v1 runs members one after another, so concurrency stays at one.
+            maxConcurrency: 1,
+            exhaustion: phase.iteration.onExhausted,
+          },
+        };
+      })
+      .sort((left, right) => compare(left.key, right.key)),
+    taskTemplates: phases
+      .filter((phase) => phase.forEach !== undefined)
+      .map((phase) => ({
+        key: `${phase.name}-work`,
+        generation: 1,
+        role: phase.agent,
+        budgets: AGENT_BUDGETS,
+        inputSchema: schemaKey(phase.input ?? ""),
+        inputMappings: [
+          { key: "item", source: { kind: "current-item", pointer: "" }, destinationPointer: "" },
+        ],
+        dependencyIdentityPointer: "/dependsOn",
+        repositoryChanges: "allowed",
+        completionPolicy: {
+          criteria: [{ key: `${phase.name}-produced`, generation: 1, required: true, input: null }],
+          evidencePolicy: {
+            mode: phase.completionEvidence.mode,
+            requirements: phase.completionEvidence.require.map((requirement) => ({
+              kind: requirement.kind,
+              minimumCount: requirement.min,
+            })),
+          },
+        },
+      }))
+      .sort((left, right) => compare(left.key, right.key)),
     phases: phases.map((phase) => lowerPhase(phase, phases, workflowInput)),
   });
 
@@ -233,7 +278,11 @@ interface AuthoredPhase {
   readonly input?: string;
   readonly gates: readonly string[];
   readonly approve: boolean;
-  readonly forEach?: string;
+  readonly forEach?: {
+    readonly phase: string;
+    readonly field: string;
+    readonly collection: string;
+  };
   readonly onFailure: string;
   readonly completionEvidence: AuthoredCompletionEvidence;
   readonly iteration: AuthoredIteration;
@@ -452,6 +501,66 @@ function readGates(
  * The expanded form exists so a run can fall back rather than stall when a model
  * is unavailable or exhausts its own ceilings.
  */
+/**
+ * Reads a fan-out declaration, which names an upstream collection to iterate.
+ *
+ * The collection schema is named rather than derived because the kernel
+ * validates the selected array on its own, and no schema for it can be
+ * conjured from the one that describes a single item.
+ */
+function readForEach(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+  needs: readonly string[],
+): { readonly phase: string; readonly field: string; readonly collection: string } | undefined {
+  const declared = raw.forEach;
+  if (declared === undefined) return undefined;
+  if (typeof declared !== "string") {
+    add(collector, "invalid-field", path, `${pointer}/forEach`, "forEach must be phase.field");
+    return undefined;
+  }
+  const [phase, ...rest] = declared.split(".");
+  const field = rest.join(".");
+  if (phase === undefined || field.length === 0) {
+    add(collector, "invalid-field", path, `${pointer}/forEach`, "forEach must be phase.field");
+    return undefined;
+  }
+  if (!needs.includes(phase)) {
+    add(
+      collector,
+      "unknown-reference",
+      path,
+      `${pointer}/forEach`,
+      `forEach reads phase ${phase} which is absent from needs`,
+    );
+    return undefined;
+  }
+  const collection = typeof raw.collection === "string" ? raw.collection : undefined;
+  if (collection === undefined) {
+    add(
+      collector,
+      "missing-field",
+      path,
+      `${pointer}/collection`,
+      "A fan-out must name the schema its collection satisfies",
+    );
+    return undefined;
+  }
+  if (typeof raw.input !== "string") {
+    add(
+      collector,
+      "missing-field",
+      path,
+      `${pointer}/input`,
+      "A fan-out member reads one item, so the phase must name that item's schema",
+    );
+    return undefined;
+  }
+  return { phase, field, collection };
+}
+
 function readRoutes(
   collector: Collector,
   path: string,
@@ -544,7 +653,7 @@ function readGateRules(
       continue;
     }
     rules.push({
-      key: `${sensorKey}-${comparison.key}`,
+      key: gateRuleKey(sensorKey, field, comparison.key),
       sensorKey,
       pointer: field.startsWith("/") ? field : `/${field}`,
       operator: comparison.operator,
@@ -552,6 +661,16 @@ function readGateRules(
     });
   }
   return rules;
+}
+
+/** A rule key names the sensor, the field, and the comparison, so two rules over one sensor stay distinct. */
+function gateRuleKey(sensorKey: string, field: string, comparison: string): string {
+  const kebab = (value: string) =>
+    value.replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`).replace(/[^a-z0-9]+/gu, "-");
+  return [sensorKey, kebab(field), kebab(comparison)]
+    .join("-")
+    .replace(/-+/gu, "-")
+    .replace(/^-|-$/gu, "");
 }
 
 function readSensors(
@@ -686,29 +805,7 @@ function readPhases(
         `Failure policy must be one of ${[...FAILURE_POLICIES].sort().join(", ")}`,
       );
     }
-    const forEach = typeof raw.forEach === "string" ? raw.forEach : undefined;
-    if (forEach !== undefined) {
-      const [sourcePhase] = forEach.split(".");
-      if (sourcePhase !== undefined && !needs.includes(sourcePhase)) {
-        add(
-          collector,
-          "unknown-reference",
-          path,
-          `${pointer}/forEach`,
-          `forEach reads phase ${sourcePhase} which is absent from needs`,
-        );
-      }
-      // Lowering a fan-out into member phases is not implemented yet. Refusing
-      // is the only honest answer, because lowering it as a plain phase would
-      // silently drop the collection the author asked to iterate.
-      add(
-        collector,
-        "invalid-field",
-        path,
-        `${pointer}/forEach`,
-        "Fan-out lowering is not implemented yet, so this phase cannot be compiled",
-      );
-    }
+    const forEach = readForEach(collector, path, pointer, raw, needs);
     // A phase reading more than one upstream output cannot have its input schema
     // derived unambiguously, so it must name one.
     const declaredInput = typeof raw.input === "string" ? raw.input : undefined;
@@ -940,22 +1037,31 @@ function lowerPhase(
     generation: 1,
     dependsOn: [...phase.needs].sort(compare),
     input: { schema: inputSchema, mappings },
-    executor: {
-      kind: "agent",
-      role: phase.agent,
-      budgets: AGENT_BUDGETS,
-      resumeAcrossAttempts: phase.session !== "element",
-      completionPolicy: {
-        criteria: [{ key: `${phase.name}-produced`, generation: 1, required: true, input: null }],
-        evidencePolicy: {
-          mode: phase.completionEvidence.mode,
-          requirements: phase.completionEvidence.require.map((requirement) => ({
-            kind: requirement.kind,
-            minimumCount: requirement.min,
-          })),
-        },
-      },
-    },
+    executor:
+      phase.forEach !== undefined
+        ? {
+            kind: "task-frontier",
+            forEach: `${phase.name}-items`,
+            template: `${phase.name}-work`,
+          }
+        : {
+            kind: "agent",
+            role: phase.agent,
+            budgets: AGENT_BUDGETS,
+            resumeAcrossAttempts: phase.session !== "element",
+            completionPolicy: {
+              criteria: [
+                { key: `${phase.name}-produced`, generation: 1, required: true, input: null },
+              ],
+              evidencePolicy: {
+                mode: phase.completionEvidence.mode,
+                requirements: phase.completionEvidence.require.map((requirement) => ({
+                  kind: requirement.kind,
+                  minimumCount: requirement.min,
+                })),
+              },
+            },
+          },
     outputs: [
       {
         key: phase.name,

@@ -65,6 +65,47 @@ describe("authored workflow lowering", () => {
     expect(result.snapshot?.graph.nodes.filter((node) => node.kind === "phase")).toHaveLength(2);
   });
 
+  it("lowers a fan-out into a task frontier over the named collection", () => {
+    const lowered = lowerAuthoredWorkflow({
+      ...authored(),
+      workflow: {
+        path: "workflow.yaml",
+        text: `${WORKFLOW.slice(0, WORKFLOW.indexOf("  - name: verify"))}  - name: verify\n    agent: verifier\n    needs: [define]\n    forEach: define.items\n    collection: schemas/collection.schema.json\n    input: schemas/item.schema.json\n    output: schemas/verification.schema.json\n`,
+      },
+    });
+    expect(lowered.diagnostics).toEqual([]);
+    const document = lowered.document as unknown as {
+      readonly forEach: readonly Record<string, unknown>[];
+      readonly taskTemplates: readonly Record<string, unknown>[];
+      readonly phases: readonly Record<string, unknown>[];
+    };
+    expect(document.forEach[0]).toMatchObject({
+      key: "verify-items",
+      source: { kind: "phase-output", phase: "define" },
+      pointer: "/items",
+      identityPointer: "/id",
+    });
+    expect(document.taskTemplates[0]).toMatchObject({ key: "verify-work", role: "verifier" });
+    expect(document.phases[1]?.executor).toMatchObject({
+      kind: "task-frontier",
+      forEach: "verify-items",
+      template: "verify-work",
+    });
+  });
+
+  it("refuses a fan-out that does not name its collection shape", () => {
+    const lowered = lowerAuthoredWorkflow({
+      ...authored(),
+      workflow: {
+        path: "workflow.yaml",
+        text: `${WORKFLOW.slice(0, WORKFLOW.indexOf("  - name: verify"))}  - name: verify\n    agent: verifier\n    needs: [define]\n    forEach: define.items\n    input: schemas/item.schema.json\n    output: schemas/verification.schema.json\n`,
+      },
+    });
+    // The kernel validates the selected collection separately, so its shape
+    // cannot be inferred from the item schema.
+    expect(lowered.diagnostics.map(({ pointer }) => pointer)).toContain("/phases/1/collection");
+  });
+
   it("keeps ordered model routes so a run can fall back rather than stall", () => {
     const lowered = lowerAuthoredWorkflow({
       ...authored(),
@@ -118,7 +159,7 @@ describe("authored workflow lowering", () => {
     ).gates;
     expect(gates[0]?.blocking).toEqual([
       {
-        key: "coverage-atLeast",
+        key: "coverage-total-lines-pct-at-least",
         condition: {
           operator: "greater-than-or-equal",
           accessor: { sensorKey: "coverage", pointer: "/total/lines/pct" },
