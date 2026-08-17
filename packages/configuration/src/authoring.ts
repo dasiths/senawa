@@ -358,13 +358,26 @@ function readPhases(
     }
     const gates = Array.isArray(raw.gates) ? raw.gates.filter(isString) : [];
     for (const [gateIndex, gate] of gates.entries()) {
-      if (!sensors.has(gate)) {
+      const sensor = sensors.get(gate);
+      if (sensor === undefined) {
         add(
           collector,
           "unknown-reference",
           path,
           `${pointer}/gates/${gateIndex}`,
           `Unknown sensor ${gate}`,
+        );
+        continue;
+      }
+      // A blocking gate with no deterministic reading is the harness agreeing
+      // with itself, so it is refused where it is written rather than passing.
+      if (!sensor.deterministic) {
+        add(
+          collector,
+          "invalid-gate",
+          path,
+          `${pointer}/gates/${gateIndex}`,
+          `Sensor ${gate} is not deterministic, so it cannot anchor a blocking gate`,
         );
       }
     }

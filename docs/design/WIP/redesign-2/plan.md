@@ -32,7 +32,7 @@ wherever that is possible.
 | 1 | An authored workflow becomes a run | Complete |
 | 2 | One phase runs a real agent end to end | In progress |
 | 3 | The consumer command line | In progress |
-| 4 | Sensors, gates, and anchors | Not started |
+| 4 | Sensors, gates, and anchors | In progress |
 | 5 | Human decisions and escalation | Not started |
 | 6 | Fan-out and fan-in | Not started |
 | 7 | Sessions and steering | Not started |
@@ -141,11 +141,11 @@ Acceptance:
 Completion becomes granted rather than claimed, which is the property the product
 exists to provide.
 
-* [ ] Execute consumer-declared sensors through the proven process sensor, under
+* [x] Execute consumer-declared sensors through the proven process sensor, under
   the existing environment allowlist and containment.
-* [ ] Produce sensor readings in production, carrying provenance so the kernel can
+* [x] Produce sensor readings in production, carrying provenance so the kernel can
   tell a measured result from an asserted one.
-* [ ] Add the anchor invariant: a blocking gate requires at least one
+* [x] Add the anchor invariant: a blocking gate requires at least one
   deterministic reading. Reject at compile time a blocking gate that cannot have
   one.
 * [ ] Give the git command port an argv allowlist before any consumer-authored
@@ -154,7 +154,7 @@ exists to provide.
 Acceptance:
 
 * [ ] A failing test refuses a phase and returns actionable reasons.
-* [ ] A gate declaring no blocking sensor is rejected when authored rather than
+* [x] A gate whose sensor cannot anchor it is rejected when authored rather than
   passing vacuously.
 * [ ] A sensor cannot read the environment or escape the workspace.
 

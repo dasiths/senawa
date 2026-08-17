@@ -11,5 +11,6 @@ export * from "./git-integration.js";
 export * from "./git-repository.js";
 export * from "./git-workspace.js";
 export * from "./process-sensor.js";
+export * from "./sensor-runner.js";
 export * from "./workspace-effect-host.js";
 export * from "./workspace-files.js";

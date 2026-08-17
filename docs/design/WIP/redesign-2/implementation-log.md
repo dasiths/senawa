@@ -485,3 +485,40 @@ for Phase 5.
 * 3 advancement tests covering the refusals.
 * Full suite: 111 files and 1,349 tests passed with 2 skipped opt-in live tests.
 * Typecheck, boundaries across 493 files.
+
+## Phase 4 log
+
+### Sensors now measure something
+
+`runSensors` executes a workflow's declared sensors through the proven process
+sensor and turns each result into a kernel reading. Before this, no production
+code produced a reading at all: readings arrived as caller-supplied command
+payload, so a gate could only agree with whoever submitted it.
+
+Each reading carries an input digest over the command's argv, working directory,
+and root. A reading is therefore bound to the command that produced it and cannot
+be presented as evidence for a different one. The tests prove a zero exit passes,
+a non-zero exit refuses, two sensors produce different input digests, and an
+undeclared sensor is refused by name.
+
+### Decision D-012: The anchor invariant is enforced where the gate is written
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: a phase naming a gate whose sensor is not deterministic is refused at
+  authoring time with `invalid-gate`.
+* Alternatives: checking at gate evaluation, or warning rather than refusing.
+* Rationale: the project README defines an anchor as a deterministic reading that
+  cannot be argued with, and says every blocking gate needs one or the harness is
+  only agreeing with itself. A check at evaluation time arrives after a run has
+  spent credits reaching it. Refusing at authoring time makes the invariant a
+  property of the document.
+* Consequence: `deterministic: false` is expressible in `sensors.yaml` but a
+  non-deterministic sensor cannot back a blocking gate. Advisory use remains open
+  for when advisory readings are wired.
+
+### Validation
+
+* 4 sensor tests executing real processes, and 1 anchor test.
+* Full suite: 112 files and 1,354 tests passed with 2 skipped opt-in live tests.
+* Typecheck, boundaries across 497 files.

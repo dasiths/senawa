@@ -140,6 +140,22 @@ describe("authored workflow lowering", () => {
     });
   });
 
+  it("refuses a blocking gate whose sensor cannot anchor it", () => {
+    const lowered = lowerAuthoredWorkflow({
+      ...authored(),
+      sensors: {
+        path: "sensors.yaml",
+        text: "sensors:\n  tests:\n    run: pnpm test\n    deterministic: false\n",
+      },
+    });
+    expect(lowered.diagnostics).toContainEqual({
+      code: "invalid-gate",
+      locator: "workflow.yaml",
+      pointer: "/phases/1/gates/0",
+      message: "Sensor tests is not deterministic, so it cannot anchor a blocking gate",
+    });
+  });
+
   it("reports a YAML syntax error against the file that carries it", () => {
     const lowered = lowerAuthoredWorkflow({
       ...authored(),
