@@ -334,15 +334,21 @@ export class PortalApplication {
     overview: PortalRunOverview,
   ): Promise<boolean> {
     const key = runKey(repositoryId, runId);
-    const [needs, events, receipts] = await Promise.all([
-      this.#client.needs(repositoryId, runId),
-      this.#client.events(repositoryId, runId),
-      this.#client.receipts(repositoryId, runId),
-    ]);
+    const needs = await this.#client.needs(repositoryId, runId);
     if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
     this.#dispatch({ type: "human-needs", needs: needs.needs });
-    this.#dispatch({ type: "cache", cache: "events", key, value: events });
-    this.#dispatch({ type: "cache", cache: "receipts", key, value: receipts });
+    // Needs drive the attention banner on every route. Events and receipts feed
+    // only the activity route, so fetching them everywhere made three requests
+    // where one was wanted and delayed the view a reader actually asked for.
+    if (route === "activity") {
+      const [events, receipts] = await Promise.all([
+        this.#client.events(repositoryId, runId),
+        this.#client.receipts(repositoryId, runId),
+      ]);
+      if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
+      this.#dispatch({ type: "cache", cache: "events", key, value: events });
+      this.#dispatch({ type: "cache", cache: "receipts", key, value: receipts });
+    }
     switch (route) {
       case "overview":
         return true;
