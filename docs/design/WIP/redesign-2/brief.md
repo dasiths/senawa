@@ -111,6 +111,11 @@ one atomic request, so no output is published unless that request is granted.
 The self-check spends no attempt, so an agent can measure its own work before
 committing to a completion.
 
+Every refusal converges on the same place: the agent revises using the reasons
+senawa returned, and the next attempt begins with those reasons as input. That
+is the inner loop, and it is the reason a refusal has to name what failed rather
+than only that something did.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -123,7 +128,9 @@ sequenceDiagram
     Senawa->>Senawa: compile the authored workflow and instantiate the run
     Senawa->>Agent: dispatch the assignment prompt plus the generated operating contract
 
-    loop attempt 1 to maximumAttempts
+    loop attempt 1 to maximumAttempts, until the phase closes
+        Agent->>Agent: do the work
+
         opt self-check, which spends no attempt
             Agent->>Senawa: senawa run-gates implement
             Senawa->>Sensors: execute the declared sensors
@@ -134,7 +141,7 @@ sequenceDiagram
         Agent->>Senawa: senawa worker complete, carrying the output asset and evidence
 
         alt the output violates its declared schema
-            Senawa-->>Agent: refused, naming the offending pointers. Nothing is published
+            Senawa-->>Agent: refused, naming the offending pointers
         else required evidence is missing
             Senawa-->>Agent: refused, naming the evidence kind and the count still owed
         else the request is admitted
@@ -143,24 +150,30 @@ sequenceDiagram
                 Sensors-->>Senawa: outcome failed, for example a timeout or a missing command
                 Note over Senawa: an unreported blocking reading resolves to unknown, so the gate fails closed
                 Senawa-->>Agent: refused, naming the sensor and why it could not measure
-            else readings are produced
+            else a blocking rule is red
                 Sensors-->>Senawa: readings, each bound to the command that produced it
-                alt a blocking rule is red
-                    Senawa-->>Agent: refused, naming the rule, the expected value, and the measured value
-                else every blocking rule is green
-                    Senawa->>Senawa: form the candidate and publish the outputs
-                    opt the phase declares an approval
-                        Senawa->>Human: present the candidate for review
-                        alt the human rejects
-                            Human-->>Senawa: reject, with a reason that is required
-                            Senawa-->>Agent: the next attempt carries that reason as input
-                        else the human approves
-                            Human-->>Senawa: approve
-                        end
+                Senawa-->>Agent: refused, naming the rule, the expected value, and the measured value
+            else every blocking rule is green
+                Senawa->>Senawa: publish the outputs and grant completion
+                opt the phase declares an approval
+                    Senawa->>Human: present the candidate for review
+                    alt the human rejects
+                        Human-->>Senawa: reject, with a reason that is required
+                        Senawa-->>Agent: refused, carrying the human's reason
+                    else the human approves
+                        Human-->>Senawa: approve
                     end
-                    Senawa->>Senawa: close the phase and advance to the next one
                 end
             end
+        end
+
+        alt completion was granted and any declared approval passed
+            Senawa->>Senawa: close the phase and advance to the next one
+            Note over Senawa,Agent: the loop ends here, and no later attempt runs
+        else the attempt was refused for any of the reasons above
+            Note over Senawa,Agent: nothing was published, so the phase is unchanged
+            Agent->>Agent: revise the work using the reasons senawa returned
+            Senawa->>Agent: next attempt, with those reasons supplied as input
         end
     end
 
