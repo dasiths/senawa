@@ -99,6 +99,115 @@ senawa start workflow.yaml input.json
      to completion on its own.
 ```
 
+### One phase in sequence
+
+The numbered loop above is the happy path. The refusal paths are where the
+design earns its keep, so they are drawn explicitly: a schema violation, missing
+evidence, a sensor that cannot produce a reading, a red blocking rule, a human
+rejection, and exhausted attempts.
+
+Two properties are visible in the diagram and are load bearing. Completion is
+one atomic request, so no output is published unless that request is granted.
+The self-check spends no attempt, so an agent can measure its own work before
+committing to a completion.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Human
+    participant Senawa
+    participant Agent
+    participant Sensors
+
+    Human->>Senawa: senawa start input.json
+    Senawa->>Senawa: compile the authored workflow and instantiate the run
+    Senawa->>Agent: dispatch the assignment prompt plus the generated operating contract
+
+    loop attempt 1 to maximumAttempts
+        opt self-check, which spends no attempt
+            Agent->>Senawa: senawa run-gates implement
+            Senawa->>Sensors: execute the declared sensors
+            Sensors-->>Senawa: readings
+            Senawa-->>Agent: measured result with reasons
+        end
+
+        Agent->>Senawa: senawa worker complete, carrying the output asset and evidence
+
+        alt the output violates its declared schema
+            Senawa-->>Agent: refused, naming the offending pointers. Nothing is published
+        else required evidence is missing
+            Senawa-->>Agent: refused, naming the evidence kind and the count still owed
+        else the request is admitted
+            Senawa->>Sensors: execute the sensors this phase gates on
+            alt a sensor cannot produce a reading
+                Sensors-->>Senawa: outcome failed, for example a timeout or a missing command
+                Note over Senawa: an unreported blocking reading resolves to unknown, so the gate fails closed
+                Senawa-->>Agent: refused, naming the sensor and why it could not measure
+            else readings are produced
+                Sensors-->>Senawa: readings, each bound to the command that produced it
+                alt a blocking rule is red
+                    Senawa-->>Agent: refused, naming the rule, the expected value, and the measured value
+                else every blocking rule is green
+                    Senawa->>Senawa: form the candidate and publish the outputs
+                    opt the phase declares an approval
+                        Senawa->>Human: present the candidate for review
+                        alt the human rejects
+                            Human-->>Senawa: reject, with a reason that is required
+                            Senawa-->>Agent: the next attempt carries that reason as input
+                        else the human approves
+                            Human-->>Senawa: approve
+                        end
+                    end
+                    Senawa->>Senawa: close the phase and advance to the next one
+                end
+            end
+        end
+    end
+
+    alt the attempts are exhausted, or the agent gives up first
+        Agent->>Senawa: senawa worker escalate, when it knows it cannot comply
+        Senawa->>Human: escalation carrying the recorded gate evidence and the allowed responses
+        Human-->>Senawa: waive, mark done, steer, or end the run
+        Note over Senawa,Human: every override is recorded with who decided, when, and on what reasoning
+    end
+```
+
+### Fan-out in sequence
+
+A phase such as plan produces a collection. The next phase runs one member per
+element, each with its own loop, gates, approval, and escalation. A member that
+cannot pass does not have to stop the ones that did.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Senawa
+    participant Planner as plan agent
+    participant Member as implement member agent
+    actor Human
+
+    Planner->>Senawa: complete, carrying a tasks collection
+    Senawa->>Senawa: fan out one member phase per element, keyed by the element identity
+
+    loop each member, sequentially in v1
+        Senawa->>Member: dispatch with exactly one task element as its input
+        alt the member passes its own gates
+            Member->>Senawa: complete
+            Senawa->>Senawa: grant this member and record it
+        else the member exhausts its attempts
+            Senawa->>Human: escalate this member alone
+            alt the human marks it done over red gates
+                Human-->>Senawa: authority decision carrying a reason
+                Note over Senawa: recorded as an override, and it stays visible in history and the report
+            else the human leaves it failed
+                Note over Senawa: onFailure continue, so the remaining members still run
+            end
+        end
+    end
+
+    Senawa->>Senawa: fan in, then advance to verify
+```
+
 ## Settled decisions
 
 ### Agent channel
