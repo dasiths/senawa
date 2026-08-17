@@ -32,6 +32,8 @@ Commands:
   status <repository> <run>             Report what a run is doing
   worker context|output-schema|complete Agent-scoped worker channel
   run-gates <phase>                     Measure a phase's gate sensors now
+  approve <repository> <run>            Approve what the run is waiting on
+  reject <repository> <run> <reason>    Reject it, with the reason to retry from
   phase <repository> <run> <phase>      Inspect one phase's lifecycle
   artifact list|read <repository> <run> Read what a run produced
   agent list <repository> <run>         List the agents a run dispatched

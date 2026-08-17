@@ -37,6 +37,7 @@ import { restoreSupervisorStateRoot, verifySupervisorStateBackup } from "./state
 
 const MAX_OPERATIONAL_ARGUMENT_LENGTH = 4_096;
 
+import { decidePhase } from "./decide.js";
 import {
   type InspectOptions,
   inspectPhase,
@@ -116,6 +117,19 @@ export async function runOperationalCli(
   }
   if (group === "agent" && action === "list" && rest.length === 2) {
     return listDispatches(inspectOptions(paths, dependencies, rest[0] ?? "", rest[1] ?? ""));
+  }
+  if ((group === "approve" || group === "reject") && action !== undefined && rest.length >= 1) {
+    return decidePhase({
+      databasePath: paths.databasePath,
+      assetDirectory: paths.assetDirectory,
+      repositoryId: action,
+      runId: rest[0] ?? "",
+      decision: group,
+      ...(rest.length > 1 ? { reason: rest.slice(1).join(" ") } : {}),
+      principal: startPrincipal,
+      dependencies,
+      currentTime: new Date().toISOString(),
+    });
   }
   if (group === "run-gates" && action !== undefined && rest.length === 0) {
     return await runGates({ projectRoot: process.cwd(), phaseKey: action, dependencies });
