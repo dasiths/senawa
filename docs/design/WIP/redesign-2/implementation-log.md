@@ -902,3 +902,44 @@ only the implement outputs. The old internal template also gave it an
 a capability the parity phase has to restore, so the target now declares
 `evidenceFrom` on `verify` with an allowlisted kind and a sensitivity ceiling,
 and names an explicit input schema because the phase now merges two sources.
+
+### Decision D-023: Evidence is a family name, and every identifier qualifies it
+
+* Date: 2026-08-17
+* Status: Accepted
+* Trigger: F-008 found four meanings of `evidence`. The first instinct was to
+  banish the word from all but one of them.
+* What changed that: the README already defines the family meaning, saying model
+  output, receipts, and prompt text are evidence, never decisions. Evidence is
+  anything that informs a decision without being able to make one. All the uses
+  found are therefore legitimately evidence, and renaming them to unrelated words
+  such as attestation would have hidden a real shared property.
+* Decision: keep `evidence` as the family name. Require every identifier to carry
+  a qualifier naming whose evidence it is and which decision it feeds. The bare
+  word is not an identifier.
+* The rename, to land with the phase that makes evidence authorable:
+
+  | Current | Becomes | Why |
+  |---|---|---|
+  | `EvidenceAttachment` | `CompletionEvidenceItem` | Agent supplied, feeds completion accounting |
+  | `EvidencePolicy` | `CompletionEvidencePolicy` | Same decision, authored |
+  | `EvidenceRequirement` | `CompletionEvidenceRequirement` | Same |
+  | `EvidenceRequirementAssessment` | `CompletionEvidenceAssessment` | Same |
+  | `CompletionSubmission.evidence` | `.completionEvidence` | Same |
+  | `evidencePolicySatisfied` | `completionEvidenceSatisfied` | Same |
+  | `implementationEvidenceViews` | `completionEvidenceViews` | It is the completion evidence of an earlier phase, not evidence about implementation |
+  | mapping kind `implementation-evidence` | `completion-evidence` | Same |
+  | portal asset source `evidence` | `completion-evidence` | Same |
+  | `GateEvidence` | unchanged | Already qualified, and it is the only evidence a blocking gate may rest on |
+  | `SensorReading` | unchanged | Already unambiguous |
+
+* Authored surface: `completionEvidence` for a phase's own policy and
+  `completionEvidenceFrom` for a view. The shorter `evidence` was rejected even
+  though an author never writes gate evidence, because the adjacency to `gates`
+  in the same phase is exactly where the confusion would return.
+* Sequencing: the rename lands with Phase 6, which is the phase that makes
+  completion evidence authorable, so nothing is renamed twice. The portal source
+  string is Phase 12.
+* Invariant this protects, stated once so a reviewer can check it: a blocking
+  gate may rest only on readings, and only deterministic ones. Completion
+  evidence feeds completion accounting and never a gate.

@@ -58,7 +58,9 @@ phases:
     # Members that cannot pass do not block the ones that did.
     onFailure: continue
     # Completion is granted only against recorded evidence, not a claim.
-    evidence:
+    # Qualified because a phase also names gates, and gate evidence is a
+    # different thing that no author writes.
+    completionEvidence:
       mode: task
       require:
         - kind: task-completion
@@ -70,7 +72,7 @@ phases:
     # Read the accepted completion evidence of an earlier phase, not only its
     # output. The kinds are allowlisted and the ceiling caps what may cross, so
     # a confidential attachment cannot leak into a phase cleared for less.
-    evidenceFrom:
+    completionEvidenceFrom:
       - phase: implement
         kinds: [task-completion]
         maxSensitivity: internal

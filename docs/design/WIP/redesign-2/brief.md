@@ -79,35 +79,47 @@ with itself.
 
 ### What evidence means
 
-The word carries three distinct meanings in this system, and conflating them
-produced a real defect during design, so each is named here and used only in its
-own sense.
+The README already fixes the family meaning: model output, receipts, and prompt
+text are *evidence, never decisions*. Evidence is therefore anything that informs
+a decision without being able to make one. Several unrelated things in this
+system qualify, which is correct, but the code names one of them with the bare
+word and leaves the reader to infer which. That ambiguity produced a real defect
+during this redesign, so the rule is now explicit.
 
-**Completion evidence** is what an agent offers. It is a set of attachments on a
-completion request, each carrying a kind, a descriptor, and the asset it points
-at, and optionally the criterion it supports. A phase declares an evidence policy
-stating which kinds it requires and how many of each. This is testimony with
-exhibits: the agent asserts it did the work and attaches what it produced.
+**Every name carries a qualifier saying whose evidence it is and which decision
+it feeds. The bare word `evidence` is not an identifier.**
 
-**Gate evidence** is what senawa measured. It is the gate definition, the sensor
-readings, and the evaluation over them. No agent supplies it, and an escalation
+| Evidence | Produced by | Feeds | Can it be argued with |
+|---|---|---|---|
+| Sensor reading | senawa, by executing a command | gate evaluation | No, when deterministic |
+| Gate evidence | senawa, from a definition and its readings | candidate and closure | No |
+| Completion evidence | the agent, as attachments on a completion | completion accounting | Yes |
+| Completion evidence view | authored, filtering an earlier phase's accepted completion evidence | a later phase's input | Yes |
+
+**Completion evidence** is what an agent offers: attachments on a completion
+request, each carrying a kind, a descriptor, and the asset it points at, and
+optionally the criterion it supports. A phase declares which kinds it requires
+and how many of each. This is testimony with exhibits.
+
+**Gate evidence** is what senawa measured: the gate definition, the sensor
+readings, and the evaluation over them. No agent supplies it. An escalation
 carries it precisely because a human deciding whether to override needs the
 measurement rather than the agent's account of the measurement.
 
-**An evidence view** is how accepted completion evidence crosses a phase
-boundary. A later phase declares which earlier phase it reads evidence from,
-which kinds are allowlisted, and a sensitivity ceiling that caps what may cross.
-Without a view, a phase sees only the outputs of its dependencies.
+**A completion evidence view** is how accepted completion evidence crosses a
+phase boundary. A later phase declares which earlier phase it reads from, which
+kinds are allowlisted, and a sensitivity ceiling capping what may cross. Without
+a view, a phase sees only the outputs of its dependencies.
 
-The distinction that matters: completion evidence can be argued with and gate
-evidence cannot. A gate that accepted only completion evidence would be the
-harness agreeing with whoever submitted the work, which is the failure the anchor
-invariant exists to prevent. Completion evidence records what was offered.
-Blocking gates rest on readings.
+The distinction that decides correctness is the last column. Completion evidence
+can be argued with; a deterministic reading cannot. A blocking gate resting on
+completion evidence would be the harness agreeing with whoever submitted the
+work, which is the failure the anchor invariant exists to prevent. Completion
+evidence records what was offered. Blocking gates rest on readings.
 
 Citations inside an authored output, such as the file a research finding rests
-on, are not evidence in any of these senses. They are named `citations` so the
-protocol term keeps one meaning.
+on, are not evidence in any of these senses. They are named `citations`, because
+a claim's source informs a reader rather than any decision senawa makes.
 
 ## The runtime loop
 

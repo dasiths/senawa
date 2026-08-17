@@ -267,6 +267,11 @@ Acceptance:
 Completion cannot be granted against a policy the author had no way to state.
 This phase closes the most consequential part of F-004.
 
+* [ ] Apply the D-023 rename in one pass, so nothing is renamed twice: the bare
+  `evidence` identifier disappears in favour of `completionEvidence`, and
+  `implementationEvidenceViews` becomes `completionEvidenceViews` with a matching
+  `completion-evidence` mapping kind. `GateEvidence` and `SensorReading` are
+  already qualified and do not move.
 * [ ] Add concise YAML for completion criteria and evidence policy, including
   `none`, `task`, `required-criteria`, and `all-satisfied`, per-kind minimum
   counts, and waiver authority where the internal contract supports it.
@@ -450,12 +455,16 @@ Acceptance:
   attempt, route, and latest refusal reason.
 * [ ] Drive approval, reasoned rejection, question response, member override, and
   steering by pointing and clicking.
+* [ ] Rename the portal asset source `evidence` to `completion-evidence` under
+  D-023, and label completion evidence and gate evidence distinctly wherever both
+  are shown, because a reader deciding an override needs to know which one they
+  are looking at.
 
 Acceptance:
 
 * [ ] The default view shows the workflow and working agent.
-* [ ] Evidence, outputs, sensor readings, and decision reasons are reachable in
-  one action and absent until asked for.
+* [ ] Completion evidence, outputs, sensor readings, and decision reasons are
+  reachable in one action and absent until asked for.
 
 ## Phase 13: Remove what the evidence condemns
 
