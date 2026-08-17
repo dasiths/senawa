@@ -187,3 +187,34 @@ probe's fan-out phase is commented out with a note pointing at Phase 6.
 * Typecheck, boundaries across 467 files, documentation links across 45 files.
 * Biome: 33 warnings, all `noTemplateCurlyInString` on intentional prompt
   templates, two of them newly added by the authoring tests.
+
+### Decision D-007: Authored documents are read through an allowlist
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: `RootScopedConfigurationResources` gains `readAuthoredDocument`,
+  which accepts only the three fixed authored filenames and reads them through
+  the same confined path as prompts and schemas.
+* Alternatives: a general file read on the configuration directory.
+* Rationale: prompts and schemas are confined by their namespaces, and the three
+  authored documents sit at the configuration root where no namespace covers
+  them. A fixed allowlist is the confinement, so no caller can widen this into a
+  general read of the project.
+* Consequence: adding a fourth authored document is a deliberate change in two
+  places rather than an accident.
+
+### Phase 1 outcome
+
+The gap where `compileWorkflowConfiguration` had no production caller is closed.
+`loadAuthoredWorkflow` reads a project directory, lowers the three documents, and
+compiles them; `instantiateAuthoredRun` registers the snapshot and submits the
+instantiation. An authored project now becomes a run, proven end to end from a
+temporary directory rather than from fixtures.
+
+### Validation
+
+* 3 new end-to-end tests: an authored project compiles and instantiates with the
+  receipt carrying the compiled graph revision; a wrong agent reference names its
+  file and path; a missing authored document is refused by the allowlist.
+* Full suite: 106 files and 1,333 tests passed with 2 skipped opt-in live tests.
+* Typecheck, boundaries across 473 files, documentation links across 50 files.

@@ -35,6 +35,30 @@ interface Collector {
   readonly diagnostics: ConfigurationDiagnostic[];
 }
 
+/** The three documents a consumer authors, by their fixed names. */
+export const AUTHORED_DOCUMENT_NAMES = Object.freeze([
+  "agents.yaml",
+  "workflow.yaml",
+  "sensors.yaml",
+] as const);
+
+/**
+ * Lists the prompt templates the authored agents declare.
+ *
+ * Lowering needs the template text to derive input paths, and reading files is
+ * not this package's job, so a caller uses this to know what to read first.
+ */
+export function listAuthoredPromptPaths(source: AuthoredSource): readonly string[] {
+  const collector: Collector = { diagnostics: [] };
+  const agents = parseYaml(collector, source);
+  if (!isRecord(agents)) return Object.freeze([]);
+  const paths = new Set<string>();
+  for (const value of Object.values(agents)) {
+    if (isRecord(value) && typeof value.prompt === "string") paths.add(value.prompt);
+  }
+  return Object.freeze([...paths].sort(compare));
+}
+
 /**
  * Lowers the three authored documents into the internal workflow document.
  *

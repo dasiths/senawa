@@ -4,6 +4,7 @@ import { isAbsolute } from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
+  AUTHORED_DOCUMENT_NAMES,
   ConfigurationResourceReadError,
   type ConfigurationResourceReader,
   type ConfigurationResourceReadRequest,
@@ -82,6 +83,28 @@ export class RootScopedConfigurationResources implements ConfigurationResourceRe
           request.maxBytes,
           this.#testHooks.beforeIdentityCheck,
         ),
+      );
+    } catch (error) {
+      if (error instanceof ConfigurationResourceReadError) throw error;
+      throw new ConfigurationResourceReadError("read-failed");
+    }
+  }
+
+  /**
+   * Reads one authored document from the configuration directory root.
+   *
+   * The prompt and schema namespaces do not cover these, so the allowlist is the
+   * confinement: no caller can turn this into a general file read.
+   */
+  async readAuthoredDocument(name: string, maxBytes = 256 * 1_024): Promise<Uint8Array> {
+    if (!(AUTHORED_DOCUMENT_NAMES as readonly string[]).includes(name)) {
+      throw new ConfigurationResourceReadError("path-escape");
+    }
+    const relativePath =
+      this.configurationDirectory === "." ? name : `${this.configurationDirectory}/${name}`;
+    try {
+      return Uint8Array.from(
+        await runStableRead(this.root, relativePath, maxBytes, this.#testHooks.beforeIdentityCheck),
       );
     } catch (error) {
       if (error instanceof ConfigurationResourceReadError) throw error;
