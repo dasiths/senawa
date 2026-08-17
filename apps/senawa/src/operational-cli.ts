@@ -9,7 +9,7 @@ import {
   openSync,
   readSync,
 } from "node:fs";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import {
   canonicalBytes,
   canonicalStringify,
@@ -37,6 +37,17 @@ import { restoreSupervisorStateRoot, verifySupervisorStateBackup } from "./state
 
 const MAX_OPERATIONAL_ARGUMENT_LENGTH = 4_096;
 
+import { runStartCommand } from "./start-command.js";
+
+/** The local operator identity a consumer acts as when starting a run. */
+const startPrincipal = Object.freeze({
+  issuer: "senawa.local",
+  subject: "operator",
+  tenant: "local",
+  assurance: "single-factor" as const,
+  roles: Object.freeze(["operator", "release-manager"]),
+});
+
 export async function runOperationalCli(
   arguments_: readonly string[],
   environment: NodeJS.ProcessEnv = process.env,
@@ -55,6 +66,22 @@ export async function runOperationalCli(
     return undefined;
   }
   const paths = resolveSenawaServicePaths(environment);
+  if (group === "start" && action !== undefined && rest.length <= 1) {
+    // `start` reaches the authority directly rather than through the service,
+    // because a consumer starting a run should not have to start a daemon first.
+    return runStartCommand(
+      {
+        projectRoot: process.cwd(),
+        requestPath: action,
+        repositoryId: `repository_${basename(process.cwd())}`,
+        ...(rest[0] === undefined ? {} : { runId: rest[0] }),
+      },
+      { databasePath: paths.databasePath, assetDirectory: paths.assetDirectory },
+      dependencies,
+      startPrincipal,
+      new Date().toISOString(),
+    );
+  }
   if (group === "service" && action === "run" && rest.length === 0) {
     await runSenawaServiceForeground(environment);
     return success("Supervisor stopped");

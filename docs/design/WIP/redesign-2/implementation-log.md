@@ -394,3 +394,32 @@ one is skipped by the scheduler in silence and the run strands with no error.
   request the workflow input schema refuses.
 * Full suite: 110 files and 1,346 tests passed with 2 skipped opt-in live tests.
 * Typecheck, boundaries across 487 files.
+
+### Phase 2 progress: `senawa start` runs from a project directory
+
+A consumer can now author three YAML files and run one command. Verified against
+a real temporary project rather than a fixture:
+
+```text
+$ senawa start request.json
+run: run_e1d7e4bd46acb38c0a092b7535dd6ea4
+repository: repository_senawa-cli-try
+phase: define
+dispatch: dispatch_545497b2fedaa80ac9ddcfaa550fb77f...
+```
+
+Both refusal paths were checked the same way. A workflow naming an agent that
+does not exist reports
+`workflow.yaml/phases/0/agent [unknown-reference] Unknown agent missing`, and a
+missing request file reports its path and the reason. Neither prints a stack
+trace.
+
+`start` reaches the authority directly rather than through the running service,
+because a consumer starting a run should not have to start a daemon first. The
+portal and the scheduler both work from the same durable state afterwards.
+
+### Deviation: the pinned help text changed
+
+`cli.test.ts` pins the exact help output, so adding `start` failed it. The test
+was updated rather than the help softened: pinning the text is what makes the
+help truthful, and a command that exists should appear in it.

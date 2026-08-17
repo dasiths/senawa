@@ -109,7 +109,7 @@ because building the agent contract twice would be waste.
   steer, or end a run.
 * [ ] Expose the worker operations over a local API and a command line: discover
   the output schema, submit output, request completion, ask a question, escalate.
-* [ ] Add a minimal `senawa start` sufficient to trigger a run.
+* [x] Add a minimal `senawa start` sufficient to trigger a run.
 
 Acceptance:
 

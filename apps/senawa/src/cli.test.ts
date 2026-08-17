@@ -27,6 +27,7 @@ const EXPECTED_HELP = `Senawa ${SENAWA_VERSION}
 Usage: senawa <command> [arguments]
 
 Commands:
+  start <request.json> [run-id]         Start a run from the authored workflow
   doctor [path|directory]               Validate a workflow tree (default: .senawa)
   init [directory]                      Create the standard workflow tree (default: .senawa)
   service start|run|status|drain|stop   Manage the local supervisor
