@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:senawa:verify-input",
+  "title": "Verify phase input",
+  "description": "Named because verify reads two sources: the implement members' outputs, and their accepted completion evidence through a declared evidence view.",
+  "type": "object",
+  "required": ["implementation", "implementationEvidence"],
+  "properties": {
+    "implementation": {
+      "type": "array",
+      "maxItems": 36,
+      "description": "One entry per implement member that produced an output.",
+      "items": { "$ref": "urn:senawa:implementation" }
+    },
+    "implementationEvidence": {
+      "type": "array",
+      "maxItems": 200,
+      "description": "Attachments the members offered for their completion criteria, filtered to the allowlisted kinds and capped by the view's sensitivity ceiling. Senawa assembles this; an agent cannot widen it.",
+      "items": {
+        "type": "object",
+        "required": ["kind"],
+        "properties": {
+          "assetId": { "type": "string", "maxLength": 128 },
+          "kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "criterionId": { "type": "string", "maxLength": 128 },
+          "descriptor": {
+            "type": "object",
+            "description": "What the attachment is. Shape is consumer-defined.",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:senawa:research",
   "title": "Research phase output",
-  "description": "What is true about the codebase today, with evidence for each claim. Sized so a worst-case instance stays inside the 262144 byte phase output ceiling. Long-form prose belongs in documentPath: no single JSON string may exceed 65536 bytes, and real research documents already reach 64653.",
+  "description": "What is true about the codebase today, with a citation for each claim. Sized so a worst-case instance stays inside the 262144 byte phase output ceiling. Long-form prose belongs in documentPath: no single JSON string may exceed 65536 bytes, and real research documents already reach 64653.",
   "type": "object",
   "required": [
     "summary",
@@ -48,7 +48,7 @@
         "type": "object",
         "required": [
           "claim",
-          "evidence"
+          "citations"
         ],
         "properties": {
           "claim": {
@@ -56,11 +56,11 @@
             "minLength": 1,
             "maxLength": 1536
           },
-          "evidence": {
+          "citations": {
             "type": "array",
             "minItems": 1,
             "maxItems": 4,
-            "description": "Where the claim is verifiable. A claim with no evidence is an opinion.",
+            "description": "Where the claim is verifiable in the repository.",
             "items": {
               "type": "object",
               "required": [

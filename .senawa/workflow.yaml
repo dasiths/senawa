@@ -67,6 +67,15 @@ phases:
   - name: verify
     agent: verifier
     needs: [implement]
+    # Read the accepted completion evidence of an earlier phase, not only its
+    # output. The kinds are allowlisted and the ceiling caps what may cross, so
+    # a confidential attachment cannot leak into a phase cleared for less.
+    evidenceFrom:
+      - phase: implement
+        kinds: [task-completion]
+        maxSensitivity: internal
+    # Two sources now feed this phase, so the merged shape is named explicitly.
+    input: schemas/verify-input.schema.json
     output:
       schema: schemas/verification.schema.json
       # Marks the asset so it is withheld from surfaces below this ceiling.

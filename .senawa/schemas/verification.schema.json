@@ -41,9 +41,10 @@
               "not-assessable"
             ]
           },
-          "evidence": {
+          "basis": {
             "type": "string",
-            "maxLength": 1024
+            "maxLength": 1024,
+            "description": "Why this verdict was reached. Not completion evidence in the protocol sense."
           }
         },
         "additionalProperties": false

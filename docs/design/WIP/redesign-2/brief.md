@@ -77,6 +77,38 @@ while readings are red. An **anchor** is a deterministic reading that cannot be
 argued with, and every blocking gate needs one or the harness is only agreeing
 with itself.
 
+### What evidence means
+
+The word carries three distinct meanings in this system, and conflating them
+produced a real defect during design, so each is named here and used only in its
+own sense.
+
+**Completion evidence** is what an agent offers. It is a set of attachments on a
+completion request, each carrying a kind, a descriptor, and the asset it points
+at, and optionally the criterion it supports. A phase declares an evidence policy
+stating which kinds it requires and how many of each. This is testimony with
+exhibits: the agent asserts it did the work and attaches what it produced.
+
+**Gate evidence** is what senawa measured. It is the gate definition, the sensor
+readings, and the evaluation over them. No agent supplies it, and an escalation
+carries it precisely because a human deciding whether to override needs the
+measurement rather than the agent's account of the measurement.
+
+**An evidence view** is how accepted completion evidence crosses a phase
+boundary. A later phase declares which earlier phase it reads evidence from,
+which kinds are allowlisted, and a sensitivity ceiling that caps what may cross.
+Without a view, a phase sees only the outputs of its dependencies.
+
+The distinction that matters: completion evidence can be argued with and gate
+evidence cannot. A gate that accepted only completion evidence would be the
+harness agreeing with whoever submitted the work, which is the failure the anchor
+invariant exists to prevent. Completion evidence records what was offered.
+Blocking gates rest on readings.
+
+Citations inside an authored output, such as the file a research finding rests
+on, are not evidence in any of these senses. They are named `citations` so the
+protocol term keeps one meaning.
+
 ## The runtime loop
 
 ```text
@@ -251,6 +283,14 @@ and passes the named file to `senawa worker complete`; Senawa reads it under the
 workspace boundary and constructs the request. A model adapter may expose the
 same named asset as a typed tool parameter instead. Both forms produce the same
 canonical complete request and the same content-derived idempotency identity.
+
+Completion evidence travels the same way. An attachment is named by kind and by
+the workspace file that carries it, and senawa ingests that file into an asset
+inside the complete request. The internal contract identifies an attachment by
+asset identity, which would otherwise force the agent to create assets in an
+earlier call and then reference them; ingesting during completion keeps the
+single call and keeps the refusal path clean, because an attachment belonging to
+a refused completion never becomes an accepted asset.
 
 The command line and model-specific tools are two projections of that same
 contract. A scripted worker follows the command forms; the Copilot adapter

@@ -848,3 +848,57 @@ dependency in this plan.
 * Action: Phase 6 owns output and schema authoring and should choose between a
   `schemas:` declaration list in `workflow.yaml` and accepting local `$defs`
   duplication as the intended style.
+
+### Finding F-008: One word, four meanings, and one of them was mine
+
+* Date: 2026-08-17
+* Trigger: asked what evidence means in this design.
+* Finding: the repository uses `evidence` for three unrelated concepts, and the
+  target authored schemas introduced a fourth.
+  * `EvidenceAttachment` on a completion submission: what an agent offers, keyed
+    by kind and counted against `EvidenceRequirement`. Agent-supplied testimony
+    with exhibits.
+  * `GateEvidence`: the gate definition, the sensor readings, and the evaluation
+    over them. Senawa's own measurement record, which no agent supplies and which
+    an escalation carries.
+  * `implementationEvidenceViews` and the `implementation-evidence` mapping
+    source: how accepted completion evidence crosses a phase boundary, filtered
+    by allowlisted kinds and capped by a sensitivity ceiling.
+  * `findings[].evidence` in the target research schema: a citation to a file.
+    This was mine and it collided with the protocol term.
+* Why it matters beyond naming: completion evidence can be argued with and gate
+  evidence cannot. A gate resting on completion evidence would be the harness
+  agreeing with whoever submitted the work, which is exactly what the anchor
+  invariant exists to prevent. Blurring the words makes that mistake easy to
+  write and hard to see in review.
+* Fixes: the research schema field is now `citations`; the brief defines all
+  three senawa senses in one place and states which one blocking gates rest on.
+
+### Decision D-022: Completion evidence is ingested during the complete call
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: an evidence attachment is authored as a kind plus the workspace file
+  carrying it. Senawa ingests the file into an asset while admitting the complete
+  request, rather than requiring the agent to create assets in an earlier call.
+* Tension this resolves: `WorkerEvidenceAttachment` identifies an attachment by
+  `assetId`, which presumes the asset already exists. Taken literally that
+  reintroduces the separate upload step D-021 removed.
+* Rationale: one call keeps the protocol as the consumer's intent describes it,
+  and it keeps the refusal path clean, because an attachment belonging to a
+  refused completion never becomes an accepted asset. Pre-created assets would
+  leave orphans behind every refused attempt.
+* Consequence: the worker channel's completion submission currently types
+  evidence as an opaque value, which is too loose to carry kind, descriptor, and
+  criterion binding. Phase 5 replaces it with the real attachment shape, and
+  Phase 6 adds the authored evidence policy and evidence views that make the
+  kinds meaningful.
+
+### Deviation: the target workflow had lost evidence views
+
+The authored tree recreated the old five-phase workflow but let `verify` read
+only the implement outputs. The old internal template also gave it an
+`accepted-implementation` evidence view over the `task-completion` kind. That is
+a capability the parity phase has to restore, so the target now declares
+`evidenceFrom` on `verify` with an allowlisted kind and a sensitivity ceiling,
+and names an explicit input schema because the phase now merges two sources.
