@@ -1088,3 +1088,30 @@ they still referenced.
   accepted evidence.
 * Sessions, steering, and portal progressive disclosure.
 * The consumer guides still describe the earlier authoring model.
+
+## F-009: the progress table drifted ahead of the checkboxes
+
+Phases 5 through 15 were summarised as complete or near-complete in the progress
+table while 116 item checkboxes stayed unticked. Reconciling the items against
+the source rather than against the session's own summary found three claims that
+were wrong:
+
+* The D-023 rename was recorded as a decision and never executed.
+  `implementationEvidenceViews` still appears 48 times in source and
+  `completionEvidenceViews` appears nowhere. The Phase 12 portal asset rename
+  depends on it, so both are now marked blocked rather than pending.
+* The Copilot worker still exposes `submit_completion` and `submit_phase_output`.
+  Phase 5 replaced the CLI completion path only, so the claim that complete is
+  the single successful path holds for one adapter and not the other.
+* `senawa worker` has dedicated forms for context, output-schema, and complete.
+  Self-check, question, and escalate were part of the same Phase 5 item and were
+  not built.
+
+The cause is that a phase was treated as finished when its central mechanism
+worked, rather than when its items were demonstrated. The plan's fourth governing
+principle already says a phase is done when the behaviours it owns are
+demonstrated. The item checkboxes are the record of that, and updating the
+summary without them removed the only check on the summary.
+
+Phases 5, 6, 7, 11, 14, and 15 now carry the state their items support, and every
+unticked item that was attempted carries the reason it is not ticked.

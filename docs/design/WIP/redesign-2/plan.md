@@ -62,17 +62,17 @@ A later phase may not regress one of them.
 | 2 | One phase runs a real agent end to end | Dispatch and worker transport complete; acceptance moved to Phase 8 |
 | 3 | The consumer command line | Inspection complete; blocking loop moved to Phase 8 |
 | 4 | Sensors, gates, and anchors | Complete |
-| 5 | The agent operating contract | Contract and complete verb built |
-| 6 | Evidence and output policy are authorable | Complete except evidence views |
-| 7 | Loops, gates, sensors, and approval are authorable | Complete |
+| 5 | The agent operating contract | Contract and complete verb built; Copilot tool projection open |
+| 6 | Evidence and output policy are authorable | Policy authorable; D-023 rename and evidence views open |
+| 7 | Loops, gates, sensors, and approval are authorable | Authoring built; acceptances unproven |
 | 8 | The autonomous driver and human loop | Human decisions drivable; driver open |
 | 9 | Fan-out and fan-in | Lowering built; member phases open |
 | 10 | Sessions, model routing, and steering | Not started |
-| 11 | Prove authored-surface parity | Proven against senawa's own workflow |
+| 11 | Prove authored-surface parity | Tree compiles; comparison with the old template open |
 | 12 | The portal earns its density | Route fetching fixed; disclosure open |
 | 13 | Remove what the evidence condemns | Dead intent removed |
-| 14 | Name it v1 and rewrite every document in plain language | Renamed; guide rewrite open |
-| 15 | Restore the loop engineering narrative | README restored |
+| 14 | Name it v1 and rewrite every document in plain language | Renamed; every document rewrite open |
+| 15 | Restore the loop engineering narrative | README restored; guides and references open |
 
 ## Phase 0: Settle the shape
 
@@ -237,35 +237,35 @@ tells an agent how to participate in the loop.
 
 * [ ] Define one adapter-neutral worker contract for these operations: inspect
   context, discover completion requirements, complete with declared output
-  assets and evidence, run a self-check, ask a question, and escalate.
+  assets and evidence, run a self-check, ask a question, and escalate. **Partial: context, output-schema, and complete exist. Self-check, question, and escalate have no dedicated worker operation.**
 * [ ] Add dedicated command forms for those operations. Keep generic JSON
-  submission as a diagnostic escape hatch, not the primary agent experience.
-* [ ] Append a generated `senawa-operating-contract` section after the configured
+  submission as a diagnostic escape hatch, not the primary agent experience. **Blocked on the operations above.**
+* [x] Append a generated `senawa-operating-contract` section after the configured
   prompt. Derive it from the exact dispatch capabilities, output declarations,
   completion requirements, attempt state, and credential delivery. Cover it with
   the prompt-pack digest.
 * [ ] Make `senawa worker complete` the only successful completion path. Its
   request carries every required output asset, evidence, and completion summary
-  or disposition. Returning JSON in assistant text does not complete anything.
-* [ ] Let the CLI accept named output file paths and evidence file paths, read
+  or disposition. Returning JSON in assistant text does not complete anything. **Not done: the generic submit form still reaches completion.**
+* [x] Let the CLI accept named output file paths and evidence file paths, read
   them under workspace containment, and construct the complete request. The
   agent must not hand-author dispatch identities, digests, or a generic
   submission envelope. Let the Copilot tool accept the same named assets as typed
-  parameters generated from their schemas.
+  parameters generated from their schemas. **Partial: the CLI reads named assets; the Copilot tool does not take them as typed parameters.**
 * [ ] Validate completion atomically: either every output and evidence item is
   accepted, the gate path starts, and the same content digest can be replayed, or
   no output is published and structured refusal reasons are returned. There must
-  be no accepted-output state waiting for a separate completion request.
+  be no accepted-output state waiting for a separate completion request. **Not verified: no test drives a partial completion.**
 * [ ] Project the same contract into Copilot tool names, descriptions, schemas,
   and results. Replace separate `submit_phase_output` and `submit_completion`
-  tools with one `senawa_complete` tool carrying the same request as the CLI.
-* [ ] Keep authority separation explicit. Generated instructions can explain an
+  tools with one `senawa_complete` tool carrying the same request as the CLI. **Not done: the Copilot worker still exposes submit_completion and submit_phase_output.**
+* [x] Keep authority separation explicit. Generated instructions can explain an
   available capability but cannot add one, and authored prompt text cannot alter
   or suppress the generated contract.
 * [ ] Return machine-readable and human-readable refusal details to the worker,
   including which output, criterion, evidence requirement, sensor, or gate rule
-  prevented completion.
-* [ ] Remove completion instructions from authored prompts and from the generated
+  prevented completion. **Not verified.**
+* [x] Remove completion instructions from authored prompts and from the generated
   starter prompts. Prompts describe the assignment; the generated operating
   contract describes the protocol.
 
@@ -294,19 +294,19 @@ This phase closes the most consequential part of F-004.
   `evidence` identifier disappears in favour of `completionEvidence`, and
   `implementationEvidenceViews` becomes `completionEvidenceViews` with a matching
   `completion-evidence` mapping kind. `GateEvidence` and `SensorReading` are
-  already qualified and do not move.
-* [ ] Add concise YAML for completion criteria and evidence policy, including
+  already qualified and do not move. **Not done: implementationEvidenceViews still appears 48 times in source. D-023 recorded the decision; the rename was never executed.**
+* [x] Add concise YAML for completion criteria and evidence policy, including
   `none`, `task`, `required-criteria`, and `all-satisfied`, per-kind minimum
   counts, and waiver authority where the internal contract supports it.
 * [ ] Add authored implementation-evidence views and derive their strict internal
-  mappings. Authors name phases, outputs, and evidence kinds, not JSON Pointers.
-* [ ] Let an output declare schema, sensitivity, maximum bytes, and an optional
+  mappings. Authors name phases, outputs, and evidence kinds, not JSON Pointers. **Not done: authored in .senawa, not lowered.**
+* [x] Let an output declare schema, sensitivity, maximum bytes, and an optional
   repository path while retaining the current scalar schema form as shorthand.
 * [ ] Put the exact required output assets, criteria, and evidence requirements
   into the generated operating contract and complete-request schema so the agent
-  knows what completion means before it starts work.
+  knows what completion means before it starts work. **Partial: output declarations reach the contract; criteria and evidence counts do not.**
 * [ ] Refuse contradictory policies at authoring time, including evidence kinds
-  no phase can produce and sensitivity flows that exceed a declared ceiling.
+  no phase can produce and sensitivity flows that exceed a declared ceiling. **Not verified.**
 
 Acceptance:
 
@@ -322,20 +322,20 @@ Acceptance:
 This phase makes the middle and inner loops policy rather than constants hidden
 inside `lowerAuthoredWorkflow`.
 
-* [ ] Add per-phase iteration policy: maximum attempts and the dispositions for
+* [x] Add per-phase iteration policy: maximum attempts and the dispositions for
   gate rejection, approval rejection, upstream change, and exhaustion. Preserve
   today's values as concise defaults.
-* [ ] Add named gate declarations with blocking and advisory rules, the internal
+* [x] Add named gate declarations with blocking and advisory rules, the internal
   comparison and Boolean operators, named reading fields compiled to strict
   pointers, and expected values.
 * [ ] Preserve the anchor invariant across composed Boolean rules: every path to
-  a blocking acceptance must depend on a deterministic reading.
-* [ ] Add sensor policy for working directory, timeout, output limits, inherited
+  a blocking acceptance must depend on a deterministic reading. **Moot for now: authored rules do not compose with Boolean operators, so the existing anchor check still holds.**
+* [x] Add sensor policy for working directory, timeout, output limits, inherited
   environment, attempts, and reconciliation attempts. Keep containment and the
   environment allowlist as host-enforced upper bounds.
-* [ ] Replace `approve: true` with a shorthand plus an expanded form that names
+* [x] Replace `approve: true` with a shorthand plus an expanded form that names
   the approving role and rejection policy.
-* [ ] Compile all authoring conveniences into the existing strict internal
+* [x] Compile all authoring conveniences into the existing strict internal
   contracts. Do not add a looser gate or sensor model to the kernel.
 
 Acceptance:
@@ -390,7 +390,7 @@ Acceptance:
 ## Phase 9: Fan-out and fan-in
 
 * [ ] Lower authored `forEach` into member phases under the Phase 0 decision,
-  preserving one task beneath each phase and a configured nesting bound.
+  preserving one task beneath each phase and a configured nesting bound. **Not done: members lower to a task frontier rather than phases. Deviation recorded as D-025; per-member gates and approval need the phase model.**
 * [ ] Give each member its own operating contract, output, evidence policy,
   gates, approval, attempt policy, escalation, and history.
 * [ ] Honour per-phase failure policy: wait, proceed with passed members, or fail
@@ -444,14 +444,14 @@ Acceptance:
 
 F-004 is closed by evidence, not by counting lines.
 
-* [ ] Recreate the old five-phase standard workflow entirely in the three
+* [x] Recreate the old five-phase standard workflow entirely in the three
   authored YAML documents, including evidence, task-frontier fan-out, gates,
   approval, model policy, sensitivity, and iteration policy.
 * [ ] Compare the compiled graph and policy semantics with the old internal
   template. Byte identity is not required; externally meaningful behaviour is.
 * [ ] Audit every constant in `lowerAuthoredWorkflow`. Classify it as a derived
   mechanism, an overridable default, a host-enforced safety bound, or a deliberate
-  removed capability with a recorded reason.
+  removed capability with a recorded reason. **Partial: F-004 catalogued them; seven were closed by Phases 6 and 7.**
 * [ ] Replace line-count acceptance with two fixtures: a concise default workflow
   and a fully explicit workflow exercising the advanced surface.
 * [ ] Remove the lowered-document authoring escape hatch from consumer guidance
@@ -473,7 +473,7 @@ Acceptance:
 * [ ] Move authority sync vectors, raw event and receipt trees, amendment dumps,
   delivery and workspace tabs, effect counters, full digests, and pending
   receipts behind progressive disclosure.
-* [ ] Stop fetching needs, events, and receipts on every route change.
+* [x] Stop fetching needs, events, and receipts on every route change.
 * [ ] Add an agent-pool view showing the active persona, session, phase or member,
   attempt, route, and latest refusal reason.
 * [ ] Drive approval, reasoned rejection, question response, member override, and
@@ -481,7 +481,7 @@ Acceptance:
 * [ ] Rename the portal asset source `evidence` to `completion-evidence` under
   D-023, and label completion evidence and gate evidence distinctly wherever both
   are shown, because a reader deciding an override needs to know which one they
-  are looking at.
+  are looking at. **Blocked on the D-023 rename in Phase 6.**
 
 Acceptance:
 
@@ -491,12 +491,12 @@ Acceptance:
 
 ## Phase 13: Remove what the evidence condemns
 
-* [ ] Delete or implement every declared but unimplemented intent.
+* [ ] Delete or implement every declared but unimplemented intent. **Partial: publish-phase-output removed under D-021; authority.ts still refuses at least one intent as unimplemented.**
 * [ ] Remove unenforced budget units and planning code that pretends to use them.
-* [ ] Remove the dead resume binding after Phase 10 replaces it.
+* [ ] Remove the dead resume binding after Phase 10 replaces it. **Blocked on Phase 10.**
 * [ ] Remove the old internal standard-template generator once Phase 11 no longer
-  needs it as a comparison oracle.
-* [ ] Compile workspace fault injection out of production builds.
+  needs it as a comparison oracle. **Blocked on the Phase 11 comparison above.**
+* [ ] Compile workspace fault injection out of production builds. **No fault-injection symbol found in source; confirm the target still exists.**
 
 Acceptance:
 
@@ -515,8 +515,8 @@ everyday words, and precision kept rather than traded for brevity. Write "treat 
 missing measurement as a failure", not "resolve an unreported blocking reading to
 unknown and fail closed". Both are exact; only one can be read once.
 
-* [ ] Remove alpha from versions, package metadata, protocols, CLI text, and
-  prose.
+* [x] Remove alpha from versions, package metadata, protocols, CLI text, and
+  prose. **Protocol v1alphaN identifiers deliberately retained: they are content-addressed and embedded in stored digests and migrations.**
 * [ ] Rewrite consumer guides around the three authored files, the generated
   operating contract, and the command line loop.
 * [ ] Publish references for authoring defaults and expanded forms, worker
@@ -548,16 +548,16 @@ Acceptance:
 The README on `main` carries the ideas that explain why the product is shaped the
 way it is. They belong back once the system can demonstrate them.
 
-* [ ] Restore the three nested loops, naming who runs each, over what period, and
+* [x] Restore the three nested loops, naming who runs each, over what period, and
   where the human sits.
-* [ ] Restore sensor, gate, anchor, and frozen set, each defined where a reader
-  first meets it.
-* [ ] Restore backpressure as the organising idea, showing completion granted
+* [x] Restore sensor, gate, anchor, and frozen set, each defined where a reader
+  first meets it. **Partial: frozen set is named but not defined.**
+* [x] Restore backpressure as the organising idea, showing completion granted
   rather than claimed against the implemented handshake.
 * [ ] Restore the loop engineering and graph-of-loops references, and state what
   keeps the system honest: deterministic sensors that execute real code, a
   journal no agent can write, a frozen set the optimizer cannot weaken, and a
-  human who decides what better means.
+  human who decides what better means. **Partial: the honesty sentence landed; the references did not.**
 * [ ] Sweep every document for unsupported claims and undescribed capabilities.
 * [ ] Record which promises v1 keeps, changes, or drops.
 
