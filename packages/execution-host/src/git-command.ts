@@ -159,10 +159,7 @@ export class GitCommandHostError extends Error {
   }
 }
 
-function validateRequest(
-  request: GitCommandRequest,
-  allowed: ReadonlySet<string>,
-): void {
+function validateRequest(request: GitCommandRequest, allowed: ReadonlySet<string>): void {
   if (request.args.some((argument) => typeof argument !== "string" || argument.includes("\0"))) {
     throw new TypeError("Git arguments must be NUL-free strings");
   }

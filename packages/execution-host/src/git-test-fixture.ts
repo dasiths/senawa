@@ -70,14 +70,7 @@ async function initializeTemporaryGitRepository(
     new BoundedGitCommandPort({
       gitExecutable: GIT_EXECUTABLE,
       isolatedHome: home,
-      additionalSubcommands: [
-        "init",
-        "commit",
-        "cat-file",
-        "show",
-        "checkout",
-        "branch",
-      ],
+      additionalSubcommands: ["init", "commit", "cat-file", "show", "checkout", "branch"],
     }),
   );
   const senawaBefore = await senawaWorktrees(command);
