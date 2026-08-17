@@ -54,6 +54,22 @@ export async function runWorkerCli(
     if (typeof request === "string") return { exitCode: 2, output: request };
     return json(await client.submitWorkerSubmission(dispatchId, request));
   }
+  if (action === "ask" && rest.length === 1) {
+    return json(
+      await client.submitWorkerSubmission(dispatchId, {
+        kind: "question",
+        question: rest[0] ?? "",
+      }),
+    );
+  }
+  if (action === "escalate" && rest.length === 1) {
+    return json(
+      await client.submitWorkerSubmission(dispatchId, {
+        kind: "escalation",
+        reason: rest[0] ?? "",
+      }),
+    );
+  }
   if (action === "submit" && rest.length === 1) {
     const submission = decodeCanonicalJsonValue(readSubmission(rest[0] ?? ""));
     return json(await client.submitWorkerSubmission(dispatchId, submission));
@@ -65,6 +81,8 @@ export async function runWorkerCli(
       "  senawa worker context",
       "  senawa worker output-schema",
       "  senawa worker complete --output <name>=<file> [--evidence <kind>=<file>] [--summary <text>]",
+      "  senawa worker ask <question>",
+      "  senawa worker escalate <reason>",
       "  senawa worker submit <file|->",
     ].join("\n"),
   };

@@ -62,7 +62,7 @@ A later phase may not regress one of them.
 | 2 | One phase runs a real agent end to end | Dispatch and worker transport complete; acceptance moved to Phase 8 |
 | 3 | The consumer command line | Inspection complete; blocking loop moved to Phase 8 |
 | 4 | Sensors, gates, and anchors | Complete |
-| 5 | The agent operating contract | Contract and complete verb built; Copilot tool projection open |
+| 5 | The agent operating contract | Contract, verbs, and one Copilot tool built |
 | 6 | Evidence and output policy are authorable | Policy authorable; D-023 rename and evidence views open |
 | 7 | Loops, gates, sensors, and approval are authorable | Authoring built; acceptances unproven |
 | 8 | The autonomous driver and human loop | Human decisions drivable; driver open |
@@ -235,11 +235,11 @@ the protocol is complete.
 Consumer prompts remain about the assignment. Senawa owns the protocol that
 tells an agent how to participate in the loop.
 
-* [ ] Define one adapter-neutral worker contract for these operations: inspect
+* [x] Define one adapter-neutral worker contract for these operations: inspect
   context, discover completion requirements, complete with declared output
-  assets and evidence, run a self-check, ask a question, and escalate. **Partial: context, output-schema, and complete exist. Self-check, question, and escalate have no dedicated worker operation.**
-* [ ] Add dedicated command forms for those operations. Keep generic JSON
-  submission as a diagnostic escape hatch, not the primary agent experience. **Blocked on the operations above.**
+  assets and evidence, run a self-check, ask a question, and escalate.
+* [x] Add dedicated command forms for those operations. Keep generic JSON
+  submission as a diagnostic escape hatch, not the primary agent experience.
 * [x] Append a generated `senawa-operating-contract` section after the configured
   prompt. Derive it from the exact dispatch capabilities, output declarations,
   completion requirements, attempt state, and credential delivery. Cover it with

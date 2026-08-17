@@ -22,7 +22,7 @@ Usage: senawa <command> [arguments]
 Commands:
   start <request.json> [run-id]         Start a run from the authored workflow
   status <repository> <run>             Report what a run is doing
-  worker context|output-schema|complete Agent-scoped worker channel
+  worker context|output-schema|complete|ask|escalate Agent-scoped worker channel
   run-gates <phase>                     Measure a phase's gate sensors now
   approve <repository> <run>            Approve what the run is waiting on
   reject <repository> <run> <reason>    Reject it, with the reason to retry from
