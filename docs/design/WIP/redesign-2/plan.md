@@ -38,7 +38,7 @@ wherever that is possible.
 | 7 | Sessions and steering | Not started |
 | 8 | The portal earns its density | Not started |
 | 9 | Remove what the evidence condemns | Not started |
-| 10 | Name it v1 and document it | Not started |
+| 10 | Name it v1 and document it | Not started, gated on authored-surface parity |
 | 11 | Restore the loop engineering narrative | Not started |
 
 ## Phase 0: Settle the shape
@@ -91,7 +91,10 @@ Acceptance:
 * [x] What a consumer authors is under 150 lines across 3 files. Measured at 117,
   against 853 lines across 18 files before. The lowered internal document is 714
   lines, which is machine-generated and never read by a human, so the original
-  criterion measured the wrong artifact and was corrected.
+  criterion measured the wrong artifact and was corrected. **This measurement was
+  still incomplete: part of the reduction is derivation and part is hardcoding,
+  and counting lines cannot tell them apart. See
+  [the authored surface must not become a ceiling](#cross-cutting-the-authored-surface-must-not-become-a-ceiling).**
 * [x] Refusals name the offending file, path, and reason.
 
 ## Phase 2: One phase runs a real agent end to end
@@ -387,6 +390,73 @@ size should not rely on remembering to run them.
   documentation links, and the browser matrix. `.github/workflows/verify.yml`.
   It landed after Phase 2 rather than no later than it, which is recorded as a
   deviation.
+
+## Cross-cutting: the authored surface must not become a ceiling
+
+Phase 1 measured its success as 117 authored lines against 853, and that
+measurement was incomplete. Compression was achieved partly by deriving things
+and partly by **hardcoding** them, and the plan did not separate the two. The
+compiler and kernel lost nothing; the *author* lost a great deal. Recorded as
+F-004.
+
+Nothing below is a defect in the engine. Each is a value the internal document
+still accepts and `lowerAuthoredWorkflow` currently pins, with no YAML key to
+reach it. Until these land, an author who needs any of them has no route except
+hand-writing the lowered document, which is the situation the redesign set out
+to remove.
+
+Deliberate, not gaps:
+
+* Six budget units collapsing to one attempt counter is D-005, and stays.
+* Fan-out, `forEach`, and task-frontier phases are Phase 6.
+* Session scope already reaches YAML through `session`.
+
+Real gaps, none of which any phase currently schedules:
+
+* [ ] **Evidence policy.** `evidencePolicy` is pinned to `{ mode: "none",
+  requirements: [] }`. The internal document accepts `task`, `required-criteria`,
+  and `all-satisfied` with per-kind minimum counts and a waiver authority. The
+  old standard template used `mode: "task"` with a `task-completion` requirement.
+  An author cannot currently say "completion requires evidence", which is close
+  to the centre of what the product claims to do.
+* [ ] **Iteration policy.** `maximumAttempts` is pinned to 3, and
+  `onGateRejected`, `onApprovalRejected`, and `onUpstreamChanged` are all pinned
+  to `iterate` with `onExhausted` pinned to `escalate`. An author cannot make a
+  phase fail fast on a rejected gate, cannot widen or narrow the attempt budget
+  per phase, and cannot choose to fail rather than escalate. This is the loop,
+  and it is not currently authorable.
+* [ ] **Advisory gate rules.** `advisory` is pinned to `[]`. Only blocking rules
+  can be authored, so a reading that should inform without refusing has nowhere
+  to go. D-012 already noted advisory use was left open.
+* [ ] **Gate conditions.** Every rule is generated as `equals` against
+  `/exitCode` expecting `0`. The internal document supports ten operators, any
+  JSON pointer into the reading, and any expected value. An author cannot gate on
+  a coverage number, a count, or anything a sensor reports other than its exit
+  status.
+* [ ] **Sensor tuning.** `cwd`, `timeoutMs`, `maxStdoutBytes`, `maxStderrBytes`,
+  `inheritedEnvironment`, `maxAttempts`, and `maxReconciliationAttempts` are all
+  pinned. A test suite that needs longer than five minutes, or one environment
+  variable beyond `PATH`, cannot be expressed.
+* [ ] **Output sensitivity and size.** Pinned to `internal` and 262,144 bytes. An
+  author cannot mark an output `confidential`, so the sensitivity ceiling the
+  design relies on is currently decorative from the authored surface.
+* [ ] **Approval authority.** `approve: true` always names `release-manager`. An
+  author cannot route approval to a different role.
+* [ ] **Model routing.** One route per agent with `maxTurns`, `maxSubmissions`,
+  and `maxMillidollars` pinned. No fallback and no escalation route, so the
+  model-routing work the probes explored is unreachable from a workflow.
+
+Acceptance:
+
+* [ ] Every value `lowerAuthoredWorkflow` pins today is either authorable, or
+  recorded here as a deliberate decision with a reason.
+* [ ] A test asserts that the authored format can express the old standard
+  template's five-phase workflow, evidence policy and all, so the surface is
+  measured against a real workload rather than against the toy in the template.
+
+This gates Phase 10. Naming something v1 whose authoring surface cannot express
+what its own previous template did would repeat the mistake this plan exists to
+correct.
 
 ## Deferred with reasons
 

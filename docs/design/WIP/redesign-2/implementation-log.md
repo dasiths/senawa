@@ -689,3 +689,33 @@ dependency in this plan.
 * 5 escalation and decision tests, 2 kernel decision-reason tests.
 * Full suite: 115 files and 1,374 tests passed with 2 skipped opt-in live tests.
 * Typecheck, boundaries across 515 files, documentation links across 50 files.
+
+### Finding F-004: The authored surface is narrower than the engine, and the plan did not say so
+
+* Date: 2026-08-17
+* Raised by: the consumer, reading `workflow.yaml` and asking where evidence and
+  loop configuration went.
+* Finding: `lowerAuthoredWorkflow` reaches the compiler by pinning values, not
+  only by deriving them. Evidence policy, iteration policy, advisory gate rules,
+  gate operators and pointers, sensor tuning, output sensitivity, approval
+  authority, and model routing are all fixed constants with no YAML key.
+* Why it was missed: Phase 1's acceptance measured authored lines, 117 against
+  853. Line count cannot distinguish a value that was derived from a value that
+  was removed, so the criterion reported success for both. The number was correct
+  and the conclusion drawn from it was not.
+* Severity: the two the consumer named are the worst two. Evidence policy is
+  pinned to `none`, so an author cannot require evidence for completion, which is
+  close to the product's central claim. Iteration policy is pinned entirely, so
+  the loop the product is built around is not authorable at all.
+* Not a defect in the engine: `compileWorkflowConfiguration` still accepts every
+  one of these. Nothing was deleted. The loss is on the authoring surface only,
+  and an author needing any of it has no route but hand-writing the lowered
+  document, which is what the redesign set out to remove.
+* Distinguished from deliberate decisions: collapsing six budget units to one is
+  D-005 and stands. Fan-out and task-frontier are Phase 6. Session scope already
+  reaches YAML. The rest were not decisions, they were defaults nobody chose.
+* Action: recorded as a cross-cutting section in the plan with per-item detail,
+  gating Phase 10. Its acceptance requires that every pinned value is either made
+  authorable or written down as a decision with a reason, and that a test proves
+  the authored format can express the old five-phase standard template rather
+  than only the two-phase toy in the new one.
