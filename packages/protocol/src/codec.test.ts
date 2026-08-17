@@ -179,7 +179,6 @@ describe("v1alpha3 command codec", () => {
   it.each([
     "instantiate-run",
     "start-phase-attempt",
-    "publish-phase-output",
     "accept-graph-revision",
     "submit-completion",
     "evaluate-gate",

@@ -41,7 +41,6 @@ export interface RunIdentity {
 export type CommandIntent =
   | { readonly type: "instantiate-run" }
   | { readonly type: "start-phase-attempt" }
-  | { readonly type: "publish-phase-output" }
   | { readonly type: "accept-graph-revision" }
   | { readonly type: "submit-completion" }
   | { readonly type: "evaluate-gate" }

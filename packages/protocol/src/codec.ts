@@ -96,7 +96,6 @@ const TRANSPORT_KINDS = new Set<TransportKind>(["cli", "http", "runner", "portal
 const INTENT_TYPES = new Set<CommandIntent["type"]>([
   "instantiate-run",
   "start-phase-attempt",
-  "publish-phase-output",
   "accept-graph-revision",
   "submit-completion",
   "evaluate-gate",
