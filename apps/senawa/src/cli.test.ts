@@ -29,6 +29,7 @@ Usage: senawa <command> [arguments]
 Commands:
   start <request.json> [run-id]         Start a run from the authored workflow
   status <repository> <run>             Report what a run is doing
+  worker context|output-schema|submit   Agent-scoped worker channel
   doctor [path|directory]               Validate a workflow tree (default: .senawa)
   init [directory]                      Create the standard workflow tree (default: .senawa)
   service start|run|status|drain|stop   Manage the local supervisor

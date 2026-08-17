@@ -18,4 +18,5 @@ export * from "./run-event-notifier.js";
 export * from "./service.js";
 export * from "./session-security.js";
 export * from "./sse.js";
+export * from "./worker-api.js";
 export * from "./worker-credential.js";

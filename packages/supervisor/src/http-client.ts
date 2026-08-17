@@ -465,6 +465,25 @@ export class HttpSupervisorClient {
     return this.#request(method, path, body, headers, false);
   }
 
+  /** Reads one dispatch's worker context. Requires the worker credential. */
+  async workerContext(dispatchId: string): Promise<JsonValue> {
+    return decodeCanonicalJsonValue(await this.#json("GET", workerPath(dispatchId, "context")));
+  }
+
+  /** Reads the schema the phase output must satisfy, so an agent need not guess. */
+  async workerOutputSchema(dispatchId: string): Promise<JsonValue> {
+    return decodeCanonicalJsonValue(
+      await this.#json("GET", workerPath(dispatchId, "output-schema")),
+    );
+  }
+
+  /** Submits phase output, a completion request, a question, or an escalation. */
+  async submitWorkerSubmission(dispatchId: string, submission: JsonValue): Promise<JsonValue> {
+    return decodeCanonicalJsonValue(
+      await this.#requestJson("POST", workerPath(dispatchId, "submissions"), submission),
+    );
+  }
+
   async #json(method: string, path: string): Promise<string> {
     return (await this.#request(method, path)).body;
   }
@@ -621,6 +640,13 @@ function pagePath(input: string | unknown, resource: "receipts" | "events"): str
 
 function amendmentPath(repositoryId: unknown, runId: unknown): string {
   return `/api/v1alpha1/repositories/${segment(repositoryId)}/runs/${segment(runId)}/amendments`;
+}
+
+function workerPath(dispatchId: string, resource: string): string {
+  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(dispatchId)) {
+    throw new Error("Worker dispatch identity is invalid");
+  }
+  return `/api/v1alpha1/worker/${dispatchId}/${resource}`;
 }
 
 function portalRunPath(request: Record<string, unknown>): string {

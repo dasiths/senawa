@@ -100,6 +100,22 @@ export class WorkerCredentialStore {
     return { path, scope };
   }
 
+  /**
+   * Resolves a presented token without spending its submission budget.
+   *
+   * Authentication happens before the handler knows which operation was asked
+   * for, so identity has to be separable from the act of submitting.
+   */
+  identify(token: string): WorkerCredentialScope | undefined {
+    const record = this.#byDigest.get(this.#digest(token));
+    if (record === undefined) return undefined;
+    if (this.#now() >= record.scope.expiresAt) {
+      this.revoke(record.scope.dispatchId);
+      return undefined;
+    }
+    return record.scope;
+  }
+
   /** Resolves a presented token to its dispatch, refusing anything unscoped. */
   resolve(token: string, capability: string): WorkerCredentialResolution {
     const record = this.#byDigest.get(this.#digest(token));

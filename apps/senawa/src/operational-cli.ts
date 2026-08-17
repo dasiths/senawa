@@ -39,6 +39,7 @@ const MAX_OPERATIONAL_ARGUMENT_LENGTH = 4_096;
 
 import { runStatus } from "./run-status.js";
 import { runStartCommand } from "./start-command.js";
+import { runWorkerCli } from "./worker-cli.js";
 
 /** The local operator identity a consumer acts as when starting a run. */
 const startPrincipal = Object.freeze({
@@ -92,6 +93,9 @@ export async function runOperationalCli(
       startPrincipal,
       new Date().toISOString(),
     );
+  }
+  if (group === "worker") {
+    return await runWorkerCli(action, rest, { socketPath: paths.socketPath, environment });
   }
   if (group === "service" && action === "run" && rest.length === 0) {
     await runSenawaServiceForeground(environment);

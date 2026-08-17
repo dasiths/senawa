@@ -22,6 +22,12 @@ import {
 } from "./portal-assets.js";
 import { type PortalSessionSecurity, readCookie } from "./session-security.js";
 import type { SseEventSource } from "./sse.js";
+import { type WorkerApi, WorkerApiError, workerSubmissionCapability } from "./worker-api.js";
+import {
+  WorkerCredentialError,
+  type WorkerCredentialScope,
+  type WorkerCredentialStore,
+} from "./worker-credential.js";
 
 const MAX_FRAMED_BODY_BYTES = PROTOCOL_LIMITS.maxWireBytes + 1_024;
 const SESSION_COOKIE = "senawa_session";
@@ -51,6 +57,13 @@ export interface SupervisorHttpHandlerOptions {
   readonly requestTimeoutMs?: number;
   readonly operations?: SupervisorOperations;
   readonly portalAssets?: PortalAssetSource;
+  readonly worker?: SupervisorWorkerChannel;
+}
+
+/** The worker channel is optional so a supervisor with no agents exposes none of it. */
+export interface SupervisorWorkerChannel {
+  readonly api: WorkerApi;
+  readonly credentials: WorkerCredentialStore;
 }
 
 export interface SupervisorOperations {
@@ -77,6 +90,7 @@ export class SupervisorHttpHandler {
   readonly #requestTimeoutMs: number;
   readonly #operations: SupervisorOperations | undefined;
   readonly #portalAssets: PortalAssetSource | undefined;
+  readonly #worker: SupervisorWorkerChannel | undefined;
 
   constructor(options: SupervisorHttpHandlerOptions) {
     this.#api = options.api;
@@ -91,6 +105,7 @@ export class SupervisorHttpHandler {
     this.#requestTimeoutMs = options.requestTimeoutMs ?? 15_000;
     this.#operations = options.operations;
     this.#portalAssets = options.portalAssets;
+    this.#worker = options.worker;
     if (this.#transport === "ipc" && this.#credential === undefined) {
       throw new TypeError("IPC HTTP requires a local credential");
     }
@@ -107,13 +122,25 @@ export class SupervisorHttpHandler {
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
       this.#validateConnectionHeaders(request);
-      if (this.#transport === "ipc") this.#authenticateIpc(request);
+      const workerScope = this.#transport === "ipc" ? this.#authenticateIpc(request) : undefined;
       const route = matchSupervisorHttpRoute(request.method ?? "", request.url ?? "");
+      const isWorkerRoute = route.kind.startsWith("worker-");
+      // A worker token reaches nothing but the worker channel, and the operator
+      // token reaches nothing inside it, so neither identity can borrow the
+      // other's authority by choosing a different path.
+      if (isWorkerRoute !== (workerScope !== undefined)) throw notFound();
       const sessionToken = this.#authenticate(request, route.kind);
       this.#validateExpectation(request);
       this.#validateBodyHeaders(request, route.kind);
+      if (workerScope !== undefined) {
+        return await this.#handleWorker(request, response, route.kind, workerScope);
+      }
 
       switch (route.kind) {
+        case "worker-context":
+        case "worker-output-schema":
+        case "worker-submission":
+          throw notFound();
         case "supervisor-status":
           requireIpc(this.#transport);
           requireNoBody(request);
@@ -622,14 +649,43 @@ export class SupervisorHttpHandler {
     return sessionToken;
   }
 
-  #authenticateIpc(request: IncomingMessage): void {
+  #authenticateIpc(request: IncomingMessage): WorkerCredentialScope | undefined {
     const values = request.headersDistinct.authorization ?? [];
-    if (
-      values.length !== 1 ||
-      !authenticateLocalCredential(values[0], requiredValue(this.#credential))
-    ) {
-      throw httpError("unauthorized", 401, "IPC authorization failed");
+    if (values.length !== 1) throw httpError("unauthorized", 401, "IPC authorization failed");
+    if (authenticateLocalCredential(values[0], requiredValue(this.#credential))) return undefined;
+    const scope = this.#worker?.credentials.identify(presentedToken(values[0]));
+    if (scope === undefined) throw httpError("unauthorized", 401, "IPC authorization failed");
+    return scope;
+  }
+
+  async #handleWorker(
+    request: IncomingMessage,
+    response: ServerResponse,
+    kind: string,
+    scope: WorkerCredentialScope,
+  ): Promise<void> {
+    const worker = this.#requiredWorker();
+    if (kind === "worker-context") {
+      requireNoBody(request);
+      return sendJson(response, 200, await worker.api.context(scope));
     }
+    if (kind === "worker-output-schema") {
+      requireNoBody(request);
+      return sendJson(response, 200, await worker.api.outputSchema(scope));
+    }
+    const body = await readJsonBody(request, this.#requestTimeoutMs);
+    const submission = decodeCanonicalJsonValue(body);
+    // The budget is spent only once the submission names a kind the channel
+    // offers, so a malformed body cannot burn an attempt the agent never used.
+    const token = presentedToken((request.headersDistinct.authorization ?? [])[0]);
+    const resolution = worker.credentials.resolve(token, workerSubmissionCapability(submission));
+    return sendJson(response, 202, await worker.api.submit(resolution.scope, submission));
+  }
+
+  #requiredWorker(): SupervisorWorkerChannel {
+    if (this.#worker === undefined)
+      throw httpError("service-unavailable", 503, "Worker channel is unavailable");
+    return this.#worker;
   }
 
   #validateBodyHeaders(request: IncomingMessage, routeKind: string): void {
@@ -966,6 +1022,27 @@ function mapHttpError(error: unknown): {
     };
   }
   if (error instanceof SupervisorHttpError) return error;
+  if (error instanceof WorkerCredentialError) {
+    // An unrecognised token is indistinguishable from an exhausted one to the
+    // caller, so a worker cannot probe the store for other dispatches.
+    return error.reason === "unknown-credential" || error.reason === "expired-credential"
+      ? { code: "unauthorized", status: 401, message: "Worker credential is not usable" }
+      : { code: "forbidden", status: 403, message: error.message };
+  }
+  if (error instanceof WorkerApiError) {
+    return {
+      code: error.code,
+      status:
+        error.code === "unknown-dispatch"
+          ? 404
+          : error.code === "unavailable"
+            ? 503
+            : error.code === "submission-refused"
+              ? 409
+              : 400,
+      message: error.message,
+    };
+  }
   if (error instanceof SupervisorServiceUnavailableError) {
     return {
       code: "service-unavailable",
@@ -994,6 +1071,12 @@ function httpError(code: string, status: number, message: string): SupervisorHtt
 
 function notFound(): SupervisorHttpError {
   return httpError("not-found", 404, "Route was not found");
+}
+
+/** Reads the bearer value out of an Authorization header, or an empty string. */
+function presentedToken(authorization: string | undefined): string {
+  const prefix = "Bearer ";
+  return authorization?.startsWith(prefix) ? authorization.slice(prefix.length) : "";
 }
 
 function requireIpc(transport: SupervisorHttpTransport): void {
