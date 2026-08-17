@@ -1,3 +1,4 @@
+export * from "./authored-template.js";
 export * from "./authoring.js";
 export * from "./compiler.js";
 export * from "./contracts.js";

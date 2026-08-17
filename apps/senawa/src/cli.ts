@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import {
   type ConfigurationResourceReader,
-  createStandardTemplateFiles,
+  createAuthoredTemplateFiles,
   doctorWorkflowConfiguration,
   renderExampleWorkflowConfiguration,
 } from "@senawa/configuration";
@@ -23,6 +23,10 @@ Commands:
   start <request.json> [run-id]         Start a run from the authored workflow
   status <repository> <run>             Report what a run is doing
   worker context|output-schema|submit   Agent-scoped worker channel
+  run-gates <phase>                     Measure a phase's gate sensors now
+  phase <repository> <run> <phase>      Inspect one phase's lifecycle
+  artifact list|read <repository> <run> Read what a run produced
+  agent list <repository> <run>         List the agents a run dispatched
   doctor [path|directory]               Validate a workflow tree (default: .senawa)
   init [directory]                      Create the standard workflow tree (default: .senawa)
   service start|run|status|drain|stop   Manage the local supervisor
@@ -66,6 +70,21 @@ export interface CliDependencies {
   ensureDirectory(path: string): Promise<"created" | "existing">;
   syncDirectory(path: string): Promise<void>;
   publishTemplate?(projectRoot: string, files: Readonly<Record<string, string>>): Promise<void>;
+  /**
+   * Validates a project's authored three-document tree.
+   *
+   * It is optional because the in-memory CLI harness has no real directory to
+   * confine reads to, and the authored reader refuses to work without one.
+   */
+  checkAuthored?(projectRoot: string): Promise<{
+    readonly diagnostics: readonly {
+      readonly code: string;
+      readonly locator: string;
+      readonly pointer: string;
+      readonly message: string;
+    }[];
+    readonly snapshot?: unknown;
+  }>;
 }
 
 export interface CliResult {
@@ -108,9 +127,49 @@ export async function runCli(
       ? join(suppliedPath, DEFAULT_WORKFLOW_PATH)
       : (suppliedPath ?? DEFAULT_WORKFLOW_PATH);
   const isDefaultPath = suppliedPath === undefined;
-  if (command === "doctor") return doctor(path, dependencies, isDefaultPath);
+  if (command === "doctor") {
+    const projectRoot = isDefaultPath ? PROJECT_ROOT : (suppliedPath ?? PROJECT_ROOT);
+    if (dependencies.checkAuthored !== undefined && !projectRoot.endsWith(".json")) {
+      const authored = await doctorAuthored(projectRoot, dependencies.checkAuthored);
+      // A project with no authored tree may still be an earlier alpha layout,
+      // so fall through rather than reporting the newer format's absence.
+      if (authored !== undefined) return authored;
+    }
+    return doctor(path, dependencies, isDefaultPath);
+  }
   if (command === "init") return initialize(path, dependencies, isDefaultPath);
   return renderCli(arguments_);
+}
+
+/** Reports on the authored tree, which is the only thing a person writes. */
+async function doctorAuthored(
+  projectRoot: string,
+  check: NonNullable<CliDependencies["checkAuthored"]>,
+): Promise<CliResult | undefined> {
+  let result: Awaited<ReturnType<NonNullable<CliDependencies["checkAuthored"]>>>;
+  try {
+    result = await check(projectRoot);
+  } catch {
+    return undefined;
+  }
+  if (result.snapshot === undefined && result.diagnostics.every(isMissingDocument)) {
+    return undefined;
+  }
+  if (result.snapshot !== undefined)
+    return { output: `${projectRoot}/.senawa: valid`, exitCode: 0 };
+  const diagnostics = result.diagnostics.map(
+    ({ code, locator, pointer, message }) =>
+      `- [${code}] ${locator}${pointer.length === 0 ? "" : `#${pointer}`}: ${message}`,
+  );
+  return {
+    output: `${projectRoot}/.senawa: invalid (${result.diagnostics.length} diagnostic${result.diagnostics.length === 1 ? "" : "s"})\n${diagnostics.join("\n")}`,
+    exitCode: 1,
+  };
+}
+
+/** True when a diagnostic only says the authored tree is not there at all. */
+function isMissingDocument(diagnostic: { readonly code: string }): boolean {
+  return diagnostic.code === "resource-read-failed";
 }
 
 async function doctor(
@@ -170,7 +229,7 @@ async function initialize(
   if (dependencies.publishTemplate !== undefined) {
     const projectRoot = isDefaultPath ? PROJECT_ROOT : path;
     const displayedPath = isDefaultPath ? DEFAULT_CONFIGURATION_DIRECTORY : join(path, ".senawa");
-    const files = createStandardTemplateFiles();
+    const files = createAuthoredTemplateFiles();
     for (const [resourcePath, content] of Object.entries(files)) {
       assertSecretSafePositiveProjection(content, `Generated standard template ${resourcePath}`);
     }

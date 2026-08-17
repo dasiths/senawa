@@ -7,6 +7,7 @@ import {
   compileWorkflowConfiguration,
   createExampleWorkflowConfiguration,
   createExampleWorkflowResources,
+  createStandardWorkflowConfiguration,
   createStandardWorkflowResources,
 } from "@senawa/configuration";
 import { describe, expect, it } from "vitest";
@@ -30,6 +31,10 @@ Commands:
   start <request.json> [run-id]         Start a run from the authored workflow
   status <repository> <run>             Report what a run is doing
   worker context|output-schema|submit   Agent-scoped worker channel
+  run-gates <phase>                     Measure a phase's gate sensors now
+  phase <repository> <run> <phase>      Inspect one phase's lifecycle
+  artifact list|read <repository> <run> Read what a run produced
+  agent list <repository> <run>         List the agents a run dispatched
   doctor [path|directory]               Validate a workflow tree (default: .senawa)
   init [directory]                      Create the standard workflow tree (default: .senawa)
   service start|run|status|drain|stop   Manage the local supervisor
@@ -364,11 +369,13 @@ describe("built executable", () => {
       cwd: root,
     });
     expect(initialized.stdout.trim()).toBe(".senawa: created");
-    const content = await readFile(join(root, DEFAULT_WORKFLOW_PATH), "utf8");
-    expect(JSON.parse(content).apiVersion).toBe("senawa.dev/workflow/v1alpha3");
+    // The authored tree is what a person writes. The lowered internal document
+    // is machine-generated, so init must never publish one for a human to edit.
+    const content = await readFile(join(root, ".senawa", "workflow.yaml"), "utf8");
+    expect(content).toContain("phases:");
 
     const valid = await execute(process.execPath, [executable.pathname, "doctor"], { cwd: root });
-    expect(valid.stdout.trim()).toBe(".senawa/workflow.json: valid");
+    expect(valid.stdout.trim()).toBe("./.senawa: valid");
     await expect(
       execute(process.execPath, [executable.pathname, "init"], { cwd: root }),
     ).rejects.toMatchObject({ code: 1, stdout: expect.stringContaining("already exists") });
@@ -392,7 +399,7 @@ describe("built executable", () => {
           cwd: root,
         })
       ).stdout.trim(),
-    ).toBe("custom/.senawa/workflow.json: valid");
+    ).toBe("custom/.senawa: valid");
 
     await writeFile(join(root, "invalid.json"), '{"kind":"Job","authority":true}', "utf8");
     await expect(
@@ -403,7 +410,13 @@ describe("built executable", () => {
     });
 
     const migrationRoot = await mkdtemp(join(tmpdir(), "senawa-migration-"));
-    await writeFile(join(migrationRoot, "senawa.json"), content, "utf8");
+    // The earlier alpha layout is the lowered internal document, which is what
+    // the migration hint is about, so it cannot be the authored YAML.
+    await writeFile(
+      join(migrationRoot, "senawa.json"),
+      `${JSON.stringify(createStandardWorkflowConfiguration(), null, 2)}\n`,
+      "utf8",
+    );
     for (const [path, resource] of Object.entries(createStandardWorkflowResources())) {
       const destination = join(migrationRoot, path);
       await mkdir(dirname(destination), { recursive: true });
@@ -470,9 +483,7 @@ describe("built executable", () => {
     ]);
     expect(concurrent.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
     expect(concurrent.filter(({ status }) => status === "rejected")).toHaveLength(1);
-    expect(JSON.parse(await readFile(join(concurrentRoot, DEFAULT_WORKFLOW_PATH), "utf8"))).toEqual(
-      JSON.parse(content),
-    );
+    expect(await readFile(join(concurrentRoot, ".senawa", "workflow.yaml"), "utf8")).toBe(content);
   }, 15_000);
 });
 

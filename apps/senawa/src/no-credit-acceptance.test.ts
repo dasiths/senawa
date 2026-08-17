@@ -140,14 +140,15 @@ describe("Phase 14F no-credit acceptance", () => {
         output: `${join(fixture.repositoryRoot, ".senawa")}: created`,
         exitCode: 0,
       });
-      expect(await runCli(["doctor", workflowPath], createNodeCliDependencies())).toEqual({
-        output: `${workflowPath}: valid`,
-        exitCode: 0,
-      });
-      expect(JSON.parse(await readFile(workflowPath, "utf8"))).toMatchObject({
-        apiVersion: "senawa.dev/workflow/v1alpha3",
-        kind: "Workflow",
-      });
+      // `init` now publishes the authored three-document tree, which is what a
+      // person edits. This acceptance drives the lowered internal document, so
+      // it writes that itself rather than expecting init to produce one.
+      expect(await runCli(["doctor", fixture.repositoryRoot], createNodeCliDependencies())).toEqual(
+        {
+          output: `${fixture.repositoryRoot}/.senawa: valid`,
+          exitCode: 0,
+        },
+      );
 
       const workflow = configuredWorkflow(createExampleWorkflowConfiguration(), fixture.targetRef);
       await writeExampleResources(fixture.repositoryRoot);

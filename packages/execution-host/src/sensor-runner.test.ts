@@ -61,6 +61,38 @@ describe("running declared sensors", () => {
     expect(first?.inputDigest).not.toBe(second?.inputDigest);
   });
 
+  it("hides the ambient environment from a sensor", async () => {
+    const project = await authoredProject();
+    const snapshot = await compileAuthoredWorkflow(project, sha256);
+    const result = await runSensors({
+      snapshot,
+      sensorKeys: ["environment"],
+      rootDirectory: project,
+      sha256,
+      ambientEnvironment: { SENAWA_SECRET: "leaked", HOME: "/root" },
+    });
+    const data = result.readings[0]?.outcome === "succeeded" ? result.readings[0].data : undefined;
+    // A sensor that could read the operator's environment would turn every
+    // credential in it into agent-reachable input.
+    expect(JSON.stringify(data)).not.toContain("leaked");
+  });
+
+  it("keeps a sensor's working directory inside the project", async () => {
+    const project = await authoredProject();
+    const snapshot = await compileAuthoredWorkflow(project, sha256);
+    const result = await runSensors({
+      snapshot,
+      sensorKeys: ["where"],
+      rootDirectory: project,
+      sha256,
+    });
+    const data = result.readings[0]?.outcome === "succeeded" ? result.readings[0].data : undefined;
+    const stdout = (data as { readonly stdout?: string } | undefined)?.stdout ?? "";
+    // The sensor may not start outside the tree it is measuring, because a
+    // reading taken somewhere else is evidence about something else.
+    expect(stdout.trim().startsWith(project)).toBe(true);
+  });
+
   it("refuses a sensor the workflow does not declare", async () => {
     const project = await authoredProject();
     const snapshot = await compileAuthoredWorkflow(project, sha256);
@@ -93,6 +125,12 @@ sensors:
     deterministic: true
   fails:
     run: /bin/false
+    deterministic: true
+  environment:
+    run: /usr/bin/env
+    deterministic: true
+  where:
+    run: /bin/pwd
     deterministic: true
 `;
 

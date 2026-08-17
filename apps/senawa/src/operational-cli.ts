@@ -37,6 +37,14 @@ import { restoreSupervisorStateRoot, verifySupervisorStateBackup } from "./state
 
 const MAX_OPERATIONAL_ARGUMENT_LENGTH = 4_096;
 
+import {
+  type InspectOptions,
+  inspectPhase,
+  listArtifacts,
+  listDispatches,
+  readArtifact,
+} from "./inspect.js";
+import { runGates } from "./run-gates.js";
 import { runStatus } from "./run-status.js";
 import { runStartCommand } from "./start-command.js";
 import { runWorkerCli } from "./worker-cli.js";
@@ -93,6 +101,24 @@ export async function runOperationalCli(
       startPrincipal,
       new Date().toISOString(),
     );
+  }
+  if (group === "phase" && action !== undefined && rest.length === 2) {
+    return inspectPhase(inspectOptions(paths, dependencies, action, rest[0] ?? ""), rest[1] ?? "");
+  }
+  if (group === "artifact" && action === "list" && rest.length === 2) {
+    return listArtifacts(inspectOptions(paths, dependencies, rest[0] ?? "", rest[1] ?? ""));
+  }
+  if (group === "artifact" && action === "read" && rest.length === 3) {
+    return readArtifact(
+      inspectOptions(paths, dependencies, rest[0] ?? "", rest[1] ?? ""),
+      rest[2] ?? "",
+    );
+  }
+  if (group === "agent" && action === "list" && rest.length === 2) {
+    return listDispatches(inspectOptions(paths, dependencies, rest[0] ?? "", rest[1] ?? ""));
+  }
+  if (group === "run-gates" && action !== undefined && rest.length === 0) {
+    return await runGates({ projectRoot: process.cwd(), phaseKey: action, dependencies });
   }
   if (group === "worker") {
     return await runWorkerCli(action, rest, { socketPath: paths.socketPath, environment });
@@ -523,4 +549,21 @@ function success(output: string): CliResult {
 
 function invalid(output: string): CliResult {
   return { output, exitCode: 1 };
+}
+
+/** Assembles the shared inspection scope so each command reads the same run. */
+function inspectOptions(
+  paths: { readonly databasePath: string; readonly assetDirectory: string },
+  dependencies: RuntimeDependencies,
+  repositoryId: string,
+  runId: string,
+): InspectOptions {
+  return {
+    databasePath: paths.databasePath,
+    assetDirectory: paths.assetDirectory,
+    repositoryId,
+    runId,
+    dependencies,
+    currentTime: new Date().toISOString(),
+  };
 }

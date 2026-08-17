@@ -1,12 +1,13 @@
-import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CONFIGURATION_SNAPSHOT_API_VERSION,
   type ConfigurationRegistryEntry,
   type ConfigurationSnapshot,
   compileWorkflowConfiguration,
+  createStandardTemplateFiles,
   validateSchemaInstance,
 } from "@senawa/configuration";
 import {
@@ -123,10 +124,14 @@ describe("Phase 14F standard delivery acceptance", () => {
   it("drives the generated standard tree from define through verify without model credit", async () => {
     const fixture = await temporaryRepository();
     try {
-      expect(await runCli(["init", fixture.repositoryRoot], createNodeCliDependencies())).toEqual({
-        output: `${join(fixture.repositoryRoot, ".senawa")}: created`,
-        exitCode: 0,
-      });
+      // This acceptance drives the lowered internal document, which `init` no
+      // longer publishes because no person should have to edit one. It is
+      // written here directly so the test still exercises the generated tree.
+      for (const [path, content] of Object.entries(createStandardTemplateFiles())) {
+        const destination = join(fixture.repositoryRoot, path);
+        await mkdir(dirname(destination), { recursive: true });
+        await writeFile(destination, content, "utf8");
+      }
       const workflowPath = join(fixture.repositoryRoot, ".senawa", "workflow.json");
       expect(await runCli(["doctor", workflowPath], createNodeCliDependencies())).toEqual({
         output: `${workflowPath}: valid`,

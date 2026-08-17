@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, realpath, rename, rm, rmdir } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { RootScopedConfigurationResources } from "@senawa/execution-host";
+import { loadAuthoredWorkflow, RootScopedConfigurationResources } from "@senawa/execution-host";
 import type { CliDependencies } from "./cli.js";
 
 export function createNodeCliDependencies(): CliDependencies {
@@ -16,6 +16,11 @@ export function createNodeCliDependencies(): CliDependencies {
       return RootScopedConfigurationResources.create(dirname(resolve(workflowPath)), ".");
     },
     publishTemplate,
+    checkAuthored(projectRoot) {
+      return loadAuthoredWorkflow(projectRoot, {
+        digest: (bytes) => createHash("sha256").update(bytes).digest("hex"),
+      });
+    },
     async readText(path, maxBytes) {
       if ((await realpath(path)) !== resolve(path)) throw filesystemError("ELOOP");
       const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
