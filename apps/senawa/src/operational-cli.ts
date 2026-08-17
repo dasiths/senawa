@@ -37,6 +37,7 @@ import { restoreSupervisorStateRoot, verifySupervisorStateBackup } from "./state
 
 const MAX_OPERATIONAL_ARGUMENT_LENGTH = 4_096;
 
+import { runStatus } from "./run-status.js";
 import { runStartCommand } from "./start-command.js";
 
 /** The local operator identity a consumer acts as when starting a run. */
@@ -66,6 +67,16 @@ export async function runOperationalCli(
     return undefined;
   }
   const paths = resolveSenawaServicePaths(environment);
+  if (group === "status" && action !== undefined && rest.length === 1) {
+    return runStatus({
+      databasePath: paths.databasePath,
+      assetDirectory: paths.assetDirectory,
+      repositoryId: action,
+      runId: rest[0] ?? "",
+      dependencies,
+      currentTime: new Date().toISOString(),
+    });
+  }
   if (group === "start" && action !== undefined && rest.length <= 1) {
     // `start` reaches the authority directly rather than through the service,
     // because a consumer starting a run should not have to start a daemon first.

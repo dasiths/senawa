@@ -423,3 +423,31 @@ portal and the scheduler both work from the same durable state afterwards.
 `cli.test.ts` pins the exact help output, so adding `start` failed it. The test
 was updated rather than the help softened: pinning the text is what makes the
 help truthful, and a command that exists should appear in it.
+
+## Phase 3 log
+
+### `senawa status` answers the question a consumer actually asks
+
+The authority exposes revisions, digests, and effect counters. None of those tell
+a human what is happening. Status reports the run's mode, how many phases exist,
+how many agents have been dispatched, and what is waiting on them, with each
+waiting item named.
+
+Verified against the run created by `senawa start` moments earlier:
+
+```text
+run: run_70f8f785c711f1ca09e28966b89a0974
+mode: running
+phases: 1
+agents dispatched: 1
+waiting on you: 0
+```
+
+Human needs are read through `SqlitePortalQueryAuthority` rather than the command
+authority, which does not expose them. That is the same reader the portal uses,
+so the command line and the portal cannot disagree about what is pending.
+
+### Validation
+
+* Full suite: 110 files and 1,346 tests passed with 2 skipped opt-in live tests.
+* Typecheck, boundaries across 491 files.

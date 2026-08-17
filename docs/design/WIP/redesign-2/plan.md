@@ -31,7 +31,7 @@ wherever that is possible.
 | 0 | Settle the shape | Complete |
 | 1 | An authored workflow becomes a run | Complete |
 | 2 | One phase runs a real agent end to end | In progress |
-| 3 | The consumer command line | Not started |
+| 3 | The consumer command line | In progress |
 | 4 | Sensors, gates, and anchors | Not started |
 | 5 | Human decisions and escalation | Not started |
 | 6 | Fan-out and fan-in | Not started |
@@ -125,7 +125,9 @@ Acceptance:
 
 * [ ] `senawa start workflow.yaml input.json` blocks by default and streams events
   and agent output, with a non-blocking argument.
-* [ ] Run-level status, phase inspection, and artifact reading.
+* [x] Run-level status showing mode, phase count, agents dispatched, and what is
+  waiting on the human.
+* [ ] Phase inspection and artifact reading.
 * [ ] `senawa run-gates <workflow> <phase>` so an agent, or a human, can
   self-check.
 
