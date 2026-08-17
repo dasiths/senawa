@@ -1,5 +1,9 @@
 const AUTHORED_AGENTS = `# One entry per agent. The model and the prompt are all
 # an author supplies; senawa derives the rest.
+#
+# A prompt describes the assignment only. Senawa adds its own instructions at
+# dispatch time telling the agent how to finish, so no prompt here mentions a
+# senawa command or an output file.
 planner:
   model: gpt-5
   prompt: prompts/planner.md
@@ -42,7 +46,8 @@ Read the request and produce a plan.
 
 Request: \${{ input.request }}
 
-Return JSON matching the plan schema.
+Break the work into tasks that can each be carried out and checked on their own.
+Order them so no task depends on one that comes later.
 `;
 
 const IMPLEMENTOR_PROMPT = `You are the implementor.
@@ -51,7 +56,7 @@ Carry out the plan and leave the working tree clean.
 
 Plan: \${{ input.plan }}
 
-Return JSON matching the implementation schema.
+Say what changed and why a reviewer should believe it is correct.
 `;
 
 function authoredSchema(id: string, body: Record<string, unknown>): string {

@@ -30,7 +30,7 @@ Usage: senawa <command> [arguments]
 Commands:
   start <request.json> [run-id]         Start a run from the authored workflow
   status <repository> <run>             Report what a run is doing
-  worker context|output-schema|submit   Agent-scoped worker channel
+  worker context|output-schema|complete Agent-scoped worker channel
   run-gates <phase>                     Measure a phase's gate sensors now
   phase <repository> <run> <phase>      Inspect one phase's lifecycle
   artifact list|read <repository> <run> Read what a run produced

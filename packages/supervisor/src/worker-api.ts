@@ -35,6 +35,9 @@ export class WorkerApiError extends Error {
  * authority operation, which is the point of the separate channel.
  */
 const SUBMISSION_CAPABILITIES: Readonly<Record<string, string>> = Object.freeze({
+  // A complete request carries the outputs and asks for completion in one go,
+  // so it spends the completion capability rather than a separate output one.
+  complete: "worker.submit.completion",
   "phase-output": "worker.submit.phase-output",
   completion: "worker.submit.completion",
   question: "worker.submit.question",
@@ -51,7 +54,7 @@ export function workerSubmissionCapability(submission: JsonValue): string {
   if (capability === undefined) {
     throw new WorkerApiError(
       "invalid-submission",
-      "Submission kind must be phase-output, completion, question, or escalation",
+      "Submission kind must be complete, phase-output, completion, question, or escalation",
     );
   }
   return capability;

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import { decodeCanonicalJsonValue, type JsonValue } from "@senawa/protocol";
 import { HttpSupervisorClient } from "@senawa/supervisor";
 import type { CliResult } from "./cli.js";
@@ -15,6 +16,7 @@ export const WORKER_DISPATCH_VARIABLE = "SENAWA_WORKER_DISPATCH";
 export interface WorkerCliOptions {
   readonly socketPath: string;
   readonly environment: NodeJS.ProcessEnv;
+  readonly workspaceRoot: string;
 }
 
 /**
@@ -47,14 +49,89 @@ export async function runWorkerCli(
   if (action === "output-schema" && rest.length === 0) {
     return json(await client.workerOutputSchema(dispatchId));
   }
+  if (action === "complete") {
+    const request = buildCompleteRequest(rest, options.workspaceRoot);
+    if (typeof request === "string") return { exitCode: 2, output: request };
+    return json(await client.submitWorkerSubmission(dispatchId, request));
+  }
   if (action === "submit" && rest.length === 1) {
     const submission = decodeCanonicalJsonValue(readSubmission(rest[0] ?? ""));
     return json(await client.submitWorkerSubmission(dispatchId, submission));
   }
   return {
     exitCode: 2,
-    output: "Usage: senawa worker <context|output-schema|submit <file|->>",
+    output: [
+      "Usage:",
+      "  senawa worker context",
+      "  senawa worker output-schema",
+      "  senawa worker complete --output <name>=<file> [--evidence <kind>=<file>] [--summary <text>]",
+      "  senawa worker submit <file|->",
+    ].join("\n"),
   };
+}
+
+/**
+ * Turns named files into the complete request.
+ *
+ * The agent names what it produced; senawa reads the bytes and builds the
+ * envelope, so no agent has to know a dispatch identity or compute a digest.
+ */
+function buildCompleteRequest(argv: readonly string[], workspaceRoot: string): JsonValue | string {
+  const outputs: { name: string; value: JsonValue }[] = [];
+  const evidence: { kind: string; path: string; content: string }[] = [];
+  let summary = "";
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index];
+    const argument = argv[index + 1];
+    if (flag === "--summary" && argument !== undefined) {
+      summary = argument;
+      index += 1;
+      continue;
+    }
+    if ((flag === "--output" || flag === "--evidence") && argument !== undefined) {
+      const separator = argument.indexOf("=");
+      if (separator <= 0) return `Expected ${flag} <name>=<file>, got ${argument}`;
+      const name = argument.slice(0, separator);
+      const path = argument.slice(separator + 1);
+      let content: string;
+      try {
+        content = readWorkspaceFile(workspaceRoot, path);
+      } catch (error) {
+        return `Cannot read ${path}: ${error instanceof Error ? error.message : "unknown"}`;
+      }
+      if (flag === "--evidence") {
+        evidence.push({ kind: name, path, content });
+      } else {
+        try {
+          outputs.push({ name, value: decodeCanonicalJsonValue(content) });
+        } catch {
+          return `Output ${name} at ${path} is not valid JSON`;
+        }
+      }
+      index += 1;
+      continue;
+    }
+    return `Unrecognized argument ${flag ?? ""}`.trim();
+  }
+
+  if (outputs.length === 0) return "complete requires at least one --output <name>=<file>";
+  return {
+    kind: "complete",
+    outputs,
+    evidence,
+    ...(summary.length === 0 ? {} : { summary }),
+  } as unknown as JsonValue;
+}
+
+/** Reads a file the agent named, refusing anything outside the workspace. */
+function readWorkspaceFile(workspaceRoot: string, path: string): string {
+  const resolved = resolve(workspaceRoot, path);
+  const root = resolve(workspaceRoot);
+  if (resolved !== root && !resolved.startsWith(`${root}sep`.replace("sep", sep))) {
+    throw new Error("path escapes the workspace");
+  }
+  return readFileSync(resolved, "utf8");
 }
 
 function readSubmission(path: string): string {

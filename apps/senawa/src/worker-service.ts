@@ -10,6 +10,16 @@ export interface WorkerDispatchRecord {
 
 /** The kinds of submission the worker channel accepts, in canonical form. */
 export type WorkerSubmission =
+  | {
+      readonly kind: "complete";
+      readonly outputs: readonly { readonly name: string; readonly value: CanonicalValue }[];
+      readonly evidence: readonly {
+        readonly kind: string;
+        readonly path: string;
+        readonly content: string;
+      }[];
+      readonly summary?: string;
+    }
   | { readonly kind: "phase-output"; readonly outputName: string; readonly value: CanonicalValue }
   | { readonly kind: "completion"; readonly summary: string; readonly evidence: CanonicalValue }
   | { readonly kind: "question"; readonly question: string }
@@ -91,6 +101,36 @@ export class SenawaWorkerApi implements WorkerApi {
 export function parseWorkerSubmission(submission: JsonValue): WorkerSubmission {
   const record = asRecord(submission);
   const kind = record.kind;
+  if (kind === "complete") {
+    const outputs = requiredArray(record, "outputs").map((entry) => {
+      const output = asRecord(entry);
+      return {
+        name: requiredString(output, "name"),
+        value: canonicalValue(requiredPresent(output, "value")),
+      };
+    });
+    if (outputs.length === 0) {
+      throw new WorkerApiError("invalid-submission", "A completion must carry at least one output");
+    }
+    const names = new Set(outputs.map(({ name }) => name));
+    if (names.size !== outputs.length) {
+      throw new WorkerApiError("invalid-submission", "A completion names the same output twice");
+    }
+    const summary = record.summary;
+    return {
+      kind,
+      outputs,
+      evidence: requiredArray(record, "evidence").map((entry) => {
+        const item = asRecord(entry);
+        return {
+          kind: requiredString(item, "kind"),
+          path: requiredString(item, "path"),
+          content: requiredString(item, "content"),
+        };
+      }),
+      ...(typeof summary === "string" && summary.length > 0 ? { summary } : {}),
+    };
+  }
   if (kind === "phase-output") {
     return {
       kind,
@@ -129,6 +169,17 @@ function requiredPresent(record: { readonly [key: string]: JsonValue }, key: str
   const value = record[key];
   if (value === undefined) {
     throw new WorkerApiError("invalid-submission", `Submission ${key} is required`);
+  }
+  return value;
+}
+
+function requiredArray(
+  record: { readonly [key: string]: JsonValue },
+  key: string,
+): readonly JsonValue[] {
+  const value = record[key];
+  if (!Array.isArray(value)) {
+    throw new WorkerApiError("invalid-submission", `Submission ${key} must be an array`);
   }
   return value;
 }

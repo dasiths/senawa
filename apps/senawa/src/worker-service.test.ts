@@ -29,6 +29,59 @@ function api(sink: WorkerSubmissionSink): SenawaWorkerApi {
 }
 
 describe("worker channel", () => {
+  it("takes every output and its evidence in one complete request", async () => {
+    let accepted: unknown;
+    const worker = api({
+      accept: (submission) => {
+        accepted = submission.submission;
+        return Promise.resolve(canonicalValue({}) as never);
+      },
+    });
+    await worker.submit(scope, {
+      kind: "complete",
+      outputs: [{ name: "plan", value: { tasks: [] } }],
+      evidence: [{ kind: "task-completion", path: "logs/test.txt", content: "ok" }],
+      summary: "done",
+    } as never);
+
+    expect(accepted).toMatchObject({
+      kind: "complete",
+      outputs: [{ name: "plan" }],
+      evidence: [{ kind: "task-completion" }],
+      summary: "done",
+    });
+  });
+
+  it("refuses a completion that carries no output", async () => {
+    let reached = false;
+    const worker = api({
+      accept: () => {
+        reached = true;
+        return Promise.resolve(canonicalValue({}) as never);
+      },
+    });
+    // Completion is the only way a phase produces anything, so a request with
+    // nothing in it cannot be a completion.
+    await expect(
+      worker.submit(scope, { kind: "complete", outputs: [], evidence: [] } as never),
+    ).rejects.toBeInstanceOf(WorkerApiError);
+    expect(reached).toBe(false);
+  });
+
+  it("refuses a completion that names the same output twice", async () => {
+    const worker = api({ accept: () => Promise.resolve(canonicalValue({}) as never) });
+    await expect(
+      worker.submit(scope, {
+        kind: "complete",
+        outputs: [
+          { name: "plan", value: { a: 1 } },
+          { name: "plan", value: { a: 2 } },
+        ],
+        evidence: [],
+      } as never),
+    ).rejects.toBeInstanceOf(WorkerApiError);
+  });
+
   it("serves the context and the output schema so an agent need not guess", async () => {
     const worker = api({ accept: () => Promise.resolve(canonicalValue({}) as never) });
     expect(await worker.context(scope)).toEqual({ prompt: "Do the work" });

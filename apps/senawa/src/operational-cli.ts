@@ -121,7 +121,11 @@ export async function runOperationalCli(
     return await runGates({ projectRoot: process.cwd(), phaseKey: action, dependencies });
   }
   if (group === "worker") {
-    return await runWorkerCli(action, rest, { socketPath: paths.socketPath, environment });
+    return await runWorkerCli(action, rest, {
+      socketPath: paths.socketPath,
+      environment,
+      workspaceRoot: process.cwd(),
+    });
   }
   if (group === "service" && action === "run" && rest.length === 0) {
     await runSenawaServiceForeground(environment);
