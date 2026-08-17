@@ -30,6 +30,29 @@ offer concise defaults, but every product policy in the brief must remain
 authorable. Each pinned value must therefore be classified as derived,
 defaulted, or deliberately removed.
 
+A fourth follows from the canonical behaviours: **a phase is done when the
+behaviours it owns are demonstrated, not when its checklist is ticked.** The
+brief's table is the contract. Each phase below names the behaviour ids it must
+land, so a reviewer can check the phase against the brief rather than against the
+phase's own description of itself.
+
+| Phase | Behaviours it must land |
+|---|---|
+| 5 | DP-01, DP-02, DP-03, DP-05, CO-01, CO-02, CO-03, CO-04, CO-05, CO-06 |
+| 6 | AU-06, SC-04, and the completion evidence half of CO-01 |
+| 7 | AU-03, AU-04, GA-02, GA-05, IT-02, IT-03 |
+| 8 | DP-04, IT-01, IT-04, IT-05, IT-06, HU-01, HU-02, HU-04, RC-03 |
+| 9 | FO-01, FO-02, FO-03, FO-04, FO-05 |
+| 10 | SS-01, SS-02, SS-03, SS-04 |
+| 11 | AU-06 proved against a real workload |
+| 12 | OB-02, OB-03 |
+| 13 | RC-01 kept true as code is removed |
+| 14 | OB-01 stated plainly everywhere it is documented |
+
+Behaviours already demonstrated are AU-01, AU-02, AU-05, AU-07, AU-08, GA-01,
+GA-03, GA-04, GA-06, HU-03, SC-01, SC-02, SC-03, SC-05, RC-01, RC-02, and RC-04.
+A later phase may not regress one of them.
+
 ## Progress
 
 | Phase | Title | State |
@@ -48,7 +71,7 @@ defaulted, or deliberately removed.
 | 11 | Prove authored-surface parity | Not started |
 | 12 | The portal earns its density | Not started |
 | 13 | Remove what the evidence condemns | Not started |
-| 14 | Name it v1 and document it | Not started |
+| 14 | Name it v1 and rewrite every document in plain language | Not started |
 | 15 | Restore the loop engineering narrative | Not started |
 
 ## Phase 0: Settle the shape
@@ -481,23 +504,44 @@ Acceptance:
   documented adapter extension point.
 * [ ] Boundary and dependency checks still pass.
 
-## Phase 14: Name it v1 and document it
+## Phase 14: Name it v1 and rewrite every document in plain language
+
+Two things happen together because they touch the same files. Renaming to v1
+without fixing the prose would leave a v1 nobody can read, and rewriting the
+prose first would only have to be redone when the name changes.
+
+The register is the one the canonical behaviours settled: short sentences,
+everyday words, and precision kept rather than traded for brevity. Write "treat a
+missing measurement as a failure", not "resolve an unreported blocking reading to
+unknown and fail closed". Both are exact; only one can be read once.
 
 * [ ] Remove alpha from versions, package metadata, protocols, CLI text, and
   prose.
-* [ ] Rewrite consumer guides around the three authored files, generated agent
-  operating contract, and command line loop.
+* [ ] Rewrite consumer guides around the three authored files, the generated
+  operating contract, and the command line loop.
 * [ ] Publish references for authoring defaults and expanded forms, worker
   commands, refusal responses, session policy, and portal decisions.
 * [ ] Rewrite the design set to describe what exists after this plan.
+* [ ] Sweep every document in `docs/` and every package README into the plain
+  register, including the ones this redesign did not touch.
+* [ ] Rewrite refusal messages, CLI help, and diagnostics in the same register,
+  because they are the prose a consumer reads most and the only prose they read
+  while something is going wrong.
+* [ ] Replace jargon that survives with the word the canonical behaviours use,
+  and define any term that genuinely cannot be replaced where a reader first
+  meets it.
 * [ ] Record which contracts were accepted, changed, disproved, or deferred.
 
 Acceptance:
 
 * [ ] A new consumer can scaffold, author, validate, run, inspect, intervene, and
   finish a workflow without reading an internal contract.
-* [ ] No v1 guide instructs an author to put Senawa protocol text in an agent
+* [ ] No v1 guide instructs an author to put senawa protocol text in an agent
   prompt.
+* [ ] No document explains a behaviour in words the canonical behaviours table
+  says more simply.
+* [ ] Every refusal a consumer can trigger names what failed, where, and what to
+  do next, in one sentence.
 
 ## Phase 15: Restore the loop engineering narrative
 

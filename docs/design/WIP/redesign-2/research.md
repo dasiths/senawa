@@ -25,20 +25,26 @@ no production caller, that was confirmed by searching all of `apps` and
 
 ## The assembly gap
 
-Five findings together explain why a consumer cannot run a workflow today.
+Five findings together explained why a consumer could not run a workflow when
+this research was written. The table now carries what has changed, because
+planning from the original column would rebuild work that already exists.
 
-| Symbol | Production callers | Consequence |
-|---|---|---|
-| `compileWorkflowConfiguration` | none | An authored workflow never becomes a run |
-| `registerDispatch` | none | A phase never becomes agent work |
-| `evaluateTaskFrontier` | none | Fan-out never happens |
-| `createEscalation` | none | A stuck run cannot escalate |
-| `measureExecutableSensor` | one, as the git transport | No sensor ever measures anything |
+| Symbol | Then | Now | Closed by |
+|---|---|---|---|
+| `compileWorkflowConfiguration` | none | Authored projects compile through `loadAuthoredWorkflow` | Phase 1 |
+| `registerDispatch` | none | `dispatch-driver.ts` | Phase 2 |
+| `evaluateTaskFrontier` | none | Still none. Fan-out is unlowered | Phase 9 |
+| `createEscalation` | none | `authority.ts`, behind the `create-escalation` intent | Phase 8 start |
+| `measureExecutableSensor` | one, as the git transport | `sensor-runner.ts` | Phase 4 |
 
-`senawa doctor` appears to contradict the first row, but it calls
-`doctorWorkflowConfiguration`, a diagnostics-only variant. The only production
-compile path is `compileWorkflowAmendment`, which handles amendments to a run
-that already exists. Nothing compiles the document a consumer authors into a run.
+One claim above was wrong when it was written and is corrected here.
+`compileWorkflowConfiguration` is a four-line wrapper that calls
+`doctorWorkflowConfiguration` and throws when it returns diagnostics instead of a
+snapshot. Both produce the same snapshot through the same validation, so doctor
+was never a shallower check, and the authored path calling it directly is the
+better of the two because it returns diagnostics rather than raising. The real
+gap was that nothing called either one on a consumer's document, which is what
+Phase 1 closed.
 
 The second row was established earlier and is unchanged: `ProductionScheduler`
 derives runs from dispatches that already exist, so a run holding no dispatch is
@@ -102,13 +108,17 @@ waste.
 
 ## What is missing, and larger than the brief assumed
 
+Each heading below carries its current state. Resolved means an executable check
+now covers it, and the reference names where.
+
 ### Escalation does not exist in production
 
-`createEscalation` has no production caller, and the runtime authority never
-passes escalations into the lifecycle projection. The entire `escalated` status
-and every escalation human need are unreachable. The runner's `RunnerEscalation`
-is a different, effect-level concept. The brief lists escalation under keep; it
-belongs under add.
+**Resolved.** `createEscalation` had no production caller, and the runtime
+authority never passed escalations into the lifecycle projection, so the entire
+`escalated` status was unreachable. `create-escalation` is now an implemented
+intent that derives the escalation from recorded gate evidence, refuses a passing
+gate, a closed phase, a second escalation, and one offering no response. The
+finding stands as the reason escalation was new construction rather than wiring.
 
 ### Runs can strand with no path out
 
@@ -120,18 +130,17 @@ requirement that a human be able to mark an element done.
 
 ### No production code produces a sensor reading
 
-Readings arrive as caller-supplied command payload. The process sensor is
-production-proven, but only as the git transport. There is no sensor registry, no
-measurement path, and nothing reads the `sensors` section of an authored
-workflow. The acceptance test for the template's own `diff-check` sensor
-hardcodes its result.
+**Resolved.** Readings arrived as caller-supplied command payload, so a gate
+could only agree with whoever submitted it. `runSensors` now executes the
+workflow's declared sensors through the proven process sensor and binds each
+reading to the argv, working directory, and root that produced it.
 
 ### There is no anchor concept
 
-Nothing in the repository expresses a required deterministic reading. A
-`SensorReading` carries no provenance, so the kernel cannot distinguish a
-compiler exit code from a model's opinion. A gate with an empty blocking list is
-vacuously accepted, so declaring a gate currently guarantees nothing.
+**Resolved at authoring time.** A phase naming a gate whose sensor is not
+deterministic is refused with `invalid-gate` when it is written, rather than
+passing vacuously at runtime. A gate with an empty blocking list remains a
+separate concern for the gate-authoring phase.
 
 ### Only one budget unit is enforced
 
@@ -176,16 +185,19 @@ brief's declared session scope is therefore new work, not wiring.
 
 ### Workers hold no command identity
 
-Workers submit no commands. Their surface is six broker submission types bridged
-into commands server-side. On the command channel, `AuthenticatedPrincipal` has
-no dispatch, run, scope, or expiry field, authorization is a pure roles-by-intent
-lookup, and every local caller collapses into one principal holding both
-`operator` and `release-manager` behind a single machine-wide token.
+**Resolved for the channel, open for the protocol.** A worker now holds a
+per-dispatch credential delivered as a mode 0600 file, with its own capability
+set and expiry, and worker and operator identities are mutually exclusive on the
+HTTP surface. What remains is the agent-facing protocol above that channel, which
+is the operating contract work.
 
 ### Three intents are declared but unimplemented
 
-`start-phase-attempt`, `publish-phase-output`, and `create-escalation` fall
-through to `unsupported-intent`.
+**Two resolved, one open.** `start-phase-attempt` advances a run and
+`create-escalation` records an escalation. `publish-phase-output` remains
+unimplemented, and the decision recorded since is to remove it as a public intent
+rather than build it, because output publication is a consequence of a granted
+completion rather than something an agent coordinates.
 
 ## The agent contract
 
@@ -287,10 +299,19 @@ the prompt input paths. The complexity is redundant rather than load-bearing.
 
 ## Open questions carried into the plan
 
-1. Do fan-out members become phases, and does the task layer survive at all?
-2. What replaces `toolCallId` as the submission idempotency key?
-3. Is the anchor invariant a compile-time property of a gate, a provenance field
-   on a reading, or both?
-4. Should the three unimplemented intents be built or removed?
-5. Does per-element approval need more than the single authority decision slot a
-   phase generation allows today?
+Four of the five are now answered. The answers are recorded here so the plan does
+not reopen them.
+
+1. **Answered.** Fan-out members become phases, and the task layer survives
+   beneath them. The compiler already synthesises one reserved task per agent
+   phase, so an agent phase is already a phase containing one task.
+2. **Answered.** A content digest of the canonical submission, computed by senawa
+   and never supplied by the agent.
+3. **Answered, as a compile-time property.** A phase naming a gate whose sensor
+   is not deterministic is refused when it is written, because a check at
+   evaluation time arrives after a run has already spent credits reaching it.
+4. **Answered.** `start-phase-attempt` and `create-escalation` were built.
+   `publish-phase-output` is removed rather than built.
+5. **Still open.** Whether per-element approval needs more than the single
+   authority decision slot a phase generation allows today. This is the first
+   question the fan-out phase has to settle.
