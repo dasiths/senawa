@@ -240,7 +240,7 @@ import {
 } from "@senawa/runtime";
 import Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 1;
 export const ASSET_SECURITY_LIMITS = Object.freeze({
   maxObjectBytes: 256 * 1024 * 1024,
   defaultMaxObjects: 10_000,
@@ -10474,12 +10474,7 @@ function validateConfigurationSnapshot(
 ): ConfigurationSnapshotValue {
   const canonical = canonicalValue(input) as unknown;
   if (!isPlainRecord(canonical)) throw new TypeError("Configuration snapshot must be an object");
-  if (canonical.apiVersion === "senawa.dev/configuration-snapshot/v1alpha2") {
-    throw new TypeError(
-      "Historical configuration snapshot uses unsupported senawa.dev/configuration-snapshot/v1alpha2 and has no external prompt bytes. Phase 14 cannot resume it from current files; use a fresh state root or the earlier alpha binary.",
-    );
-  }
-  if (canonical.apiVersion !== "senawa.dev/configuration-snapshot/v1alpha3") {
+  if (canonical.apiVersion !== "senawa.dev/configuration-snapshot/v1") {
     throw new TypeError("Configuration snapshot apiVersion is unsupported");
   }
   const snapshot = validateConfigurationSnapshotContract(canonical, dependencies.sha256);

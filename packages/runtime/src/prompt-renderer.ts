@@ -95,7 +95,7 @@ export function renderPromptPack(
     ].join("\n");
   });
   const prompt = canonicalValue({
-    apiVersion: "senawa.dev/prompt-pack/v1alpha2",
+    apiVersion: "senawa.dev/prompt-pack/v1",
     sections: [
       {
         kind: "senawa-authority",

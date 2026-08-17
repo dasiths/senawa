@@ -1013,7 +1013,7 @@ function configurationSnapshot(graph: ReturnType<typeof portalGraph>) {
     failurePolicy: "continue",
   });
   const content = {
-    apiVersion: "senawa.dev/configuration-snapshot/v1alpha3",
+    apiVersion: "senawa.dev/configuration-snapshot/v1",
     execution,
     graph,
     prompts,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GOLDEN_COMMAND_JSON, GOLDEN_RECEIPT_JSON } from "./fixtures/v1alpha3.js";
+import { GOLDEN_COMMAND_JSON, GOLDEN_RECEIPT_JSON } from "./fixtures/wire-v1.js";
 import {
   canonicalBytes,
   decodeAnswerQuestionPayload,
@@ -136,7 +136,7 @@ const errorEnvelope = {
   details: { actualRevision: "revision_08" },
 } as const;
 
-describe("v1alpha3 command codec", () => {
+describe("v1 command codec", () => {
   it("matches the canonical command golden fixture and round trips", () => {
     const encoded = encodeCommandEnvelope(command);
 
@@ -343,7 +343,7 @@ describe("v1alpha3 command codec", () => {
   });
 });
 
-describe("v1alpha2 human authority and run-control payloads", () => {
+describe("v1 human authority and run-control payloads", () => {
   it("round trips an exact question answer without caller-owned authority facts", () => {
     const payload = {
       submissionId: "submission_question",
@@ -392,7 +392,7 @@ describe("v1alpha2 human authority and run-control payloads", () => {
   });
 });
 
-describe("v1alpha2 amendment command payloads", () => {
+describe("v1 amendment command payloads", () => {
   const amendmentId = "amendment_fixture";
   const proposalDigest = "b".repeat(64);
   const reviewedResultGraphRevisionDigest = "c".repeat(64);
@@ -465,7 +465,7 @@ describe("v1alpha2 amendment command payloads", () => {
   });
 });
 
-describe("v1alpha2 identity and attribution values", () => {
+describe("v1 identity and attribution values", () => {
   it("round trips standalone principal, transport, and run identity DTOs", () => {
     expect(decodeAuthenticatedPrincipal(encodeAuthenticatedPrincipal(command.principal))).toEqual(
       command.principal,
@@ -496,7 +496,7 @@ describe("v1alpha2 identity and attribution values", () => {
   });
 });
 
-describe("v1alpha3 receipts", () => {
+describe("v1 receipts", () => {
   it("matches the canonical receipt golden fixture and round trips", () => {
     const encoded = encodeDurableReceipt(receipt);
 
@@ -528,7 +528,7 @@ describe("v1alpha3 receipts", () => {
   });
 });
 
-describe("v1alpha2 bounded query pages", () => {
+describe("v1 bounded query pages", () => {
   const receiptPage = {
     apiVersion: PROTOCOL_VERSION,
     repositoryId: command.repositoryId,
@@ -651,7 +651,7 @@ describe("v1alpha2 bounded query pages", () => {
   });
 });
 
-describe("v1alpha2 supervisor persistence codecs", () => {
+describe("v1 supervisor persistence codecs", () => {
   it("decodes exact admission allocations and rejects unknown allocation fields", () => {
     const admission = {
       currentTime: "2026-08-12T12:00:00Z",
@@ -718,7 +718,7 @@ describe("v1alpha2 supervisor persistence codecs", () => {
   });
 });
 
-describe("v1alpha2 event, projection, capability, and error envelopes", () => {
+describe("v1 event, projection, capability, and error envelopes", () => {
   it("round trips canonical event and projection envelopes", () => {
     expect(decodeEventStreamFrame(encodeEventStreamFrame(event))).toEqual(event);
     expect(decodeProjectionEnvelope(encodeProjectionEnvelope(projection))).toEqual(projection);
@@ -733,7 +733,7 @@ describe("v1alpha2 event, projection, capability, and error envelopes", () => {
     expectProtocolError("invalid-value", "$.supportedVersions", () =>
       decodeCapabilityHandshake({
         ...handshake,
-        supportedVersions: ["senawa.dev/protocol/v2alpha1"],
+        supportedVersions: ["senawa.dev/protocol/v2"],
       }),
     );
     expectProtocolError("invalid-value", "$.capabilities", () =>

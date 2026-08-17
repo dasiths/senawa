@@ -14,7 +14,7 @@ import {
   type TaskId,
 } from "./identity.js";
 
-export const READINESS_FRONTIER_API_VERSION = "senawa.dev/readiness-frontier/v1alpha1";
+export const READINESS_FRONTIER_API_VERSION = "senawa.dev/readiness-frontier/v1";
 
 export type NonacceptedTaskStatus = "pending" | "active" | "failed" | "cancelled";
 

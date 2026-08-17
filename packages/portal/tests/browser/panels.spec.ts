@@ -17,7 +17,7 @@ test("narrates one submitted command from submission through its receipt", async
   await expect(narrator).toHaveAttribute("aria-busy", "false");
 
   let delayFirstCommand = true;
-  await page.route("**/api/v1alpha1/commands", async (route) => {
+  await page.route("**/api/v1/commands", async (route) => {
     if (route.request().method() !== "POST" || !delayFirstCommand) return route.continue();
     delayFirstCommand = false;
     await new Promise((resolve) => setTimeout(resolve, 1_200));

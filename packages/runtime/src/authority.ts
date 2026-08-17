@@ -104,7 +104,7 @@ import type {
   RunnerAllowancePolicy,
 } from "./workspace-authority.js";
 
-const SNAPSHOT_VERSION = "senawa.dev/runtime-memory/v1alpha2" as const;
+const SNAPSHOT_VERSION = "senawa.dev/runtime-memory/v1" as const;
 
 export interface RoleAuthorizationRule {
   readonly intent: CommandIntent["type"];

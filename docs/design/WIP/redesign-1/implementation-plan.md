@@ -760,7 +760,7 @@ Run a fresh RPI research cycle after Phase 13. The research must:
   schema substitution, stale phase output, unstable task identity, duplicate
   fan-out, plan-import races, resumed-session drift, and unbounded loops.
 * Select deterministic migration diagnostics. Do not add legacy runtime
-  compatibility or silently reinterpret v1alpha2 documents.
+  compatibility or silently reinterpret v1 documents.
 
 Research artifacts remain temporary. Record accepted choices and rejected
 alternatives in the implementation log.
@@ -1009,7 +1009,7 @@ clean at this handoff. Do not restart the phase or rewrite the checkpoint.
 
 #### Completed implementation
 
-* [x] Phase 14A is implemented. Workflow v1alpha3, confined external prompt and
+* [x] Phase 14A is implemented. Workflow v1, confined external prompt and
   schema resources, immutable resource snapshots, deterministic migration
   diagnostics, prompt template substitution, and historical prompt binding are
   present.

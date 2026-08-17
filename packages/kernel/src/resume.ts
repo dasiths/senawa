@@ -19,7 +19,7 @@ import {
 } from "./identity.js";
 
 export const AGENT_SESSION_RESUME_BINDING_API_VERSION =
-  "senawa.dev/agent-session-resume-binding/v1alpha1";
+  "senawa.dev/agent-session-resume-binding/v1";
 
 export interface AgentSessionResumeBindingInput {
   readonly predecessorDispatchId: DispatchId;

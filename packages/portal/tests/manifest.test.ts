@@ -22,7 +22,7 @@ describe("portal production manifest", () => {
       }[];
     };
     expect(serialized).toBe(canonicalStringify(manifest));
-    expect(manifest.apiVersion).toBe("senawa.dev/portal-assets/v1alpha1");
+    expect(manifest.apiVersion).toBe("senawa.dev/portal-assets/v1");
     expect(manifest.shell).toBe("index.html");
     expect(manifest.assets.length).toBeGreaterThanOrEqual(3);
     for (const asset of manifest.assets) {

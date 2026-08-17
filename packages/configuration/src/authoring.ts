@@ -23,7 +23,7 @@ export interface AuthoredLoweringResult {
   readonly document?: CanonicalValue;
 }
 
-const WORKFLOW_API_VERSION = "senawa.dev/workflow/v1alpha3";
+const WORKFLOW_API_VERSION = "senawa.dev/workflow/v1";
 const SESSION_SCOPES = new Set(["run", "phase", "element"]);
 const FAILURE_POLICIES = new Set(["continue", "fail-fast"]);
 const OUTPUT_SENSITIVITIES = new Set(["public", "internal", "confidential", "restricted"]);

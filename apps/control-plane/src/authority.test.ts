@@ -53,7 +53,7 @@ describe("reference control-plane authority", () => {
     expect(
       fixture.authority.negotiate({
         ...validNegotiation(fixture),
-        offer: { ...helloOffer(), supportedVersions: ["senawa.dev/remote-control/v2alpha1"] },
+        offer: { ...helloOffer(), supportedVersions: ["senawa.dev/remote-control/v2"] },
       }),
     ).toMatchObject({ type: "refusal", code: "no-common-version" });
     expect(

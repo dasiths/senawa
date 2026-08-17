@@ -91,11 +91,11 @@ export class PortalHttpClient {
   }
 
   session(): Promise<PortalSessionDescriptor> {
-    return this.#get("/api/v1alpha1/session", decodePortalSessionDescriptor);
+    return this.#get("/api/v1/session", decodePortalSessionDescriptor);
   }
 
   async issueCsrf(): Promise<string> {
-    const value = await this.#request("/api/v1alpha1/session", { method: "POST" });
+    const value = await this.#request("/api/v1/session", { method: "POST" });
     let parsed: unknown;
     try {
       parsed = JSON.parse(value);
@@ -116,7 +116,7 @@ export class PortalHttpClient {
   }
 
   repositories(): Promise<PortalRepositoryPage> {
-    return this.#get("/api/v1alpha1/repositories?limit=100", decodePortalRepositoryPage);
+    return this.#get("/api/v1/repositories?limit=100", decodePortalRepositoryPage);
   }
 
   runs(repositoryId: string): Promise<PortalRunPage> {
@@ -284,7 +284,7 @@ export class PortalHttpClient {
   }
 
   async postCanonicalSubmission(canonicalSubmission: string): Promise<void> {
-    const response = await this.#raw("/api/v1alpha1/commands", {
+    const response = await this.#raw("/api/v1/commands", {
       method: "POST",
       body: canonicalSubmission,
       headers: { "Content-Type": "application/json; charset=utf-8" },
@@ -294,9 +294,7 @@ export class PortalHttpClient {
   }
 
   async receipt(commandId: string): Promise<DurableReceipt | undefined> {
-    const response = await this.#raw(
-      `/api/v1alpha1/commands/${encodeURIComponent(commandId)}/receipt`,
-    );
+    const response = await this.#raw(`/api/v1/commands/${encodeURIComponent(commandId)}/receipt`);
     if (response.status === 404) return undefined;
     if (!response.ok) await this.#throwResponse(response);
     const receipt = decodeSupervisorReceipt(await readBounded(response));
@@ -388,7 +386,7 @@ async function readBounded(response: Response): Promise<string> {
 }
 
 function runBase(repositoryId: string, runId?: string): string {
-  const repository = `/api/v1alpha1/repositories/${encodeURIComponent(repositoryId)}/runs`;
+  const repository = `/api/v1/repositories/${encodeURIComponent(repositoryId)}/runs`;
   return runId === undefined ? repository : `${repository}/${encodeURIComponent(runId)}`;
 }
 

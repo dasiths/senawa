@@ -34,37 +34,37 @@ forwarding headers, and emit no CORS headers.
 
 The shared handler exposes these exact routes:
 
-* `GET /api/v1alpha1/capabilities`
-* `POST /api/v1alpha1/commands`
-* `GET /api/v1alpha1/commands/{commandId}/receipt`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/receipts`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/events`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/events/stream`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/projections/phase-lifecycle`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/amendments`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/amendments/{amendmentId}`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/amendments/{amendmentId}/source`
-* `GET /api/v1alpha1/repositories?after={repositoryId}&limit={count}`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs?after={runId}&limit={count}`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/overview`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/graph`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/delivery?after={cursor}&limit={count}`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/transcript/{ownerKind}/{ownerId}?after={cursor}&limit={count}`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/graph/nodes?revision={digest}&after={offset}&limit={count}`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/graph/edges?revision={digest}&after={offset}&limit={count}`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/records/{kind}/{digest}`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/needs`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/allowances/{escalationCommandId}`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/questions`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/questions/{submissionId}`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/artifacts`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/artifacts/{artifactId}`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/artifacts/{artifactId}/content?offset={offset}&length={count}`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/artifacts/{artifactId}/download`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/workspaces`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/integrations`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/activity/receipts`
-* `GET /api/v1alpha1/repositories/{repositoryId}/runs/{runId}/activity/events`
+* `GET /api/v1/capabilities`
+* `POST /api/v1/commands`
+* `GET /api/v1/commands/{commandId}/receipt`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/receipts`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/events`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/events/stream`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/projections/phase-lifecycle`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/amendments`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/amendments/{amendmentId}`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/amendments/{amendmentId}/source`
+* `GET /api/v1/repositories?after={repositoryId}&limit={count}`
+* `GET /api/v1/repositories/{repositoryId}/runs?after={runId}&limit={count}`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/overview`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/graph`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/delivery?after={cursor}&limit={count}`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/transcript/{ownerKind}/{ownerId}?after={cursor}&limit={count}`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/graph/nodes?revision={digest}&after={offset}&limit={count}`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/graph/edges?revision={digest}&after={offset}&limit={count}`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/records/{kind}/{digest}`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/needs`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/allowances/{escalationCommandId}`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/questions`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/questions/{submissionId}`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/artifacts`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/artifacts/{artifactId}`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/artifacts/{artifactId}/content?offset={offset}&length={count}`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/artifacts/{artifactId}/download`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/workspaces`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/integrations`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/activity/receipts`
+* `GET /api/v1/repositories/{repositoryId}/runs/{runId}/activity/events`
 
 Receipt and event page queries accept optional `after` and `limit` parameters.
 The SSE route accepts optional `after`; `Last-Event-ID` is also accepted when it
@@ -109,15 +109,15 @@ charset=utf-8`, `X-Content-Type-Options: nosniff`, and `Cache-Control: no-store`
 
 Authenticated Unix-socket clients can use these exact routes:
 
-* `GET /supervisor/v1alpha1/status`
-* `POST /supervisor/v1alpha1/drain`
-* `POST /supervisor/v1alpha1/stop`
-* `POST /supervisor/v1alpha1/recoveries`
-* `POST /supervisor/v1alpha1/backups`
-* `GET /supervisor/v1alpha1/logs?after={cursor}&limit={count}`
-* `POST /api/v1alpha1/portal-sessions`
+* `GET /supervisor/v1/status`
+* `POST /supervisor/v1/drain`
+* `POST /supervisor/v1/stop`
+* `POST /supervisor/v1/recoveries`
+* `POST /supervisor/v1/backups`
+* `GET /supervisor/v1/logs?after={cursor}&limit={count}`
+* `POST /api/v1/portal-sessions`
 
-Loopback requests receive `404` for every `/supervisor/v1alpha1` route. Recovery
+Loopback requests receive `404` for every `/supervisor/v1` route. Recovery
 accepts only repository and run identities. The server supplies owner, fence,
 attempt, and current-time facts. Backup accepts one bounded request identity and
 destination directory, and returns only that identity plus verified status.
@@ -205,7 +205,7 @@ transaction before it creates a staging file.
 ## Portal sessions
 
 Authenticated IPC creates a portal bootstrap through
-`POST /api/v1alpha1/portal-sessions`. The response contains a loopback bootstrap
+`POST /api/v1/portal-sessions`. The response contains a loopback bootstrap
 path with a one-time 32-byte capability that expires within 60 seconds. Only the
 capability digest is retained.
 
@@ -215,10 +215,10 @@ with status `303` to `/portal/`. It sets a host-only `senawa_session` cookie wit
 marked `Secure`. The raw session token is stored only in the cookie; the server
 retains its digest.
 
-`GET /api/v1alpha1/session` returns the session expiry, capabilities, and a
+`GET /api/v1/session` returns the session expiry, capabilities, and a
 secret-free CSRF mode. Before issuance the mode is `available`. After another
 tab or the current tab claims the token, subsequent GET responses report
-`read-only`. `POST /api/v1alpha1/session` returns the separate CSRF token once
+`read-only`. `POST /api/v1/session` returns the separate CSRF token once
 and then returns conflict. The server retains only its digest and never returns
 the cookie or token through the descriptor.
 

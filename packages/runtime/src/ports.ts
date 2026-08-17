@@ -74,7 +74,7 @@ export interface SerializableAuthorityPort {
   toCanonicalJson(): string;
 }
 
-export const REPORTING_SNAPSHOT_VERSION = "senawa.dev/reporting-snapshot/v1alpha2" as const;
+export const REPORTING_SNAPSHOT_VERSION = "senawa.dev/reporting-snapshot/v1" as const;
 
 export const REPORTING_LIMITS = Object.freeze({
   maxRecordsPerSection: 10_000,

@@ -130,22 +130,20 @@ export class HttpSupervisorClient {
   }
 
   async capabilities(): Promise<CapabilityHandshake> {
-    return decodeCapabilityHandshake(await this.#json("GET", "/api/v1alpha1/capabilities"));
+    return decodeCapabilityHandshake(await this.#json("GET", "/api/v1/capabilities"));
   }
 
   async submitCommand(input: string | unknown): Promise<SupervisorCommandAcceptance> {
     const result = await this.#request(
       "POST",
-      "/api/v1alpha1/commands",
+      "/api/v1/commands",
       typeof input === "string" ? input : canonicalStringify(input),
     );
     if (result.status !== 202 || typeof result.headers.location !== "string") {
       throw new Error("Supervisor command response must be 202 with Location");
     }
     const acceptance = decodeSupervisorCommandAcceptance(result.body);
-    if (
-      result.headers.location !== `/api/v1alpha1/commands/${acceptance.location.commandId}/receipt`
-    ) {
+    if (result.headers.location !== `/api/v1/commands/${acceptance.location.commandId}/receipt`) {
       throw new Error("Supervisor command Location is invalid");
     }
     return acceptance;
@@ -157,7 +155,7 @@ export class HttpSupervisorClient {
     if (typeof commandId !== "string")
       return decodeSupervisorReceipt(await this.#json("GET", "/invalid"));
     return decodeSupervisorReceipt(
-      await this.#json("GET", `/api/v1alpha1/commands/${encodeURIComponent(commandId)}/receipt`),
+      await this.#json("GET", `/api/v1/commands/${encodeURIComponent(commandId)}/receipt`),
     );
   }
 
@@ -174,7 +172,7 @@ export class HttpSupervisorClient {
     return decodeProjectionEnvelope(
       await this.#json(
         "GET",
-        `/api/v1alpha1/repositories/${segment(request.repositoryId)}/runs/${segment(request.runId)}/projections/phase-lifecycle`,
+        `/api/v1/repositories/${segment(request.repositoryId)}/runs/${segment(request.runId)}/projections/phase-lifecycle`,
       ),
     );
   }
@@ -209,7 +207,7 @@ export class HttpSupervisorClient {
   async listPortalRepositories(input: string | unknown = {}): Promise<PortalRepositoryPage> {
     const request = exactClientObject(input, [], ["after", "limit"]);
     return decodePortalRepositoryPage(
-      await this.#json("GET", `/api/v1alpha1/repositories${lexicalQuery(request)}`),
+      await this.#json("GET", `/api/v1/repositories${lexicalQuery(request)}`),
     );
   }
 
@@ -218,7 +216,7 @@ export class HttpSupervisorClient {
     return decodePortalRunPage(
       await this.#json(
         "GET",
-        `/api/v1alpha1/repositories/${segment(request.repositoryId)}/runs${lexicalQuery(request)}`,
+        `/api/v1/repositories/${segment(request.repositoryId)}/runs${lexicalQuery(request)}`,
       ),
     );
   }
@@ -362,7 +360,7 @@ export class HttpSupervisorClient {
   }
 
   async createPortalSession(): Promise<{ readonly expiresAt: string; readonly path: string }> {
-    const value = localObject(await this.#json("POST", "/api/v1alpha1/portal-sessions"));
+    const value = localObject(await this.#json("POST", "/api/v1/portal-sessions"));
     if (typeof value.expiresAt !== "string" || typeof value.path !== "string") {
       throw new Error("Portal session bootstrap response is invalid");
     }
@@ -370,21 +368,21 @@ export class HttpSupervisorClient {
   }
 
   async status(): Promise<SupervisorServiceStatus> {
-    return decodeSupervisorServiceStatus(await this.#json("GET", "/supervisor/v1alpha1/status"));
+    return decodeSupervisorServiceStatus(await this.#json("GET", "/supervisor/v1/status"));
   }
 
   async drain(): Promise<void> {
-    await this.#json("POST", "/supervisor/v1alpha1/drain");
+    await this.#json("POST", "/supervisor/v1/drain");
   }
 
   async stop(): Promise<void> {
-    await this.#json("POST", "/supervisor/v1alpha1/stop");
+    await this.#json("POST", "/supervisor/v1/stop");
   }
 
   async recover(input: string | unknown): Promise<{ readonly worked: boolean }> {
     const request = exactClientObject(input, ["repositoryId", "runId"]);
     const value = localObject(
-      await this.#requestJson("POST", "/supervisor/v1alpha1/recoveries", request),
+      await this.#requestJson("POST", "/supervisor/v1/recoveries", request),
     );
     if (typeof value.worked !== "boolean" || Object.keys(value).length !== 1) {
       throw new Error("Supervisor recovery response is invalid");
@@ -396,9 +394,7 @@ export class HttpSupervisorClient {
     input: string | unknown,
   ): Promise<{ readonly requestId: string; readonly verified: true }> {
     const request = exactClientObject(input, ["requestId", "destinationDirectory"]);
-    const value = localObject(
-      await this.#requestJson("POST", "/supervisor/v1alpha1/backups", request),
-    );
+    const value = localObject(await this.#requestJson("POST", "/supervisor/v1/backups", request));
     if (
       typeof value.requestId !== "string" ||
       value.verified !== true ||
@@ -414,7 +410,7 @@ export class HttpSupervisorClient {
     if (afterCursor !== undefined) query.set("after", String(afterCursor));
     if (limit !== undefined) query.set("limit", String(limit));
     return decodeSupervisorLogPage(
-      await this.#json("GET", `/supervisor/v1alpha1/logs${query.size === 0 ? "" : `?${query}`}`),
+      await this.#json("GET", `/supervisor/v1/logs${query.size === 0 ? "" : `?${query}`}`),
     );
   }
 
@@ -429,11 +425,11 @@ export class HttpSupervisorClient {
       throw new Error("Portal bootstrap cookie is invalid");
     }
     this.#sessionCookie = sessionCookie;
-    const descriptor = localObject(await this.#json("GET", "/api/v1alpha1/session"));
+    const descriptor = localObject(await this.#json("GET", "/api/v1/session"));
     if (descriptor.csrfMode !== "available") {
       throw new Error("Portal session is not available for CSRF issuance");
     }
-    const session = localObject(await this.#json("POST", "/api/v1alpha1/session"));
+    const session = localObject(await this.#json("POST", "/api/v1/session"));
     if (typeof session.csrfToken !== "string") throw new Error("Portal CSRF response is invalid");
     this.#csrfToken = session.csrfToken;
   }
@@ -635,22 +631,22 @@ function pagePath(input: string | unknown, resource: "receipts" | "events"): str
   if (request.afterCursor !== undefined) query.set("after", String(request.afterCursor));
   if (request.limit !== undefined) query.set("limit", String(request.limit));
   const suffix = query.size === 0 ? "" : `?${query}`;
-  return `/api/v1alpha1/repositories/${segment(request.repositoryId)}/runs/${segment(request.runId)}/${resource}${suffix}`;
+  return `/api/v1/repositories/${segment(request.repositoryId)}/runs/${segment(request.runId)}/${resource}${suffix}`;
 }
 
 function amendmentPath(repositoryId: unknown, runId: unknown): string {
-  return `/api/v1alpha1/repositories/${segment(repositoryId)}/runs/${segment(runId)}/amendments`;
+  return `/api/v1/repositories/${segment(repositoryId)}/runs/${segment(runId)}/amendments`;
 }
 
 function workerPath(dispatchId: string, resource: string): string {
   if (!/^[A-Za-z0-9_-]{1,128}$/u.test(dispatchId)) {
     throw new Error("Worker dispatch identity is invalid");
   }
-  return `/api/v1alpha1/worker/${dispatchId}/${resource}`;
+  return `/api/v1/worker/${dispatchId}/${resource}`;
 }
 
 function portalRunPath(request: Record<string, unknown>): string {
-  return `/api/v1alpha1/repositories/${segment(request.repositoryId)}/runs/${segment(request.runId)}`;
+  return `/api/v1/repositories/${segment(request.repositoryId)}/runs/${segment(request.runId)}`;
 }
 
 function lexicalQuery(request: Record<string, unknown>): string {

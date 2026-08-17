@@ -304,7 +304,7 @@ describe("daemon worker composition", () => {
       const shell = await loopback.raw("GET", "/portal/");
       expect(shell.status).toBe(503);
       expect(JSON.parse(shell.body)).toMatchObject({ code: "service-unavailable" });
-      const lifecycle = await loopback.raw("GET", "/supervisor/v1alpha1/status");
+      const lifecycle = await loopback.raw("GET", "/supervisor/v1/status");
       expect(lifecycle.status).toBe(404);
     } finally {
       await started.service.stop();

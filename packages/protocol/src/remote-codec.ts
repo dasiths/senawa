@@ -51,8 +51,7 @@ const TOKEN_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 const SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{86}$/;
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
-const REMOTE_VERSION_PATTERN =
-  /^senawa\.dev\/remote-control\/v[1-9][0-9]*(?:alpha|beta|rc)[1-9][0-9]*$/;
+const REMOTE_VERSION_PATTERN = /^senawa\.dev\/remote-control\/v[1-9][0-9]*$/;
 const REFUSAL_CODES = new Set<RemoteHelloRefusalCode>([
   "no-common-version",
   "missing-capability",

@@ -7,7 +7,7 @@ import {
   validatePromptTemplateInputs,
 } from "./prompt-template.js";
 
-describe("v1alpha3 prompt templates", () => {
+describe("v1 prompt templates", () => {
   it("extracts canonical distinct input paths while retaining repeated tokens", () => {
     const parsed = parsePromptTemplate(
       "Use ${{ input.request }} then ${{\tinput.plan.tasks }} and ${{ input.request }}.",

@@ -655,15 +655,6 @@ function parseDocument(
   value: CanonicalValue,
   collector: DiagnosticCollector,
 ): ParsedWorkflow | undefined {
-  if (isRecord(value) && value.apiVersion === "senawa.dev/workflow/v1alpha2") {
-    addDiagnostic(
-      collector,
-      "unsupported-workflow-version",
-      "/apiVersion",
-      "senawa.dev/workflow/v1alpha2 is not supported by Phase 14. Migrate to senawa.dev/workflow/v1alpha3: move inline schema bodies to schemas/<key>.schema.json, declare external prompts, and add one prompt reference to every agent role.",
-    );
-    return undefined;
-  }
   const document = exactObject(value, "", ROOT_FIELDS, OPTIONAL_ROOT_FIELDS, collector);
   if (document === undefined) return undefined;
   if (document.apiVersion !== WORKFLOW_CONFIGURATION_API_VERSION) {
@@ -673,6 +664,7 @@ function parseDocument(
       "/apiVersion",
       `apiVersion must be ${WORKFLOW_CONFIGURATION_API_VERSION}`,
     );
+    return undefined;
   }
   if (document.kind !== "Workflow") {
     addDiagnostic(collector, "invalid-kind", "/kind", "kind must be Workflow");
@@ -1121,7 +1113,7 @@ function parseSchemas(
         collector,
         "invalid-field",
         `${pointer}/schema`,
-        "Inline schema bodies are not supported in v1alpha3; use path",
+        "Inline schema bodies are not supported in v1; use path",
       );
     }
     const object = exactObject(item, pointer, ["key", "path"], [], collector);
@@ -1141,7 +1133,7 @@ function parsePrompts(
       collector,
       "missing-prompt-resources",
       "/prompts",
-      "v1alpha3 requires the prompts resource array",
+      "v1 requires the prompts resource array",
     );
     return undefined;
   }

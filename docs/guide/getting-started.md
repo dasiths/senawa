@@ -234,7 +234,7 @@ Write this exact submission, which asks to pause a run that was never
 instantiated:
 
 ```bash
-printf '%s' '{"apiVersion":"senawa.dev/protocol/v1alpha3","commandId":"command_getting-started-pause","intent":{"type":"pause-run"},"payload":{},"payloadDigest":"44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","repositoryId":"repository_example","runId":"run_example"}' > pause.json
+printf '%s' '{"apiVersion":"senawa.dev/protocol/v1","commandId":"command_getting-started-pause","intent":{"type":"pause-run"},"payload":{},"payloadDigest":"44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","repositoryId":"repository_example","runId":"run_example"}' > pause.json
 senawa command submit pause.json
 ```
 
@@ -260,7 +260,7 @@ senawa receipt get command_getting-started-pause
 The receipt reaches a terminal status and carries the exact refusal:
 
 ```text
-{"commandId":"command_getting-started-pause","recordedAt":"2026-08-16T11:44:18.258Z","repositoryId":"repository_example","runId":"run_example","sequence":3,"status":"terminal","terminalReceipt":{"apiVersion":"senawa.dev/protocol/v1alpha3","commandId":"command_getting-started-pause","cursor":3,"error":{"apiVersion":"senawa.dev/protocol/v1alpha3","code":"run-control-unavailable","commandId":"command_getting-started-pause","message":"Run control is not initialized","retryable":false},"repositoryId":"repository_example","runId":"run_example","status":"refused"}}
+{"commandId":"command_getting-started-pause","recordedAt":"2026-08-16T11:44:18.258Z","repositoryId":"repository_example","runId":"run_example","sequence":3,"status":"terminal","terminalReceipt":{"apiVersion":"senawa.dev/protocol/v1","commandId":"command_getting-started-pause","cursor":3,"error":{"apiVersion":"senawa.dev/protocol/v1","code":"run-control-unavailable","commandId":"command_getting-started-pause","message":"Run control is not initialized","retryable":false},"repositoryId":"repository_example","runId":"run_example","status":"refused"}}
 ```
 
 A refusal is a first-class durable outcome, not an error to retry blindly. The

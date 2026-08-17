@@ -2287,7 +2287,7 @@ describe("SQLite amendment authority", () => {
     sandbox.dispose();
   });
 
-  it("persists exact v1alpha3 resources and rejects corruption or v1alpha2 history", () => {
+  it("persists exact resources and rejects corruption or an unsupported version", () => {
     const sandbox = createSandbox();
     const authority = new SqliteAuthority(sandbox.options);
     try {
@@ -2309,10 +2309,10 @@ describe("SQLite amendment authority", () => {
         /execution policy is invalid/u,
       );
 
-      const legacy = JSON.parse(JSON.stringify(snapshot)) as Record<string, unknown>;
-      legacy.apiVersion = "senawa.dev/configuration-snapshot/v1alpha2";
-      expect(() => authority.putConfigurationSnapshot(legacy)).toThrow(
-        /has no external prompt bytes.*fresh state root or the earlier alpha binary/u,
+      const unknownVersion = JSON.parse(JSON.stringify(snapshot)) as Record<string, unknown>;
+      unknownVersion.apiVersion = "senawa.dev/configuration-snapshot/v2";
+      expect(() => authority.putConfigurationSnapshot(unknownVersion)).toThrow(
+        /apiVersion is unsupported/u,
       );
     } finally {
       authority.close();
@@ -3087,7 +3087,7 @@ describe("SQLite authority durability", () => {
     const authority = new SqliteAuthority(sandbox.options);
     try {
       authority.submit(instantiateCommand("command_cas-removal"), admission());
-      const emptySnapshot = '{"runs":[],"version":"senawa.dev/runtime-memory/v1alpha2"}';
+      const emptySnapshot = '{"runs":[],"version":"senawa.dev/runtime-memory/v1"}';
       authority.compareAndSwapSnapshot(authority.revision(), emptySnapshot);
       expect(authority.toCanonicalJson()).toBe(emptySnapshot);
       authority.close();
@@ -4036,7 +4036,7 @@ function amendmentConfigurationSnapshot(graph: ReturnType<typeof createRuntimeGr
     failurePolicy: "continue",
   });
   const content = {
-    apiVersion: "senawa.dev/configuration-snapshot/v1alpha3",
+    apiVersion: "senawa.dev/configuration-snapshot/v1",
     execution,
     graph,
     prompts,

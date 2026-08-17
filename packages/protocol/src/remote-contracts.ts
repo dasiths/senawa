@@ -7,7 +7,7 @@ import type {
 } from "./contracts.js";
 
 export const REMOTE_NEGOTIATION_VERSION = "senawa.dev/remote-control/negotiation/v1" as const;
-export const REMOTE_PROTOCOL_VERSION = "senawa.dev/remote-control/v1alpha1" as const;
+export const REMOTE_PROTOCOL_VERSION = "senawa.dev/remote-control/v1" as const;
 
 export const REMOTE_CAPABILITIES = Object.freeze([
   "classified-reporting-v1",

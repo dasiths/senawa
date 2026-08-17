@@ -343,7 +343,7 @@ describe("remote connector trust boundary", () => {
           signature: harness.keys.centralCrypto.sign(
             envelope.signingKeyId,
             joinedBytes(
-              "senawa.dev/remote-control/v1alpha1/wrong-domain\n",
+              "senawa.dev/remote-control/v1/wrong-domain\n",
               canonicalBytes(withoutSignature(envelope)),
             ),
           ),
@@ -520,7 +520,7 @@ describe("remote connector trust boundary", () => {
       type: "refusal",
       code: "no-common-version",
       message: "no common version",
-      supportedVersions: ["senawa.dev/remote-control/v2alpha1"],
+      supportedVersions: ["senawa.dev/remote-control/v2"],
       requiredCapabilities: REMOTE_CAPABILITIES,
     };
     expect(await harness.connector.pumpOnce()).toMatchObject({ partitioned: true });

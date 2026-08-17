@@ -34,11 +34,11 @@ import {
   type TaskId,
 } from "./identity.js";
 
-export const TASK_DEPENDENCY_BARRIER_API_VERSION = "senawa.dev/task-dependency-barrier/v1alpha1";
-export const WORKER_CONTEXT_BASE_API_VERSION = "senawa.dev/worker-context-base/v1alpha3";
-export const WORKER_DISPATCH_API_VERSION = "senawa.dev/worker-dispatch/v1alpha3";
+export const TASK_DEPENDENCY_BARRIER_API_VERSION = "senawa.dev/task-dependency-barrier/v1";
+export const WORKER_CONTEXT_BASE_API_VERSION = "senawa.dev/worker-context-base/v1";
+export const WORKER_DISPATCH_API_VERSION = "senawa.dev/worker-dispatch/v1";
 export const WORKER_MODEL_ROUTE_SELECTION_API_VERSION =
-  "senawa.dev/worker-model-route-selection/v1alpha1";
+  "senawa.dev/worker-model-route-selection/v1";
 
 export const CONTEXT_CONTRACT_KINDS = [
   "completion-policy",

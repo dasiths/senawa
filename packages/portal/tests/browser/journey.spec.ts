@@ -35,7 +35,7 @@ test("reconnects from the last cursor, deduplicates replay, and resynchronizes a
 
   const sourceCount = await simulated.page.evaluate(() => window.__senawaEventSources?.length ?? 0);
   let reconnectPreflights = 0;
-  await simulated.page.route("**/api/v1alpha1/session", async (route) => {
+  await simulated.page.route("**/api/v1/session", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     reconnectPreflights += 1;
     if (reconnectPreflights === 1) return route.abort("failed");
@@ -69,7 +69,7 @@ test("reconnects from the last cursor, deduplicates replay, and resynchronizes a
       window.__senawaEventSources?.at(-1)?.emit("gap", JSON.stringify(gap));
     },
     {
-      apiVersion: "senawa.dev/protocol/v1alpha2",
+      apiVersion: "senawa.dev/protocol/v1",
       code: "replay-gap",
       message: "Deterministic browser replay gap",
       retryable: true,
@@ -183,7 +183,7 @@ test("preserves reviewed values across rerenders and closes authority on run cha
   await expect(page.getByRole("dialog")).toContainText("runModeRevision");
   const commandRequests: string[] = [];
   page.on("request", (request) => {
-    if (request.method() === "POST" && request.url().includes("/api/v1alpha1/commands")) {
+    if (request.method() === "POST" && request.url().includes("/api/v1/commands")) {
       commandRequests.push(request.postData() ?? "");
     }
   });
@@ -268,7 +268,7 @@ test("records exact human decisions with pending recovery", async ({ page }) => 
   const questionRouteObserved = new Promise<void>((resolvePromise) => {
     observeQuestionRoute = resolvePromise;
   });
-  await page.route("**/api/v1alpha1/commands", async (route) => {
+  await page.route("**/api/v1/commands", async (route) => {
     const body = route.request().postData();
     if (body === null) return route.continue();
     questionBodies.push(body);
@@ -287,7 +287,7 @@ test("records exact human decisions with pending recovery", async ({ page }) => 
       status: 504,
       contentType: "application/json",
       body: JSON.stringify({
-        apiVersion: "senawa.dev/protocol/v1alpha2",
+        apiVersion: "senawa.dev/protocol/v1",
         code: "response-lost",
         message: "Accepted response was not observable",
         retryable: true,
@@ -308,7 +308,7 @@ test("records exact human decisions with pending recovery", async ({ page }) => 
   await expect(page.getByText("read-write", { exact: true })).toBeVisible();
   await expectPendingClear(page);
   await expect(page.getByText("Connection live", { exact: true })).toBeVisible();
-  await page.unroute("**/api/v1alpha1/commands");
+  await page.unroute("**/api/v1/commands");
   expect(questionBodies).toHaveLength(1);
   expect(questionPersistedBeforeEffect).toEqual([true]);
   const question = await portalJson(
@@ -324,14 +324,14 @@ test("records exact human decisions with pending recovery", async ({ page }) => 
 
   const amendmentBodies: string[] = [];
   let amendmentAttempt = 0;
-  await page.route("**/api/v1alpha1/commands", async (route) => {
+  await page.route("**/api/v1/commands", async (route) => {
     const body = route.request().postData();
     if (body === null) return route.continue();
     amendmentBodies.push(body);
     amendmentAttempt += 1;
     if (amendmentAttempt === 1) return route.abort("failed");
     await route.continue();
-    await page.unroute("**/api/v1alpha1/commands");
+    await page.unroute("**/api/v1/commands");
   });
   await reviewNeed(page, "amendment-decision");
   const amendmentDialog = page.getByRole("dialog");
@@ -353,7 +353,7 @@ test("records exact human decisions with pending recovery", async ({ page }) => 
   await expect(approvalDialog).toContainText("gateEvidenceDigest");
   await approvalDialog.getByLabel("Decision").selectOption("approve");
   const approvalRequest = page.waitForRequest(
-    (request) => request.url().includes("/api/v1alpha1/commands") && request.method() === "POST",
+    (request) => request.url().includes("/api/v1/commands") && request.method() === "POST",
   );
   await approvalDialog.getByRole("button", { name: "Record exact decision" }).click();
   await approvalRequest;
@@ -434,7 +434,7 @@ async function latestEvent(page: Page, runId: string): Promise<unknown> {
 }
 
 async function portalJson(page: Page, runId: string, suffix: string): Promise<unknown> {
-  const path = `/api/v1alpha1/repositories/${repositoryForRun(runId)}/runs/${runId}${suffix}`;
+  const path = `/api/v1/repositories/${repositoryForRun(runId)}/runs/${runId}${suffix}`;
   return page.evaluate(async (url) => {
     const response = await fetch(url, { credentials: "same-origin" });
     if (!response.ok) throw new Error(`Portal fixture read failed with ${response.status}`);
@@ -446,7 +446,7 @@ async function runDiscoveryStatus(page: Page, runId: string): Promise<number> {
   const repositoryId = repositoryForRun(runId);
   const status = await page.evaluate(
     async (path) => (await fetch(path, { credentials: "same-origin" })).status,
-    `/api/v1alpha1/repositories/${repositoryId}/runs?limit=100`,
+    `/api/v1/repositories/${repositoryId}/runs?limit=100`,
   );
   return status;
 }

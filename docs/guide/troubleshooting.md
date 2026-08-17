@@ -160,7 +160,7 @@ command files must be canonical JSON with sorted object members, no
 insignificant whitespace, no duplicate keys, and no trailing newline. Pretty
 printed JSON is refused.
 
-Other causes are an `apiVersion` other than `senawa.dev/protocol/v1alpha3`, a
+Other causes are an `apiVersion` other than `senawa.dev/protocol/v1`, a
 `commandId` that is neither a lowercase UUID nor a `command_` identity, a
 `payloadDigest` that is not 64 lowercase hexadecimal characters, or an unknown
 field such as `principal` or `transport`, which clients may never supply.

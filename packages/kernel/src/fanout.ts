@@ -26,7 +26,7 @@ import {
   taskId,
 } from "./identity.js";
 
-export const FAN_OUT_EVALUATION_API_VERSION = "senawa.dev/fan-out-evaluation/v1alpha1";
+export const FAN_OUT_EVALUATION_API_VERSION = "senawa.dev/fan-out-evaluation/v1";
 const MAX_IDENTITY_BYTES = 256;
 const UTF8 = new TextEncoder();
 
@@ -490,7 +490,7 @@ function validateLimits(limits: FanOutLimits): void {
     limits.maxConcurrency > 32 ||
     !["escalate", "fail"].includes(limits.exhaustion)
   ) {
-    fail("invalid-fan-out", "Fan-out limits exceed the v1alpha3 contract");
+    fail("invalid-fan-out", "Fan-out limits exceed the v1 contract");
   }
 }
 

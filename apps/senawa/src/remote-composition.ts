@@ -23,7 +23,7 @@ import {
   type SupervisorApi,
 } from "@senawa/supervisor";
 
-const ENROLLMENT_VERSION = "senawa.dev/remote-connector-enrollment/v1alpha1";
+const ENROLLMENT_VERSION = "senawa.dev/remote-connector-enrollment/v1";
 const MAX_ENROLLMENT_BYTES = 64 * 1024;
 const MAX_REMOTE_RESPONSE_BYTES = PROTOCOL_LIMITS.maxWireBytes;
 export const REMOTE_NETWORK_LIMITS = Object.freeze({
@@ -403,7 +403,7 @@ export function parseRemoteEndpoint(input: string): URL {
   ) {
     throw new Error("Remote connector endpoint is invalid");
   }
-  endpoint.pathname = `${endpoint.pathname.replace(/\/*$/u, "")}/remote/v1alpha1/`;
+  endpoint.pathname = `${endpoint.pathname.replace(/\/*$/u, "")}/remote/v1/`;
   return endpoint;
 }
 

@@ -213,27 +213,27 @@ function parseRequestTarget(target: string): {
 }
 
 function matchPath(segments: readonly string[], query: URLSearchParams): SupervisorHttpRoute {
-  if (samePath(segments, ["supervisor", "v1alpha1", "status"])) {
+  if (samePath(segments, ["supervisor", "v1", "status"])) {
     requireQuery(query, []);
     return { kind: "supervisor-status" };
   }
-  if (samePath(segments, ["supervisor", "v1alpha1", "drain"])) {
+  if (samePath(segments, ["supervisor", "v1", "drain"])) {
     requireQuery(query, []);
     return { kind: "supervisor-drain" };
   }
-  if (samePath(segments, ["supervisor", "v1alpha1", "stop"])) {
+  if (samePath(segments, ["supervisor", "v1", "stop"])) {
     requireQuery(query, []);
     return { kind: "supervisor-stop" };
   }
-  if (samePath(segments, ["supervisor", "v1alpha1", "recoveries"])) {
+  if (samePath(segments, ["supervisor", "v1", "recoveries"])) {
     requireQuery(query, []);
     return { kind: "supervisor-recovery" };
   }
-  if (samePath(segments, ["supervisor", "v1alpha1", "backups"])) {
+  if (samePath(segments, ["supervisor", "v1", "backups"])) {
     requireQuery(query, []);
     return { kind: "supervisor-backup" };
   }
-  if (samePath(segments, ["supervisor", "v1alpha1", "logs"])) {
+  if (samePath(segments, ["supervisor", "v1", "logs"])) {
     requireQuery(query, ["after", "limit"]);
     const afterCursor = optionalInteger(query, "after", 0, Number.MAX_SAFE_INTEGER);
     const limit = optionalInteger(query, "limit", 1, 1_024);
@@ -243,24 +243,24 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
       ...(limit === undefined ? {} : { limit }),
     };
   }
-  if (samePath(segments, ["api", "v1alpha1", "capabilities"])) {
+  if (samePath(segments, ["api", "v1", "capabilities"])) {
     requireQuery(query, []);
     return { kind: "capabilities" };
   }
-  if (samePath(segments, ["api", "v1alpha1", "commands"])) {
+  if (samePath(segments, ["api", "v1", "commands"])) {
     requireQuery(query, []);
     return { kind: "commands" };
   }
   if (
     segments.length === 6 &&
-    samePath(segments.slice(0, 3), ["api", "v1alpha1", "commands"]) &&
+    samePath(segments.slice(0, 3), ["api", "v1", "commands"]) &&
     segments[4] === "receipt"
   ) {
     throw notFound();
   }
   if (
     segments.length === 5 &&
-    samePath(segments.slice(0, 3), ["api", "v1alpha1", "commands"]) &&
+    samePath(segments.slice(0, 3), ["api", "v1", "commands"]) &&
     segments[4] === "receipt"
   ) {
     requireQuery(query, []);
@@ -268,7 +268,7 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
   }
   if (
     segments.length === 5 &&
-    samePath(segments.slice(0, 3), ["api", "v1alpha1", "worker"]) &&
+    samePath(segments.slice(0, 3), ["api", "v1", "worker"]) &&
     (segments[4] === "context" || segments[4] === "output-schema" || segments[4] === "submissions")
   ) {
     requireQuery(query, []);
@@ -277,7 +277,7 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
     if (segments[4] === "output-schema") return { kind: "worker-output-schema", dispatchId };
     return { kind: "worker-submission", dispatchId };
   }
-  if (samePath(segments, ["api", "v1alpha1", "portal-sessions"])) {
+  if (samePath(segments, ["api", "v1", "portal-sessions"])) {
     requireQuery(query, []);
     return { kind: "portal-session-bootstrap" };
   }
@@ -287,7 +287,7 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
     if (token === null || token.length === 0) throw badTarget();
     return { kind: "portal-bootstrap", token };
   }
-  if (samePath(segments, ["api", "v1alpha1", "session"])) {
+  if (samePath(segments, ["api", "v1", "session"])) {
     requireQuery(query, []);
     return { kind: "portal-session-descriptor" };
   }
@@ -295,13 +295,13 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
     requireQuery(query, []);
     return { kind: "portal-asset", name: validateAssetName(segments[2]) };
   }
-  if (samePath(segments, ["api", "v1alpha1", "repositories"])) {
+  if (samePath(segments, ["api", "v1", "repositories"])) {
     const page = lexicalPage(query, PORTAL_LIMITS.maxDiscoveryItems);
     return { kind: "portal-repository-list", ...page };
   }
   if (
     segments.length === 5 &&
-    samePath(segments.slice(0, 3), ["api", "v1alpha1", "repositories"]) &&
+    samePath(segments.slice(0, 3), ["api", "v1", "repositories"]) &&
     segments[4] === "runs"
   ) {
     const page = lexicalPage(query, PORTAL_LIMITS.maxDiscoveryItems);
@@ -313,7 +313,7 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
   }
   if (
     segments.length >= 7 &&
-    samePath(segments.slice(0, 3), ["api", "v1alpha1", "repositories"]) &&
+    samePath(segments.slice(0, 3), ["api", "v1", "repositories"]) &&
     segments[4] === "runs"
   ) {
     const repositoryId = validateIdentity(segments[3]);

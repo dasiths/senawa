@@ -161,7 +161,7 @@ function writeManifest(root: string, assets: readonly ReturnType<typeof entry>[]
   writeFileSync(
     path,
     canonicalStringify({
-      apiVersion: "senawa.dev/portal-assets/v1alpha1",
+      apiVersion: "senawa.dev/portal-assets/v1",
       shell: "index.html",
       assets,
     }),

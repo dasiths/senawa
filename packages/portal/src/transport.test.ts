@@ -11,7 +11,7 @@ describe("portal HTTP transport", () => {
       client.allowanceReview("repository_alpha", "run_alpha", "runner-command_alpha"),
     ).resolves.toEqual(review);
     expect(String(fetcher.mock.calls[0]?.[0])).toBe(
-      "/api/v1alpha1/repositories/repository_alpha/runs/run_alpha/allowances/runner-command_alpha",
+      "/api/v1/repositories/repository_alpha/runs/run_alpha/allowances/runner-command_alpha",
     );
 
     const tampered = new PortalHttpClient({

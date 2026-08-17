@@ -431,7 +431,7 @@ function inspectReferences(
     findings.push({
       code: "invalid-schema",
       pointer: `${diagnosticPointer}${location.pointer}/$dynamicRef`,
-      message: "$dynamicRef is not supported by workflow configuration v1alpha1",
+      message: "$dynamicRef is not supported by workflow configuration v1",
     });
   }
   for (const key of ["$ref"] as const) {

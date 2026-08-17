@@ -59,7 +59,7 @@ function portalManifest(): Plugin {
       await writeFile(
         join(outputRoot, "manifest.json"),
         canonicalJson({
-          apiVersion: "senawa.dev/portal-assets/v1alpha1",
+          apiVersion: "senawa.dev/portal-assets/v1",
           shell: "index.html",
           assets,
         }),

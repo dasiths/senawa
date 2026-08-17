@@ -224,7 +224,7 @@ describe("runCli", () => {
     const content = memory.files.get(DEFAULT_WORKFLOW_PATH);
     expect(content).toBeDefined();
     const document = JSON.parse(content as string);
-    expect(document.apiVersion).toBe("senawa.dev/workflow/v1alpha3");
+    expect(document.apiVersion).toBe("senawa.dev/workflow/v1");
     await expect(
       compileWorkflowConfiguration(
         {

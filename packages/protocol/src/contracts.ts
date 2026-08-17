@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = "senawa.dev/protocol/v1alpha3" as const;
+export const PROTOCOL_VERSION = "senawa.dev/protocol/v1" as const;
 
 export type ProtocolVersion = typeof PROTOCOL_VERSION;
 

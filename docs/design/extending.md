@@ -162,17 +162,17 @@ enrollment and classification model.
 
 Treat as stable, with a versioned identifier and a compatibility obligation:
 
-* The wire protocol, `PROTOCOL_VERSION` at `senawa.dev/protocol/v1alpha3`.
+* The wire protocol, `PROTOCOL_VERSION` at `senawa.dev/protocol/v1`.
 * The remote protocol, `REMOTE_PROTOCOL_VERSION` at
-  `senawa.dev/remote-control/v1alpha1`, and `REMOTE_NEGOTIATION_VERSION` at
+  `senawa.dev/remote-control/v1`, and `REMOTE_NEGOTIATION_VERSION` at
   `senawa.dev/remote-control/negotiation/v1`.
 * The workflow document, `WORKFLOW_CONFIGURATION_API_VERSION` at
-  `senawa.dev/workflow/v1alpha3`, and the compiled
+  `senawa.dev/workflow/v1`, and the compiled
   `CONFIGURATION_SNAPSHOT_API_VERSION` at
-  `senawa.dev/configuration-snapshot/v1alpha3`.
+  `senawa.dev/configuration-snapshot/v1`.
 * Reporting outputs: `REPORTING_SNAPSHOT_VERSION`,
   `DETERMINISTIC_REPORT_VERSION`, and `REPORT_EXPORT_VERSION`, all at
-  `v1alpha2`.
+  `v1`.
 * Kernel record contracts that carry their own `apiVersion`, such as
   `WORKER_CONTEXT_BASE_API_VERSION`, `WORKER_DISPATCH_API_VERSION`,
   `PHASE_ATTEMPT_API_VERSION`, `FAN_OUT_EVALUATION_API_VERSION`, and

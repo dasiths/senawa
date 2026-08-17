@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GOLDEN_REMOTE_ENVELOPE_JSON } from "./fixtures/remote-v1alpha1.js";
+import { GOLDEN_REMOTE_ENVELOPE_JSON } from "./fixtures/remote-wire-v1.js";
 import {
   decodeRemoteCentralAcceptedCommand,
   decodeRemoteClassifiedReport,
@@ -227,7 +227,7 @@ describe("remote hello negotiation codecs", () => {
   const unsupportedOffer = {
     negotiationVersion: REMOTE_NEGOTIATION_VERSION,
     peerId: "connector_alpha",
-    supportedVersions: ["senawa.dev/remote-control/v2alpha1"],
+    supportedVersions: ["senawa.dev/remote-control/v2"],
     capabilities: [...REMOTE_CAPABILITIES],
   } as const;
 
@@ -259,7 +259,7 @@ describe("remote hello negotiation codecs", () => {
     expectProtocolError("invalid-value", "$.selectedVersion", () =>
       decodeRemoteHelloResponse({
         ...selection,
-        selectedVersion: "senawa.dev/remote-control/v2alpha1",
+        selectedVersion: "senawa.dev/remote-control/v2",
       }),
     );
     expectProtocolError("invalid-value", "$.capabilities", () =>
@@ -282,10 +282,7 @@ describe("remote hello negotiation codecs", () => {
     expectProtocolError("invalid-value", "$.supportedVersions", () =>
       decodeRemoteHelloOffer({
         ...unsupportedOffer,
-        supportedVersions: [
-          "senawa.dev/remote-control/v2alpha1",
-          "senawa.dev/remote-control/v2alpha1",
-        ],
+        supportedVersions: ["senawa.dev/remote-control/v2", "senawa.dev/remote-control/v2"],
       }),
     );
     expectProtocolError("invalid-value", "$.supportedVersions[0]", () =>

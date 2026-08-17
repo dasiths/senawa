@@ -16,7 +16,7 @@ import {
 import type { PhaseAttemptReference } from "./dataflow.js";
 import { isDefinitionGeneration, isPhaseId, isRunId, type RunId } from "./identity.js";
 
-export const PHASE_ATTEMPT_TRANSITION_API_VERSION = "senawa.dev/phase-attempt-transition/v1alpha1";
+export const PHASE_ATTEMPT_TRANSITION_API_VERSION = "senawa.dev/phase-attempt-transition/v1";
 
 export type PhaseAttemptTransitionTrigger =
   | "gate-rejected"

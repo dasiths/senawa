@@ -16,8 +16,8 @@ import type {
 } from "@senawa/runtime";
 import { REPORTING_LIMITS, REPORTING_SNAPSHOT_VERSION } from "@senawa/runtime";
 
-export const DETERMINISTIC_REPORT_VERSION = "senawa.dev/deterministic-report/v1alpha2" as const;
-export const REPORT_EXPORT_VERSION = "senawa.dev/report-export/v1alpha2" as const;
+export const DETERMINISTIC_REPORT_VERSION = "senawa.dev/deterministic-report/v1" as const;
+export const REPORT_EXPORT_VERSION = "senawa.dev/report-export/v1" as const;
 
 export const REPORT_EXPORT_LIMITS = Object.freeze({
   maxFiles: 20,

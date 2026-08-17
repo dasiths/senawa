@@ -23,7 +23,7 @@ with `unknown-field`:
 
 ```json
 {
-  "apiVersion": "senawa.dev/workflow/v1alpha3",
+  "apiVersion": "senawa.dev/workflow/v1",
   "kind": "Workflow",
   "execution": {},
   "workflow": {},
@@ -40,9 +40,9 @@ with `unknown-field`:
 }
 ```
 
-`execution` and `remote` are the only optional top-level fields. A `v1alpha2`
+`execution` and `remote` are the only optional top-level fields. A `v1`
 document receives a deterministic migration diagnostic and is never reinterpreted
-as `v1alpha3`.
+as `v1`.
 
 ## Execution policy
 
@@ -599,7 +599,7 @@ it finished does not close anything by itself.
 
 ## Amendments
 
-A separate `senawa.dev/workflow-amendment/v1alpha1` document proposes additive
+A separate `senawa.dev/workflow-amendment/v1` document proposes additive
 changes to a running graph. It carries the base snapshot and context digests and
 a list of `add-phase` or `add-task` operations. Amendments cannot remove or
 rewrite existing nodes. Review them with `senawa amendment list`, `get`,

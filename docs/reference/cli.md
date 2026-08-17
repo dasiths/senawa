@@ -171,7 +171,7 @@ development. If the selected manifest is missing or invalid, the authenticated
 portal shell returns a typed unavailable response while service and query
 commands remain operational.
 
-Create a complete `senawa.dev/workflow/v1alpha3` standard delivery tree without
+Create a complete `senawa.dev/workflow/v1` standard delivery tree without
 overwriting an existing destination:
 
 ```bash
@@ -219,8 +219,8 @@ category and line and column. Filesystem failures expose an allowlisted error
 code without stack traces or internal paths. Doctor loads every declared prompt
 and schema through the confined, symlink-refusing resource reader and compiles
 the complete immutable snapshot. It does not execute sensors, start work,
-invoke models, or contact a runner. A v1alpha2 document receives a deterministic
-migration diagnostic and is never reinterpreted as v1alpha3.
+invoke models, or contact a runner. A v1 document receives a deterministic
+migration diagnostic and is never reinterpreted as v1.
 
 Inspect both locations before manually moving an earlier alpha file. The CLI
 does not overwrite the destination or provide an automatic migration command:

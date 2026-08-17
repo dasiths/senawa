@@ -85,7 +85,7 @@ const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const ROLE_PATTERN = /^[a-z0-9](?:[a-z0-9:-]{0,62}[a-z0-9])?$/;
 const TOKEN_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
-const VERSION_PATTERN = /^senawa\.dev\/protocol\/v[1-9][0-9]*(?:alpha|beta|rc)[1-9][0-9]*$/;
+const VERSION_PATTERN = /^senawa\.dev\/protocol\/v[1-9][0-9]*$/;
 
 const ASSURANCE_LEVELS = new Set<AssuranceLevel>([
   "single-factor",
@@ -1423,7 +1423,7 @@ function token(value: unknown, path: string): void {
 function version(value: unknown, path: string): void {
   boundedString(value, path, 1, 128);
   if (!VERSION_PATTERN.test(value as string)) {
-    fail("invalid-value", path, "must be a Senawa prerelease protocol version");
+    fail("invalid-value", path, "must be a Senawa protocol version");
   }
 }
 

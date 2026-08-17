@@ -32,7 +32,7 @@ const taskShape = {
 
 export function createStandardWorkflowConfiguration(): WorkflowConfigurationDocument {
   return canonicalValue({
-    apiVersion: "senawa.dev/workflow/v1alpha3",
+    apiVersion: "senawa.dev/workflow/v1",
     kind: "Workflow",
     execution: {
       workspaceMode: "repository",

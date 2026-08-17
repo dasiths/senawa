@@ -30,7 +30,7 @@ SENAWA_REMOTE_KEY_FILE=/private/path/remote-enrollment.json
 
 The endpoint must be at most 2,048 characters. It must use HTTPS without user
 information, query, or fragment. Plain HTTP is accepted only for `127.0.0.1` or
-`localhost`. Senawa appends `/remote/v1alpha1/` beneath the configured base path.
+`localhost`. Senawa appends `/remote/v1/` beneath the configured base path.
 
 The enrollment file is local operational state. It must be a regular file owned
 by the daemon user with exact mode `0600`, cannot be a symbolic-link leaf, and
@@ -39,7 +39,7 @@ The exact top-level fields are:
 
 ```json
 {
-  "apiVersion": "senawa.dev/remote-connector-enrollment/v1alpha1",
+  "apiVersion": "senawa.dev/remote-connector-enrollment/v1",
   "binding": {},
   "configurationSnapshotDigest": "<sha256>",
   "controlPlanePublicKeyPem": "<Ed25519 public key PEM>",

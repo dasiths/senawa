@@ -93,7 +93,7 @@ export class PortalEventStream {
     this.#closed = false;
     this.#cursor = afterCursor;
     this.#attempt = 0;
-    this.#url = `/api/v1alpha1/repositories/${encodeURIComponent(repositoryId)}/runs/${encodeURIComponent(runId)}/events/stream`;
+    this.#url = `/api/v1/repositories/${encodeURIComponent(repositoryId)}/runs/${encodeURIComponent(runId)}/events/stream`;
     this.#connect(this.#generation);
   }
 

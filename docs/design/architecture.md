@@ -81,7 +81,7 @@ and `protocol`. Nothing above them may be imported by them.
 ## Protocol
 
 Versioned wire contracts and codecs. `PROTOCOL_VERSION` is
-`senawa.dev/protocol/v1alpha3`, defined in
+`senawa.dev/protocol/v1`, defined in
 [packages/protocol/src/contracts.ts](../../packages/protocol/src/contracts.ts).
 The package carries command envelopes, durable receipts, event frames,
 projection envelopes, portal contracts, worker contracts, and remote contracts,
@@ -123,7 +123,7 @@ storage, execution-host, sensors, workers, git, supervisor, or portal.
 
 ## Configuration
 
-The workflow compiler. It parses a `senawa.dev/workflow/v1alpha3` document,
+The workflow compiler. It parses a `senawa.dev/workflow/v1` document,
 loads declared external prompt and schema resources through a confined reader,
 validates every reference, and produces an immutable `ConfigurationSnapshot`
 with per-category component digests and one snapshot digest. Contracts are in

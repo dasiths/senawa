@@ -197,7 +197,7 @@ export class SupervisorHttpHandler {
             this.#contextFactory(request, this.#transport === "ipc" ? "cli" : "http"),
           );
           return sendJson(response, 202, acceptance, {
-            Location: `/api/v1alpha1/commands/${acceptance.location.commandId}/receipt`,
+            Location: `/api/v1/commands/${acceptance.location.commandId}/receipt`,
           });
         }
         case "command-receipt":

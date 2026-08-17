@@ -425,7 +425,7 @@ interface StoredPhaseOutputFact {
 }
 
 export interface ContextAuthoritySnapshot {
-  readonly version: "senawa.dev/context-authority-memory/v1alpha1";
+  readonly version: "senawa.dev/context-authority-memory/v1";
   readonly contexts: readonly WorkerContextBase[];
   readonly taskScopes: readonly TaskScopeCurrentness[];
   readonly dispatches: readonly WorkerDispatch[];
@@ -475,7 +475,7 @@ export interface DurableRead {
 }
 
 export interface DurableContextAuthoritySnapshot {
-  readonly version: "senawa.dev/context-authority-durable/v1alpha1";
+  readonly version: "senawa.dev/context-authority-durable/v1";
   readonly taskScopes: readonly TaskScopeCurrentness[];
   readonly dispatches: readonly StoredDispatch[];
   readonly grants: readonly StoredGrant[];
@@ -585,7 +585,7 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
         compareText(left.submission.submissionId, right.submission.submissionId),
       );
     return deepFreeze({
-      version: "senawa.dev/context-authority-memory/v1alpha1",
+      version: "senawa.dev/context-authority-memory/v1",
       contexts,
       taskScopes: [...this.taskScopes.values()].sort(compareTaskScope),
       dispatches,
@@ -676,7 +676,7 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
 
   durableSnapshot(): DurableContextAuthoritySnapshot {
     return deepFreeze({
-      version: "senawa.dev/context-authority-durable/v1alpha1",
+      version: "senawa.dev/context-authority-durable/v1",
       taskScopes: [...this.taskScopes.values()].sort(compareTaskScope),
       dispatches: [...this.dispatches.values()],
       grants: [...this.grants.values()].map((grant) => ({ ...grant })),
@@ -742,7 +742,7 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
       "events",
       "cursor",
     ]);
-    if (parsed.version !== "senawa.dev/context-authority-durable/v1alpha1")
+    if (parsed.version !== "senawa.dev/context-authority-durable/v1")
       throw new TypeError("Unsupported durable context authority version");
     assertNoGrantTokenField(parsed, "snapshot");
     const dispatchRecords = durableArray(parsed.dispatches, "dispatches");

@@ -1005,7 +1005,7 @@ Commit `d8a3d7a feat: add completion and escalation semantics` was pushed to
 * Date: 2026-08-12
 * Status: Accepted for Phase 3 bounded slice A
 * Phase: 3
-* Decision: Define the `senawa.dev/protocol/v1alpha1` wire contracts as
+* Decision: Define the `senawa.dev/protocol/v1` wire contracts as
   browser-safe TypeScript DTOs with dependency-free exact runtime validators.
   Accept object inputs for canonical encoding, and require raw JSON inputs to
   already use the canonical key ordering and scalar encoding. Apply fixed byte,
@@ -1385,7 +1385,7 @@ Passed on 2026-08-12:
   boundary. Runtime composition must recompute them with its SHA-256 adapter
   before accepting authority effects.
 * Later version negotiation must define compatibility when more than one
-  protocol version is implemented; this slice only accepts v1alpha1 envelopes.
+  protocol version is implemented; this slice only accepts v1 envelopes.
 
 ### Bounded slice B: In-memory command authority
 
@@ -1951,13 +1951,13 @@ was not reproducible as a history-growth regression.
 * Date: 2026-08-13
 * Status: Accepted for Phase 6 bounded slice A
 * Phase: 6
-* Decision: Accept one exact `senawa.dev/workflow/v1alpha1` unknown-input
+* Decision: Accept one exact `senawa.dev/workflow/v1` unknown-input
   boundary with flat phases and embedded executable work. Derive each branded
   graph identity from its definition kind and the supplied SHA-256 digest of a
   qualified consumer path, resolve consumer references before lowering one
   `NormalizedWorkflowInput`, and delegate graph authority to
   `compileWorkflowGraph`. Produce one recursively immutable
-  `senawa.dev/configuration-snapshot/v1alpha1` snapshot whose component digests
+  `senawa.dev/configuration-snapshot/v1` snapshot whose component digests
   bind the graph and every sorted registry, and whose snapshot digest excludes
   only itself.
 * Alternatives: Expose graph identities in consumer documents; allocate
@@ -1980,7 +1980,7 @@ was not reproducible as a history-growth regression.
 * Date: 2026-08-13
 * Status: Accepted for Phase 6 bounded slice B
 * Phase: 6
-* Decision: Extend the exact `senawa.dev/workflow/v1alpha1` document with
+* Decision: Extend the exact `senawa.dev/workflow/v1` document with
   declaration-order-insensitive schema, role, model policy, sensor, and gate
   registries plus in-memory top-level projected work records. Require executable
   work to name an agent role and six positive finite loop budgets. Bind role,
@@ -2090,7 +2090,7 @@ to match that recorded closure.
 
 * Add a pure browser-safe `@senawa/configuration` package over
   `@senawa/kernel`.
-* Compile the exact v1alpha1 workflow, phase, embedded work, criterion,
+* Compile the exact v1 workflow, phase, embedded work, criterion,
   dependency, completion policy, and canonical input boundary.
 * Aggregate sorted doctor diagnostics and make compilation throw the complete
   diagnostic set without returning a partial snapshot.
@@ -2297,7 +2297,7 @@ identity, gate reference, and diagnostic-location defects. Repairs on
   fragments as document-wide.
 * The subsequent adversarial review demonstrated that rewriting `$dynamicRef`
   to a static pointer cannot preserve dynamic-scope semantics. Workflow
-  configuration v1alpha1 now rejects `$dynamicRef` explicitly until runtime
+  configuration v1 now rejects `$dynamicRef` explicitly until runtime
   schema evaluation can implement and test its dynamic scope. It does not claim
   static equivalence for stored schemas.
 * Schema analysis now rejects definitions beyond 128 container levels or 10,000
@@ -2372,7 +2372,7 @@ No commit or push was performed for bounded slice B, as requested.
 
 #### Scope
 
-* Added a recursively immutable, sensor-free v1alpha1 example factory and
+* Added a recursively immutable, sensor-free v1 example factory and
   deterministic JSON renderer to the browser-safe configuration package.
 * Added the real `@senawa/execution-host` package with zero production
   dependencies. Its public API returns discriminated measurement and failure
@@ -2555,7 +2555,7 @@ Passed on 2026-08-13:
 * Date: 2026-08-13
 * Status: Accepted for Phase 7 bounded Slice A
 * Phase: 7
-* Decision: Compile one exact `senawa.dev/worker-context-base/v1alpha1` record
+* Decision: Compile one exact `senawa.dev/worker-context-base/v1` record
   from a recursion-free task seed containing only `taskId` and
   `definitionGeneration`, plus graph and configuration digests, selected
   immutable contract references, a dependency barrier, historical asset
@@ -3040,7 +3040,7 @@ canonical data, normalized facts, and unkeyed digests.
 * Status: Accepted for Phase 7 bounded Slice D
 * Phase: 7
 * Decision: Compile and exactly revalidate one deterministic
-  `senawa.dev/worker-model-route-selection/v1alpha1` value in the kernel. Bind
+  `senawa.dev/worker-model-route-selection/v1` value in the kernel. Bind
   it to the exact dispatch, context, model policy, ordered route index,
   provider, model, `maxTurns`, `maxSubmissions`, and `maxMillidollars`. Retain a
   separate trusted positive `maxAiCredits` ceiling for the Copilot SDK and
@@ -4559,8 +4559,8 @@ and pushed to `origin/redesign/workflow-state-machine` on 2026-08-13.
 * Status: Accepted and implemented for Phase 10A
 * Phase: Phase 10A
 * Decision: Move the exact workflow configuration and configuration snapshot
-  APIs to `v1alpha2`. Materialize normalized execution policy in every snapshot,
-  while retaining workflow amendments at `v1alpha1` and preserving the accepted
+  APIs to `v1`. Materialize normalized execution policy in every snapshot,
+  while retaining workflow amendments at `v1` and preserving the accepted
   policy unchanged. Derive readiness from exact current-generation task facts.
   Bind raw typed Git object and revision descriptors into separate canonical
   Senawa SHA-256 digests, sorted integration members, fan-in, and exact
@@ -4576,8 +4576,8 @@ and pushed to `origin/redesign/workflow-state-machine` on 2026-08-13.
   Senawa SHA-256, while sorted member records make fan-in independent of worker
   timing.
 * Consequence: Current workflow documents must use
-  `senawa.dev/workflow/v1alpha2`, and persisted configuration snapshots use
-  `senawa.dev/configuration-snapshot/v1alpha2`. Phase 10B can consume the pure
+  `senawa.dev/workflow/v1`, and persisted configuration snapshots use
+  `senawa.dev/configuration-snapshot/v1`. Phase 10B can consume the pure
   readiness frontier and normalized policy, but runtime scheduling, capacity,
   protocol commands, persistence migrations, Git adapters, and supervisor
   composition remain absent.
@@ -4772,7 +4772,7 @@ fence is claimed by Phase 10B.
   durable reservation flag. One immediate transaction acquires the repository
   integration slot and changes the attempt to active; a partial unique index
   permits one active attempt, and expired takeover increments its fence.
-* Consequence: Protocol `v1alpha2` adds the exact trusted
+* Consequence: Protocol `v1` adds the exact trusted
   `record-integration-barrier` command. Run instantiation binds the exact
   configuration snapshot digest and execution policy. Repository mode forbids
   barriers; worktree gates and closure require the exact current full kernel
@@ -4806,7 +4806,7 @@ asserts the same slot fence inside its immediate transaction.
 ### Deviations
 
 No architecture deviation was required. The exact empty runtime snapshot seed
-from migration 001 advances to runtime snapshot `v1alpha2` in migration 006.
+from migration 001 advances to runtime snapshot `v1` in migration 006.
 Nonempty legacy runtime snapshots are not accepted, consistent with the alpha
 no-compatibility policy.
 
@@ -5487,7 +5487,7 @@ No commit or push was performed, as required by the Phase 11A request.
   manifest loader rejects symbolic links, traversal, unknown types, duplicate
   entries, digest or size drift, and unmanifested files before retaining bytes
   in memory.
-* `GET /api/v1alpha1/session` is a secret-free descriptor. The first
+* `GET /api/v1/session` is a secret-free descriptor. The first
   authenticated `POST` returns CSRF once. Later GET requests remain valid and
   report read-only mode, while later POST requests conflict.
 
@@ -5495,7 +5495,7 @@ No commit or push was performed, as required by the Phase 11A request.
 
 * Activity tail and backward windows use explicit `/activity/receipts` and
   `/activity/events` routes. Existing forward receipt and event routes retain
-  their v1alpha1 response contracts for CLI and transport compatibility.
+  their v1 response contracts for CLI and transport compatibility.
 * Integration summaries return fixed sanitized state diagnostics. Raw Git and
   effect output remains unavailable because no trusted sanitized diagnostic
   producer exists yet.
@@ -5591,7 +5591,7 @@ No commit or push was performed, as required by the Phase 11B request.
   preview was added.
 * Vite emits one shell and flat content-hashed JavaScript and CSS names under
   `dist/static`. A build plugin writes canonical
-  `senawa.dev/portal-assets/v1alpha1` metadata with SHA-256, exact byte length,
+  `senawa.dev/portal-assets/v1` metadata with SHA-256, exact byte length,
   content type, and relative path for every asset.
 * A single reducer owns booting, read-write, read-only, expired, and invalid
   sessions; connecting, live, reconnecting, gap, resyncing, and offline
@@ -6426,7 +6426,7 @@ review reported no remaining critical, high, or medium findings.
   phase outputs, runtime instance validation, deterministic mapping and
   substitution, stable per-item fan-out, plan import, iteration, rework,
   approvals, reporting, portal support, packed-init templates, and a complete
-  no-credit define-to-verify journey. The current v1alpha2 example remains valid
+  no-credit define-to-verify journey. The current v1 example remains valid
   only for Phase 13 and will not be expanded with unenforced fields. Phase 15
   documents the final implemented contract and remains the last phase before the
   pull request.
@@ -7406,7 +7406,7 @@ review reported no remaining critical, high, or medium findings.
 * The paid Copilot lane remains intentionally unexecuted by default and requires
   exact SDK 1.0.9, model, timeout, positive credit ceiling, and explicit cost and
   data acknowledgement.
-* The tracked v1alpha2 example is the truthful Phase 13 workflow. Phase 14 will
+* The tracked v1 example is the truthful Phase 13 workflow. Phase 14 will
   replace it only after external prompts, external schemas, mappings, template
   substitution, schema-selected fan-out, plan import, iteration, and approvals
   are implemented end to end.
@@ -7423,14 +7423,14 @@ review reported no remaining critical, high, or medium findings.
 * Status: Accepted and implemented for Phase 14A
 * Phase: Phase 14A
 * Decision: Advance workflow and configuration snapshot authoring to breaking
-  `v1alpha3`. Require external prompt and schema declarations, load exact bytes
+  `v1`. Require external prompt and schema declarations, load exact bytes
   through an async configuration-owned reader port, and embed round-trippable
   UTF-8 text, paths, lengths, content digests, semantic schema digests, prompt
   input paths, and complete resource digests in the immutable snapshot. Advance
-  worker context, dispatch, and prompt pack contracts to `v1alpha2` so replay
+  worker context, dispatch, and prompt pack contracts to `v1` so replay
   binds exact historical prompt bytes and mapped input without filesystem I/O.
-* Alternatives: Retain inline schemas or prompts; accept `v1alpha2` as a partial
-  `v1alpha3`; store configuration resources in the worker asset store; reload
+* Alternatives: Retain inline schemas or prompts; accept `v1` as a partial
+  `v1`; store configuration resources in the worker asset store; reload
   current files during resume; use a general expression engine; expose prompt
   bodies through reporting.
 * Rationale: One self-contained configuration snapshot avoids a storage and
@@ -7440,11 +7440,11 @@ review reported no remaining critical, high, or medium findings.
   byte-only reader port leaves path and content semantics in pure configuration
   code while the Linux adapter owns descriptor-relative filesystem security.
 * Consequence: Current authoring accepts only
-  `senawa.dev/workflow/v1alpha3`; snapshots use
-  `senawa.dev/configuration-snapshot/v1alpha3`; worker contexts, dispatches, and
-  prompt packs use their `v1alpha2` contracts. Workflow amendments remain
+  `senawa.dev/workflow/v1`; snapshots use
+  `senawa.dev/configuration-snapshot/v1`; worker contexts, dispatches, and
+  prompt packs use their `v1` contracts. Workflow amendments remain
   filesystem-free and inherit accepted resources. Persisted configuration
-  snapshot `v1alpha2` history receives a fixed incompatibility diagnostic and
+  snapshot `v1` history receives a fixed incompatibility diagnostic and
   is never upgraded from current files.
 
 ## Phase 14A log
@@ -7482,14 +7482,14 @@ review reported no remaining critical, high, or medium findings.
 * Final atomic multi-file standard init, the tracked `.senawa` tree, packaging
   template staging, portal changes, phase output runtime, fan-out, and import
   remain assigned to later Phase 14 subphases as requested. The existing
-  single-file init emits v1alpha3 workflow metadata, and doctor correctly
+  single-file init emits v1 workflow metadata, and doctor correctly
   refuses until the declared external files exist.
 * Storage and execution-host now depend directly on configuration for the exact
   snapshot validator and reader port. The architecture boundary allowlist was
   updated for these two directed dependencies; configuration remains pure and
   imports only kernel plus schema libraries.
 * No compatibility authoring fallback was added. Additive amendments preserve
-  accepted v1alpha3 resources and cannot add or replace resources in Phase 14A.
+  accepted v1 resources and cannot add or replace resources in Phase 14A.
 
 ### Validation
 
@@ -7554,9 +7554,9 @@ No commit or push was performed, as required for Phase 14A.
   digests make replay and stale refusal deterministic. Closure acceptance keeps
   worker output outside workflow authority until gate and optional human review
   approve the exact candidate output set.
-* Consequence: Protocol commands and worker submissions use v1alpha3. Worker
-  contexts and dispatches use v1alpha3. Reporting snapshot, deterministic
-  report, and report export use v1alpha2. SQLite schema 010 owns normalized
+* Consequence: Protocol commands and worker submissions use v1. Worker
+  contexts and dispatches use v1. Reporting snapshot, deterministic
+  report, and report export use v1. SQLite schema 010 owns normalized
   dataflow records and revisions. Fan-out, plan import, iteration scheduling,
   final init, and portal journeys remain later Phase 14 work.
 
@@ -7577,7 +7577,7 @@ No commit or push was performed, as required for Phase 14A.
   and phase output are revalidated at their trust boundaries.
 * Agent phases lower to one visible deterministic `phase-executor` task sourced
   at the phase executor pointer. Static compatibility remains only through the
-  exact v1alpha3 `task-set` executor shape. Fan-out executors are not accepted.
+  exact v1 `task-set` executor shape. Fan-out executors are not accepted.
 * Worker output submissions carry metadata only. The context broker verifies the
   declared slot, attempt, task, dispatch, context, graph, snapshot, input,
   schema, validation receipt, canonical installed bytes, and capability before
@@ -7665,7 +7665,7 @@ No commit or push was performed, as required for Phase 14B.
 * Date: 2026-08-15
 * Status: Accepted and implemented for Phase 14D
 * Phase: Phase 14D
-* Decision: Replace `projectedWork` in v1alpha3 with top-level `forEach` and task
+* Decision: Replace `projectedWork` in v1 with top-level `forEach` and task
   template registries plus exact `task-frontier` executors and `import-plan`
   actions. Evaluate one accepted output or current phase input through bounded
   JSON Pointer selection, schema validation, NFC and control-free stable
@@ -7736,7 +7736,7 @@ Passed on 2026-08-15:
 
 * First-edit kernel iteration check: 3 tests
 * Focused kernel iteration, fan-out, resume, dataflow, and context checks
-* Focused configuration v1alpha3 task-frontier and projected-work-removal checks
+* Focused configuration v1 task-frontier and projected-work-removal checks
 * Focused protocol metadata command and task-frontier status checks
 * Focused runtime transition, import crash/review, scheduler rework/exhaustion,
   and effective task-set completion checks
@@ -7777,7 +7777,7 @@ implementation.
   through private staging, exclusive files, file and directory syncs, one
   exclusive final rename, project-root sync, and device/inode-checked cleanup.
 * Alternatives: Preserve explicit single-file output; create final directories
-  incrementally; overwrite an existing v1alpha2 tree; maintain separate source,
+  incrementally; overwrite an existing v1 tree; maintain separate source,
   tracked, and packaged template copies.
 * Rationale: A workflow file without its declared resources is not a truthful
   initialization result. One directory publication prevents doctor or runtime

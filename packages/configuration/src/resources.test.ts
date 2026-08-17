@@ -11,7 +11,7 @@ import {
 
 const sha256: Sha256 = { digest: (bytes) => bytes.byteLength.toString(16).padStart(64, "0") };
 
-describe("v1alpha3 configuration resources", () => {
+describe("v1 configuration resources", () => {
   it.each([
     ["prompt", "prompts/role.md"],
     ["schema", "schemas/task-input.schema.json"],

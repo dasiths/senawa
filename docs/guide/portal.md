@@ -258,7 +258,7 @@ always use a fixed server-derived filename and an attachment disposition.
 
 * It cannot apply an amendment. Amendment review is inert data; application is a
   trusted local operation.
-* It cannot reach daemon lifecycle routes. Every `/supervisor/v1alpha1` route
+* It cannot reach daemon lifecycle routes. Every `/supervisor/v1` route
   returns `404` on loopback.
 * It cannot see canonical repository paths, grant tokens, SDK session
   identities, worker prompt packs, secrets, target refs, or raw process output.

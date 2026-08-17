@@ -16,7 +16,7 @@ import {
   type TaskId,
 } from "./identity.js";
 
-export const INTEGRATION_BARRIER_API_VERSION = "senawa.dev/integration-barrier/v1alpha1";
+export const INTEGRATION_BARRIER_API_VERSION = "senawa.dev/integration-barrier/v1";
 
 export type GitObjectFormat = "sha1" | "sha256";
 

@@ -15,7 +15,7 @@ import { canonicalStringify } from "@senawa/protocol";
 import { assertSecretSafePositiveProjection } from "@senawa/reporting";
 import type { PortalAsset, PortalAssetSource } from "@senawa/supervisor";
 
-const MANIFEST_VERSION = "senawa.dev/portal-assets/v1alpha1";
+const MANIFEST_VERSION = "senawa.dev/portal-assets/v1";
 const PACKAGED_MANIFEST_PATH = fileURLToPath(
   new URL("../dist/portal/manifest.json", import.meta.url),
 );

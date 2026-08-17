@@ -53,10 +53,10 @@ afterEach(() => {
 describe("production remote connector composition", () => {
   it("accepts only strict HTTPS or explicit loopback endpoints", () => {
     expect(parseRemoteEndpoint("https://control.example.test/base").href).toBe(
-      "https://control.example.test/base/remote/v1alpha1/",
+      "https://control.example.test/base/remote/v1/",
     );
     expect(parseRemoteEndpoint("http://127.0.0.1:8080").href).toBe(
-      "http://127.0.0.1:8080/remote/v1alpha1/",
+      "http://127.0.0.1:8080/remote/v1/",
     );
     for (const endpoint of [
       "http://control.example.test",
@@ -178,7 +178,7 @@ describe("production remote connector composition", () => {
     };
     const requests: { readonly path: string; readonly body: Record<string, unknown> }[] = [];
     const transport = new HttpRemoteConnectorTransport({
-      endpoint: new URL("https://control.example.test/remote/v1alpha1/"),
+      endpoint: new URL("https://control.example.test/remote/v1/"),
       binding: enrollment.binding,
       fetch: async (input, init) => {
         const path = new URL(String(input)).pathname;
@@ -225,8 +225,8 @@ describe("production remote connector composition", () => {
       ...context,
     });
     expect(requests.map((request) => request.path)).toEqual([
-      "/remote/v1alpha1/hello",
-      "/remote/v1alpha1/commands/poll",
+      "/remote/v1/hello",
+      "/remote/v1/commands/poll",
     ]);
     expect(requests[0]?.body).toMatchObject({
       connectorId: enrollment.binding.connectorId,
@@ -262,7 +262,7 @@ describe("production remote connector composition", () => {
     } as const;
     const transport = (fetch: typeof globalThis.fetch, responseTimeoutMs = 50) =>
       new HttpRemoteConnectorTransport({
-        endpoint: new URL("https://control.example.test/remote/v1alpha1/"),
+        endpoint: new URL("https://control.example.test/remote/v1/"),
         binding: enrollment.binding,
         fetch,
         responseTimeoutMs,
@@ -369,7 +369,7 @@ async function createFixture() {
   writeFileSync(
     keyFile,
     canonicalStringify({
-      apiVersion: "senawa.dev/remote-connector-enrollment/v1alpha1",
+      apiVersion: "senawa.dev/remote-connector-enrollment/v1",
       binding: {
         apiVersion: REMOTE_PROTOCOL_VERSION,
         bindingId: "binding-composition",

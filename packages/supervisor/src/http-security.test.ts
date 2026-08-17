@@ -201,14 +201,14 @@ describe("supervisor HTTP security", () => {
   it("authenticates every IPC request without reflecting credential or hostile output", async () => {
     const valid = await raw({
       socketPath: required(fixture.ipc.socketPath),
-      path: "/api/v1alpha1/capabilities",
+      path: "/api/v1/capabilities",
       headers: ipcHeaders(fixture.credential.token),
     });
     expect(valid.status).toBe(200);
 
     const wrong = await raw({
       socketPath: required(fixture.ipc.socketPath),
-      path: "/api/v1alpha1/missing/%1b%5b31m",
+      path: "/api/v1/missing/%1b%5b31m",
       headers: ipcHeaders("A".repeat(43)),
     });
     expect(wrong.status).toBe(401);
@@ -249,11 +249,11 @@ describe("supervisor HTTP security", () => {
     const cookie = required(setCookie?.split(";", 1)[0]);
 
     expectError(await raw({ origin, path: bootstrap.path }), 401, "unauthorized");
-    expectError(await raw({ origin, path: "/api/v1alpha1/session" }), 401, "unauthorized");
+    expectError(await raw({ origin, path: "/api/v1/session" }), 401, "unauthorized");
 
     const descriptor = await raw({
       origin,
-      path: "/api/v1alpha1/session",
+      path: "/api/v1/session",
       headers: { Cookie: cookie },
     });
     expect(descriptor.status).toBe(200);
@@ -261,14 +261,14 @@ describe("supervisor HTTP security", () => {
     const csrfResponse = await raw({
       origin,
       method: "POST",
-      path: "/api/v1alpha1/session",
+      path: "/api/v1/session",
       headers: { Cookie: cookie, Origin: origin },
     });
     expect(csrfResponse.status).toBe(200);
     const csrf = (JSON.parse(csrfResponse.body) as { csrfToken: string }).csrfToken;
     const readOnly = await raw({
       origin,
-      path: "/api/v1alpha1/session",
+      path: "/api/v1/session",
       headers: { Cookie: cookie },
     });
     expect(readOnly.status).toBe(200);
@@ -277,7 +277,7 @@ describe("supervisor HTTP security", () => {
       await raw({
         origin,
         method: "POST",
-        path: "/api/v1alpha1/session",
+        path: "/api/v1/session",
         headers: { Cookie: cookie, Origin: origin },
       }),
       409,
@@ -289,7 +289,7 @@ describe("supervisor HTTP security", () => {
       await raw({
         origin,
         method: "POST",
-        path: "/api/v1alpha1/commands",
+        path: "/api/v1/commands",
         body,
         headers: { Cookie: cookie, "Content-Type": "application/json" },
       }),
@@ -300,7 +300,7 @@ describe("supervisor HTTP security", () => {
       await raw({
         origin,
         method: "POST",
-        path: "/api/v1alpha1/commands",
+        path: "/api/v1/commands",
         body,
         headers: {
           Cookie: cookie,
@@ -315,7 +315,7 @@ describe("supervisor HTTP security", () => {
     const authenticated = await raw({
       origin,
       method: "POST",
-      path: "/api/v1alpha1/commands",
+      path: "/api/v1/commands",
       body,
       headers: {
         Cookie: cookie,
@@ -380,7 +380,7 @@ describe("supervisor HTTP security", () => {
     try {
       const body = await streamBody({
         origin: required(server.origin),
-        path: "/api/v1alpha1/repositories/repository_expiry/runs/run_expiry/events/stream",
+        path: "/api/v1/repositories/repository_expiry/runs/run_expiry/events/stream",
         cookie: `senawa_session=${session.token}`,
         afterOpen() {
           setTimeout(() => {
@@ -405,7 +405,7 @@ describe("supervisor HTTP security", () => {
       expectError(
         await raw({
           origin: required(server.origin),
-          path: "/api/v1alpha1/capabilities",
+          path: "/api/v1/capabilities",
           headers: { Cookie: expiredCookie },
         }),
         401,
@@ -476,7 +476,7 @@ describe("supervisor HTTP security", () => {
     try {
       const body = await streamBody({
         origin: required(server.origin),
-        path: "/api/v1alpha1/repositories/repository_blocked-replay/runs/run_blocked-replay/events/stream",
+        path: "/api/v1/repositories/repository_blocked-replay/runs/run_blocked-replay/events/stream",
         cookie: `senawa_session=${session.token}`,
         afterOpen() {},
       });
@@ -489,12 +489,12 @@ describe("supervisor HTTP security", () => {
   });
 
   it.each([
-    ["GET", "http://127.0.0.1/api/v1alpha1/capabilities", undefined, 400],
-    ["GET", "/api//v1alpha1/capabilities", undefined, 400],
-    ["GET", "/api/%2e/v1alpha1/capabilities", undefined, 400],
-    ["GET", "/api%2fv1alpha1/capabilities", undefined, 400],
-    ["GET", "/api/v1alpha1/capabilities?x=1", undefined, 400],
-    ["POST", "/api/v1alpha1/commands", "{}", 415],
+    ["GET", "http://127.0.0.1/api/v1/capabilities", undefined, 400],
+    ["GET", "/api//v1/capabilities", undefined, 400],
+    ["GET", "/api/%2e/v1/capabilities", undefined, 400],
+    ["GET", "/api%2fv1/capabilities", undefined, 400],
+    ["GET", "/api/v1/capabilities?x=1", undefined, 400],
+    ["POST", "/api/v1/commands", "{}", 415],
   ] as const)("rejects hostile IPC framing %s %s", async (method, path, body, status) => {
     const response = await raw({
       socketPath: required(fixture.ipc.socketPath),
@@ -513,7 +513,7 @@ describe("supervisor HTTP security", () => {
     const response = await raw({
       socketPath: required(fixture.ipc.socketPath),
       method: "POST",
-      path: "/api/v1alpha1/commands",
+      path: "/api/v1/commands",
       body: "",
       headers: {
         ...ipcHeaders(fixture.credential.token),
@@ -530,7 +530,7 @@ describe("supervisor HTTP security", () => {
     const response = await raw({
       socketPath: required(fixture.ipc.socketPath),
       method: "POST",
-      path: "/api/v1alpha1/commands",
+      path: "/api/v1/commands",
       body: Buffer.concat([Buffer.from('{"value":"'), Buffer.from([0xff]), Buffer.from('"}')]),
       headers: {
         ...ipcHeaders(fixture.credential.token),
@@ -546,7 +546,7 @@ describe("supervisor HTTP security", () => {
   it("authenticates Expect requests without sending interim responses", async () => {
     const continueUnauthorized = await raw({
       socketPath: required(fixture.ipc.socketPath),
-      path: "/api/v1alpha1/capabilities",
+      path: "/api/v1/capabilities",
       headers: { ...ipcHeaders("A".repeat(43)), Expect: "100-continue" },
     });
     expectError(continueUnauthorized, 401, "unauthorized");
@@ -554,7 +554,7 @@ describe("supervisor HTTP security", () => {
 
     const unsupportedUnauthorized = await raw({
       socketPath: required(fixture.ipc.socketPath),
-      path: "/api/v1alpha1/capabilities",
+      path: "/api/v1/capabilities",
       headers: { ...ipcHeaders("A".repeat(43)), Expect: "unsupported" },
     });
     expectError(unsupportedUnauthorized, 401, "unauthorized");
@@ -562,7 +562,7 @@ describe("supervisor HTTP security", () => {
 
     const authenticated = await raw({
       socketPath: required(fixture.ipc.socketPath),
-      path: "/api/v1alpha1/capabilities",
+      path: "/api/v1/capabilities",
       headers: { ...ipcHeaders(fixture.credential.token), Expect: "100-continue" },
     });
     expectError(authenticated, 417, "invalid-request");
@@ -673,7 +673,7 @@ describe("supervisor Unix socket security", () => {
     const recovered = await startUnixSupervisorServer(socketPath, fixture.ipcHandler);
     const response = await raw({
       socketPath,
-      path: "/api/v1alpha1/capabilities",
+      path: "/api/v1/capabilities",
       headers: ipcHeaders(fixture.credential.token),
     });
     expect(response.status).toBe(200);
@@ -750,7 +750,7 @@ describe("supervisor Unix socket security", () => {
     expect(winners).toHaveLength(1);
     const response = await raw({
       socketPath,
-      path: "/api/v1alpha1/capabilities",
+      path: "/api/v1/capabilities",
       headers: ipcHeaders(fixture.credential.token),
     });
     expect(response.status).toBe(200);
@@ -859,7 +859,7 @@ async function createBootstrap(): Promise<{ readonly path: string }> {
   const response = await raw({
     socketPath: required(fixture.ipc.socketPath),
     method: "POST",
-    path: "/api/v1alpha1/portal-sessions",
+    path: "/api/v1/portal-sessions",
     headers: { ...ipcHeaders(fixture.credential.token), "Content-Length": "0" },
   });
   expect(response.status).toBe(201);

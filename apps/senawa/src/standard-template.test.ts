@@ -32,7 +32,7 @@ async function generatedTemplateRoot(): Promise<string> {
 }
 
 describe("generated standard-delivery template", () => {
-  it("doctors and compiles the complete v1alpha3 resource tree", async () => {
+  it("doctors and compiles the complete v1 resource tree", async () => {
     const templateRoot = await generatedTemplateRoot();
     const document = JSON.parse(await readFile(resolve(templateRoot, "workflow.json"), "utf8"));
     const resources = await RootScopedConfigurationResources.create(templateRoot, ".");

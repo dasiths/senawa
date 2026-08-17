@@ -24,11 +24,11 @@ const deterministicSha256: Sha256 = {
   },
 };
 
-describe("v1alpha3 workflow configuration", () => {
+describe("v1 workflow configuration", () => {
   it("embeds external prompt and schema bytes in an immutable snapshot", async () => {
     const snapshot = await compileFixture();
 
-    expect(snapshot.apiVersion).toBe("senawa.dev/configuration-snapshot/v1alpha3");
+    expect(snapshot.apiVersion).toBe("senawa.dev/configuration-snapshot/v1");
     expect(snapshot.prompts).toEqual([
       expect.objectContaining({
         key: "builder",
@@ -155,24 +155,22 @@ describe("v1alpha3 workflow configuration", () => {
     ]);
   });
 
-  it("returns one migration diagnostic for v1alpha2 without reading resources", async () => {
+  it("refuses an unknown workflow version without reading resources", async () => {
     const document = workflowFixture() as unknown as Record<string, unknown>;
-    document.apiVersion = "senawa.dev/workflow/v1alpha2";
-    delete document.prompts;
+    document.apiVersion = "senawa.dev/workflow/v2";
     const read = vi.fn<ConfigurationResourceReader["read"]>();
 
     const result = await doctorWorkflowConfiguration(
-      { document, locator: "fixture://old", resources: { read } },
+      { document, locator: "fixture://future", resources: { read } },
       deterministicSha256,
     );
 
-    expect(result.diagnostics).toEqual([
+    expect(result.diagnostics).toContainEqual(
       expect.objectContaining({
-        code: "unsupported-workflow-version",
+        code: "invalid-api-version",
         pointer: "/apiVersion",
-        message: expect.stringContaining("Migrate to senawa.dev/workflow/v1alpha3"),
       }),
-    ]);
+    );
     expect(read).not.toHaveBeenCalled();
   });
 
@@ -280,7 +278,7 @@ describe("v1alpha3 workflow configuration", () => {
     ]);
   });
 
-  it("exports a compilable immutable v1alpha3 example tree", async () => {
+  it("exports a compilable immutable v1 example tree", async () => {
     const example = createExampleWorkflowConfiguration();
     const resources = createExampleWorkflowResources();
     const snapshot = await compileWorkflowConfiguration(
@@ -288,7 +286,7 @@ describe("v1alpha3 workflow configuration", () => {
       deterministicSha256,
     );
 
-    expect(example.apiVersion).toBe("senawa.dev/workflow/v1alpha3");
+    expect(example.apiVersion).toBe("senawa.dev/workflow/v1");
     expect(snapshot.prompts.map(({ key }) => key)).toEqual(["worker"]);
     expect(snapshot.schemas.map(({ key }) => key)).toEqual(["work-input"]);
     expect(renderExampleWorkflowConfiguration().endsWith("\n")).toBe(true);
@@ -584,7 +582,7 @@ async function compileFixture(document = workflowFixture(), resources = resource
 
 function workflowFixture(): MutableWorkflowDocument {
   return {
-    apiVersion: "senawa.dev/workflow/v1alpha3",
+    apiVersion: "senawa.dev/workflow/v1",
     kind: "Workflow",
     workflow: { key: "delivery", generation: 1, input: { schema: "work-input" } },
     prompts: [{ key: "builder", path: "prompts/builder.md", inputPaths: ["/request"] }],
@@ -674,7 +672,7 @@ function task(key: string) {
 
 function amendmentDocument(snapshotDigest: string): WorkflowAmendmentDocument {
   return {
-    apiVersion: "senawa.dev/workflow-amendment/v1alpha1",
+    apiVersion: "senawa.dev/workflow-amendment/v1",
     kind: "WorkflowAmendment",
     baseSnapshotDigest: sha256Digest(snapshotDigest),
     baseContextDigest: sha256Digest("c".repeat(64)),

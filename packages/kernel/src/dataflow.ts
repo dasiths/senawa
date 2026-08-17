@@ -25,9 +25,9 @@ import {
   type RunId,
 } from "./identity.js";
 
-export const WORKFLOW_INPUT_BINDING_API_VERSION = "senawa.dev/workflow-input-binding/v1alpha1";
-export const PHASE_ATTEMPT_API_VERSION = "senawa.dev/phase-attempt/v1alpha1";
-export const PHASE_OUTPUT_PUBLICATION_API_VERSION = "senawa.dev/phase-output-publication/v1alpha1";
+export const WORKFLOW_INPUT_BINDING_API_VERSION = "senawa.dev/workflow-input-binding/v1";
+export const PHASE_ATTEMPT_API_VERSION = "senawa.dev/phase-attempt/v1";
+export const PHASE_OUTPUT_PUBLICATION_API_VERSION = "senawa.dev/phase-output-publication/v1";
 
 const MAX_MAPPINGS = 256;
 const MAX_POINTER_LENGTH = 2_048;

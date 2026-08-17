@@ -68,7 +68,7 @@ eight hours, the supervisor admits at most 1,024 active sessions, and expired
 sessions are purged before capacity is checked. Mutating requests additionally
 require the exact loopback origin and a CSRF token issued once per session.
 
-Every `/supervisor/v1alpha1` route returns `404` on loopback, so the browser
+Every `/supervisor/v1` route returns `404` on loopback, so the browser
 cannot reach daemon lifecycle operations.
 
 ## Service lifecycle

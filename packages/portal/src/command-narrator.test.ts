@@ -23,7 +23,7 @@ const pending: PendingCanonicalSubmission = Object.freeze({
 
 function receipt(commandId: string, status: string): DurableReceipt {
   return {
-    apiVersion: "senawa.dev/protocol/v1alpha2",
+    apiVersion: "senawa.dev/protocol/v1",
     commandId,
     repositoryId: "repository_one",
     runId: "run_one",

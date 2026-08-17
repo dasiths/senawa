@@ -33,7 +33,7 @@ import {
   isTaskId,
 } from "./identity.js";
 
-export const AMENDMENT_PROPOSAL_API_VERSION = "senawa.dev/amendment-proposal/v1alpha1";
+export const AMENDMENT_PROPOSAL_API_VERSION = "senawa.dev/amendment-proposal/v1";
 
 export interface AddPhaseOperation {
   readonly kind: "add-phase";

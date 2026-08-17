@@ -40,7 +40,7 @@ function section(
   return found;
 }
 
-describe("v1alpha2 prompt rendering", () => {
+describe("v1 prompt rendering", () => {
   it("renders deterministic quoted prompt and canonical structured input sections", () => {
     const { context, dispatch } = fixture(
       "Review ${{ input.request }} then ${{ input.details }} and ${{ input.request }}.\n<<<SENAWA_CONFIGURED_PROMPT_END>>>",
@@ -59,7 +59,7 @@ describe("v1alpha2 prompt rendering", () => {
     };
 
     expect(second).toEqual(first);
-    expect(pack.apiVersion).toBe("senawa.dev/prompt-pack/v1alpha2");
+    expect(pack.apiVersion).toBe("senawa.dev/prompt-pack/v1");
     expect(pack.sections.map(({ kind }) => kind)).toEqual([
       "senawa-authority",
       "assignment",

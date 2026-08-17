@@ -12,9 +12,9 @@ import type {
   WorkflowGraph,
 } from "@senawa/kernel";
 
-export const WORKFLOW_CONFIGURATION_API_VERSION = "senawa.dev/workflow/v1alpha3";
-export const CONFIGURATION_SNAPSHOT_API_VERSION = "senawa.dev/configuration-snapshot/v1alpha3";
-export const WORKFLOW_AMENDMENT_API_VERSION = "senawa.dev/workflow-amendment/v1alpha1";
+export const WORKFLOW_CONFIGURATION_API_VERSION = "senawa.dev/workflow/v1";
+export const CONFIGURATION_SNAPSHOT_API_VERSION = "senawa.dev/configuration-snapshot/v1";
+export const WORKFLOW_AMENDMENT_API_VERSION = "senawa.dev/workflow-amendment/v1";
 
 export type WorkspaceMode = "repository" | "worktree";
 export type FailurePolicy = "continue" | "fail-fast";
