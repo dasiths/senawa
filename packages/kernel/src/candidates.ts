@@ -88,6 +88,14 @@ export interface AuthorityDecisionInput {
   readonly principal: unknown;
   readonly occurredAt: string;
   readonly candidateDigest: Sha256Digest;
+  /**
+   * Why the human decided as they did.
+   *
+   * A rejection without a reason tells the next attempt nothing, so the agent
+   * can only guess at what to change. The reason is part of the decision's
+   * digest, so it cannot be revised after the fact.
+   */
+  readonly reason?: string;
 }
 
 export interface AuthorityDecision {
@@ -96,6 +104,7 @@ export interface AuthorityDecision {
   readonly principal: CanonicalValue;
   readonly occurredAt: string;
   readonly candidateDigest: Sha256Digest;
+  readonly reason?: string;
   readonly decisionDigest: Sha256Digest;
 }
 
@@ -1096,9 +1105,15 @@ function authorityDecisionContent(
       "candidateDigest",
       ...(includesDigest ? ["decisionDigest"] : []),
     ],
-    [],
+    ["reason"],
     "invalid-decision",
   );
+  if (
+    value.reason !== undefined &&
+    (typeof value.reason !== "string" || value.reason.length === 0)
+  ) {
+    fail("invalid-decision", "Authority decision reasons must be non-empty strings");
+  }
   if (!isApprovalId(value.approvalId)) {
     fail("invalid-decision", "Authority decisions require an approval identity");
   }
@@ -1114,6 +1129,7 @@ function authorityDecisionContent(
     principal: value.principal as CanonicalValue,
     occurredAt: value.occurredAt,
     candidateDigest: value.candidateDigest,
+    ...(value.reason === undefined ? {} : { reason: value.reason }),
   } as const;
 }
 

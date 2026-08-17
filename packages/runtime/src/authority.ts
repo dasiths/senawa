@@ -1060,9 +1060,23 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       throw new RuntimeRefusal("decision-exists", "An authority decision already exists");
     }
     this.assertExactObject(command, records.candidate.candidateDigest);
-    const payload = exactObject(command.payload, "authority-decision payload", ["decision"]);
+    const payload = exactObject(
+      command.payload,
+      "authority-decision payload",
+      ["decision"],
+      ["reason"],
+    );
     if (payload.decision !== "approve" && payload.decision !== "reject") {
       throw new RuntimeRefusal("invalid-decision", "Decision must be approve or reject");
+    }
+    if (payload.reason !== undefined && typeof payload.reason !== "string") {
+      throw new RuntimeRefusal("invalid-decision", "Decision reason must be a string");
+    }
+    // A rejection without a reason leaves the next attempt guessing, so the
+    // reason is required exactly where it is the only thing that carries
+    // forward.
+    if (payload.decision === "reject" && (payload.reason ?? "").length === 0) {
+      throw new RuntimeRefusal("invalid-decision", "A rejection must carry a reason");
     }
     const authorityDecision = createAuthorityDecision(
       {
@@ -1071,6 +1085,9 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
         principal: command.principal,
         occurredAt: admission.currentTime,
         candidateDigest: records.candidate.candidateDigest,
+        ...(typeof payload.reason === "string" && payload.reason.length > 0
+          ? { reason: payload.reason }
+          : {}),
       },
       this.dependencies.sha256,
     );

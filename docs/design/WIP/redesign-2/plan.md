@@ -33,7 +33,7 @@ wherever that is possible.
 | 2 | One phase runs a real agent end to end | Complete except live-credit acceptance |
 | 3 | The consumer command line | Complete except blocking start |
 | 4 | Sensors, gates, and anchors | Complete |
-| 5 | Human decisions and escalation | Not started |
+| 5 | Human decisions and escalation | Escalation built, loop items open |
 | 6 | Fan-out and fan-in | Not started |
 | 7 | Sessions and steering | Not started |
 | 8 | The portal earns its density | Not started |
@@ -190,10 +190,11 @@ redesign exists to escape, where parts exist and nothing runs.
 
 Specifically:
 
-* **Phase 5** is the next real piece of work and nothing blocks it. Escalation
-  has no production caller today, so it is new construction rather than wiring.
-  Approval and rejection need the run loop that Phase 3's blocking `start` also
-  waits on, which is why both are deferred to the same place.
+* **Phase 5** is part done. Escalation was new construction and is built; the
+  remaining items need a run loop that advances a phase without a human poking
+  it, which is the same thing Phase 3's blocking `start` waits on. That loop is
+  the single largest open dependency in this plan and everything below inherits
+  it.
 * **Phase 6** depends on Phase 5, because a fan-out member that cannot escalate
   reintroduces exactly the strand Phase 5 exists to remove. It also carries a
   known correctness risk: amendment quiescence must become transitive over
@@ -227,20 +228,35 @@ Two smaller items are worth naming so they are not lost:
 
 ## Phase 5: Human decisions and escalation
 
-> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
+> Partly started. The remaining items depend on the run loop; the reason is
+> recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
 
-* [ ] Build escalation. It is currently unreachable, so this is new work, and it
-  must remove the strand where a permanently failing member leaves a phase with no
-  route to a gate, closure, or escalation.
+* [x] Build escalation. It was unreachable, so this was new work. `create-escalation`
+  is now an implemented intent: it requires the gate evidence it is escalating,
+  refuses a passing gate, refuses a second escalation, refuses a closed phase,
+  and refuses an escalation that offers the human no response.
+* [ ] Remove the strand where a permanently failing member leaves a phase with no
+  route to a gate, closure, or escalation. **Not done: members are Phase 6, so
+  there are no members to strand yet. The escalation the removal depends on now
+  exists.**
 * [ ] Approve and reject with reasons, where the reasons become the next
-  iteration's input for the same agent.
-* [ ] Record every human decision with who decided, when, and on what reasoning.
+  iteration's input for the same agent. **Partly done: an authority decision now
+  carries a reason, the reason is bound into the decision digest so it cannot be
+  revised afterwards, and a rejection without one is refused. Feeding it into the
+  next iteration's prompt needs the run loop.**
+* [x] Record every human decision with who decided, when, and on what reasoning.
+  The decision already carried principal and timestamp; it now carries reasoning.
 
 Acceptance:
 
-* [ ] A rejected phase re-runs with the reasons supplied.
+* [ ] A rejected phase re-runs with the reasons supplied. **Not done: needs the
+  run loop.**
 * [ ] An agent that cannot satisfy its gates escalates rather than stalling.
-* [ ] No reachable state leaves a run neither completing nor escalating.
+  **Not done: the escalation exists and is reachable, but nothing calls it yet
+  because nothing drives a phase to exhaustion without a human.**
+* [ ] No reachable state leaves a run neither completing nor escalating. **Not
+  done: this is a claim about the whole state space and cannot be made until the
+  loop that traverses it exists.**
 
 ## Phase 6: Fan-out and fan-in
 

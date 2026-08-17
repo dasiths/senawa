@@ -16,6 +16,7 @@ const dependencies: RuntimeDependencies = {
   authorization: createRoleAuthorizationPolicy([
     { intent: "instantiate-run", roles: ["release-manager"] },
     { intent: "create-escalation", roles: ["engine", "release-manager"] },
+    { intent: "record-authority-decision", roles: ["release-manager"] },
   ]),
 };
 const REPOSITORY_ID = "repository_escalation";
@@ -64,7 +65,69 @@ describe("escalating a phase that cannot reach its gate", () => {
   });
 });
 
+describe("recording a human decision", () => {
+  it("refuses a rejection that carries no reason", async () => {
+    const { authority, snapshot } = await instantiated();
+    try {
+      const receipt = submitDecision(authority, snapshot.graph.revisionDigest, {
+        decision: "reject",
+      });
+      // A rejection is the input to the next attempt. Without a reason the
+      // agent can only guess at what to change, so the loop learns nothing.
+      // This run has no candidate yet, so the earlier guard answers first; the
+      // reason requirement itself is proven at the kernel in `candidates`.
+      expect(receipt.status).toBe("refused");
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("refuses a rejection whose reason is empty", async () => {
+    const { authority, snapshot } = await instantiated();
+    try {
+      const receipt = submitDecision(authority, snapshot.graph.revisionDigest, {
+        decision: "reject",
+        reason: "",
+      });
+      expect(receipt.status).toBe("refused");
+    } finally {
+      authority.close();
+    }
+  });
+});
+
 let commandOrdinal = 0;
+
+function submitDecision(
+  authority: SqliteAuthority,
+  graphRevision: string,
+  payload: Readonly<Record<string, string>>,
+) {
+  commandOrdinal += 1;
+  let allocation = 0;
+  return authority.submit(
+    decodeCommandEnvelope({
+      apiVersion: PROTOCOL_VERSION,
+      commandId: `command_decision-${commandOrdinal}`,
+      principal: runtimePrincipal,
+      transport: { kind: "cli", requestId: `request_decision-${commandOrdinal}` },
+      repositoryId: REPOSITORY_ID,
+      runId: RUN_ID,
+      intent: { type: "record-authority-decision" },
+      expectedGraphRevision: graphRevision,
+      payload,
+      payloadDigest: dependencies.sha256.digest(canonicalBytes(payload)),
+    }),
+    {
+      currentTime: NOW,
+      facts: { source: "decision-test" },
+      allocateId: (kind) => {
+        allocation += 1;
+        return `${kind}-decision-${allocation}`;
+      },
+    },
+  );
+}
 
 function submitEscalation(
   authority: SqliteAuthority,

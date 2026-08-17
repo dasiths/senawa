@@ -1123,3 +1123,41 @@ interface MutableAuthorityDecisionInput {
   occurredAt: string;
   candidateDigest: ReturnType<typeof sha256Digest>;
 }
+
+describe("authority decision reasons", () => {
+  it("carries a reason and binds it into the decision digest", () => {
+    const base = {
+      decision: "reject" as const,
+      approvalId: approvalId("approval_reason"),
+      principal: { subject: "operator" },
+      occurredAt: "2026-08-17T00:00:00.000Z",
+      candidateDigest: sha256Digest("1".repeat(64)),
+    };
+    const withoutReason = createAuthorityDecision(base, deterministicSha256);
+    const withReason = createAuthorityDecision(
+      { ...base, reason: "The plan omits the migration step" },
+      deterministicSha256,
+    );
+    expect(withReason.reason).toBe("The plan omits the migration step");
+    // The reason is part of what was decided, so it cannot be revised after the
+    // fact without producing a different decision.
+    expect(withReason.decisionDigest).not.toBe(withoutReason.decisionDigest);
+    expect(validateAuthorityDecision(withReason, deterministicSha256)).toEqual(withReason);
+  });
+
+  it("refuses an empty reason rather than recording a decision that says nothing", () => {
+    expect(() =>
+      createAuthorityDecision(
+        {
+          decision: "reject",
+          approvalId: approvalId("approval_empty"),
+          principal: { subject: "operator" },
+          occurredAt: "2026-08-17T00:00:00.000Z",
+          candidateDigest: sha256Digest("1".repeat(64)),
+          reason: "",
+        },
+        deterministicSha256,
+      ),
+    ).toThrow();
+  });
+});

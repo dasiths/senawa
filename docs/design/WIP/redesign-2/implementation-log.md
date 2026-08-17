@@ -637,3 +637,55 @@ on a dirty one, printing the sensor, its exit code, and the diff that failed it.
 * Full suite: 114 files and 1,367 tests passed with 2 skipped opt-in live tests.
 * Typecheck, lint at the 41-warning template baseline, boundaries across 513
   files, documentation links across 50 files.
+
+## Phase 5 log
+
+### Decision D-017: An escalation is derived from the authority's records
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: `create-escalation` takes only `allowedResponses` from the caller.
+  Owner, trigger, context digest, candidate digest, policy digest, and the failed
+  reading digests are all read from the phase's own records.
+* Alternatives: letting the caller describe the failure it is escalating.
+* Rationale: an agent that could describe its own failure could describe a
+  different one, and the escalation is the artifact a human reads to decide. It
+  has to be evidence, not testimony.
+* Guards: escalation requires gate evidence whose decision is `rejected`, so a
+  passing gate cannot be routed around; a closed phase cannot escalate; a second
+  escalation is refused; and an escalation offering no response is refused,
+  because handing a human a decision with no options is not a handover.
+* Consequence: `AllocationKind` gained `escalation`, and phase records gained an
+  `escalation` slot beside `authorityDecision` and `closure`.
+
+### Decision D-018: A rejection must carry a reason
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: `AuthorityDecision` gained an optional `reason`, bound into the
+  decision digest. `record-authority-decision` refuses a rejection without one.
+* Alternatives: keeping the reason in a separate note, or making it optional on
+  both outcomes.
+* Rationale: the plan says rejection reasons become the next iteration's input.
+  A rejection with no reason gives the next attempt nothing to change, so the
+  loop spends an attempt and learns nothing. An approval needs no reason because
+  the artifact it approved is already the record of what was accepted.
+* Why the digest: a reason that could be revised after the fact would let the
+  record of why something was rejected drift from what the agent was told.
+* Consequence: `reason` is optional on the type so approvals stay unchanged, and
+  the requirement is enforced where rejection is expressed rather than in the
+  type.
+
+### What is still open in Phase 5
+
+The command line has no `approve` or `reject` yet. Both need the candidate digest
+and graph revision of a phase that has been gated, and no candidate exists until
+something drives a phase to gate evaluation without a human assembling the
+command by hand. That driver is the run loop, which is the largest single open
+dependency in this plan.
+
+### Validation
+
+* 5 escalation and decision tests, 2 kernel decision-reason tests.
+* Full suite: 115 files and 1,374 tests passed with 2 skipped opt-in live tests.
+* Typecheck, boundaries across 515 files, documentation links across 50 files.
