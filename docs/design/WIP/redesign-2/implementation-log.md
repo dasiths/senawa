@@ -76,7 +76,7 @@ commit messages where they explain a choice.
 * Risk accepted: amendment quiescence computes affected task scopes with a
   single-level parent filter, so introducing a nesting level silently narrows the
   sweep. A member could then claim against a superseded definition, which is
-  exactly what fencing exists to prevent. Phase 6 must make that descent
+  exactly what fencing exists to prevent. Phase 9 must make that descent
   transitive and cover it with a test. Recorded here so it is not discovered
   later.
 
@@ -173,11 +173,11 @@ rewritten to measure that instead, rather than being quietly marked as met.
 
 ### Deviation: an authored fan-out is refused rather than ignored
 
-The lowering does not yet turn `forEach` into member phases, which is Phase 6
+The lowering does not yet turn `forEach` into member phases, which is Phase 9
 work. Lowering such a phase as an ordinary agent phase would compile cleanly
 while silently discarding the collection the author asked to iterate. The
 compiler now refuses it with a diagnostic naming the file and path, and the
-probe's fan-out phase is commented out with a note pointing at Phase 6.
+probe's fan-out phase is commented out with a note pointing at Phase 9.
 
 ### Validation
 
@@ -230,10 +230,10 @@ protocol but fall through to `unsupported-intent`, and completion submission
 asserts the task belongs to the active phase. A second phase therefore cannot be
 dispatched in the same run today.
 
-Phase 2 can still deliver what it promises, because it promises one phase end to
-end. Multi-phase progression is a real prerequisite for Phase 5 and Phase 6, and
-belongs with the escalation work rather than being discovered there. This is the
-same limit recorded as PE-004 in redesign-1, now with a concrete consequence.
+Phase 2 can still deliver its dispatch infrastructure because it promises one
+phase. Multi-phase progression now belongs to the autonomous driver in Phase 8
+and is a prerequisite for Phase 9 fan-out. This is the same limit recorded as
+PE-004 in redesign-1, now with a concrete consequence.
 
 ### Decision D-008: Agent roles carry the protocol capabilities
 
@@ -570,7 +570,8 @@ undeclared sensor is refused by name.
   produced `Could not read agents.yaml`. Phase 1 changed what a consumer authors
   and nothing changed what `init` scaffolds, so the product's own scaffold could
   not be compiled by the product.
-* Alternatives: publishing both, or leaving `init` alone until Phase 10.
+* Alternatives: publishing both, or leaving `init` alone until the v1
+  documentation phase, now Phase 14.
 * Rationale: publishing both would give a consumer two files that describe the
   same workflow and no way to tell which one is read. Leaving it alone would mean
   the first command a new consumer runs produces a project the second command
@@ -712,10 +713,102 @@ dependency in this plan.
   and an author needing any of it has no route but hand-writing the lowered
   document, which is what the redesign set out to remove.
 * Distinguished from deliberate decisions: collapsing six budget units to one is
-  D-005 and stands. Fan-out and task-frontier are Phase 6. Session scope already
-  reaches YAML. The rest were not decisions, they were defaults nobody chose.
-* Action: recorded as a cross-cutting section in the plan with per-item detail,
-  gating Phase 10. Its acceptance requires that every pinned value is either made
-  authorable or written down as a decision with a reason, and that a test proves
-  the authored format can express the old five-phase standard template rather
-  than only the two-phase toy in the new one.
+  D-005 and stands. Fan-out and task-frontier are Phase 9. Session scope already
+  reaches YAML, while durable session semantics are Phase 10. The rest were not
+  decisions, they were defaults nobody chose.
+* Action: the plan now assigns the gaps to Phases 5 through 11. Phase 11 audits
+  every pinned value and proves the authored format can express the old
+  five-phase standard template rather than only the two-phase toy.
+
+### Finding F-005: The worker transport exists, but the agent is not taught the protocol
+
+* Date: 2026-08-17
+* Raised by: the consumer, observing that authored prompts never tell an agent
+  how to signal completion.
+* Finding: `renderPromptPack` appends assignment metadata and a capability list,
+  but no operating instructions. The Copilot adapter exposes typed tools whose
+  descriptions partly fill the gap for that adapter. The command line exposes
+  `context`, `output-schema`, and one generic JSON `submit` operation. A scripted
+  or different model worker receives no authoritative sequence telling it to
+  complete with output assets, handle refusal, retry, or escalate.
+* Consequence: Phase 2 completed a secure transport, not the full agent-facing
+  contract its wording implied. A capability string proves permission, not
+  discoverability or correct use.
+* Action: Phase 5 now owns an adapter-neutral operating contract, dedicated CLI
+  verbs, an authority-owned prompt-pack section, equivalent Copilot tools, and a
+  scripted-worker acceptance whose assignment prompt contains no Senawa text.
+
+### Decision D-019: Senawa injects the agent operating contract at dispatch time
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: authored prompts contain domain instructions only. Senawa appends a
+  generated `senawa-operating-contract` section after configured prompt text,
+  derived from the exact dispatch and covered by the prompt-pack digest.
+* Alternatives: requiring every prompt author to explain Senawa commands, relying
+  on adapter-specific tool descriptions, or installing a static instruction
+  file in the workspace.
+* Rationale: authored protocol text would drift as commands change, could claim
+  capabilities the dispatch does not carry, and would make a scripted worker and
+  Copilot worker follow different contracts. Static workspace instructions have
+  the same drift problem and are untrusted repository content. The dispatch is
+  the only source that knows the exact outputs, evidence, attempt policy, and
+  capabilities available now.
+* Authority boundary: the generated section explains authority but does not
+  create it. Capability checks remain on the worker channel. Configured prompt
+  text is quoted non-authority data and cannot suppress, replace, or widen the
+  generated contract.
+* Consequence: CLI operations and Copilot tools become projections of one worker
+  protocol. The generated section must name output and evidence requirements,
+  the atomic complete request and refusal semantics, retry disposition,
+  questions, and escalation. Prompt-pack verification must fail if any of it
+  changes.
+
+### Decision D-020: Authoring parity is sequenced before the autonomous driver
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: replace the old Phase 5 through 11 sequence with explicit phases for
+  the operating contract, evidence and output policy, loop and gate policy, the
+  autonomous driver, fan-out, sessions and model policy, and parity proof before
+  portal cleanup and v1 naming.
+* Rationale: the driver should execute the workflow the consumer authored, not a
+  workflow whose central policies were silently chosen by constants. The agent
+  contract comes first because no autonomous loop can expect an agent to call a
+  protocol it was never taught. Evidence and iteration come next because they
+  define what completion and retry mean. Fan-out follows a proven single-phase
+  loop, and session policy follows the fan-out identity it has to scope.
+* Consequence: the Phase 2 live, restart, and scripted acceptances and the Phase
+  3 blocking-start acceptance now belong to Phase 8. Phase 11 gates the v1 name
+  with an authored version of the old five-phase standard workflow and a complete
+  audit of every pinned lowering value.
+
+### Decision D-021: Complete carries the output assets
+
+* Date: 2026-08-17
+* Status: Accepted
+* Decision: a worker completes through one idempotent `complete` operation whose
+  request carries every required output asset, offered evidence, and completion
+  summary or disposition. Returning JSON in assistant text has no protocol
+  effect. Output submission and completion request are not separate worker
+  operations.
+* Alternatives: keep `submit_phase_output` followed by `submit_completion`, or
+  parse the model's final assistant message as the phase output.
+* Rationale: two protocol operations create an intermediate state in which an
+  output is accepted but completion was never requested, and force the agent to
+  coordinate identities across calls. Parsing assistant text confuses narration
+  with authority, depends on adapter-specific response conventions, and gives a
+  scripted worker a different contract. One complete request is the consumer's
+  intent and the natural idempotency boundary.
+* Atomicity: Senawa validates every output schema and limit, admits evidence, and
+  evaluates completion as one request. A refusal publishes no phase output and
+  returns structured reasons. A grant publishes the outputs as a consequence of
+  the accepted completion. Replaying identical content resolves to the same
+  result.
+* Prompt consequence: the starter prompts' current `Return JSON matching ...`
+  lines are wrong and will be removed in Phase 5. Authored prompts describe the
+  assignment. The Senawa-owned operating contract tells the agent to call
+  complete and supplies the exact request schema.
+* Adapter consequence: Phase 5 replaces separate `submit_phase_output` and
+  `submit_completion` Copilot tools with `senawa_complete`, and replaces generic
+  JSON submission as the primary CLI path with `senawa worker complete`.

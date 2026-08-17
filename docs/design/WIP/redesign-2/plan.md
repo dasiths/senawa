@@ -24,22 +24,32 @@ fixture whose shape agrees with the implementation proves nothing.** Where a
 phase adds behaviour, its tests must be built from a compiled real workflow
 wherever that is possible.
 
+A third principle follows from F-004: **a default is not a simplification when
+it cannot be overridden.** The authored format may derive mechanical values and
+offer concise defaults, but every product policy in the brief must remain
+authorable. Each pinned value must therefore be classified as derived,
+defaulted, or deliberately removed.
+
 ## Progress
 
 | Phase | Title | State |
 |---|---|---|
 | 0 | Settle the shape | Complete |
 | 1 | An authored workflow becomes a run | Complete |
-| 2 | One phase runs a real agent end to end | Complete except live-credit acceptance |
-| 3 | The consumer command line | Complete except blocking start |
+| 2 | One phase runs a real agent end to end | Dispatch and worker transport complete; acceptance moved to Phase 8 |
+| 3 | The consumer command line | Inspection complete; blocking loop moved to Phase 8 |
 | 4 | Sensors, gates, and anchors | Complete |
-| 5 | Human decisions and escalation | Escalation built, loop items open |
-| 6 | Fan-out and fan-in | Not started |
-| 7 | Sessions and steering | Not started |
-| 8 | The portal earns its density | Not started |
-| 9 | Remove what the evidence condemns | Not started |
-| 10 | Name it v1 and document it | Not started, gated on authored-surface parity |
-| 11 | Restore the loop engineering narrative | Not started |
+| 5 | The agent operating contract | Not started |
+| 6 | Evidence and output policy are authorable | Not started |
+| 7 | Loops, gates, sensors, and approval are authorable | Not started |
+| 8 | The autonomous driver and human loop | Foundations partly built |
+| 9 | Fan-out and fan-in | Not started |
+| 10 | Sessions, model routing, and steering | Not started |
+| 11 | Prove authored-surface parity | Not started |
+| 12 | The portal earns its density | Not started |
+| 13 | Remove what the evidence condemns | Not started |
+| 14 | Name it v1 and document it | Not started |
+| 15 | Restore the loop engineering narrative | Not started |
 
 ## Phase 0: Settle the shape
 
@@ -110,25 +120,24 @@ because building the agent contract twice would be waste.
   model — per-dispatch principal, capability set, exact binding, expiry — onto
   the command channel. A worker must not be able to approve, reject, mark done,
   steer, or end a run.
-* [x] Expose the worker operations over a local API and a command line: discover
-  the output schema, submit output, request completion, ask a question, escalate.
+* [x] Expose worker context, output-schema discovery, and generic submissions over
+  a scoped local API and command line. This completed the transport, not the
+  agent-facing operating contract. Dedicated verbs and generated instructions
+  are Phase 5.
 * [x] Add a minimal `senawa start` sufficient to trigger a run.
 
 Acceptance:
 
 * [ ] From a clean repository, an authored workflow drives a real Copilot agent
-  through one phase to a granted completion. **Not done: this spends model
-  credits against a live account, which is not a decision an autonomous run
-  should take. Everything it needs is in place and the scripted path below
-  covers the same composition.**
+  through one phase to a granted completion. **Moved to Phase 8 after Phase 5
+  defines how an agent knows to call complete with its output asset. The live case remains
+  opt-in because it spends model credits.**
 * [ ] The artifacts and transcript survive a process restart. **Not done: the
   durable stores are exercised by the existing restart tests, but no test yet
-  restarts a process mid-dispatch, because nothing drives a dispatch to the
-  point where a restart would be meaningful until the run loop of Phase 5
-  exists.**
+  restarts the autonomous loop mid-dispatch. Moved to Phase 8.**
 * [ ] A scripted agent with no model completes the same loop, keeping the path
-  testable without credits. **Not done: blocked on the same run loop. The worker
-  channel it would speak to is built and tested.**
+  testable without credits. **Moved to Phase 8. Phase 5 first defines the
+  adapter-neutral contract the script follows.**
 * [x] A worker attempting a human authority operation is refused, and the refusal
   is recorded. Proven in `worker-http.test.ts`: an operator route does not merely
   reject a worker token, it does not resolve at all, and an operator token is
@@ -139,7 +148,7 @@ Acceptance:
 * [ ] `senawa start workflow.yaml input.json` blocks by default and streams events
   and agent output, with a non-blocking argument. **Not done: blocking has
   nothing to block on until a run loop advances phases without a human poking
-  it. Deferred into Phase 5, where that loop is built.**
+  it. Moved to Phase 8, where that loop is built.**
 * [x] Run-level status showing mode, phase count, agents dispatched, and what is
   waiting on the human.
 * [x] Phase inspection and artifact reading. `senawa phase`, `senawa artifact
@@ -153,8 +162,8 @@ Acceptance:
 * [ ] The complete loop is drivable from the command line with no portal running
   and no hand-computed values. **Partly done: authoring, starting, status, phase
   inspection, artifact reading, and gate measurement are all drivable with no
-  hand-computed values. The loop is not yet complete because approval, rejection,
-  and escalation are Phase 5.**
+  hand-computed values. The completion handshake is Phase 5 and the autonomous
+  loop is Phase 8.**
 
 ## Phase 4: Sensors, gates, and anchors
 
@@ -181,205 +190,331 @@ Acceptance:
 * [x] A sensor cannot read the environment or escape the workspace. Proven in
   `sensor-runner.test.ts`.
 
-## Phases 5 to 11: not started, and why
+## Sequencing from Phase 5
 
-The four phases above were taken in order and each one was finished or explicitly
-excused before the next began. Phases 5 to 11 are untouched. They are listed
-below unchanged, with the reason each is still open recorded once here rather
-than repeated against every line, because the reason is the same shape each time:
-they are sequenced work that depends on what precedes them, and inventing a
-partial version of any of them would leave the repository in the state this whole
-redesign exists to escape, where parts exist and nothing runs.
+The remaining work has four dependencies that the previous sequence blurred:
 
-Specifically:
+1. An agent needs an explicit operating contract before any autonomous driver
+  can expect it to call complete with output assets and evidence.
+2. Evidence and loop policy must be authorable before the driver can honestly
+   claim to run the workflow the consumer wrote.
+3. Fan-out depends on a complete single-phase loop, including escalation and
+   human override.
+4. Session, model, and steering policy depend on the fan-out element identity
+   they have to scope.
 
-* **Phase 5** is part done. Escalation was new construction and is built; the
-  remaining items need a run loop that advances a phase without a human poking
-  it, which is the same thing Phase 3's blocking `start` waits on. That loop is
-  the single largest open dependency in this plan and everything below inherits
-  it.
-* **Phase 6** depends on Phase 5, because a fan-out member that cannot escalate
-  reintroduces exactly the strand Phase 5 exists to remove. It also carries a
-  known correctness risk: amendment quiescence must become transitive over
-  member phases, and a test has to prove it before the feature is trusted.
-* **Phase 7** depends on Phase 6 for the fresh-per-element session scope it has
-  to honour. It additionally requires widening the SDK port so `MessageOptions.mode`
-  is expressible; today's resume path is a fifteen-field equality guard that is
-  structurally unreachable across phases, so it is replaced rather than extended.
-* **Phase 8** is portal work whose value is measured against a running loop. Its
-  nine always-on panels are identified, but moving them before there is a loop to
-  watch would be guessing at what a person wants in front of them.
-* **Phase 9** removes what the evidence condemns. Doing it before Phases 5 to 7
-  would delete seams those phases are about to need, and would have to be redone.
-* **Phase 10** renames to v1 and rewrites the guides. Naming something v1 before
-  it runs a loop end to end would be the precise dishonesty this plan was written
-  to correct.
-* **Phase 11** restores the loop engineering narrative. Its own preamble already
-  says these ideas belong back *once the system can actually demonstrate them*,
-  and it cannot yet.
+The phases below follow those dependencies. Each phase must preserve the
+scripted no-model path, because a model choosing the expected tool does not prove
+the protocol is complete.
 
-Two smaller items are worth naming so they are not lost:
+## Phase 5: The agent operating contract
 
-* `publish-phase-output` and `create-escalation` remain unimplemented command
-  intents. The phase-output mechanism exists on the dataflow authority and is
-  reachable; the intents are the gap. Phase 9 decides whether to implement or
-  delete them, and Phase 5 needs escalation either way.
-* `senawa init` now publishes the authored three-document tree rather than the
-  lowered internal document. `createStandardTemplateFiles` still exists and is
-  still exercised, because two acceptance tests drive the lowered document
-  directly. Phase 10 decides whether that generator survives.
+Consumer prompts remain about the assignment. Senawa owns the protocol that
+tells an agent how to participate in the loop.
 
-## Phase 5: Human decisions and escalation
-
-> Partly started. The remaining items depend on the run loop; the reason is
-> recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
-
-* [x] Build escalation. It was unreachable, so this was new work. `create-escalation`
-  is now an implemented intent: it requires the gate evidence it is escalating,
-  refuses a passing gate, refuses a second escalation, refuses a closed phase,
-  and refuses an escalation that offers the human no response.
-* [ ] Remove the strand where a permanently failing member leaves a phase with no
-  route to a gate, closure, or escalation. **Not done: members are Phase 6, so
-  there are no members to strand yet. The escalation the removal depends on now
-  exists.**
-* [ ] Approve and reject with reasons, where the reasons become the next
-  iteration's input for the same agent. **Partly done: an authority decision now
-  carries a reason, the reason is bound into the decision digest so it cannot be
-  revised afterwards, and a rejection without one is refused. Feeding it into the
-  next iteration's prompt needs the run loop.**
-* [x] Record every human decision with who decided, when, and on what reasoning.
-  The decision already carried principal and timestamp; it now carries reasoning.
+* [ ] Define one adapter-neutral worker contract for these operations: inspect
+  context, discover completion requirements, complete with declared output
+  assets and evidence, run a self-check, ask a question, and escalate.
+* [ ] Add dedicated command forms for those operations. Keep generic JSON
+  submission as a diagnostic escape hatch, not the primary agent experience.
+* [ ] Append a generated `senawa-operating-contract` section after the configured
+  prompt. Derive it from the exact dispatch capabilities, output declarations,
+  completion requirements, attempt state, and credential delivery. Cover it with
+  the prompt-pack digest.
+* [ ] Make `senawa worker complete` the only successful completion path. Its
+  request carries every required output asset, evidence, and completion summary
+  or disposition. Returning JSON in assistant text does not complete anything.
+* [ ] Let the CLI accept named output file paths and evidence file paths, read
+  them under workspace containment, and construct the complete request. The
+  agent must not hand-author dispatch identities, digests, or a generic
+  submission envelope. Let the Copilot tool accept the same named assets as typed
+  parameters generated from their schemas.
+* [ ] Validate completion atomically: either every output and evidence item is
+  accepted, the gate path starts, and the same content digest can be replayed, or
+  no output is published and structured refusal reasons are returned. There must
+  be no accepted-output state waiting for a separate completion request.
+* [ ] Project the same contract into Copilot tool names, descriptions, schemas,
+  and results. Replace separate `submit_phase_output` and `submit_completion`
+  tools with one `senawa_complete` tool carrying the same request as the CLI.
+* [ ] Keep authority separation explicit. Generated instructions can explain an
+  available capability but cannot add one, and authored prompt text cannot alter
+  or suppress the generated contract.
+* [ ] Return machine-readable and human-readable refusal details to the worker,
+  including which output, criterion, evidence requirement, sensor, or gate rule
+  prevented completion.
+* [ ] Remove completion instructions from authored prompts and from the generated
+  starter prompts. Prompts describe the assignment; the generated operating
+  contract describes the protocol.
 
 Acceptance:
 
-* [ ] A rejected phase re-runs with the reasons supplied. **Not done: needs the
-  run loop.**
-* [ ] An agent that cannot satisfy its gates escalates rather than stalling.
-  **Not done: the escalation exists and is reachable, but nothing calls it yet
-  because nothing drives a phase to exhaustion without a human.**
-* [ ] No reachable state leaves a run neither completing nor escalating. **Not
-  done: this is a claim about the whole state space and cannot be made until the
-  loop that traverses it exists.**
+* [ ] A scripted worker whose assignment prompt contains no Senawa commands
+  discovers the completion contract, writes a valid output asset, calls complete
+  with that asset's path, and exits only after completion is granted.
+* [ ] A Copilot worker receives equivalent typed tools and completes the same
+  handshake without protocol text in the authored prompt.
+* [ ] Removing a capability removes its generated instruction, CLI operation,
+  and Copilot tool from the dispatch.
+* [ ] A model response containing valid JSON but no complete call leaves the
+  dispatch awaiting completion.
+* [ ] A refused complete call publishes no output; replaying the same corrected
+  request is idempotent and can be granted.
+* [ ] Prompt-pack verification detects any change to the generated operating
+  contract.
 
-## Phase 6: Fan-out and fan-in
+## Phase 6: Evidence and output policy are authorable
 
-> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
+Completion cannot be granted against a policy the author had no way to state.
+This phase closes the most consequential part of F-004.
 
-* [ ] Generalise the output side of fan-out along the Phase 0 decision, so a
-  member can nest to a bounded depth and carry its own gates and approval.
-* [ ] Honour a per-phase failure policy, including proceeding with the members
-  that passed.
-* [ ] Let a human mark a member done over red gates, recorded as an explicit
-  authority decision that stays visible in history and reports.
-* [ ] Let a human supply steering or instructions to a stuck member.
+* [ ] Add concise YAML for completion criteria and evidence policy, including
+  `none`, `task`, `required-criteria`, and `all-satisfied`, per-kind minimum
+  counts, and waiver authority where the internal contract supports it.
+* [ ] Add authored implementation-evidence views and derive their strict internal
+  mappings. Authors name phases, outputs, and evidence kinds, not JSON Pointers.
+* [ ] Let an output declare schema, sensitivity, maximum bytes, and an optional
+  repository path while retaining the current scalar schema form as shorthand.
+* [ ] Put the exact required output assets, criteria, and evidence requirements
+  into the generated operating contract and complete-request schema so the agent
+  knows what completion means before it starts work.
+* [ ] Refuse contradictory policies at authoring time, including evidence kinds
+  no phase can produce and sensitivity flows that exceed a declared ceiling.
 
 Acceptance:
 
-* [ ] A plan phase computes a collection and later members run their own loops
-  sequentially, grouped under their parent phase in the portal.
+* [ ] The old standard template's `task-completion` evidence requirement compiles
+  from authored YAML without a lowered-document escape hatch.
+* [ ] A completion request missing required evidence is refused with the missing
+  kind and count, and the next attempt receives that reason.
+* [ ] Confidential output remains confidential through context assembly, portal
+  projection, report export, and the generated operating contract.
+
+## Phase 7: Loops, gates, sensors, and approval are authorable
+
+This phase makes the middle and inner loops policy rather than constants hidden
+inside `lowerAuthoredWorkflow`.
+
+* [ ] Add per-phase iteration policy: maximum attempts and the dispositions for
+  gate rejection, approval rejection, upstream change, and exhaustion. Preserve
+  today's values as concise defaults.
+* [ ] Add named gate declarations with blocking and advisory rules, the internal
+  comparison and Boolean operators, named reading fields compiled to strict
+  pointers, and expected values.
+* [ ] Preserve the anchor invariant across composed Boolean rules: every path to
+  a blocking acceptance must depend on a deterministic reading.
+* [ ] Add sensor policy for working directory, timeout, output limits, inherited
+  environment, attempts, and reconciliation attempts. Keep containment and the
+  environment allowlist as host-enforced upper bounds.
+* [ ] Replace `approve: true` with a shorthand plus an expanded form that names
+  the approving role and rejection policy.
+* [ ] Compile all authoring conveniences into the existing strict internal
+  contracts. Do not add a looser gate or sensor model to the kernel.
+
+Acceptance:
+
+* [ ] One authored phase retries twice after red gates and then escalates; a
+  second fails immediately; both behaviours follow YAML rather than constants.
+* [ ] An advisory coverage reading is visible but does not block, while a
+  blocking coverage threshold below its expected value refuses completion.
+* [ ] A blocking gate with a Boolean path that can bypass every deterministic
+  reading is rejected at authoring time.
+* [ ] The default two-phase template remains concise and compiles to the same
+  policy it uses today.
+
+## Phase 8: The autonomous driver and human loop
+
+Compose the existing primitives into the deterministic middle loop. This phase
+absorbs the unfinished acceptance from Phases 2, 3, and the former Phase 5.
+
+* [ ] Drive a phase through dispatch, worker output, evidence admission,
+  atomic complete admission, sensor execution, gate evaluation, candidate
+  formation, approval, closure, output publication, and advancement to the next
+  phase.
+* [ ] Remove the public `publish-phase-output` step. Output publication is an
+  internal consequence of a granted complete request, not an operation an agent
+  coordinates separately. No declared intent may remain as a false promise.
+* [ ] On gate or approval rejection, start the next attempt with structured
+  reasons in its mapped input and operating contract, using the same agent scope.
+* [x] Implement escalation as an authority operation derived from recorded gate
+  evidence rather than an agent-authored account of failure.
+* [x] Record human decisions with principal, timestamp, reasoning, and a digest
+  that binds the reason.
+* [ ] Expose approve, reject with reasons, answer, and escalation response from
+  the command line. The portal remains optional.
+* [ ] Make `senawa start` block and stream by default, with an explicit
+  non-blocking option.
+* [ ] Recover an in-flight dispatch and continue the same loop after process
+  restart without duplicating accepted output or completion.
+* [ ] Prove there is no reachable state in which a run can neither make progress,
+  await a declared human decision, fail, nor escalate.
+
+Acceptance:
+
+* [ ] A scripted no-model agent drives a multi-phase authored workflow to
+  completion through the public command surface.
+* [ ] An opt-in live test drives a real Copilot agent through the same path.
+* [ ] A rejected phase reruns with the exact human or gate reasons supplied.
+* [ ] Artifacts, transcript, attempt history, and accepted submissions survive a
+  process restart.
+* [ ] The complete loop is drivable from the command line with no portal and no
+  hand-computed digest or revision.
+
+## Phase 9: Fan-out and fan-in
+
+* [ ] Lower authored `forEach` into member phases under the Phase 0 decision,
+  preserving one task beneath each phase and a configured nesting bound.
+* [ ] Give each member its own operating contract, output, evidence policy,
+  gates, approval, attempt policy, escalation, and history.
+* [ ] Honour per-phase failure policy: wait, proceed with passed members, or fail
+  outright.
+* [ ] Make amendment quiescence transitive over member phases before an approved
+  amendment can apply.
+* [ ] Let a human mark a member done over red gates as an explicit authority
+  decision carrying principal, timestamp, and reason.
+* [ ] Let a human supply queued or retry steering to a stuck member before live
+  steering lands in Phase 10.
+
+Acceptance:
+
+* [ ] A plan phase computes a collection and later members run sequentially,
+  grouped under their parent phase in the portal.
 * [ ] Three failing members do not block the remaining seven under a continue
   policy.
-* [ ] A human override is visible in the report.
+* [ ] A nested member at the configured depth runs its own complete loop, and one
+  beyond the bound is refused at authoring time.
+* [ ] Human override remains visible in history and the final report.
 
-## Phase 7: Sessions and steering
+## Phase 10: Sessions, model routing, and steering
 
-> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
+Agent policy belongs together because session scope, route changes, and steering
+all change what an attempt actually sees.
 
-* [ ] Make session scope a declared property of an agent, defaulting to durable
-  across phases and fresh per fan-out element. Today's resume is a
-  strict-equality replay guard that cannot span phases, so this replaces it.
-* [ ] Widen the SDK port so `MessageOptions.mode` is expressible, and hold the
+* [ ] Make authored model policy support ordered routes and per-route turn,
+  submission, credit, and spend ceilings. Keep one route as shorthand.
+* [ ] Make session scope durable across phases by declared agent identity and
+  fresh per fan-out element by default. Replace the current strict-equality
+  replay guard rather than extending it.
+* [ ] Record session identity and turn position on dispatches, and record session
+  loss as an explicit degrading event rather than a silent restart.
+* [ ] Widen the SDK port so `MessageOptions.mode` is expressible and retain the
   live session handle where steering can reach it.
-* [ ] Deliver steering from the portal and the command line, scoped to a running
-  agent instance, recorded durably before delivery.
-* [ ] Record session identity and turn position on dispatch records, and treat
-  session loss as an explicit degrading event rather than a silent restart.
-* [ ] Bound context growth by retention or compaction, as authority-visible
+* [ ] Deliver live, queued, and abort-and-retry steering from the command line and
+  portal, scoped to one running agent and recorded durably before delivery.
+* [ ] Bound context growth through authority-visible retention or compaction
   policy.
 
 Acceptance:
 
-* [ ] A human steers a running agent mid-turn and the run history explains why
-  the agent changed course.
-* [ ] A long run does not grow its context without bound.
+* [ ] One persona carries rejection context across phases, while two fan-out
+  elements receive distinct sessions.
+* [ ] Route exhaustion selects the next authored route and records why.
+* [ ] A human steers a running agent mid-turn and history explains the resulting
+  change of course.
+* [ ] A long run does not grow context without bound.
 
-## Phase 8: The portal earns its density
+## Phase 11: Prove authored-surface parity
 
-> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
+F-004 is closed by evidence, not by counting lines.
 
-* [ ] Keep the graph, the terminal, the question banner, and the review dialog as
-  the primary surface.
-* [ ] Move behind progressive disclosure: the authority sync vector, raw event and
-  receipt trees, whole-record amendment dumps, delivery and workspace tabs,
-  effect counters, full digests, and the pending receipts rail.
+* [ ] Recreate the old five-phase standard workflow entirely in the three
+  authored YAML documents, including evidence, task-frontier fan-out, gates,
+  approval, model policy, sensitivity, and iteration policy.
+* [ ] Compare the compiled graph and policy semantics with the old internal
+  template. Byte identity is not required; externally meaningful behaviour is.
+* [ ] Audit every constant in `lowerAuthoredWorkflow`. Classify it as a derived
+  mechanism, an overridable default, a host-enforced safety bound, or a deliberate
+  removed capability with a recorded reason.
+* [ ] Replace line-count acceptance with two fixtures: a concise default workflow
+  and a fully explicit workflow exercising the advanced surface.
+* [ ] Remove the lowered-document authoring escape hatch from consumer guidance
+  and production scaffolding.
+
+Acceptance:
+
+* [ ] Every capability promised by the brief is reachable from authored YAML and
+  the command line.
+* [ ] The concise fixture stays small because defaults are available; the explicit
+  fixture loses no policy because defaults are overridable.
+* [ ] No consumer acceptance test has to write `WorkflowConfigurationDocument`
+  directly.
+
+## Phase 12: The portal earns its density
+
+* [ ] Keep the graph, terminal, question banner, and review dialog as the primary
+  surface.
+* [ ] Move authority sync vectors, raw event and receipt trees, amendment dumps,
+  delivery and workspace tabs, effect counters, full digests, and pending
+  receipts behind progressive disclosure.
 * [ ] Stop fetching needs, events, and receipts on every route change.
-* [ ] Add an agent-pool view so a human can watch the team work, not only the
-  graph.
-* [ ] Let approval, rejection, and steering be driven by pointing and clicking.
+* [ ] Add an agent-pool view showing the active persona, session, phase or member,
+  attempt, route, and latest refusal reason.
+* [ ] Drive approval, reasoned rejection, question response, member override, and
+  steering by pointing and clicking.
 
 Acceptance:
 
-* [ ] The default view shows the workflow and the working agent.
-* [ ] Evidence, assets, and sensor readings are reachable in one action and absent
-  until asked for.
+* [ ] The default view shows the workflow and working agent.
+* [ ] Evidence, outputs, sensor readings, and decision reasons are reachable in
+  one action and absent until asked for.
 
-## Phase 9: Remove what the evidence condemns
+## Phase 13: Remove what the evidence condemns
 
-> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
-
-* [ ] Delete or implement the three unimplemented intents.
-* [ ] Remove the unenforced budget units and the code that pretends to plan
-  against them.
-* [ ] Remove unreachable paths the research identified, including the dead resume
-  binding.
-* [ ] Compile out the workspace fault-injection path from production builds.
+* [ ] Delete or implement every declared but unimplemented intent.
+* [ ] Remove unenforced budget units and planning code that pretends to use them.
+* [ ] Remove the dead resume binding after Phase 10 replaces it.
+* [ ] Remove the old internal standard-template generator once Phase 11 no longer
+  needs it as a comparison oracle.
+* [ ] Compile workspace fault injection out of production builds.
 
 Acceptance:
 
-* [ ] No exported symbol in production packages lacks a production caller unless
-  it is a documented extension seam.
+* [ ] No exported production symbol lacks a production caller unless it is a
+  documented adapter extension point.
 * [ ] Boundary and dependency checks still pass.
 
-## Phase 10: Name it v1 and document it
+## Phase 14: Name it v1 and document it
 
-> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
-
-* [ ] Remove alpha from versions, package metadata, and prose.
-* [ ] Rewrite the consumer guides around the three-file authoring model and the
-  command line loop.
+* [ ] Remove alpha from versions, package metadata, protocols, CLI text, and
+  prose.
+* [ ] Rewrite consumer guides around the three authored files, generated agent
+  operating contract, and command line loop.
+* [ ] Publish references for authoring defaults and expanded forms, worker
+  commands, refusal responses, session policy, and portal decisions.
 * [ ] Rewrite the design set to describe what exists after this plan.
 * [ ] Record which contracts were accepted, changed, disproved, or deferred.
 
-## Phase 11: Restore the loop engineering narrative
+Acceptance:
 
-> Not started. The reason is recorded in [Phases 5 to 11: not started, and why](#phases-5-to-11-not-started-and-why).
+* [ ] A new consumer can scaffold, author, validate, run, inspect, intervene, and
+  finish a workflow without reading an internal contract.
+* [ ] No v1 guide instructs an author to put Senawa protocol text in an agent
+  prompt.
+
+## Phase 15: Restore the loop engineering narrative
 
 The README on `main` carries the ideas that explain why the product is shaped the
-way it is, and the redesign dropped them. They belong back once the system can
-actually demonstrate them.
+way it is. They belong back once the system can demonstrate them.
 
 * [ ] Restore the three nested loops, naming who runs each, over what period, and
   where the human sits.
-* [ ] Restore the vocabulary the design depends on: sensor, gate, anchor, and
-  frozen set, each defined where a reader first meets it.
-* [ ] Restore backpressure as the organising idea, with completion granted rather
-  than claimed shown against the implementation that now does it.
-* [ ] Restore the loop engineering and graph-of-loops references, and state plainly
-  what keeps the system honest: deterministic sensors that execute real code, a
+* [ ] Restore sensor, gate, anchor, and frozen set, each defined where a reader
+  first meets it.
+* [ ] Restore backpressure as the organising idea, showing completion granted
+  rather than claimed against the implemented handshake.
+* [ ] Restore the loop engineering and graph-of-loops references, and state what
+  keeps the system honest: deterministic sensors that execute real code, a
   journal no agent can write, a frozen set the optimizer cannot weaken, and a
   human who decides what better means.
-* [ ] Sweep every document for claims the implementation no longer supports, and
-  for capabilities it gained that nothing describes.
-* [ ] Record which of the original design's promises v1 keeps, changes, or drops.
+* [ ] Sweep every document for unsupported claims and undescribed capabilities.
+* [ ] Record which promises v1 keeps, changes, or drops.
 
 Acceptance:
 
 * [ ] A reader who has never seen the project understands the three loops and the
   backpressure model from the README alone.
-* [ ] Every vocabulary term used in the design set is defined once and used
+* [ ] Every vocabulary term in the design set is defined once and used
   consistently.
-* [ ] No document describes behaviour the code does not have, verified by
-  checking each testable claim.
+* [ ] Every testable documentation claim is linked to an executable acceptance.
 
 ## Cross-cutting: continuous integration
 
@@ -399,64 +534,21 @@ and partly by **hardcoding** them, and the plan did not separate the two. The
 compiler and kernel lost nothing; the *author* lost a great deal. Recorded as
 F-004.
 
-Nothing below is a defect in the engine. Each is a value the internal document
-still accepts and `lowerAuthoredWorkflow` currently pins, with no YAML key to
-reach it. Until these land, an author who needs any of them has no route except
-hand-writing the lowered document, which is the situation the redesign set out
-to remove.
+The expanded plan gives each gap an owner:
 
-Deliberate, not gaps:
+| Gap | Owning phase |
+|---|---|
+| Agent completion instructions and command forms | Phase 5 |
+| Evidence policy, evidence views, output sensitivity and limits | Phase 6 |
+| Iteration, gate conditions, advisory rules, sensor policy, approval role | Phase 7 |
+| Fan-out, `forEach`, task-frontier semantics | Phase 9 |
+| Model routes, session scope and retention | Phase 10 |
+| Exhaustive pinned-value audit and old-template parity proof | Phase 11 |
 
-* Six budget units collapsing to one attempt counter is D-005, and stays.
-* Fan-out, `forEach`, and task-frontier phases are Phase 6.
-* Session scope already reaches YAML through `session`.
-
-Real gaps, none of which any phase currently schedules:
-
-* [ ] **Evidence policy.** `evidencePolicy` is pinned to `{ mode: "none",
-  requirements: [] }`. The internal document accepts `task`, `required-criteria`,
-  and `all-satisfied` with per-kind minimum counts and a waiver authority. The
-  old standard template used `mode: "task"` with a `task-completion` requirement.
-  An author cannot currently say "completion requires evidence", which is close
-  to the centre of what the product claims to do.
-* [ ] **Iteration policy.** `maximumAttempts` is pinned to 3, and
-  `onGateRejected`, `onApprovalRejected`, and `onUpstreamChanged` are all pinned
-  to `iterate` with `onExhausted` pinned to `escalate`. An author cannot make a
-  phase fail fast on a rejected gate, cannot widen or narrow the attempt budget
-  per phase, and cannot choose to fail rather than escalate. This is the loop,
-  and it is not currently authorable.
-* [ ] **Advisory gate rules.** `advisory` is pinned to `[]`. Only blocking rules
-  can be authored, so a reading that should inform without refusing has nowhere
-  to go. D-012 already noted advisory use was left open.
-* [ ] **Gate conditions.** Every rule is generated as `equals` against
-  `/exitCode` expecting `0`. The internal document supports ten operators, any
-  JSON pointer into the reading, and any expected value. An author cannot gate on
-  a coverage number, a count, or anything a sensor reports other than its exit
-  status.
-* [ ] **Sensor tuning.** `cwd`, `timeoutMs`, `maxStdoutBytes`, `maxStderrBytes`,
-  `inheritedEnvironment`, `maxAttempts`, and `maxReconciliationAttempts` are all
-  pinned. A test suite that needs longer than five minutes, or one environment
-  variable beyond `PATH`, cannot be expressed.
-* [ ] **Output sensitivity and size.** Pinned to `internal` and 262,144 bytes. An
-  author cannot mark an output `confidential`, so the sensitivity ceiling the
-  design relies on is currently decorative from the authored surface.
-* [ ] **Approval authority.** `approve: true` always names `release-manager`. An
-  author cannot route approval to a different role.
-* [ ] **Model routing.** One route per agent with `maxTurns`, `maxSubmissions`,
-  and `maxMillidollars` pinned. No fallback and no escalation route, so the
-  model-routing work the probes explored is unreachable from a workflow.
-
-Acceptance:
-
-* [ ] Every value `lowerAuthoredWorkflow` pins today is either authorable, or
-  recorded here as a deliberate decision with a reason.
-* [ ] A test asserts that the authored format can express the old standard
-  template's five-phase workflow, evidence policy and all, so the surface is
-  measured against a real workload rather than against the toy in the template.
-
-This gates Phase 10. Naming something v1 whose authoring surface cannot express
-what its own previous template did would repeat the mistake this plan exists to
-correct.
+Six budget units collapsing to one attempt counter remains the deliberate D-005
+decision. Host safety limits may remain non-overridable, but they must be named
+as limits rather than disguised as workflow defaults. Phase 11 gates the v1
+name: a surface that cannot express the brief cannot be called v1.
 
 ## Deferred with reasons
 

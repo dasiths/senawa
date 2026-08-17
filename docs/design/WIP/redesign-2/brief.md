@@ -83,13 +83,15 @@ with itself.
 senawa start workflow.yaml input.json
   1. Senawa reads the workflow and starts the first phase with the given input
      and that phase's agent definition.
-  2. The agent works, then signals completion.
+    2. The agent works, discovers the completion contract, then calls Senawa's
+      complete operation with the declared output asset and evidence.
   3. Senawa runs the phase's gates.
        pass -> completion is granted, the run advances
        fail -> senawa returns the reasons, and the agent tries again
   4. The agent can self-check at any time with `senawa run-gates <workflow> <phase|task>`.
-  5. The agent discovers the required output shape by asking senawa for it, and
-     submits an output.json conforming to that schema.
+    5. The agent discovers the required output shape by asking senawa for it. The
+      output is the asset carried by the complete request; it is not returned as
+      assistant chat text and is not uploaded in a separate protocol step.
   6. An agent that cannot satisfy the conditions escalates rather than stalling.
   7. A phase such as plan can produce a collection, and a later phase fans out
      over it, each element running its own loop, then fans back in.
@@ -105,12 +107,41 @@ Agents reach senawa over a command line surface. A real consumer installs senawa
 on `PATH`; during development the environment is prepared before `senawa start`
 so that child processes inherit it.
 
+Consumer prompts describe the work, not Senawa's protocol. Senawa appends a
+generated operating contract to every rendered prompt after the configured
+prompt text. That contract names the worker operations available for the exact
+dispatch, the required outputs and evidence, how to call complete with those
+assets, what a gate refusal returns, and how to ask a question or escalate. It is
+Senawa-owned, derived from the compiled context, and covered by the prompt-pack
+digest. Prompt text cannot change it or grant additional authority.
+
+Completion is one idempotent protocol operation. Its body carries every output
+asset required by the phase, the evidence offered for the completion criteria,
+and the completion summary or disposition. Senawa validates the assets against
+their declared schemas and limits, admits evidence, evaluates completion, and
+either publishes the assets and grants completion or publishes nothing and
+returns structured refusal reasons. An agent never completes by printing JSON in
+assistant text, and it never has to coordinate a separate output upload with a
+later completion request.
+
+On the command line, the agent writes each JSON output asset to a workspace file
+and passes the named file to `senawa worker complete`; Senawa reads it under the
+workspace boundary and constructs the request. A model adapter may expose the
+same named asset as a typed tool parameter instead. Both forms produce the same
+canonical complete request and the same content-derived idempotency identity.
+
+The command line and model-specific tools are two projections of that same
+contract. A scripted worker follows the command forms; the Copilot adapter
+offers equivalent typed tools. An authored prompt must not need to mention
+Senawa, know a dispatch identity, or teach the agent how to signal completion.
+
 **A scoped credential is required.** If a worker inherits the operator's
 credential it can call any command, including approving its own phase, which
 collapses the property the whole design exists to protect. The worker's channel
 must carry a per-dispatch identity authorised only for worker operations:
-discover schema, submit output, run gates, request completion, ask a question,
-escalate. Human authority operations must be unreachable from it.
+discover the completion schema, call complete with output assets and evidence,
+run gates for a self-check, ask a question, and escalate. Human authority
+operations must be unreachable from it.
 
 A local MCP server is worth offering later as an alternative front end over the
 same command surface, for agent runtimes that prefer typed tools. It should not
