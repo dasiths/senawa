@@ -62,7 +62,7 @@ A later phase may not regress one of them.
 | 2 | One phase runs a real agent end to end | Dispatch and worker transport complete; acceptance moved to Phase 8 |
 | 3 | The consumer command line | Complete |
 | 4 | Sensors, gates, and anchors | Complete |
-| 5 | The agent operating contract | Contract, verbs, and one Copilot tool built |
+| 5 | The agent operating contract | Complete: contract, verbs, typed Copilot tool, digest coverage |
 | 6 | Evidence and output policy are authorable | Policy, views, contract, and the evidence refusal all landed |
 | 7 | Loops, gates, sensors, and approval are authorable | Authoring built; acceptances unproven |
 | 8 | The autonomous driver and human loop | Loop drives, closes, advances, and waits for people; rerun moved to Phase 9 |
@@ -247,7 +247,7 @@ tells an agent how to participate in the loop.
   them under workspace containment, and construct the complete request. The
   agent must not hand-author dispatch identities, digests, or a generic
   submission envelope. Let the Copilot tool accept the same named assets as typed
-  parameters generated from their schemas. **Partial: the CLI reads named assets; the Copilot tool does not take them as typed parameters.**
+  parameters generated from their schemas.
 * [x] Validate completion atomically: either every output and evidence item is
   accepted, the gate path starts, and the same content digest can be replayed, or
   no output is published and structured refusal reasons are returned. There must
@@ -270,7 +270,7 @@ Acceptance:
 * [x] A scripted worker whose assignment prompt contains no Senawa commands
   discovers the completion contract, writes a valid output asset, calls complete
   with that asset's path, and exits only after completion is granted.
-* [ ] A Copilot worker receives equivalent typed tools and completes the same
+* [x] A Copilot worker receives equivalent typed tools and completes the same
   handshake without protocol text in the authored prompt.
 * [x] Removing a capability removes its generated instruction, CLI operation,
   and Copilot tool from the dispatch.
@@ -278,7 +278,7 @@ Acceptance:
   dispatch awaiting completion.
 * [x] A refused complete call publishes no output; replaying the same corrected
   request is idempotent and can be granted.
-* [ ] Prompt-pack verification detects any change to the generated operating
+* [x] Prompt-pack verification detects any change to the generated operating
   contract.
 
 ## Phase 6: Evidence and output policy are authorable

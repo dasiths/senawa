@@ -159,6 +159,23 @@ describe("v1 prompt rendering", () => {
     expect(spoken).toContain("each required criterion");
   });
 
+  it("covers the generated contract with the pack digest", () => {
+    const plain = fixture("Do it: ${{ input.request }}", { request: "x" }, ["/request"]);
+    const stricter = fixture("Do it: ${{ input.request }}", { request: "x" }, ["/request"], {
+      criteria: [{ criterionId: criterionId("criterion_tested"), required: true }],
+      completionEvidencePolicy: { mode: "none", requirements: [] },
+    });
+
+    // Verification re-renders and compares digests, so a contract that changed
+    // without the dispatch changing has to show up as a different pack.
+    expect(
+      renderPromptPack(stricter.context, stricter.dispatch, sha256, DEFAULT_PROMPT_PACK_MAX_BYTES)
+        .digest,
+    ).not.toBe(
+      renderPromptPack(plain.context, plain.dispatch, sha256, DEFAULT_PROMPT_PACK_MAX_BYTES).digest,
+    );
+  });
+
   it("says nothing is owed when the phase asks for no evidence", () => {
     const { context, dispatch } = fixture("Do it: ${{ input.request }}", { request: "x" }, [
       "/request",

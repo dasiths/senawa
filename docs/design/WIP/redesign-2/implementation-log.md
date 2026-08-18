@@ -2259,4 +2259,21 @@ The confidential acceptance follows one authored `sensitivity: confidential`
 output through the contract, the prompt pack, and the listing, and asserts the
 body never appears in the first two while the label appears in all three.
 
+## Two Phase 5 acceptances that were true and unproven
 
+The Copilot tool has taken typed per-output parameters generated from each
+output's schema since D-028; the plan note saying otherwise was written before
+that change and never corrected. What was genuinely missing was the acceptance
+tying the two halves together, so there is now a test where the authored prompt
+says only "Complete the assigned work", the delivered prompt carries the
+generated contract, and the worker completes through `senawa_complete`.
+
+The first version of that test asserted the authored prompt matched no
+`/senawa|complete|tool/`, and failed on the word "Complete" in an ordinary
+English sentence. A test for protocol text has to look for protocol text, not
+for words that also appear in it.
+
+Prompt-pack verification covering the contract is now asserted directly: two
+contexts differing only in completion policy render different pack digests, so a
+contract that changed without its dispatch changing cannot survive the broker's
+re-render.

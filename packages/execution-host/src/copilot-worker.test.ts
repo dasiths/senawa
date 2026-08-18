@@ -990,6 +990,33 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect(fixture.broker.installedOutputs).toHaveLength(0);
   });
 
+  it("teaches the handshake from the generated contract, not the authored prompt", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk, { phaseOutput: true });
+    let delivered = "";
+    sdk.onSend = async (config, session, prompt) => {
+      delivered = prompt ?? "";
+      const tool = required(config.tools.find((candidate) => candidate.name === "senawa_complete"));
+      await invoke(tool, session.sessionId, "call_only", {
+        disposition: "completed",
+        summary: "Completed",
+        criteria: [],
+        completionEvidence: [],
+        outputs: { verification: { verified: true, summary: "done" } },
+      });
+    };
+
+    const result = await fixture.adapter.run(fixture.input);
+
+    // The author wrote one sentence about the work and nothing about senawa.
+    expect(workerPrompt().utf8).not.toMatch(/senawa|senawa_complete|return json matching/iu);
+    // Everything the agent needs to finish arrives in the generated section.
+    expect(delivered).toContain("senawa-operating-contract");
+    expect(delivered).toContain("calling senawa");
+    expect(result.status).toBe("completed");
+    expect(fixture.broker.installedOutputs).toHaveLength(1);
+  });
+
   it("keeps the generated output tool schema closed and identity free", async () => {
     const sdk = new FakeSdkPort();
     const fixture = harness(sdk, { phaseOutput: true });
