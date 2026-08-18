@@ -22,6 +22,7 @@ Usage: senawa <command> [arguments]
 
 Commands:
   start <request.json> [run-id]         Start a run from the authored workflow
+  advance <repository-id> <run-id>      Drive a run until it needs an agent or a person
   status <repository> <run>             Report what a run is doing
   worker context|output-schema|complete|ask|escalate Agent-scoped worker channel
   run-gates <phase>                     Measure a phase's gate sensors now

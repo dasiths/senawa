@@ -65,7 +65,7 @@ A later phase may not regress one of them.
 | 5 | The agent operating contract | Contract, verbs, and one Copilot tool built |
 | 6 | Evidence and output policy are authorable | Policy authorable; D-023 rename and evidence views open |
 | 7 | Loops, gates, sensors, and approval are authorable | Authoring built; acceptances unproven |
-| 8 | The autonomous driver and human loop | Human decisions drivable; driver open |
+| 8 | The autonomous driver and human loop | Driver closes and advances phases; streaming and restart open |
 | 9 | Fan-out and fan-in | Lowering built; member phases open |
 | 10 | Sessions, model routing, and steering | Not started |
 | 11 | Prove authored-surface parity | Tree compiles; comparison with the old template open |
@@ -354,11 +354,11 @@ Acceptance:
 Compose the existing primitives into the deterministic middle loop. This phase
 absorbs the unfinished acceptance from Phases 2, 3, and the former Phase 5.
 
-* [ ] Drive a phase through dispatch, worker output, evidence admission,
+* [x] Drive a phase through dispatch, worker output, evidence admission,
   atomic complete admission, sensor execution, gate evaluation, candidate
   formation, approval, closure, output publication, and advancement to the next
   phase.
-* [ ] Remove the public `publish-phase-output` step. Output publication is an
+* [x] Remove the public `publish-phase-output` step. Output publication is an
   internal consequence of a granted complete request, not an operation an agent
   coordinates separately. No declared intent may remain as a false promise.
 * [ ] On gate or approval rejection, start the next attempt with structured

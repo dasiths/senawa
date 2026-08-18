@@ -1399,3 +1399,17 @@ None of these are reachable from a single-phase workflow, which is why the
 existing suite passed. The acceptance now runs two phases: the first closes and
 the second is dispatched, asserted by dispatching it rather than by trusting the
 first call's report.
+
+## The loop is reachable from the command line
+
+`senawa advance <repository> <run>` drives a run until it needs something senawa
+cannot supply, then says which. Against a freshly scaffolded project it reports
+`waiting for the agent working on plan`, which is the honest answer: the phase is
+dispatched and no agent has finished it.
+
+The command takes bounded steps rather than looping forever, and stops on the
+first outcome that is not progress. A gate refusal exits non-zero; waiting for an
+agent or a person does not, because neither is a failure.
+
+Still open in Phase 8: `senawa start` does not yet block and stream by default,
+and restart recovery mid-dispatch is unproven.

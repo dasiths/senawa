@@ -37,6 +37,7 @@ import { restoreSupervisorStateRoot, verifySupervisorStateBackup } from "./state
 
 const MAX_OPERATIONAL_ARGUMENT_LENGTH = 4_096;
 
+import { runAdvanceCommand } from "./advance-command.js";
 import { decidePhase } from "./decide.js";
 import {
   type InspectOptions,
@@ -97,6 +98,15 @@ export async function runOperationalCli(
         repositoryId: `repository_${basename(process.cwd())}`,
         ...(rest[0] === undefined ? {} : { runId: rest[0] }),
       },
+      { databasePath: paths.databasePath, assetDirectory: paths.assetDirectory },
+      dependencies,
+      startPrincipal,
+      new Date().toISOString(),
+    );
+  }
+  if (group === "advance" && action !== undefined && rest.length === 1) {
+    return runAdvanceCommand(
+      { projectRoot: process.cwd(), repositoryId: action, runId: rest[0] ?? "" },
       { databasePath: paths.databasePath, assetDirectory: paths.assetDirectory },
       dependencies,
       startPrincipal,
