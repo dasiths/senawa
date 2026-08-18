@@ -88,7 +88,9 @@ export async function runOperationalCli(
       currentTime: new Date().toISOString(),
     });
   }
-  if (group === "start" && action !== undefined && rest.length <= 1) {
+  if (group === "start" && action !== undefined && rest.length <= 2) {
+    const detached = rest.includes("--detach");
+    const positional = rest.filter((value) => value !== "--detach");
     // `start` reaches the authority directly rather than through the service,
     // because a consumer starting a run should not have to start a daemon first.
     return runStartCommand(
@@ -96,7 +98,8 @@ export async function runOperationalCli(
         projectRoot: process.cwd(),
         requestPath: action,
         repositoryId: `repository_${basename(process.cwd())}`,
-        ...(rest[0] === undefined ? {} : { runId: rest[0] }),
+        ...(positional[0] === undefined ? {} : { runId: positional[0] }),
+        ...(detached ? { detach: true } : {}),
       },
       { databasePath: paths.databasePath, assetDirectory: paths.assetDirectory },
       dependencies,

@@ -55,9 +55,11 @@ export function instantiateAuthoredRun(input: InstantiateAuthoredRunInput): Dura
     .digest(canonicalBytes({ repositoryId: input.repositoryId, runId: input.runId }))
     .slice(0, 32)}`;
   let allocation = 0;
+  // Identities are globally unique, so they carry the run they belong to. A
+  // fixed suffix meant only the first run in a state root could start.
   const allocateId = (kind: string): string => {
     allocation += 1;
-    return `${kind}-instantiate-${allocation}`;
+    return `${kind}-${commandId.slice(8)}-${allocation}`;
   };
   return authority.submit(
     decodeCommandEnvelope({

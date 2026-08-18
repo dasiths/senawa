@@ -1413,3 +1413,23 @@ agent or a person does not, because neither is a failure.
 
 Still open in Phase 8: `senawa start` does not yet block and stream by default,
 and restart recovery mid-dispatch is unproven.
+
+## Only the first run in a state root could ever start
+
+`instantiateAuthoredRun` allocated stream identities with a fixed suffix, so
+every run produced the same ones. The second run in a state root was refused
+with "Allocated stream event identities must be globally unique". A state root
+holds every run a consumer has ever started, so this meant senawa could start a
+run once and never again.
+
+It survived because every existing test builds a fresh state root per case, and
+because nothing before this drove a second run. It surfaced within a minute of
+running the command twice by hand.
+
+Identities now carry the command they belong to, the same fix the driver needed.
+A regression test starts two runs in one state root and fails when the fixed
+suffix is restored.
+
+`senawa start` now blocks by default and reports what the run is waiting for,
+with `--detach` to return as soon as the first phase is dispatched. Live event
+streaming is still not built; the command reports outcomes, not a feed.

@@ -4,6 +4,7 @@ import { ConfigurationCompilationError } from "@senawa/configuration";
 import { canonicalValue, sha256Digest } from "@senawa/kernel";
 import type { AuthenticatedPrincipal } from "@senawa/protocol";
 import type { RuntimeDependencies } from "@senawa/runtime";
+import { runAdvanceCommand } from "./advance-command.js";
 import type { CliResult } from "./cli.js";
 import { startAuthoredRun } from "./start-run.js";
 
@@ -18,6 +19,8 @@ export interface StartCommandOptions {
   readonly repositoryId: string;
   readonly runId?: string;
   readonly maxAiCredits?: number;
+  /** Return as soon as the first phase is dispatched instead of driving the run. */
+  readonly detach?: boolean;
 }
 
 const MAX_REQUEST_BYTES = 256 * 1_024;
@@ -71,6 +74,17 @@ export async function runStartCommand(
         `repository: ${started.repositoryId}`,
         `phase: ${started.phaseKey}`,
         `dispatch: ${started.dispatchId}`,
+        ...(options.detach === true
+          ? []
+          : [
+              await driveStartedRun(
+                { ...options, repositoryId: started.repositoryId, runId: started.runId },
+                paths,
+                dependencies,
+                principal,
+                currentTime,
+              ),
+            ]),
       ].join("\n"),
       exitCode: 0,
     };
@@ -84,6 +98,28 @@ export async function runStartCommand(
     }
     return failure(error instanceof Error ? error.message : "Run could not be started");
   }
+}
+
+/** Drives the run after starting it, so `start` finishes when the run does. */
+async function driveStartedRun(
+  options: StartCommandOptions & { readonly repositoryId: string; readonly runId: string },
+  paths: StartCommandPaths,
+  dependencies: RuntimeDependencies,
+  principal: AuthenticatedPrincipal,
+  currentTime: string,
+): Promise<string> {
+  const result = await runAdvanceCommand(
+    {
+      projectRoot: options.projectRoot,
+      repositoryId: options.repositoryId,
+      runId: options.runId,
+    },
+    paths,
+    dependencies,
+    principal,
+    currentTime,
+  );
+  return result.output;
 }
 
 function deriveRunId(repositoryId: string, dependencies: RuntimeDependencies): string {

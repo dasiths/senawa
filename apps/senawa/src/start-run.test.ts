@@ -64,6 +64,34 @@ describe("starting an authored run", () => {
     }
   });
 
+  it("starts a second run in the same state root", async () => {
+    const project = await authoredProject();
+    const paths = {
+      databasePath: join(project, "authority.db"),
+      assetDirectory: join(project, "assets"),
+    };
+    const common = {
+      projectRoot: project,
+      ...paths,
+      dependencies,
+      principal: runtimePrincipal,
+      input: canonicalValue({ request: "Add a health endpoint" }),
+      currentTime: NOW,
+      repositoryBase: {
+        commitDigest: sha256Digest("1".repeat(64)),
+        treeDigest: sha256Digest("2".repeat(64)),
+      },
+    };
+
+    await startAuthoredRun({ ...common, repositoryId: "repository_one", runId: "run_first" });
+
+    // Allocated identities are globally unique, so a fixed suffix would let
+    // only the first run in a state root ever start.
+    await expect(
+      startAuthoredRun({ ...common, repositoryId: "repository_two", runId: "run_second" }),
+    ).resolves.toMatchObject({ runId: "run_second" });
+  });
+
   it("refuses a request the workflow input schema does not accept", async () => {
     const project = await authoredProject({ strictSchema: true });
     await expect(

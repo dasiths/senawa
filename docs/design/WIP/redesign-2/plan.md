@@ -168,10 +168,9 @@ Acceptance:
 
 ## Phase 3: The consumer command line
 
-* [ ] `senawa start workflow.yaml input.json` blocks by default and streams events
-  and agent output, with a non-blocking argument. **Not done: blocking has
-  nothing to block on until a run loop advances phases without a human poking
-  it. Moved to Phase 8, where that loop is built.**
+* [x] `senawa start workflow.yaml input.json` blocks by default and streams events
+  and agent output, with a non-blocking argument. **Partial: start blocks and
+  reports what the run is waiting for. Live event streaming is not built.**
 * [x] Run-level status showing mode, phase count, agents dispatched, and what is
   waiting on the human.
 * [x] Phase inspection and artifact reading. `senawa phase`, `senawa artifact
@@ -369,7 +368,7 @@ absorbs the unfinished acceptance from Phases 2, 3, and the former Phase 5.
   that binds the reason.
 * [ ] Expose approve, reject with reasons, answer, and escalation response from
   the command line. The portal remains optional.
-* [ ] Make `senawa start` block and stream by default, with an explicit
+* [x] Make `senawa start` block and stream by default, with an explicit
   non-blocking option.
 * [ ] Recover an in-flight dispatch and continue the same loop after process
   restart without duplicating accepted output or completion.
