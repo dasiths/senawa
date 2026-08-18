@@ -1300,6 +1300,10 @@ function harness(
       phaseAttempt,
       phaseInputBinding,
       phaseOutputDeclarations: options.phaseOutput === true ? [OUTPUT_DECLARATION] : [],
+      completionPolicy: {
+        criteria: [],
+        completionEvidencePolicy: { mode: "none", requirements: [] },
+      },
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 4 }],
     },

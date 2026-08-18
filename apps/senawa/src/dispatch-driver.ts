@@ -246,6 +246,9 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
         maxBytes: output.maxBytes,
         sensitivity: output.sensitivity,
       })),
+      // The same policy the broker judges completion by, so the generated
+      // contract cannot promise the agent different terms.
+      completionPolicy: taskNode.definition.completionPolicy,
       capabilities,
       budgets: declaration.executor.budgets,
     },

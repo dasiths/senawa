@@ -298,12 +298,11 @@ This phase closes the most consequential part of F-004.
   mappings. Authors name phases, outputs, and evidence kinds, not JSON Pointers.
 * [x] Let an output declare schema, sensitivity, maximum bytes, and an optional
   repository path while retaining the current scalar schema form as shorthand.
-* [ ] Put the exact required output assets, criteria, and evidence requirements
+* [x] Put the exact required output assets, criteria, and evidence requirements
   into the generated operating contract and complete-request schema so the agent
-  knows what completion means before it starts work. **Partial: output
-  declarations reach the contract. Criteria and evidence counts cannot follow
-  until they travel in the worker context, because the prompt pack digest is
-  reproducible from context and dispatch alone.**
+  knows what completion means before it starts work. **The worker context carries
+  `completionPolicy`, and the broker refuses a dispatch whose context states a
+  different policy than completion is judged by. D-030.**
 * [x] Refuse contradictory policies at authoring time, including evidence kinds
   no phase can produce and sensitivity flows that exceed a declared ceiling.
 

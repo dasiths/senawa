@@ -208,6 +208,10 @@ export function createWorkerExecutionFixture(
           sensitivity: "internal",
         },
       ],
+      completionPolicy: {
+        criteria: [{ criterionId: runtimeFixture.criterionId, required: true }],
+        completionEvidencePolicy: { mode: "none", requirements: [] },
+      },
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 2_000 }],
     },

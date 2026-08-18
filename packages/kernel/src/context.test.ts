@@ -16,7 +16,15 @@ import {
   workerSessionIdentity,
 } from "./context.js";
 import { createPhaseAttempt, createPhaseInputBinding } from "./dataflow.js";
-import { assetId, consumerKey, definitionGeneration, phaseId, runId, taskId } from "./identity.js";
+import {
+  assetId,
+  consumerKey,
+  criterionId,
+  definitionGeneration,
+  phaseId,
+  runId,
+  taskId,
+} from "./identity.js";
 
 const deterministicSha256: Sha256 = {
   digest(bytes) {
@@ -536,6 +544,10 @@ function contextInput(kind: "software" | "non-software") {
     phaseAttempt,
     phaseInputBinding,
     phaseOutputDeclarations: [],
+    completionPolicy: {
+      criteria: [{ criterionId: criterionId("criterion_done"), required: true }],
+      completionEvidencePolicy: { mode: "none" as const, requirements: [] },
+    },
     capabilities: ["asset.read", "completion.submit"],
     budgets: [{ unit: "work-attempt" as const, limit: 3 }],
   };

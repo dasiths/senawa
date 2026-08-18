@@ -280,6 +280,24 @@ export function registerContextBrokerConformance(
       ).toThrow(/maximum is 64/u);
     });
 
+    it("refuses a dispatch whose contract states a different policy than completion is judged by", () => {
+      const harness = createHarness();
+
+      // The agent reads its criteria from the context, so judging completion by
+      // a different policy would refuse work the contract said was enough.
+      expect(() =>
+        registerBoundDispatch(
+          harness.broker,
+          harness.assetPort,
+          harness.bytes,
+          2,
+          "a",
+          ALL_CAPABILITIES,
+          "criterion_other",
+        ),
+      ).toThrowError(expect.objectContaining({ code: "binding-mismatch" }));
+    });
+
     it("persists only grant token digests and protects deep mutation boundaries", async () => {
       const harness = createHarness();
       const grant = grantAsset(harness);
@@ -1177,6 +1195,7 @@ function registerBoundDispatch(
   ordinal: number,
   graphCharacter: string,
   capabilities: readonly string[],
+  requirementsCriterion = "criterion_done",
 ): { context: WorkerContextBase; dispatch: WorkerDispatch } {
   const task = {
     taskId: taskId(ordinal === 1 ? "task_worker" : `task_worker-${ordinal}`),
@@ -1265,6 +1284,10 @@ function registerBoundDispatch(
           sensitivity: "internal",
         },
       ],
+      completionPolicy: {
+        criteria: [{ criterionId: criterionId("criterion_done"), required: true }],
+        completionEvidencePolicy: { mode: "none", requirements: [] },
+      },
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 4 }],
     },
@@ -1299,7 +1322,7 @@ function registerBoundDispatch(
     },
     completionRequirements: {
       task: dispatch.task,
-      criteria: [{ criterionId: criterionId("criterion_done"), required: true }],
+      criteria: [{ criterionId: criterionId(requirementsCriterion), required: true }],
       completionEvidencePolicy: { mode: "none", requirements: [] },
     },
   });

@@ -164,6 +164,7 @@ function operatingContract(
   dispatch: ReturnType<typeof validateWorkerDispatch>,
 ): CanonicalValue {
   const capabilities = new Set<string>(dispatch.capabilities.map((value) => String(value)));
+  const policy = context.completionPolicy;
   return canonicalValue({
     apiVersion: OPERATING_CONTRACT_API_VERSION,
     completion: {
@@ -175,6 +176,17 @@ function operatingContract(
         maxBytes: declaration.maxBytes,
         sensitivity: declaration.sensitivity,
       })),
+      criteria: policy.criteria.map((criterion) => ({
+        criterionId: String(criterion.criterionId),
+        required: criterion.required,
+      })),
+      completionEvidence: {
+        mode: policy.completionEvidencePolicy.mode,
+        requirements: policy.completionEvidencePolicy.requirements.map((requirement) => ({
+          kind: requirement.kind,
+          minimumCount: requirement.minimumCount,
+        })),
+      },
       permitted: capabilities.has(COMPLETION_CAPABILITY),
     },
     selfCheck: { operation: "run-gates", spendsAttempt: false },
@@ -202,6 +214,22 @@ function operatingInstructions(
     "A refused completion publishes nothing and returns the reasons. Fix what it named and call complete again.",
     "Running the gates yourself costs no attempt, so check before you complete.",
   ];
+  const required = context.completionPolicy.criteria.filter(({ required: value }) => value);
+  if (context.completionPolicy.criteria.length > 0) {
+    lines.push(
+      `Report an outcome for every criterion: ${context.completionPolicy.criteria
+        .map(({ criterionId }) => String(criterionId))
+        .join(", ")}.`,
+      required.length === 0
+        ? "No criterion is required, so none of them can refuse your completion on its own."
+        : `These must be satisfied or waived before completion is granted: ${required
+            .map(({ criterionId }) => String(criterionId))
+            .join(", ")}.`,
+    );
+  }
+  for (const line of completionEvidenceInstructions(context.completionPolicy)) {
+    lines.push(line);
+  }
   if (capabilities.has(QUESTION_CAPABILITY)) {
     lines.push("Ask a question rather than guessing when the assignment is ambiguous.");
   }
@@ -210,6 +238,31 @@ function operatingInstructions(
     "You cannot approve, reject, override, or end this run. Those belong to a human.",
   );
   return Object.freeze(lines);
+}
+
+/** Evidence counts an agent cannot discover any other way before it starts. */
+function completionEvidenceInstructions(
+  policy: ReturnType<typeof validateWorkerContextBase>["completionPolicy"],
+): readonly string[] {
+  const { mode, requirements } = policy.completionEvidencePolicy;
+  if (mode === "none") return ["This phase asks for no completion evidence."];
+  const owed = requirements.map(
+    (requirement) => `${requirement.minimumCount} of ${describeKind(requirement.kind)}`,
+  );
+  const scope =
+    mode === "task"
+      ? "Attach completion evidence to the completion itself"
+      : mode === "required-criteria"
+        ? "Attach completion evidence to each required criterion"
+        : "Attach completion evidence to every criterion you satisfy";
+  return owed.length === 0
+    ? [`${scope}.`]
+    : [`${scope}, at least: ${owed.join(", ")}.`, "A completion owing evidence is refused."];
+}
+
+/** An evidence kind is canonical data, so it can be an object rather than a name. */
+function describeKind(kind: unknown): string {
+  return typeof kind === "string" ? kind : canonicalSerialize(canonicalValue(kind));
 }
 
 function parseTemplate(template: string): readonly TemplateToken[] {

@@ -838,6 +838,10 @@ function buildFixture(): Fixture {
       phaseAttempt,
       phaseInputBinding,
       phaseOutputDeclarations: [OUTPUT_DECLARATION],
+      completionPolicy: {
+        criteria: [{ criterionId: criterionId("criterion_verified"), required: true }],
+        completionEvidencePolicy: { mode: "none", requirements: [] },
+      },
       capabilities: CAPABILITIES,
       budgets: [{ unit: "work-attempt", limit: 4 }],
     },

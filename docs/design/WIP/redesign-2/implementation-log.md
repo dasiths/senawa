@@ -2155,3 +2155,56 @@ validated, compiled, and read by nothing.
 fallback. Session scope. Completion criteria and evidence counts in the
 operating contract. Whether a workflow whose last phase closes ends its own run,
 which stays with the person who holds that authority.
+
+## The contract can state what completion means, because the context now carries it
+
+The reverted attempt threaded completion requirements into `renderPromptPack` as
+a fifth argument, and four suites refused it at once: the pack is re-rendered
+from the context and the dispatch and compared by digest, so anything the
+contract states has to live in one of those two.
+
+So it lives in the context. `WorkerContextBase` now carries `completionPolicy`,
+the same `{ criteria, completionEvidencePolicy }` the task definition declares,
+and the generated contract states the criteria by name, which of them are
+required, the evidence mode, and the minimum count of each kind. An agent can
+now read what completion means before it starts work rather than discovering it
+in a refusal.
+
+### D-030: the context policy and the judged policy must be the same policy
+
+* Date: 2026-08-18
+* Status: Accepted
+* Decision: `registerDispatch` refuses a dispatch whose context completion policy
+  differs from its completion requirements.
+* Alternatives: derive the context policy inside the broker, or trust the caller
+  to pass the same value twice.
+* Rationale: the contract an agent reads is generated from the context, and
+  completion is judged from the requirements. Left unchecked, a dispatch could
+  tell an agent one thing and refuse it by another, which is the same class of
+  defect as an authored value that is parsed and discarded. Deriving it inside
+  the broker was rejected because the broker has no graph.
+* Consequence: every caller passes the policy it read from the task definition,
+  and the fixtures that previously invented requirements now agree with their
+  contexts.
+
+### A canonical value is not a string, and coercing one throws
+
+The first draft wrote `String(requirement.kind)` in the instruction line. An
+evidence kind is a `CanonicalValue`, so it can be an object, and a canonical
+object has a null prototype with no `toString`. The no-credit acceptance, whose
+kind is `{ name, version }`, failed with `Cannot convert object to primitive
+value`. Kinds are now serialised canonically when they are not strings.
+
+Worth stating because the type said so all along and the code read as though the
+kind were a name. Nothing in the suite caught it until a fixture used the shape
+the type actually permits.
+
+### Both tests were checked by breaking the code
+
+Emptying the criteria list in the contract fails the renderer test. Disabling the
+new broker comparison fails the conformance test, but only after the first
+version of that test was rewritten: it re-registered the harness dispatch, so it
+passed on the pre-existing duplicate-registration check instead of the new one,
+and stayed green with the invariant disabled. It now registers a fresh dispatch
+whose requirements disagree with its context.
+

@@ -1071,6 +1071,7 @@ function createAcceptanceSeeds(
         phaseAttempt,
         phaseInputBinding,
         phaseOutputDeclarations: [],
+        completionPolicy: node.definition.completionPolicy,
         capabilities: ["worker.submit.asset", "worker.submit.completion"],
         budgets: [{ unit: "dispatch-failure", limit: 1 }],
       },

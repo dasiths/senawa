@@ -8,7 +8,12 @@ import {
   type Sha256,
   type Sha256Digest,
 } from "./canonical.js";
-import type { TaskGenerationReference, TerminalDisposition } from "./completion.js";
+import {
+  type CompletionPolicy,
+  type TaskGenerationReference,
+  type TerminalDisposition,
+  validateCompletionPolicy,
+} from "./completion.js";
 import {
   type PhaseAttempt,
   type PhaseInputBinding,
@@ -171,6 +176,7 @@ export interface WorkerContextBaseInput {
   readonly phaseAttempt: PhaseAttempt;
   readonly phaseInputBinding: PhaseInputBinding;
   readonly phaseOutputDeclarations: readonly PhaseOutputDeclarationInput[];
+  readonly completionPolicy: CompletionPolicy;
   readonly capabilities: readonly string[];
   readonly budgets: readonly ContextBudget[];
 }
@@ -192,6 +198,7 @@ export interface WorkerContextBase {
   readonly phaseInputBinding: PhaseInputBinding;
   readonly phaseOutputDeclarations: readonly PhaseOutputDeclaration[];
   readonly phaseOutputDeclarationsDigest: Sha256Digest;
+  readonly completionPolicy: CompletionPolicy;
   readonly capabilities: readonly string[];
   readonly budgets: readonly ContextBudget[];
   readonly contextDigest: Sha256Digest;
@@ -355,6 +362,7 @@ export function validateWorkerContextBase(value: unknown, sha256: Sha256): Worke
     "phaseInputBinding",
     "phaseOutputDeclarations",
     "phaseOutputDeclarationsDigest",
+    "completionPolicy",
     "capabilities",
     "budgets",
     "contextDigest",
@@ -417,6 +425,7 @@ export function validateWorkerContextBase(value: unknown, sha256: Sha256): Worke
         sensitivity: declaration.sensitivity,
       };
     }),
+    completionPolicy: snapshot.completionPolicy,
     capabilities: snapshot.capabilities,
     budgets: snapshot.budgets,
   };
@@ -629,6 +638,7 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
     "phaseAttempt",
     "phaseInputBinding",
     "phaseOutputDeclarations",
+    "completionPolicy",
     "capabilities",
     "budgets",
   ]);
@@ -667,6 +677,7 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
     canonicalValue({ declarations: phaseOutputDeclarations }),
     sha256,
   );
+  const completionPolicy = contextCompletionPolicy(value.completionPolicy);
   const capabilities = capabilitySet(value.capabilities, "invalid-context");
   const budgets = contextBudgets(value.budgets);
   const content = {
@@ -686,6 +697,7 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
     phaseInputBinding,
     phaseOutputDeclarations,
     phaseOutputDeclarationsDigest,
+    completionPolicy,
     capabilities,
     budgets,
   };
@@ -696,6 +708,18 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
     contextDigest,
     contextId: derivedContextId,
   }) as unknown as WorkerContextBase;
+}
+
+/** A context error, not a completion one, because the caller is building a context. */
+function contextCompletionPolicy(value: unknown): CompletionPolicy {
+  try {
+    return validateCompletionPolicy(value);
+  } catch (error) {
+    fail(
+      "invalid-context",
+      `Worker context completion policy is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 function outputDeclarations(value: unknown, sha256: Sha256): readonly PhaseOutputDeclaration[] {

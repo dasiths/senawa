@@ -1,4 +1,5 @@
 import {
+  type CompletionPolicy,
   canonicalDigest,
   canonicalValue,
   consumerKey,
@@ -6,6 +7,7 @@ import {
   createPhaseInputBinding,
   createWorkerContextBase,
   createWorkerDispatch,
+  criterionId,
   definitionGeneration,
   phaseId,
   runId,
@@ -24,6 +26,10 @@ const sha256: Sha256 = {
   },
 };
 const digest = (character: string) => sha256Digest(character.repeat(64));
+const EMPTY_COMPLETION_POLICY: CompletionPolicy = {
+  criteria: [],
+  completionEvidencePolicy: { mode: "none", requirements: [] },
+};
 
 function section(
   context: unknown,
@@ -111,6 +117,58 @@ describe("v1 prompt rendering", () => {
     expect(spoken).not.toContain("Ask a question");
   });
 
+  it("states the criteria and evidence completion is judged by", () => {
+    const { context, dispatch } = fixture(
+      "Do it: ${{ input.request }}",
+      { request: "x" },
+      ["/request"],
+      {
+        criteria: [
+          { criterionId: criterionId("criterion_tested"), required: true },
+          { criterionId: criterionId("criterion_noted"), required: false },
+        ],
+        completionEvidencePolicy: {
+          mode: "required-criteria",
+          requirements: [{ kind: canonicalValue("task-completion"), minimumCount: 2 }],
+        },
+      },
+    );
+    const contract = section(context, dispatch, "senawa-operating-contract");
+    const value = contract.value as {
+      completion: {
+        criteria: { criterionId: string; required: boolean }[];
+        completionEvidence: {
+          mode: string;
+          requirements: { kind: string; minimumCount: number }[];
+        };
+      };
+    };
+    const spoken = (contract.lines ?? []).join(" ");
+
+    expect(value.completion.criteria).toEqual([
+      { criterionId: "criterion_tested", required: true },
+      { criterionId: "criterion_noted", required: false },
+    ]);
+    expect(value.completion.completionEvidence).toEqual({
+      mode: "required-criteria",
+      requirements: [{ kind: "task-completion", minimumCount: 2 }],
+    });
+    // An agent cannot discover a count from a schema, so the words have to say it.
+    expect(spoken).toContain("criterion_tested, criterion_noted");
+    expect(spoken).toContain("2 of task-completion");
+    expect(spoken).toContain("each required criterion");
+  });
+
+  it("says nothing is owed when the phase asks for no evidence", () => {
+    const { context, dispatch } = fixture("Do it: ${{ input.request }}", { request: "x" }, [
+      "/request",
+    ]);
+    const spoken = (section(context, dispatch, "senawa-operating-contract").lines ?? []).join(" ");
+
+    expect(spoken).toContain("asks for no completion evidence");
+    expect(spoken).not.toContain("owing evidence");
+  });
+
   it.each([
     [42, "42"],
     [true, "true"],
@@ -149,7 +207,12 @@ describe("v1 prompt rendering", () => {
   });
 });
 
-function fixture(template: string, mappedValue: unknown, inputPaths: readonly string[]) {
+function fixture(
+  template: string,
+  mappedValue: unknown,
+  inputPaths: readonly string[],
+  completionPolicy: CompletionPolicy = EMPTY_COMPLETION_POLICY,
+) {
   const prompt = promptFixture(template, inputPaths);
   const mapped = canonicalValue(mappedValue);
   const task = { taskId: taskId("task_fixture"), definitionGeneration: definitionGeneration(1) };
@@ -208,6 +271,7 @@ function fixture(template: string, mappedValue: unknown, inputPaths: readonly st
       phaseAttempt,
       phaseInputBinding,
       phaseOutputDeclarations: [],
+      completionPolicy,
       capabilities: ["completion.submit"],
       budgets: [{ unit: "work-attempt", limit: 3 }],
     },

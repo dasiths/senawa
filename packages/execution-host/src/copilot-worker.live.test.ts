@@ -160,6 +160,10 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
             phaseAttempt,
             phaseInputBinding,
             phaseOutputDeclarations: [],
+            completionPolicy: {
+              criteria: [],
+              completionEvidencePolicy: { mode: "none", requirements: [] },
+            },
             capabilities: [WORKER_CAPABILITIES.completion],
             budgets: [{ unit: "work-attempt", limit: 1 }],
           },
@@ -329,6 +333,10 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
             phaseAttempt,
             phaseInputBinding,
             phaseOutputDeclarations: [LIVE_OUTPUT_DECLARATION],
+            completionPolicy: {
+              criteria: [],
+              completionEvidencePolicy: { mode: "none", requirements: [] },
+            },
             capabilities,
             budgets: [{ unit: "work-attempt", limit: 1 }],
           },

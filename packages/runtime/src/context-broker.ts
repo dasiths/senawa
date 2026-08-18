@@ -1306,6 +1306,21 @@ export class ContextBroker implements ContextBrokerClient {
         "Completion requirements do not match the dispatch task generation",
       );
     }
+    // The contract the agent reads is generated from the context, so a context
+    // stating a different policy would tell the agent one thing and judge it by
+    // another.
+    if (
+      canonicalStringify(context.completionPolicy) !==
+      canonicalStringify({
+        criteria: completionRequirements.criteria,
+        completionEvidencePolicy: completionRequirements.completionEvidencePolicy,
+      })
+    ) {
+      throw new ContextBrokerError(
+        "binding-mismatch",
+        "Worker context completion policy does not match the dispatch completion requirements",
+      );
+    }
     if (
       this.containsIssuedGrantToken(context) ||
       this.containsIssuedGrantToken(dispatch) ||

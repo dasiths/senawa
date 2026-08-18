@@ -845,6 +845,10 @@ function workerForRun(
       phaseAttempt,
       phaseInputBinding,
       phaseOutputDeclarations: [],
+      completionPolicy: {
+        criteria: [{ criterionId: runtimeFixture.criterionId, required: true }],
+        completionEvidencePolicy: { mode: "none" as const, requirements: [] },
+      },
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 2_000 }],
     },
