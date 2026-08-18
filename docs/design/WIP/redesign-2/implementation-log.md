@@ -1256,3 +1256,54 @@ thing to reintroduce by accident.
 
 The stale migration hint pointing at `senawa.json` and "the earlier alpha
 binary" is gone. D-027 made it false.
+
+## F-011: approval is authored per phase and enforced per run
+
+The authored surface states approval on a phase, and the compiler lowers it
+there: each `phaseDataflow` entry carries its own `approval` policy. The runtime
+authority holds one `approvalPolicy` per run, set at instantiation and carried
+forward unchanged when a phase closes and the next begins.
+
+The consequence is narrow but real: a workflow that approves any phase currently
+approves every phase, because the run-level policy is the only one `close-phase`
+consults.
+
+`instantiateAuthoredRun` now derives that policy from the authored workflow
+rather than hardcoding `approval-required`, so a workflow with no authored
+approval closes its phases without waiting for a human who was never asked for.
+That is the common case and the one the scaffold produces. A workflow that mixes
+approved and unapproved phases is over-strict rather than unsound, which is the
+right way round for a mistake of this kind.
+
+Narrowing it properly means per-phase approval policy in the authority, which is
+a kernel change rather than a driver change, so it is recorded here rather than
+worked around in the driver.
+
+## Phase 8 log: the driver takes its first real steps
+
+`dispatchPhase` assumed the root phase. It bound the workflow input as the only
+source, fixed the attempt at one, and passed empty upstream digests and an empty
+mapping policy. A second phase could not be dispatched at all.
+
+It now binds a phase's input from the accepted outputs of the phases it depends
+on, carries the acceptance digest for each, and derives the upstream set digest
+from the bindings rather than using a placeholder. The acceptance digest is the
+part that matters: a phase may read an upstream output that was accepted, not
+one that was merely produced.
+
+`advanceRun` is the join. One call takes one durable step and reports what it is
+waiting for, because every step is an authority decision and a caller that
+crashes between two of them has to resume at the next rather than repeat the
+last. The steps are dispatch, wait for the agent, read the gate's sensors for
+real, evaluate, close, and start the next phase.
+
+Two refusals are deliberate:
+
+* It will not evaluate a gate over work no agent has finished. A dispatch with
+  no terminal completion and no published output returns `awaiting-agent`.
+* It will not record an approval decision. A phase that authored approval
+  returns `awaiting-approval` and waits for `senawa approve`, because a driver
+  that approves on a human's behalf has removed the only step the human owns.
+
+Proven by breaking it: removing the completion guard makes the waiting test
+fail, so the test measures the guard rather than agreeing with it.

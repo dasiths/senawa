@@ -40,7 +40,7 @@ export function instantiateAuthoredRun(input: InstantiateAuthoredRunInput): Dura
     execution: snapshot.execution,
     graph: snapshot.graph,
     phase: { phaseId: phase.id, definitionGeneration: phase.generation },
-    approvalPolicy: { policy: "approval-required", authority: input.principal },
+    approvalPolicy: approvalPolicyFor(snapshot, input.principal),
     escalationPolicyDigest: sha256Digest("9".repeat(64)),
     allowancePolicy: {
       policyDigest: sha256Digest("9".repeat(64)),
@@ -77,6 +77,27 @@ export function instantiateAuthoredRun(input: InstantiateAuthoredRunInput): Dura
       allocateId,
     },
   );
+}
+
+/**
+ * The run's approval policy, derived from what the author asked for.
+ *
+ * The authority models approval per run while the authored surface states it
+ * per phase, so a workflow that approves any phase currently approves them all.
+ * Recorded as F-011; narrowing it needs per-phase policy in the authority.
+ */
+function approvalPolicyFor(
+  snapshot: ConfigurationSnapshot,
+  principal: AuthenticatedPrincipal,
+): { readonly policy: string; readonly authority?: AuthenticatedPrincipal } {
+  const approved = snapshot.phaseDataflow.some(
+    (entry) =>
+      (entry.value as unknown as { readonly approval?: { readonly policy?: string } }).approval
+        ?.policy === "required",
+  );
+  return approved
+    ? { policy: "approval-required", authority: principal }
+    : { policy: "no-approval" };
 }
 
 function selectLifecyclePhase(

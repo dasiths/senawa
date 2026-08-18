@@ -231,7 +231,48 @@ async function step(
     gateDefinition: gate,
     readings,
   });
+
+  // An authored approval is a human's to give. The driver stops here and the
+  // run waits, rather than recording a decision nobody made.
+  if (requiresApproval(phase)) return { kind: "awaiting-approval", phaseKey };
+
+  submit(supervisor, input, `close-${phaseKey}`, "close-phase", candidate.candidateDigest, {});
+  const next = nextPhase(snapshot, phaseKey);
+  if (next === undefined) return { kind: "finished" };
+  submit(
+    supervisor,
+    input,
+    `advance-${next.key}`,
+    "start-phase-attempt",
+    candidate.candidateDigest,
+    {
+      phaseId: next.id,
+      definitionGeneration: next.generation,
+    },
+  );
   return { kind: "closed", phaseKey };
+}
+
+function requiresApproval(phase: SnapshotPhase): boolean {
+  return (
+    (phase as unknown as { readonly approval?: { readonly policy?: string } }).approval?.policy ===
+    "required"
+  );
+}
+
+/** The phase that becomes current once this one closes, in declaration order. */
+function nextPhase(
+  snapshot: ConfigurationSnapshot,
+  closedKey: string,
+): { readonly key: string; readonly id: string; readonly generation: number } | undefined {
+  const keys = snapshot.phaseDataflow.map((entry) => entry.key);
+  const following = keys[keys.indexOf(closedKey) + 1];
+  if (following === undefined) return undefined;
+  const node = snapshot.graph.nodes.find(
+    (candidate) => candidate.kind === "phase" && candidate.definition.key === following,
+  );
+  if (node === undefined || node.kind !== "phase") return undefined;
+  return { key: following, id: node.definition.id, generation: node.definition.generation };
 }
 
 /** Runs the phase's sensors for real, so the gate rests on something executed. */
