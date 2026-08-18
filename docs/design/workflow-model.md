@@ -124,7 +124,8 @@ verifies that a recorded acceptance still follows from the recorded policy.
 
 ## Evidence policy
 
-An `EvidencePolicy` has a mode and a list of requirements. Each requirement pairs
+A `CompletionEvidencePolicy` has a mode and a list of requirements. Each
+requirement pairs
 an evidence kind with a minimum count. The four modes set the scope:
 
 * `none` requires no evidence.
@@ -132,10 +133,14 @@ an evidence kind with a minimum count. The four modes set the scope:
 * `required-criteria` applies them to each criterion marked required.
 * `all-satisfied` applies them to every criterion reaching `satisfied`.
 
-An `EvidenceAttachment` names an asset identifier, a kind, a descriptor, and an
-optional criterion. The assessment reports per-requirement counts and a
+A `CompletionEvidenceItem` names an asset identifier, a kind, a descriptor, and
+an optional criterion. The assessment reports per-requirement counts and a
 `satisfied` flag rather than a single pass or fail, so a reader can see which
 requirement fell short.
+
+Completion evidence is what an agent offers, and it can be argued with. Gate
+evidence is what senawa measured, and it cannot. Only readings may back a
+blocking gate; completion evidence feeds completion accounting and never a gate.
 
 Evidence is content, not narration. An attachment references a stored asset, and
 model prose is never accepted in its place.
@@ -191,9 +196,9 @@ closure accepted.
 ## Budgets and escalation
 
 Every autonomous loop draws from a `BudgetLedger` of counters, one per unit.
-`BUDGET_UNITS` names eight: `work-attempt`, `dispatch-failure`, `sensor-retry`,
-`review-iteration`, `integration-attempt`, `rebase-attempt`, `elapsed-time-ms`,
-and `spend-nano`.
+`BUDGET_UNITS` names six: `work-attempt`, `dispatch-failure`, `sensor-retry`,
+`review-iteration`, `integration-attempt`, and `rebase-attempt`. Two earlier
+units were removed because nothing counted them.
 
 `consumeBudget` returns either `BudgetConsumed` with the updated ledger or
 `BudgetExhausted` with the exhausted facts. Exhaustion is a fact, not an

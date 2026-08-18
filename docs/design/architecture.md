@@ -328,6 +328,38 @@ narrow exception for browser system tests under `packages/*/tests/browser/`.
 * External dependencies: none.
 * Runtime: Node only.
 
+### The driver
+
+The composition root also holds the loop, in three files.
+
+`start-run.ts` takes a project from authored files to a dispatched first phase:
+compile the three YAML documents, instantiate the run, bind the request against
+the root phase's declared input schema, and dispatch that phase.
+
+`dispatch-driver.ts` turns one phase into one registered dispatch. It starts a
+phase attempt, binds the phase's input from the accepted outputs of the phases it
+depends on, builds the worker context, renders the prompt pack, selects a model
+route, derives the completion requirements, and registers the dispatch with a
+task scope fence and an effect seed. The ordering is not free: the prompt pack
+digest is an input to the dispatch and the dispatch is an input to rendering the
+pack, so the first dispatch exists only to render against and is discarded.
+
+`advance-run.ts` takes exactly one durable step and reports what it is waiting
+for. The steps are dispatch, wait for the agent, read the gate's sensors, form a
+candidate, evaluate, retry or close, and start the next phase. One step per call
+is deliberate: every step is an authority decision, so a caller that dies between
+two of them resumes at the next rather than repeating the last. Nothing is held
+between calls, which is why restart recovery is a property of the shape rather
+than a feature.
+
+Two refusals are load bearing. The driver will not evaluate a gate over work no
+agent has finished, and it will not record an approval, because a driver that
+approved on a person's behalf would remove the only step the person owns.
+
+`classifyOutcome` maps every outcome to progress, a human's turn, or a refusal,
+through an exhaustive switch with a `never` default. There is no fourth
+disposition, so no reachable outcome means stuck with nothing to do.
+
 ## apps/control-plane
 
 A reference remote server used to prove the outbound connector against something

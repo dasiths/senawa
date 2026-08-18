@@ -238,11 +238,11 @@ Every created path is captured with its device and inode. Failure cleanup remove
 only paths whose identity still matches, so a concurrent process that replaced a
 path does not lose its file to Senawa's rollback.
 
-The alpha uses pathname-based Node filesystem APIs. That means it cannot prevent
-a hostile process from swapping an ancestor directory between the final identity
-check and the path-based create. Descriptor-relative publication is not part of
-this alpha contract, and the [CLI reference](../reference/cli.md) states the same
-limit.
+Publication uses pathname-based Node filesystem APIs. That means it cannot
+prevent a hostile process from swapping an ancestor directory between the final
+identity check and the path-based create. Descriptor-relative publication is not
+part of the v1 contract, and the [CLI reference](../reference/cli.md) states the
+same limit.
 
 ## Integrity verification
 

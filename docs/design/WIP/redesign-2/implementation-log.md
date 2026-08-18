@@ -2515,3 +2515,25 @@ to the cheaper model, so the sentence that reads worse is the one that ships.
 
 The host limits are listed as limits rather than as defaults an author forgot to
 change, which is the distinction F-004 said the plan kept blurring.
+
+## The design set described a system with two extra budget units and no driver
+
+Sweeping `docs/design` against source found the same two shapes as the guides.
+
+False claims, three of them: `BUDGET_UNITS` was described as eight units in two
+places, and `elapsed-time-ms` and `spend-nano` were removed by D-029 for never
+being counted. `EvidenceAttachment` and `EvidencePolicy` were renamed by D-023
+and the design set kept the old names, which is worse than a stale name because
+the rename exists to stop a reader confusing agent testimony with senawa's own
+measurement. Both are corrected, and the distinction the rename protects is now
+stated where the type is defined.
+
+A missing subject, again: `advanceRun`, `dispatchPhase`, and `senawa advance`
+appeared zero times across all eight design documents. The component this whole
+redesign was built to add was absent from the set that explains how the system
+works. `architecture.md` now describes the three files, why one step per call is
+the right shape, why the prompt pack has to be rendered against a discarded
+dispatch, and which two refusals are load bearing.
+
+The remaining `alpha` sentences went with it. D-027 renamed the product and left
+prose behind in two design files.

@@ -199,8 +199,8 @@ Treat as internal, changeable without notice:
   `portal-contracts.ts`.
 * Diagnostic message text. Diagnostic codes are stable; the prose is not.
 
-Senawa is alpha software. A stable contract carries a versioned identifier so a
-change is observable, not so it never changes.
+A stable contract carries a versioned identifier so a change is observable, not
+so it never changes.
 
 ## Rules enforced by check-boundaries
 

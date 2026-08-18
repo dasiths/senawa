@@ -105,8 +105,8 @@ recorded facts satisfy a declared policy.
 Task completion is assessed by `assessCompletionAccounting` in
 [packages/kernel/src/completion.ts](../../packages/kernel/src/completion.ts),
 which checks each declared criterion against a submitted disposition and checks
-attached evidence against an `EvidencePolicy` whose mode is one of `none`,
-`task`, `required-criteria`, or `all-satisfied`. Gate evaluation in
+attached evidence against a `CompletionEvidencePolicy` whose mode is one of
+`none`, `task`, `required-criteria`, or `all-satisfied`. Gate evaluation in
 [packages/kernel/src/gates.ts](../../packages/kernel/src/gates.ts) reduces sensor
 readings through a three-valued logic where the third value is `unknown`, and a
 gate is accepted only when every blocking rule evaluates to `true`.
@@ -170,9 +170,12 @@ What it forbids:
 
 Every loop that can run without a human carries a finite ledger. `BUDGET_UNITS`
 in [packages/kernel/src/budgets.ts](../../packages/kernel/src/budgets.ts)
-enumerates eight units: `work-attempt`, `dispatch-failure`, `sensor-retry`,
-`review-iteration`, `integration-attempt`, `rebase-attempt`, `elapsed-time-ms`,
-and `spend-nano`. Exhaustion produces an `Escalation`, not a retry.
+enumerates six units: `work-attempt`, `dispatch-failure`, `sensor-retry`,
+`review-iteration`, `integration-attempt`, and `rebase-attempt`. Exhaustion
+produces an `Escalation`, not a retry.
+
+Only `review-iteration` is demanded of every phase. The other five remain
+declarable, and an authored workflow states none of them.
 
 Phase iteration follows the same shape. `planPhaseAttemptTransition` in
 [packages/kernel/src/iteration.ts](../../packages/kernel/src/iteration.ts)

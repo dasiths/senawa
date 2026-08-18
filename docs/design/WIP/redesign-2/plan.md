@@ -555,7 +555,9 @@ unknown and fail closed". Both are exact; only one can be read once.
   authoring reference carries every field, default, expanded form, host limit,
   and diagnostic code. Worker commands and refusals are in the CLI reference;
   portal decisions are in the portal guide.**
-* [ ] Rewrite the design set to describe what exists after this plan.
+* [x] Rewrite the design set to describe what exists after this plan. **Two
+  removed budget units, three renamed evidence types, and the remaining alpha
+  language were corrected, and the driver is described where it lives.**
 * [x] Sweep every document in `docs/` and every package README into the plain
   register, including the ones this redesign did not touch.
 * [ ] Rewrite refusal messages, CLI help, and diagnostics in the same register,
