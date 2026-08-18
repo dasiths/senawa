@@ -90,7 +90,6 @@ describe("GitIntegrationAdapter", () => {
         fixture.baseRevision.commit.oid,
       );
     },
-    30_000,
   );
 
   it("validates in an owned detached worktree and leaves the target unchanged on gate failure", async () => {

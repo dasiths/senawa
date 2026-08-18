@@ -2618,4 +2618,7 @@ a workspace restart acceptance and a git binary-conflict case, both passing alon
 and both spawning real processes. They declare their budgets now. That is the
 third time this shape has appeared, which suggests the five second default is
 simply wrong for a suite that spawns processes, and a repository-wide
-`testTimeout` would be the better fix than annotating them one at a time.
+`testTimeout` would be the better fix than annotating them one at a time. It is
+now 30 seconds, and the per-test annotations added while chasing the individual
+flakes are removed, because a workaround left in place after the cause is fixed
+reads as a fact about that test.

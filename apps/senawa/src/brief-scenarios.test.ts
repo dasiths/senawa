@@ -97,7 +97,7 @@ describe("fan-out in sequence", () => {
     const outcome = await advance(scenario);
     expect(outcome).toMatchObject({ kind: "closed", phaseKey: "define" });
     await expect(advance(scenario)).rejects.toThrow(/fan-out/iu);
-  }, 30_000);
+  });
 });
 
 describe("what an author can state", () => {
@@ -294,7 +294,7 @@ describe("one phase in sequence", () => {
     });
     expect(listed.output).toContain("confidential");
     expect(listed.output).not.toContain(secret);
-  }, 30_000);
+  });
 
   it("refuses a completion that owes evidence, naming the kind and the count", async () => {
     const scenario = await startScenario("owed", { requireEvidence: 2 });
@@ -325,7 +325,7 @@ describe("one phase in sequence", () => {
 
     expect(accepted).toEqual({ status: "accepted" });
     expect(await advance(scenario)).toEqual({ kind: "finished" });
-  }, 30_000);
+  });
 
   it("leaves the dispatch awaiting completion when the agent only writes output", async () => {
     const scenario = await startScenario("nocomplete");
@@ -362,7 +362,7 @@ describe("one phase in sequence", () => {
     expect(await promptPackText(scenario, outcome.dispatchId)).toContain(
       "the endpoint returns the wrong status",
     );
-  }, 30_000);
+  });
 
   it("retries a refused phase with the reasons the gate gave", async () => {
     const scenario = await startScenario("retry", { sensorCommand: "false", attempts: 3 });
@@ -379,7 +379,7 @@ describe("one phase in sequence", () => {
     const pack = await promptPackText(scenario, outcome.dispatchId);
     expect(pack).toContain("This is attempt 2");
     expect(pack).toContain("measure did not pass");
-  }, 30_000);
+  });
 
   it("stops at the authored attempt ceiling rather than retrying forever", async () => {
     const scenario = await startScenario("ceiling", { sensorCommand: "false", attempts: 1 });
@@ -464,7 +464,7 @@ describe("one phase in sequence", () => {
 
     if (decision.exitCode !== 0) throw new Error(decision.output);
     expect(await advance(scenario)).toEqual({ kind: "finished" });
-  }, 30_000);
+  });
 
   it("carries the human's reason back when they reject", async () => {
     const scenario = await startScenario("rejected", { approval: true });
@@ -570,5 +570,5 @@ describe("one phase in sequence", () => {
 
     expect(await advance(scenario)).toEqual({ kind: "closed", phaseKey: "define" });
     expect(await advance(scenario)).toMatchObject({ kind: "dispatched", phaseKey: "verify" });
-  }, 30_000);
+  });
 });
