@@ -22,6 +22,7 @@ The exact files are:
 ```text
 $XDG_RUNTIME_DIR/senawa/supervisor.sock   authenticated local IPC socket
 $XDG_RUNTIME_DIR/senawa/credential        private bearer credential
+$XDG_RUNTIME_DIR/senawa/dispatches/<id>/credential  one agent's scoped credential
 $XDG_STATE_HOME/senawa/authority.db       SQLite authority
 $XDG_STATE_HOME/senawa/assets             content-addressed asset store
 $XDG_STATE_HOME/senawa/copilot-sdk        SDK session store
@@ -40,6 +41,70 @@ Isolate an experiment by pointing both roots somewhere disposable:
 export XDG_RUNTIME_DIR="$(mktemp -d)/run"
 export XDG_STATE_HOME="$(mktemp -d)/state"
 ```
+
+## Running a workflow
+
+The daemon is for the portal and for scheduled work. A run is started and driven
+from the command line, and neither command needs the service to be up.
+
+```bash
+senawa start request.json
+senawa advance <repository> <run>
+```
+
+`start` compiles the authored project, instantiates the run, binds the request
+against the first phase's declared input schema, and dispatches that phase. It
+prints the run, the repository, the phase, the dispatch, and the path to the
+worker credential that dispatch was given:
+
+```text
+run: run_70f8f785c711f1ca09e28966b89a0974
+repository: repository_senawa
+phase: define
+dispatch: dispatch_545497b2fedaa80ac9ddcfaa550fb77f
+credential: /run/user/1000/senawa/dispatches/dispatch_5454.../credential
+```
+
+It then blocks and reports what the run is waiting for. Pass `--detach` to
+return as soon as the first phase is dispatched.
+
+`advance` takes bounded durable steps and stops at the first thing senawa cannot
+do on its own. Each step is an authority decision, so a process that dies
+between two of them resumes at the next rather than repeating the last.
+
+| It reports | What it means | What you do |
+|---|---|---|
+| `dispatched` | An agent has work | Nothing; run `advance` again later |
+| `retrying` | A refusal started the next attempt, carrying its reasons | Nothing |
+| `waiting for the agent` | The dispatch has no completed work yet | Wait, or steer the agent |
+| `waiting for a decision` | A phase declares approval and owes one | `senawa approve` or `senawa reject` |
+| `did not pass` | A blocking gate refused, and attempts are spent | Fix what it names, or escalate |
+| `was rejected` | A person refused, and attempts are spent | Read the reason and decide |
+| `produced an output senawa refused` | The output violated its declared schema, so nothing was published | Fix the schema or the agent |
+| `closed` | A phase closed and the next began | Nothing |
+| `every phase is done` | The workflow finished | End the run when you are satisfied |
+
+Only a refusal exits non-zero. Waiting for an agent or a person is not a
+failure, so a script can treat a non-zero exit as something that needs a person.
+
+A finished workflow leaves its run open on purpose. Ending a run carries human
+authority, so the driver does not do it for you.
+
+### Answering what a run is waiting for
+
+```bash
+senawa status <repository> <run>
+senawa approve <repository> <run>
+senawa reject <repository> <run> "the endpoint returns the wrong status"
+senawa answer <repository> <run> "use the existing health check"
+senawa run-gates <phase>
+senawa artifact list <repository> <run>
+```
+
+A rejection must carry a reason, and the reason is bound into the decision
+digest so it cannot drift from what the next attempt is told. When the phase
+authored `onApprovalRejected: iterate` and attempts remain, the next `advance`
+dispatches the next attempt with that exact sentence.
 
 ## Credentials
 

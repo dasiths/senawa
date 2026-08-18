@@ -78,6 +78,44 @@ transaction that stages a file. Raw grant tokens exist only inside worker-call
 closures. They are never persisted in a portal DTO, a report, a log, or a
 diagnostic bundle.
 
+## The worker channel
+
+An agent never holds the operator's credential. If it did it could approve its
+own phase, which would make every gate decoration.
+
+Each dispatch is minted its own credential: 32 random bytes in a mode `0600`
+file under the private runtime directory, scoped to one repository, run,
+dispatch, context, and principal, with an explicit capability list, an expiry,
+and a submission budget. The worker is given the path, not the value.
+
+A file is the only delivery that can be withdrawn from a process that has
+already started. An environment variable cannot be taken back and propagates to
+every descendant; a value in `argv` is world-readable through the process table.
+Revoking is an unlink.
+
+`SENAWA_WORKER_CREDENTIAL` names that file and `SENAWA_WORKER_DISPATCH` names
+the dispatch. `senawa start` prints both when it dispatches.
+
+Worker and operator identities are mutually exclusive. A worker route does not
+resolve for an operator, and an operator route does not resolve for a worker.
+Both refusals are `404` rather than `403`, so a worker cannot enumerate the
+surface it is missing by watching which paths answer differently.
+
+Reads spend nothing, so an agent that crashed can re-read its context without
+losing an attempt it never used. The submission budget is spent only once a
+submission names a kind the channel offers, so a malformed body cannot burn one.
+
+### What this scheme does not do
+
+It bounds what the worker's own identity can do. It does not stop a worker that
+can read arbitrary files from reading the operator's credential, which sits at a
+predictable path with mode `0600` owned by the same user. The SDK worker cannot
+do that because it has no shell and no general file read; a worker command line
+necessarily reopens the capability.
+
+So this prevents privilege by identity, not privilege by theft. Narrowing it
+further needs a different uid or a sandbox, which v1 does not attempt.
+
 ## Proposal-only agents
 
 Agents propose. Humans and workflow policy approve.

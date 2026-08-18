@@ -2470,3 +2470,31 @@ runs in the pipeline, and reintroducing one is proven to fail it.
 The lesson generalises past this check. A criterion stated in one sentence can
 still be three rules, and the count a first implementation produces is evidence
 about the rule rather than about the code.
+
+## The three remaining guides were accurate and incomplete
+
+The plan said operations, portal, and security "still describe the earlier
+surface". Checking every claim in all three found no false ones: the paths,
+modes, byte limits, session lifetimes, capability lists, and route behaviour all
+match the source. The log entry was written before later commits corrected them.
+
+What is wrong is different and worse in one way: `senawa start`, `advance`,
+`approve`, `reject`, and `answer` appear zero times across all three. An
+operator reading operations.md end to end learns to run a daemon, take a backup,
+verify integrity, and produce a diagnostics bundle, and never learns how to run
+a workflow or unstick one. Security.md describes the in-process worker
+capability set and never mentions the per-dispatch worker credential, which is
+the whole of D-010, D-014, and F-003.
+
+A guide that says nothing false while omitting its subject is not a correct
+guide. Operations now opens the loop with what each `advance` outcome means and
+what to do about it, security carries the worker channel including the honest
+statement that it prevents privilege by identity and not privilege by theft, and
+the portal guide states that every decision it offers is also a command and that
+neither surface can start or advance a run.
+
+Every command name and outcome string in the new prose was taken from the help
+text and the `describe` switch rather than from memory, which caught two errors
+before they shipped: the credential lives under `dispatches/<id>/credential`
+rather than a `worker/` directory, and `output-refused` was missing from the
+outcome table.

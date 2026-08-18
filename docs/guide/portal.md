@@ -258,6 +258,8 @@ always use a fixed server-derived filename and an attachment disposition.
 
 * It cannot apply an amendment. Amendment review is inert data; application is a
   trusted local operation.
+* It cannot start or advance a run. Both are command-line operations, and the
+  portal observes the state they produce.
 * It cannot reach daemon lifecycle routes. Every `/supervisor/v1` route
   returns `404` on loopback.
 * It cannot see canonical repository paths, grant tokens, SDK session
@@ -265,6 +267,27 @@ always use a fixed server-derived filename and an attachment disposition.
   Portal DTOs omit them.
 * It cannot widen its own session. Capabilities come from the session
   descriptor.
+
+## The portal is optional
+
+Every decision the portal offers is also a command, and a run can be taken from
+start to finish without opening a browser:
+
+| In the portal | On the command line |
+|---|---|
+| Approve a candidate | `senawa approve <repository> <run>` |
+| Reject with a reason | `senawa reject <repository> <run> "<reason>"` |
+| Answer a question | `senawa answer <repository> <run> "<text>"` |
+| Read a run's artifacts | `senawa artifact list\|read <repository> <run>` |
+| Watch what a run is waiting for | `senawa status <repository> <run>` |
+
+The portal and the command line read the same durable records, so they cannot
+disagree about what is pending. What the portal adds is the graph, the agent
+transcript, and seeing several runs at once.
+
+A run blocked on a decision stays blocked until someone makes it, in either
+surface. `senawa advance` reports `waiting for a decision` and does not submit
+one on a person's behalf.
 
 ## When a session ends
 

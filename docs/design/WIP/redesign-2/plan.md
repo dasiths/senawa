@@ -547,9 +547,9 @@ unknown and fail closed". Both are exact; only one can be read once.
 * [x] Remove alpha from versions, package metadata, protocols, CLI text, and
   prose. **Protocol v1alphaN identifiers deliberately retained: they are content-addressed and embedded in stored digests and migrations.**
 * [x] Rewrite consumer guides around the three authored files, the generated
-  operating contract, and the command line loop. **Partial: authoring, getting
-  started, troubleshooting, and the guide index are rewritten. Operations,
-  portal, and security still describe the earlier surface.**
+  operating contract, and the command line loop. **Operations, portal, and
+  security carried no false claims but omitted the run loop entirely, and
+  security omitted the worker credential. Both are now covered.**
 * [ ] Publish references for authoring defaults and expanded forms, worker
   commands, refusal responses, session policy, and portal decisions.
 * [ ] Rewrite the design set to describe what exists after this plan.
