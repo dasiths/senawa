@@ -402,7 +402,7 @@ Acceptance:
 ## Phase 9: Fan-out and fan-in
 
 * [ ] Lower authored `forEach` into member phases under the Phase 0 decision,
-  preserving one task beneath each phase and a configured nesting bound. **Not done: members lower to a task frontier rather than phases. Deviation recorded as D-025; per-member gates and approval need the phase model.**
+  preserving one task beneath each phase and a configured nesting bound. **Not done: members lower to a task frontier rather than phases, and no member runs at all. Reaching a fan-out now refuses by naming that limit instead of reporting the workflow as broken. F-015 records what running one needs and which authority question it settles.**
 * [ ] Give each member its own operating contract, output, evidence policy,
   gates, approval, attempt policy, escalation, and history.
 * [x] Honour per-phase failure policy: wait, proceed with passed members, or fail

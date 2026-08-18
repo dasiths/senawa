@@ -35,6 +35,7 @@ interface SnapshotPhase {
     readonly mappings: readonly DataMappingDeclaration[];
   };
   readonly executor: CanonicalValue & {
+    readonly kind?: string;
     readonly role: string;
     readonly budgets: readonly ContextBudget[];
   };
@@ -135,6 +136,14 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
     (node) => node.kind === "task" && node.definition.parentId === phaseNode.definition.id,
   );
   if (taskNode === undefined || taskNode.kind !== "task") {
+    // A fan-out phase has no task until its members are materialised from the
+    // collection an earlier phase produced. Saying so beats reporting the
+    // workflow as broken, which is what "declares no executable work" reads as.
+    if (declaration.executor.kind === "task-frontier") {
+      throw new Error(
+        `Phase ${input.phaseKey} is a fan-out, and v1 compiles one without running it yet`,
+      );
+    }
     throw new Error(`Phase ${input.phaseKey} declares no executable work`);
   }
 

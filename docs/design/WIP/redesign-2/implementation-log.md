@@ -2400,3 +2400,45 @@ scripted worker is told the protocol by the harness, and a model has to find it
 in the generated contract. The first draft stubbed the route selection with a
 cast, which would have made it pass while proving nothing; `startAuthoredRun` now
 returns the real selection instead.
+
+## F-015: fan-out reports itself as a broken workflow
+
+Driving a compiled fan-out found that reaching one throws:
+
+```text
+Phase implement declares no executable work
+```
+
+An author who wrote a valid `forEach` reads that as their workflow being wrong.
+It is not: a fan-out phase has no task until its members are materialised from
+the collection the earlier phase produced, and v1 does not materialise them. The
+refusal now says that.
+
+This is the fifth time in this redesign that an unimplemented or discarded thing
+has presented as a defect in the consumer's input rather than as a limit of the
+product. The others were the missing `workflow.json`, the ignored unknown field,
+the discarded `completionEvidenceFrom`, and the inverted `onFailure` default.
+
+### What running a fan-out actually needs, established rather than assumed
+
+Members cannot be dispatched without existing in the graph, because completion
+requirements and the candidate are both derived from graph tasks. Materialising
+them is therefore a graph amendment, and `PlanImportCoordinator` already turns a
+`FanOutEvaluation` into an `AmendmentProposal` for exactly this.
+
+The obstacle is not machinery, it is authority. `record-amendment-decision` is
+authorised for `release-manager` alone, so as things stand every fan-out would
+stop and ask a person to approve the members its own workflow declared. The
+brief's fan-out diagram has no human between the planner completing and the
+members running, and states that humans are asked only at declared phase edges.
+
+The resolution the evidence supports, recorded here so the phase that builds it
+does not reopen the question: an amendment whose diff is additions only, arising
+from an accepted output of a phase that authored `forEach`, is the authored shape
+being filled in rather than an unplanned graph change, and needs no human
+decision. `ImportPlanResult` already separates `proposal-enqueued` from
+`review-required`, and the fan-out diff classifier already forces review on any
+change or removal, so the distinction exists and is unwired rather than absent.
+
+Not built here. Recorded with its evidence so it is a decision waiting to be
+executed rather than a question waiting to be asked again.
