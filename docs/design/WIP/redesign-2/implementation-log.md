@@ -1374,3 +1374,28 @@ The test asserts the receipts the authority durably recorded, not the outcome
 the driver returned. An earlier version asserted the return value and passed
 with `close-phase` deleted. This one was checked the same way and fails when
 the closure is removed.
+
+## Two runtime defects that only a second phase could reveal
+
+Advancing a run past its first phase had never been executed. Doing it found two
+defects in the authority, both in `start-phase-attempt`:
+
+* The projection reads the amendment aggregate whenever any part of it exists,
+  and advancing created `phaseLifecycles` while leaving `amendmentRecords` and
+  `amendmentEvents` undefined. A run that advanced without ever proposing an
+  amendment could not be projected at all, which is every ordinary run.
+  Advancing now seeds the empty halves.
+* A run's first phase never entered `phaseLifecycles`, because
+  `updateCurrentPhase` returns early when the list is undefined. The phase that
+  had just closed was therefore dropped from history, and the next advance found
+  no record of it. Advancing now seeds the closing phase before folding it in.
+* Advancing carried the closed phase's `assessments` forward while giving the new
+  phase's lifecycle an empty list, so the current lifecycle no longer equalled
+  its phase-keyed record. Beyond the projection refusal this was a real hazard:
+  a phase inheriting the previous phase's accepted tasks could close on work that
+  was never done for it. The next phase now starts with no assessments.
+
+None of these are reachable from a single-phase workflow, which is why the
+existing suite passed. The acceptance now runs two phases: the first closes and
+the second is dispatched, asserted by dispatching it rather than by trusting the
+first call's report.

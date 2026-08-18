@@ -1262,7 +1262,14 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
         `Phase depends on ${unmet.length} phase${unmet.length === 1 ? "" : "s"} that have not closed`,
       );
     }
-    const archived = updateCurrentPhase(records, {});
+    // A run's first phase has no lifecycle entry until something advances past
+    // it, so seed the closing phase before folding its closure in. Without this
+    // the phase that just closed is dropped from history entirely.
+    const seeded: RuntimeRunRecords =
+      records.phaseLifecycles === undefined
+        ? { ...records, phaseLifecycles: [phaseLifecycleRecords(records)] }
+        : records;
+    const archived = updateCurrentPhase(seeded, {});
     // The next phase builds its own candidate, evidence, and decision, so the
     // closed phase's records are dropped rather than carried forward.
     const {
@@ -1279,6 +1286,9 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
         phaseId: target.definition.id,
         definitionGeneration: target.definition.generation,
       },
+      // The next phase has accepted nothing yet; carrying the closed phase's
+      // assessments would let it close on work that was never done for it.
+      assessments: [],
       phaseLifecycles: [
         ...(archived.phaseLifecycles ?? []),
         {
@@ -1291,6 +1301,11 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
           assessments: [],
         },
       ],
+      // The projection reads the amendment aggregate whenever any part of it
+      // exists, so advancing seeds the empty halves rather than leaving a run
+      // that never amended anything unprojectable.
+      amendmentRecords: archived.amendmentRecords ?? [],
+      amendmentEvents: archived.amendmentEvents ?? [],
     };
     this.project(advanced);
     run.records = advanced;

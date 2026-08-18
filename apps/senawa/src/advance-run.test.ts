@@ -117,7 +117,8 @@ describe("advancing a run", () => {
       repositoryBase: BASE,
     });
 
-    expect(outcome).toEqual({ kind: "finished" });
+    // The run closed define and moved to verify, which the next call dispatches.
+    expect(outcome).toEqual({ kind: "closed", phaseKey: "define" });
 
     // The outcome alone would also be reported by a driver that closed nothing,
     // so assert the closure the authority durably recorded.
@@ -132,6 +133,24 @@ describe("advancing a run", () => {
     } finally {
       authority.close();
     }
+
+    // The run must actually be on the second phase, not merely report that it
+    // closed the first, so advancing again dispatches verify.
+    const next = await advanceRun({
+      projectRoot: project,
+      ...paths,
+      repositoryId: "repository_close",
+      runId: "run_close",
+      principal: runtimePrincipal,
+      dependencies,
+      currentTime: NOW,
+      workflowInput: {
+        bindingDigest: sha256Digest("3".repeat(64)),
+        value: canonicalValue({ request: "Add a health endpoint" }),
+      },
+      repositoryBase: BASE,
+    });
+    expect(next).toMatchObject({ kind: "dispatched", phaseKey: "verify" });
   });
 
   it("refuses to advance a run it cannot find", async () => {
@@ -160,6 +179,10 @@ const AGENTS = `
 definer:
   model: gpt-5
   prompt: prompts/definer.md
+
+verifier:
+  model: gpt-5
+  prompt: prompts/verifier.md
 `;
 
 const WORKFLOW = `
@@ -169,6 +192,12 @@ phases:
   - name: define
     agent: definer
     output: schemas/definition.schema.json
+    gates: [define]
+
+  - name: verify
+    agent: verifier
+    needs: [define]
+    output: schemas/verification.schema.json
     gates: [define]
 `;
 
@@ -198,9 +227,11 @@ gates:
     join(configuration, "prompts", "definer.md"),
     "Define the work.\n\nRequest: ${{ input.request }}\n",
   );
+  await writeFile(join(configuration, "prompts", "verifier.md"), "Verify the work.\n");
   for (const [name, id] of [
     ["request.schema.json", "urn:senawa:request"],
     ["definition.schema.json", "urn:senawa:definition"],
+    ["verification.schema.json", "urn:senawa:verification"],
   ]) {
     await writeFile(
       join(configuration, "schemas", String(name)),
