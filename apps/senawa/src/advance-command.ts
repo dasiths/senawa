@@ -81,6 +81,8 @@ function describe(outcome: AdvanceOutcome): string {
     case "closed":
       return `closed ${outcome.phaseKey}`;
     default:
-      return "finished";
+      // The run stays open: ending one carries human authority the driver has
+      // no business fabricating.
+      return "every phase is done; end the run when you are satisfied";
   }
 }

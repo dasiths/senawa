@@ -156,7 +156,7 @@ describe("the command surface end to end", () => {
       // command line, reaching the end on the strength of an agent's work.
       const repository = /^repository: (.+)$/m.exec(started.stdout)?.[1] ?? "";
       const advanced = await senawa(project, stateRoot, "advance", repository, "run_agent");
-      expect(advanced.stdout).toContain("finished");
+      expect(advanced.stdout).toContain("every phase is done");
 
       // A finished run has to show what it produced.
       const artifacts = await senawa(

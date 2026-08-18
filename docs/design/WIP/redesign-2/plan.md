@@ -422,8 +422,10 @@ Acceptance:
 * [x] Drive the agent side end to end from the command line: dispatch, read
   context and output schema, complete, and see the run advance.
 
-* [ ] Decide whether a workflow whose last phase closes ends its own run, and
-  make `status` and `advance` agree either way.
+* [x] Decide whether a workflow whose last phase closes ends its own run, and
+  make `status` and `advance` agree either way. **Decided: it does not. Ending a
+  run carries human authority, so `advance` now says every phase is done and
+  leaves the run open.**
 
 ## Phase 10: Sessions, model routing, and steering
 

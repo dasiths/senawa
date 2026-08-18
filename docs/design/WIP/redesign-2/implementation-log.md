@@ -2038,3 +2038,14 @@ The contradiction is real either way, so it is a plan item rather than a quiet
 change: either the last phase closing ends the run, or `advance` stops saying
 `finished` about a run that is still open, and `status` says what is actually
 left. Both are defensible; picking one without asking is not.
+
+### Decided: a completed workflow leaves its run open
+
+`end-run` resolves through `trustedFacts.humanAuthority`, so the driver cannot
+end a run without fabricating a human decision. That settles it: the last phase
+closing does not end the run.
+
+So `advance` stops claiming `finished` about a run that is still open and says
+"every phase is done; end the run when you are satisfied". `status` reporting
+`mode: running` is then correct rather than contradictory, and the person who
+has to decide is told there is a decision waiting.
