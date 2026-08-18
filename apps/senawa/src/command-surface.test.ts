@@ -59,6 +59,30 @@ describe("the command surface end to end", () => {
     expect(started.stdout).toContain("run: run_cli");
     expect(started.stdout).toContain("phase: plan");
     expect(started.stdout).toContain("waiting for the agent");
+
+    // The rest of what a consumer needs, in the order they need it, with no
+    // internal contract read and no digest computed by hand.
+    const repository = /repository: (\S+)/u.exec(started.stdout)?.[1];
+    if (repository === undefined) throw new Error("start did not name the repository");
+
+    const status = await senawa(project, stateRoot, "status", repository, "run_cli");
+    expect(status.stdout).toContain("mode: running");
+    expect(status.stdout).toContain("agents dispatched: 1");
+
+    const gates = await senawa(project, stateRoot, "run-gates", "plan");
+    expect(gates.stdout.length).toBeGreaterThan(0);
+
+    const agents = await senawa(project, stateRoot, "agent", "list", repository, "run_cli");
+    expect(agents.stdout).toContain("dispatch_");
+
+    const artifacts = await senawa(project, stateRoot, "artifact", "list", repository, "run_cli");
+    expect(artifacts.stdout).toContain("no artifacts yet");
+
+    // Intervening on a run that owes nobody a decision has to say so rather
+    // than fail obscurely.
+    const approve = await senawa(project, stateRoot, "approve", repository, "run_cli");
+    expect(approve.stdout).toContain("Nothing is waiting for a decision");
+    expect(approve.stdout).toContain("senawa status");
   }, 60_000);
 
   it("keeps the IPC credential out of status and diagnostics", async () => {

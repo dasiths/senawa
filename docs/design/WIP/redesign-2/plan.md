@@ -581,8 +581,10 @@ unknown and fail closed". Both are exact; only one can be read once.
 
 Acceptance:
 
-* [ ] A new consumer can scaffold, author, validate, run, inspect, intervene, and
-  finish a workflow without reading an internal contract.
+* [x] A new consumer can scaffold, author, validate, run, inspect, intervene, and
+  finish a workflow without reading an internal contract. **Driven through the
+  built binary in `command-surface.test.ts`: init, doctor, start, status,
+  run-gates, agent list, artifact list, approve.**
 * [x] No v1 guide instructs an author to put senawa protocol text in an agent
   prompt.
 * [ ] No document explains a behaviour in words the canonical behaviours table
