@@ -1816,3 +1816,51 @@ checked output makes the test fail, so it is testing the thing it names.
 
 The diagnostics argument is a bundle directory rather than a file, which the
 first attempt got wrong and the filesystem said so immediately.
+
+## The agent channel was never plugged in
+
+Driving the command line the way the reference describes it, every worker verb
+answered `Route was not found`:
+
+```text
+senawa worker context        -> Route was not found
+senawa worker output-schema  -> Route was not found
+senawa worker ask hello      -> Route was not found
+```
+
+The first guess was a wrong credential, because the handler answers `404` rather
+than `401` for a worker route reached without a worker scope, and that is a
+deliberate choice about not confirming which routes exist. The guess was wrong.
+
+`WorkerCredentialStore` is referenced by the HTTP handler's types and by its own
+tests, and constructed nowhere else. `SenawaWorkerApi` is constructed only by
+`worker-service.test.ts`. The handler takes the worker channel as an optional
+option, and the daemon never passes it. Every piece exists, each one is tested,
+and none of them are joined.
+
+So an agent dispatched by `senawa start` is given a dispatch identity, a prompt,
+a context, and an output schema, and no route to hand any of it back. The parts
+passing their tests is exactly what hid this: nothing failed, because nothing
+was asked to work together.
+
+That is what the end-to-end command-surface test is for, and why the next one to
+write drives the agent side rather than the operator side.
+
+### Why the pieces could not have been joined as they stand
+
+`start` and `advance` both dispatch in the command's own process, straight
+against SQLite. `WorkerCredentialStore` keeps its minted scopes in a `Map` in
+whichever process constructed it. So the process that mints a credential at
+dispatch and the daemon process that would have to validate it are never the
+same process, and no amount of wiring in `daemon.ts` alone would have made the
+documented flow work.
+
+Two ways out. Move dispatch into the daemon, or make the credential durable like
+everything else in this system.
+
+Durable wins, and not by much argument: the store already keys scopes by token
+digest rather than holding tokens, so persisting it stores digests at rest
+exactly as the local IPC credential already does, and every other piece of
+authority state in Senawa is durable and process-independent. Moving dispatch
+into the daemon would instead make the daemon mandatory for a flow that works
+today without it.

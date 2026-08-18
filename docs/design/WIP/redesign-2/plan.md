@@ -418,6 +418,13 @@ Acceptance:
   own complete loop needs members as phases, which D-025 defers.**
 * [ ] Human override remains visible in history and the final report.
 
+* [ ] Make worker credentials durable so a dispatch minted by `start` or
+  `advance` is honoured by the daemon that serves the agent channel.
+* [ ] Wire `SenawaWorkerApi` and the credential store into the daemon's IPC
+  handler so the documented worker verbs answer.
+* [ ] Drive the agent side end to end from the command line: dispatch, read
+  context and output schema, complete, and see the run advance.
+
 ## Phase 10: Sessions, model routing, and steering
 
 Agent policy belongs together because session scope, route changes, and steering
@@ -566,7 +573,7 @@ way it is. They belong back once the system can demonstrate them.
   keeps the system honest: deterministic sensors that execute real code, a
   journal no agent can write, a frozen set the optimizer cannot weaken, and a
   human who decides what better means.
-* [ ] Sweep every document for unsupported claims and undescribed capabilities.
+* [x] Sweep every document for unsupported claims and undescribed capabilities.
 * [ ] Record which promises v1 keeps, changes, or drops.
 
 Acceptance:
