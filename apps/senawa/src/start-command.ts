@@ -6,11 +6,13 @@ import type { AuthenticatedPrincipal } from "@senawa/protocol";
 import type { RuntimeDependencies } from "@senawa/runtime";
 import { runAdvanceCommand } from "./advance-command.js";
 import type { CliResult } from "./cli.js";
+import { mintDispatchCredential } from "./mint-dispatch-credential.js";
 import { startAuthoredRun } from "./start-run.js";
 
 export interface StartCommandPaths {
   readonly databasePath: string;
   readonly assetDirectory: string;
+  readonly runtimeDirectory: string;
 }
 
 export interface StartCommandOptions {
@@ -74,6 +76,17 @@ export async function runStartCommand(
         `repository: ${started.repositoryId}`,
         `phase: ${started.phaseKey}`,
         `dispatch: ${started.dispatchId}`,
+        `credential: ${mintDispatchCredential({
+          contextId: started.contextId,
+          databasePath: paths.databasePath,
+          dispatchId: started.dispatchId,
+          now: () => Date.parse(currentTime),
+          principalId: principal.subject,
+          repositoryId: started.repositoryId,
+          runId: started.runId,
+          runtimeDirectory: paths.runtimeDirectory,
+          sha256: dependencies.sha256,
+        })}`,
         ...(options.detach === true
           ? []
           : [

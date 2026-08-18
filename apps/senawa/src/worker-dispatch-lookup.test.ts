@@ -12,7 +12,7 @@ describe("finding a dispatch the serving process never registered", () => {
     const broker = new SqliteContextBroker({
       databasePath: scenario.paths.databasePath,
       dependencies: {
-        currentTime: () => 0,
+        currentTime: () => "1970-01-01T00:00:00.000Z",
         issueGrantToken: () => new Uint8Array(32),
         sha256: runtimeDependencies.sha256,
       },
@@ -22,20 +22,25 @@ describe("finding a dispatch the serving process never registered", () => {
       const dispatchId = dispatches[0]?.dispatch.dispatchId;
       if (dispatchId === undefined) throw new Error("the scenario dispatched nothing");
 
-      const lookup = new BrokerWorkerDispatchLookup({
-        broker,
+      const lookup = new BrokerWorkerDispatchLookup({ broker });
+      const scope = {
+        capabilities: ["worker-submit"],
+        contextId: "context_a",
+        expiresAt: 4_000,
+        maxSubmissions: 2,
+        principalId: "principal_a",
         repositoryId: scenario.repositoryId,
         runId: scenario.runId,
-      });
+      };
 
       // Nothing registered this dispatch in this process, which is exactly the
       // daemon's situation when an agent calls the worker channel.
-      const found = lookup.find(dispatchId);
+      const found = lookup.find({ ...scope, dispatchId });
       expect(found).toBeDefined();
       expect(JSON.stringify(found?.context)).toContain("worker-context");
       expect(JSON.stringify(found?.outputSchema)).toContain("schemaKey");
 
-      expect(lookup.find("dispatch_absent")).toBeUndefined();
+      expect(lookup.find({ ...scope, dispatchId: "dispatch_absent" })).toBeUndefined();
     } finally {
       broker.close();
     }

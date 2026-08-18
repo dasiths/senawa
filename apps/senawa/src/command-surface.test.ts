@@ -18,15 +18,19 @@ afterEach(async () => {
 async function senawa(
   cwd: string,
   stateRoot: string,
-  ...argv: readonly string[]
+  ...argv: readonly (string | NodeJS.ProcessEnv)[]
 ): Promise<{ readonly stdout: string; readonly code: number }> {
+  const last = argv[argv.length - 1];
+  const extra = typeof last === "object" ? last : {};
+  const args = argv.filter((value): value is string => typeof value === "string");
   try {
-    const { stdout } = await run(process.execPath, [CLI, ...argv], {
+    const { stdout } = await run(process.execPath, [CLI, ...args], {
       cwd,
       env: {
         ...process.env,
         XDG_STATE_HOME: stateRoot,
         XDG_RUNTIME_DIR: join(stateRoot, "run"),
+        ...extra,
       },
     });
     return { stdout, code: 0 };
@@ -87,6 +91,40 @@ describe("the command surface end to end", () => {
         const contents = await readFile(join(entry.parentPath, entry.name), "utf8");
         expect(contents).not.toContain(credential);
       }
+    } finally {
+      await senawa(project, stateRoot, "service", "stop");
+    }
+  }, 60_000);
+
+  it("lets a dispatched agent read its own context and schema", async () => {
+    const project = await mkdtemp(join(tmpdir(), "senawa-cli-"));
+    roots.add(project);
+    const stateRoot = join(project, "state");
+
+    await senawa(project, stateRoot, "init");
+    await senawa(project, stateRoot, "service", "start");
+    try {
+      await writeFile(join(project, "request.json"), JSON.stringify({ request: "Add health" }));
+      const started = await senawa(project, stateRoot, "start", "request.json", "run_agent");
+      const credential = /^credential: (.+)$/m.exec(started.stdout)?.[1];
+      const dispatch = /^dispatch: (.+)$/m.exec(started.stdout)?.[1];
+      if (credential === undefined || dispatch === undefined) {
+        throw new Error(`start reported no agent credential:\n${started.stdout}`);
+      }
+
+      // This is the whole point: the process that dispatched is gone, and the
+      // agent talks to the daemon, which never saw the mint or the dispatch.
+      const agent = { SENAWA_WORKER_CREDENTIAL: credential, SENAWA_WORKER_DISPATCH: dispatch };
+      const context = await senawa(project, stateRoot, "worker", "context", agent);
+      expect(context.stdout).toContain("worker-context-base");
+
+      const schema = await senawa(project, stateRoot, "worker", "output-schema", agent);
+      expect(schema.stdout).toContain("schemaKey");
+
+      // Accepting a submission and dropping it would read as success, so the
+      // refusal has to name what does work.
+      const asked = await senawa(project, stateRoot, "worker", "ask", "why", agent);
+      expect(asked.stdout).toContain("does not yet accept submissions");
     } finally {
       await senawa(project, stateRoot, "service", "stop");
     }

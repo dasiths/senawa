@@ -39,7 +39,7 @@ export interface AcceptedWorkerSubmission {
  * registration alone leaves every real agent talking to an empty map.
  */
 export interface WorkerDispatchLookup {
-  find(dispatchId: string): WorkerDispatchRecord | undefined;
+  find(scope: WorkerCredentialScope): WorkerDispatchRecord | undefined;
 }
 
 /** Where accepted submissions go. The channel never decides anything itself. */
@@ -103,7 +103,7 @@ export class SenawaWorkerApi implements WorkerApi {
   }
 
   #required(scope: WorkerCredentialScope): WorkerDispatchRecord {
-    const record = this.#records.get(scope.dispatchId) ?? this.#lookup?.find(scope.dispatchId);
+    const record = this.#records.get(scope.dispatchId) ?? this.#lookup?.find(scope);
     if (record === undefined) {
       throw new WorkerApiError("unknown-dispatch", "Dispatch is not accepting worker traffic");
     }

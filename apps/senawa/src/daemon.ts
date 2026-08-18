@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   ConfigurationCompilationError,
   type ConfigurationSnapshot,
@@ -60,6 +61,8 @@ import {
   SupervisorService,
   startLoopbackSupervisorServer,
   startUnixSupervisorServer,
+  WorkerApiError,
+  WorkerCredentialStore,
 } from "@senawa/supervisor";
 import {
   configurationOutputSchemaFor,
@@ -76,6 +79,9 @@ import {
   type DaemonRemoteConnectorFactoryInput,
 } from "./remote-composition.js";
 import { backupSupervisorState } from "./state-backup.js";
+import { SqliteWorkerCredentialRecords } from "./worker-credential-records.js";
+import { BrokerWorkerDispatchLookup } from "./worker-dispatch-lookup.js";
+import { SenawaWorkerApi } from "./worker-service.js";
 import {
   DurableCompletionEligibility,
   DynamicWorkspaceEffectHost,
@@ -167,6 +173,7 @@ export async function startSenawaService(
   let service: SupervisorService | undefined;
   let ownedAuthority: SqliteSupervisorAuthority | undefined;
   let ownedContextBroker: SqliteContextBroker | undefined;
+  let workerCredentialDatabase: DatabaseSync | undefined;
   let ownedWorkspaceAuthority: SqliteWorkspaceIntegrationAuthority | undefined;
   let ownedRunnerAuthority: SqliteRunnerAuthority | undefined;
   let ownedPortalQuery: SqlitePortalQueryAuthority | undefined;
@@ -241,6 +248,33 @@ export async function startSenawaService(
       phaseOutputFacts: phaseOutputBridge,
     });
     ownedContextBroker = contextBroker;
+    // A separate handle for the one table the channel owns. The authority has
+    // already migrated the file; this only reads and writes credential rows.
+    workerCredentialDatabase = new DatabaseSync(paths.databasePath);
+    // The agent channel is served by this process and dispatched by another, so
+    // both the credential records and the readable dispatch state come from
+    // durable storage rather than from anything registered in memory here.
+    const workerChannel = {
+      api: new SenawaWorkerApi({
+        lookup: new BrokerWorkerDispatchLookup({ broker: contextBroker }),
+        sha256: dependencies.sha256,
+        sink: {
+          accept: () => {
+            // Accepting and dropping would read to an agent as success, so this
+            // refuses in the agent's own vocabulary until the sink lands.
+            throw new WorkerApiError(
+              "unavailable",
+              "This build serves worker context and output schema but does not yet accept submissions",
+            );
+          },
+        },
+      }),
+      credentials: new WorkerCredentialStore({
+        now: () => Date.now(),
+        records: new SqliteWorkerCredentialRecords(workerCredentialDatabase),
+        sha256: dependencies.sha256,
+      }),
+    };
     const amendmentBridge = new AmendmentProposalCommandBridge({
       authority,
       broker: () => contextBroker,
@@ -407,6 +441,7 @@ export async function startSenawaService(
               transport: "ipc",
               credential,
               sessions,
+              worker: workerChannel,
               contextFactory,
               sse,
               operations,
@@ -537,6 +572,7 @@ export async function startSenawaService(
     }
     try {
       ownedContextBroker?.close();
+      workerCredentialDatabase?.close();
     } catch (cleanupError) {
       cleanupErrors.push(cleanupError);
     }

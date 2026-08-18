@@ -101,7 +101,11 @@ export async function runOperationalCli(
         ...(positional[0] === undefined ? {} : { runId: positional[0] }),
         ...(detached ? { detach: true } : {}),
       },
-      { databasePath: paths.databasePath, assetDirectory: paths.assetDirectory },
+      {
+        assetDirectory: paths.assetDirectory,
+        databasePath: paths.databasePath,
+        runtimeDirectory: paths.runtimeDirectory,
+      },
       dependencies,
       startPrincipal,
       new Date().toISOString(),

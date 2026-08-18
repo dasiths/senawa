@@ -37,6 +37,7 @@ export interface StartedAuthoredRun {
   readonly runId: string;
   readonly phaseKey: string;
   readonly dispatchId: string;
+  readonly contextId: string;
   readonly graphRevision: Sha256Digest;
 }
 
@@ -123,6 +124,7 @@ export async function startAuthoredRun(input: StartAuthoredRunInput): Promise<St
       runId: input.runId,
       phaseKey,
       dispatchId: dispatched.dispatch.dispatchId,
+      contextId: dispatched.dispatch.contextId,
       graphRevision: snapshot.graph.revisionDigest,
     };
   } finally {

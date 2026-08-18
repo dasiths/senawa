@@ -1900,3 +1900,27 @@ guard doing its job against a test that lied to it. And the first assertion
 looked for the dispatch identity inside the worker context, which does not carry
 it; the context base and the dispatch are different records, and the test was
 asserting a shape that never existed rather than a behaviour that broke.
+
+### Joining the three pieces
+
+`start` now mints a worker credential when it dispatches and prints its path
+beside the dispatch, the daemon serves the channel from durable credentials and
+a broker-backed lookup, and an agent can read its own context and output schema
+through the documented verbs.
+
+Two things the manual drive caught that no unit test would have. The capability
+strings on a minted credential were invented rather than looked up, so the
+handler refused with `Worker credential does not carry worker.submit.question`;
+the real names are `worker.submit.completion`, `worker.submit.phase-output`, and
+`worker.submit.question`, and the read verbs need only a recognised credential.
+And minting made `start` fail with `ENOENT` in the one test that never starts a
+service, because the credential store creates its own directory levels but not
+their parents, and until now nothing had ever written under the runtime root
+without the daemon having been there first.
+
+The submission sink is not done. It refuses with `This build serves worker
+context and output schema but does not yet accept submissions`, which is the
+whole lesson of this phase applied to itself: a channel that accepted a
+completion and dropped it would look exactly like success to the agent that sent
+it, and the run would sit there waiting forever for work that had already been
+handed in.

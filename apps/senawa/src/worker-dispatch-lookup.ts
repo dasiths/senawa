@@ -1,6 +1,7 @@
 import { canonicalValue } from "@senawa/kernel";
 import type { JsonValue } from "@senawa/protocol";
 import type { SqliteContextBroker } from "@senawa/storage-sqlite";
+import type { WorkerCredentialScope } from "@senawa/supervisor";
 import type { WorkerDispatchLookup, WorkerDispatchRecord } from "./worker-service.js";
 
 /**
@@ -12,23 +13,17 @@ import type { WorkerDispatchLookup, WorkerDispatchRecord } from "./worker-servic
  */
 export class BrokerWorkerDispatchLookup implements WorkerDispatchLookup {
   readonly #broker: SqliteContextBroker;
-  readonly #repositoryId: string;
-  readonly #runId: string;
 
-  constructor(options: {
-    readonly broker: SqliteContextBroker;
-    readonly repositoryId: string;
-    readonly runId: string;
-  }) {
+  constructor(options: { readonly broker: SqliteContextBroker }) {
     this.#broker = options.broker;
-    this.#repositoryId = options.repositoryId;
-    this.#runId = options.runId;
   }
 
-  find(dispatchId: string): WorkerDispatchRecord | undefined {
+  find(scope: WorkerCredentialScope): WorkerDispatchRecord | undefined {
+    // The credential names the run, so one lookup serves every run the daemon
+    // holds rather than being pinned to whichever run built it.
     const stored = this.#broker
-      .listWorkerDispatches(this.#repositoryId, this.#runId)
-      .find((entry) => entry.dispatch.dispatchId === dispatchId);
+      .listWorkerDispatches(scope.repositoryId, scope.runId)
+      .find((entry) => entry.dispatch.dispatchId === scope.dispatchId);
     if (stored === undefined) return undefined;
     const declaration = stored.context.phaseOutputDeclarations[0];
     if (declaration === undefined) return undefined;
