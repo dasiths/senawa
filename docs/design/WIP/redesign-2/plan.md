@@ -418,7 +418,7 @@ Acceptance:
   own complete loop needs members as phases, which D-025 defers.**
 * [ ] Human override remains visible in history and the final report.
 
-* [ ] Make worker credentials durable so a dispatch minted by `start` or
+* [x] Make worker credentials durable so a dispatch minted by `start` or
   `advance` is honoured by the daemon that serves the agent channel.
 * [ ] Wire `SenawaWorkerApi` and the credential store into the daemon's IPC
   handler so the documented worker verbs answer.

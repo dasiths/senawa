@@ -128,7 +128,10 @@ describe("what an author can state", () => {
     if (snapshot === undefined) throw new Error("the repository tree does not compile");
 
     const planner = snapshot.modelPolicies
-      .map((entry) => entry.value as { readonly key: string; readonly routes: readonly unknown[] })
+      .map(
+        (entry) =>
+          entry.value as unknown as { readonly key: string; readonly routes: readonly unknown[] },
+      )
       .find((policy) => policy.key === "planner");
     if (planner === undefined) throw new Error("planner has no model policy");
 

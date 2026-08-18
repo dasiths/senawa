@@ -36,6 +36,58 @@ export interface WorkerCredentialResolution {
   readonly scope: WorkerCredentialScope;
 }
 
+/** One minted credential as it is kept between processes. */
+export interface WorkerCredentialRecord {
+  readonly scope: WorkerCredentialScope;
+  readonly used: number;
+  readonly path: string;
+}
+
+/**
+ * Where minted credentials live.
+ *
+ * A credential is minted by whichever process dispatches and presented to
+ * whichever process serves the agent channel, and those are not the same
+ * process. Keeping the records behind a port lets the supervisor stay free of
+ * storage while the daemon backs them with the same durable state as
+ * everything else.
+ */
+export interface WorkerCredentialRecords {
+  read(tokenDigest: string): WorkerCredentialRecord | undefined;
+  write(tokenDigest: string, record: WorkerCredentialRecord): void;
+  spend(tokenDigest: string): void;
+  forget(dispatchId: string): readonly string[];
+}
+
+/** The default records, which live only as long as the process that mints. */
+export class InMemoryWorkerCredentialRecords implements WorkerCredentialRecords {
+  readonly #byDigest = new Map<string, WorkerCredentialRecord>();
+
+  read(tokenDigest: string): WorkerCredentialRecord | undefined {
+    return this.#byDigest.get(tokenDigest);
+  }
+
+  write(tokenDigest: string, record: WorkerCredentialRecord): void {
+    this.#byDigest.set(tokenDigest, record);
+  }
+
+  spend(tokenDigest: string): void {
+    const record = this.#byDigest.get(tokenDigest);
+    if (record === undefined) return;
+    this.#byDigest.set(tokenDigest, { ...record, used: record.used + 1 });
+  }
+
+  forget(dispatchId: string): readonly string[] {
+    const paths: string[] = [];
+    for (const [digest, record] of this.#byDigest) {
+      if (record.scope.dispatchId !== dispatchId) continue;
+      paths.push(record.path);
+      this.#byDigest.delete(digest);
+    }
+    return paths;
+  }
+}
+
 export class WorkerCredentialError extends Error {
   readonly reason: WorkerCredentialRefusal;
 
@@ -55,17 +107,18 @@ export class WorkerCredentialError extends Error {
  * can be withdrawn from a running process by unlinking its file.
  */
 export class WorkerCredentialStore {
-  readonly #byDigest = new Map<string, { scope: WorkerCredentialScope; used: number }>();
-  readonly #paths = new Map<string, string>();
+  readonly #records: WorkerCredentialRecords;
   readonly #sha256: { digest(bytes: Uint8Array): string };
   readonly #now: () => number;
 
   constructor(options: {
     readonly sha256: { digest(bytes: Uint8Array): string };
     readonly now: () => number;
+    readonly records?: WorkerCredentialRecords;
   }) {
     this.#sha256 = options.sha256;
     this.#now = options.now;
+    this.#records = options.records ?? new InMemoryWorkerCredentialRecords();
   }
 
   /**
@@ -95,8 +148,7 @@ export class WorkerCredentialStore {
       maxSubmissions: input.maxSubmissions,
     });
     const path = resolve(directory, "credential");
-    this.#byDigest.set(this.#digest(credential.token), { scope, used: 0 });
-    this.#paths.set(input.dispatchId, path);
+    this.#records.write(this.#digest(credential.token), { scope, used: 0, path });
     return { path, scope };
   }
 
@@ -107,7 +159,7 @@ export class WorkerCredentialStore {
    * for, so identity has to be separable from the act of submitting.
    */
   identify(token: string): WorkerCredentialScope | undefined {
-    const record = this.#byDigest.get(this.#digest(token));
+    const record = this.#records.read(this.#digest(token));
     if (record === undefined) return undefined;
     if (this.#now() >= record.scope.expiresAt) {
       this.revoke(record.scope.dispatchId);
@@ -118,7 +170,8 @@ export class WorkerCredentialStore {
 
   /** Resolves a presented token to its dispatch, refusing anything unscoped. */
   resolve(token: string, capability: string): WorkerCredentialResolution {
-    const record = this.#byDigest.get(this.#digest(token));
+    const tokenDigest = this.#digest(token);
+    const record = this.#records.read(tokenDigest);
     if (record === undefined) {
       throw new WorkerCredentialError("unknown-credential", "Worker credential is not recognized");
     }
@@ -138,19 +191,14 @@ export class WorkerCredentialStore {
         `Worker credential does not carry ${capability}`,
       );
     }
-    record.used += 1;
+    this.#records.spend(tokenDigest);
     return { scope: record.scope };
   }
 
   /** Withdraws a credential, including from a process that already read it. */
   revoke(dispatchId: string): void {
-    for (const [digest, record] of this.#byDigest) {
-      if (record.scope.dispatchId === dispatchId) this.#byDigest.delete(digest);
-    }
-    const path = this.#paths.get(dispatchId);
-    if (path !== undefined) {
+    for (const path of this.#records.forget(dispatchId)) {
       rmSync(path, { force: true });
-      this.#paths.delete(dispatchId);
     }
   }
 

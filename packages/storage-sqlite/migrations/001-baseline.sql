@@ -249,6 +249,19 @@ CREATE TABLE context_completion_outbox (
   delivered INTEGER NOT NULL CHECK (delivered IN (0, 1))
 ) STRICT;
 
+-- Worker credentials outlive the process that mints them: `start` and `advance`
+-- dispatch in their own process, and the daemon that serves the agent channel
+-- has to honour what they minted. Only the token digest is kept, never a token.
+CREATE TABLE worker_credentials (
+  token_digest TEXT PRIMARY KEY CHECK (length(token_digest) = 64),
+  dispatch_id TEXT NOT NULL,
+  credential_path TEXT NOT NULL,
+  submissions_used INTEGER NOT NULL CHECK (submissions_used >= 0),
+  canonical_scope TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX worker_credentials_by_dispatch ON worker_credentials (dispatch_id);
+
 CREATE TABLE context_dispatches (
   dispatch_id TEXT PRIMARY KEY,
   repository_id TEXT NOT NULL,

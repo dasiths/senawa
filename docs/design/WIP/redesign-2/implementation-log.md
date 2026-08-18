@@ -1864,3 +1864,21 @@ exactly as the local IPC credential already does, and every other piece of
 authority state in Senawa is durable and process-independent. Moving dispatch
 into the daemon would instead make the daemon mandatory for a flow that works
 today without it.
+
+### Making the credential outlive the process that mints it
+
+`WorkerCredentialStore` now takes a records port and defaults to the in-memory
+implementation it already had, so the supervisor package stays free of storage
+and nothing that used it had to change. The app supplies a SQLite-backed port,
+because the app is where both the supervisor and the database are already in
+scope; putting the adapter under `storage-sqlite` would have made storage depend
+on the supervisor, which is upside down.
+
+The stored row holds a token digest, never a token, exactly as the local IPC
+credential already does.
+
+The submission budget is the part worth being careful about. Two stores reading
+the same rows must not each grant the whole budget, so spending is an `UPDATE`
+against the row rather than a counter on an object. The test spends from both
+stores in turn and expects the third attempt to be refused; running the same
+test against the in-memory default fails, which is the regression it exists for.
