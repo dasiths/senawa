@@ -62,6 +62,10 @@ export interface ScenarioOptions {
   readonly attempts?: number;
   /** Adds a field the reader does not know, to check it is refused. */
   readonly unknownField?: boolean;
+  /** Stops the run on the first failing member instead of continuing. */
+  readonly failFast?: boolean;
+  /** Fans out over a phase that already fans out. */
+  readonly nestedFanOut?: boolean;
 }
 
 export interface Scenario {
@@ -299,15 +303,32 @@ async function authoredProject(options: ScenarioOptions): Promise<string> {
 }
 
 function fanOutPhase(options: ScenarioOptions): string {
-  if (options.fanOut === undefined) return "";
-  return `
+  if (options.fanOut === undefined && options.nestedFanOut !== true) return "";
+  const first = `
   - name: implement
     agent: verifier
     needs: [define]
     forEach: define.tasks
     collection: schemas/tasks.schema.json
-${options.fanOut === "complete" ? "    input: schemas/task.schema.json\n" : ""}    output: schemas/verification.schema.json
+    input: schemas/task.schema.json
+    output: schemas/verification.schema.json${
+      options.failFast === true ? "\n    onFailure: fail-fast" : ""
+    }
 `;
+  if (options.nestedFanOut === true) {
+    return `${first}
+  - name: review
+    agent: verifier
+    needs: [implement]
+    forEach: implement.tasks
+    collection: schemas/tasks.schema.json
+    input: schemas/task.schema.json
+    output: schemas/verification.schema.json
+`;
+  }
+  return options.fanOut === "complete"
+    ? first
+    : first.replace("    input: schemas/task.schema.json\n", "");
 }
 
 function workflow(options: ScenarioOptions): string {

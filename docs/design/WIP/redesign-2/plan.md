@@ -396,8 +396,9 @@ Acceptance:
   preserving one task beneath each phase and a configured nesting bound. **Not done: members lower to a task frontier rather than phases. Deviation recorded as D-025; per-member gates and approval need the phase model.**
 * [ ] Give each member its own operating contract, output, evidence policy,
   gates, approval, attempt policy, escalation, and history.
-* [ ] Honour per-phase failure policy: wait, proceed with passed members, or fail
-  outright.
+* [x] Honour per-phase failure policy: wait, proceed with passed members, or fail
+  outright. **Partial: the authored policy now reaches the run. The authority
+  holds one policy per run, so a run any phase wants stopped is stopped. F-013.**
 * [ ] Make amendment quiescence transitive over member phases before an approved
   amendment can apply.
 * [ ] Let a human mark a member done over red gates as an explicit authority
@@ -411,8 +412,10 @@ Acceptance:
   grouped under their parent phase in the portal.
 * [ ] Three failing members do not block the remaining seven under a continue
   policy.
-* [ ] A nested member at the configured depth runs its own complete loop, and one
-  beyond the bound is refused at authoring time.
+* [x] A nested member at the configured depth runs its own complete loop, and one
+  beyond the bound is refused at authoring time. **Partial: the bound is one
+  level in v1 and nesting past it is refused when written. A member running its
+  own complete loop needs members as phases, which D-025 defers.**
 * [ ] Human override remains visible in history and the final report.
 
 ## Phase 10: Sessions, model routing, and steering

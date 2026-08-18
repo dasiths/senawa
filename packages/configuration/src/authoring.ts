@@ -141,7 +141,13 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
     execution: {
       workspaceMode: "repository",
       maxWriterConcurrency: 1,
-      failurePolicy: "continue",
+      // The authority holds one failure policy per run while an author states
+      // it per phase, so a run that any phase wants stopped is stopped. Being
+      // over-strict here fails earlier rather than continuing past a phase the
+      // author asked to halt on. Recorded as F-013.
+      failurePolicy: phases.some((phase) => phase.onFailure === "fail-fast")
+        ? "fail-fast"
+        : "continue",
     },
     workflow: {
       key: name,
@@ -783,6 +789,13 @@ function readPhases(
   );
   const phases: AuthoredPhase[] = [];
   const seen = new Set<string>();
+  const fanOutPhases = new Set(
+    value.phases.flatMap((entry) =>
+      isRecord(entry) && typeof entry.name === "string" && entry.forEach !== undefined
+        ? [entry.name]
+        : [],
+    ),
+  );
   const declaredNames = new Set(
     value.phases.flatMap((entry) =>
       isRecord(entry) && typeof entry.name === "string" ? [entry.name] : [],
@@ -859,6 +872,17 @@ function readPhases(
       );
     }
     const forEach = readForEach(collector, path, pointer, raw, needs);
+    // v1 runs members as tasks beneath one phase, so a member cannot itself fan
+    // out. Saying so here beats a run that fails once it is already going.
+    if (forEach !== undefined && fanOutPhases.has(forEach.phase)) {
+      add(
+        collector,
+        "invalid-field",
+        path,
+        `${pointer}/forEach`,
+        `Cannot fan out over ${forEach.phase}, which already fans out. v1 supports one level.`,
+      );
+    }
     // A phase reading more than one upstream output cannot have its input schema
     // derived unambiguously, so it must name one.
     const declaredInput = typeof raw.input === "string" ? raw.input : undefined;

@@ -48,6 +48,19 @@ describe("fan-out in sequence", () => {
     );
   });
 
+  it("refuses a member that itself fans out", async () => {
+    const diagnostics = await compileScenario({ nestedFanOut: true });
+
+    // v1 runs members as tasks beneath one phase, so nesting cannot work.
+    // Refusing it here beats a run that fails once it is already going.
+    expect(diagnostics.map(({ message }) => message).join(" ")).toContain("which already fans out");
+  });
+
+  it("carries an authored fail-fast policy into the compiled run", async () => {
+    const stopping = await compileScenario({ fanOut: "complete", failFast: true });
+    expect(stopping).toEqual([]);
+  });
+
   it("compiles a fan-out that names both the collection and the element", async () => {
     const scenario = await startScenario("fanout", { fanOut: "complete" });
 

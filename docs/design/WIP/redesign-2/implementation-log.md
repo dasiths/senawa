@@ -1721,3 +1721,34 @@ than writing more of it:
 
 Leaving an item open when its evidence exists is its own kind of inaccuracy: it
 hides which work is genuinely left.
+
+## F-013: the failure policy was authored, discarded, and inverted
+
+`onFailure` was read from a phase, validated against `continue` and `fail-fast`,
+defaulted to `fail-fast`, and then never used. The lowered execution block
+hardcoded `continue`.
+
+So an author who wrote nothing got `fail-fast` in the model they were reading
+and `continue` in the run they got. An author who wrote `fail-fast` explicitly
+got the same. The default was not merely ignored, it was inverted.
+
+This is the third discarded authored value found in a day, after
+`completionEvidenceFrom` and the unknown-field hole that hid both. The pattern
+is the same each time: a value is parsed, validated, and then not threaded
+through, and nothing fails because nothing looks.
+
+The run's policy is now derived from the phases: a run any phase wants stopped
+is stopped. The authority holds one policy per run while an author states it per
+phase, which is the same shape as F-011 for approval. Being over-strict fails
+earlier rather than continuing past a phase the author asked to halt on, which
+is the right way round for this kind of mismatch.
+
+## Nested fan-out is refused when it is written
+
+v1 runs members as tasks beneath one phase, so a member cannot itself fan out.
+Nothing said so: an author could write a fan-out over a fan-out and find out at
+runtime, or not at all.
+
+It is now refused at authoring time, naming the phase that already fans out and
+saying v1 supports one level. The bound is a property of the D-025 deviation
+rather than an arbitrary limit, so it moves when members become phases.
