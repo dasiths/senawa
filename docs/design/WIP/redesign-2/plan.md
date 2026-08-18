@@ -267,7 +267,7 @@ tells an agent how to participate in the loop.
 
 Acceptance:
 
-* [ ] A scripted worker whose assignment prompt contains no Senawa commands
+* [x] A scripted worker whose assignment prompt contains no Senawa commands
   discovers the completion contract, writes a valid output asset, calls complete
   with that asset's path, and exits only after completion is granted.
 * [ ] A Copilot worker receives equivalent typed tools and completes the same
@@ -286,7 +286,7 @@ Acceptance:
 Completion cannot be granted against a policy the author had no way to state.
 This phase closes the most consequential part of F-004.
 
-* [ ] Apply the D-023 rename in one pass, so nothing is renamed twice: the bare
+* [x] Apply the D-023 rename in one pass, so nothing is renamed twice: the bare
   `evidence` identifier disappears in favour of `completionEvidence`, and
   `completionEvidenceViews` becomes `completionEvidenceViews` with a matching
   `completion-evidence` mapping kind. `GateEvidence` and `SensorReading` are
@@ -300,7 +300,10 @@ This phase closes the most consequential part of F-004.
   repository path while retaining the current scalar schema form as shorthand.
 * [ ] Put the exact required output assets, criteria, and evidence requirements
   into the generated operating contract and complete-request schema so the agent
-  knows what completion means before it starts work. **Partial: output declarations reach the contract; criteria and evidence counts do not.**
+  knows what completion means before it starts work. **Partial: output
+  declarations reach the contract. Criteria and evidence counts cannot follow
+  until they travel in the worker context, because the prompt pack digest is
+  reproducible from context and dispatch alone.**
 * [x] Refuse contradictory policies at authoring time, including evidence kinds
   no phase can produce and sensitivity flows that exceed a declared ceiling.
 

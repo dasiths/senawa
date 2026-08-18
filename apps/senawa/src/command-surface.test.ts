@@ -115,6 +115,11 @@ describe("the command surface end to end", () => {
       // This is the whole point: the process that dispatched is gone, and the
       // agent talks to the daemon, which never saw the mint or the dispatch.
       const agent = { SENAWA_WORKER_CREDENTIAL: credential, SENAWA_WORKER_DISPATCH: dispatch };
+      // The authored prompt says nothing about Senawa. Everything the worker
+      // needs to hand in work is discovered through the channel.
+      const authored = await readFile(join(project, ".senawa", "prompts", "planner.md"), "utf8");
+      expect(authored).not.toMatch(/senawa|submit_completion|worker complete/i);
+
       const context = await senawa(project, stateRoot, "worker", "context", agent);
       expect(context.stdout).toContain("worker-context-base");
 

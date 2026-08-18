@@ -96,7 +96,7 @@ export async function runWorkerCli(
  */
 function buildCompleteRequest(argv: readonly string[], workspaceRoot: string): JsonValue | string {
   const outputs: { name: string; value: JsonValue }[] = [];
-  const evidence: { kind: string; path: string; content: string }[] = [];
+  const completionEvidence: { kind: string; path: string; content: string }[] = [];
   let summary = "";
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -119,7 +119,7 @@ function buildCompleteRequest(argv: readonly string[], workspaceRoot: string): J
         return `Cannot read ${path}: ${error instanceof Error ? error.message : "unknown"}`;
       }
       if (flag === "--evidence") {
-        evidence.push({ kind: name, path, content });
+        completionEvidence.push({ kind: name, path, content });
       } else {
         let parsed: unknown;
         try {
@@ -147,7 +147,7 @@ function buildCompleteRequest(argv: readonly string[], workspaceRoot: string): J
   return {
     kind: "complete",
     outputs,
-    evidence,
+    completionEvidence,
     ...(summary.length === 0 ? {} : { summary }),
   } as unknown as JsonValue;
 }

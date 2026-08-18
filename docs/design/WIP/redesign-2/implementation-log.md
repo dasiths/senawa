@@ -2049,3 +2049,29 @@ So `advance` stops claiming `finished` about a run that is still open and says
 "every phase is done; end the run when you are satisfied". `status` reporting
 `mode: running` is then correct rather than contradictory, and the person who
 has to decide is told there is a decision waiting.
+
+## The operating contract cannot be told what it does not already hold
+
+Putting completion criteria and evidence counts into the generated contract
+looked like threading one more argument into `renderPromptPack`. It is not.
+
+The broker re-renders the pack and compares digests to prove the dispatch got
+the bounded deterministic rendering, and so do the Copilot worker, the portal
+setup, and the broker conformance suite. A fifth input means every one of those
+renders a different pack from the one the driver registered, and the whole tree
+fails on `Dispatch prompt pack digest does not match the bounded deterministic
+rendering`. Four suites said so at once, which is the guard doing exactly its
+job.
+
+The digest is reproducible from the context and the dispatch. So anything the
+contract states has to be in one of them, and completion requirements are in
+neither: they are derived beside the dispatch and stored next to it.
+
+Reverted rather than left half-threaded. Stating criteria in the contract needs
+them carried in the worker context, which is a context-shape change and a piece
+of work in its own right.
+
+The D-023 rename is finished: the bare `evidence` in a complete request is now
+`completionEvidence`, matching the field the authority already judged it by. The
+remaining `evidence` identifiers belong to git integration and remote receipts,
+which are different evidence about different things.

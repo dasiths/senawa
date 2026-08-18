@@ -13,7 +13,7 @@ export type WorkerSubmission =
   | {
       readonly kind: "complete";
       readonly outputs: readonly { readonly name: string; readonly value: CanonicalValue }[];
-      readonly evidence: readonly {
+      readonly completionEvidence: readonly {
         readonly kind: string;
         readonly path: string;
         readonly content: string;
@@ -21,7 +21,11 @@ export type WorkerSubmission =
       readonly summary?: string;
     }
   | { readonly kind: "phase-output"; readonly outputName: string; readonly value: CanonicalValue }
-  | { readonly kind: "completion"; readonly summary: string; readonly evidence: CanonicalValue }
+  | {
+      readonly kind: "completion";
+      readonly summary: string;
+      readonly completionEvidence: CanonicalValue;
+    }
   | { readonly kind: "question"; readonly question: string }
   | { readonly kind: "escalation"; readonly reason: string };
 
@@ -134,7 +138,7 @@ export function parseWorkerSubmission(submission: JsonValue): WorkerSubmission {
     return {
       kind,
       outputs,
-      evidence: requiredArray(record, "evidence").map((entry) => {
+      completionEvidence: requiredArray(record, "completionEvidence").map((entry) => {
         const item = asRecord(entry);
         return {
           kind: requiredString(item, "kind"),
@@ -156,7 +160,7 @@ export function parseWorkerSubmission(submission: JsonValue): WorkerSubmission {
     return {
       kind,
       summary: requiredString(record, "summary"),
-      evidence: canonicalValue(requiredPresent(record, "evidence")),
+      completionEvidence: canonicalValue(requiredPresent(record, "completionEvidence")),
     };
   }
   if (kind === "question") return { kind, question: requiredString(record, "question") };

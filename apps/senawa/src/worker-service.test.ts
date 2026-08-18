@@ -40,14 +40,14 @@ describe("worker channel", () => {
     await worker.submit(scope, {
       kind: "complete",
       outputs: [{ name: "plan", value: { tasks: [] } }],
-      evidence: [{ kind: "task-completion", path: "logs/test.txt", content: "ok" }],
+      completionEvidence: [{ kind: "task-completion", path: "logs/test.txt", content: "ok" }],
       summary: "done",
     } as never);
 
     expect(accepted).toMatchObject({
       kind: "complete",
       outputs: [{ name: "plan" }],
-      evidence: [{ kind: "task-completion" }],
+      completionEvidence: [{ kind: "task-completion" }],
       summary: "done",
     });
   });
@@ -63,7 +63,7 @@ describe("worker channel", () => {
     // Completion is the only way a phase produces anything, so a request with
     // nothing in it cannot be a completion.
     await expect(
-      worker.submit(scope, { kind: "complete", outputs: [], evidence: [] } as never),
+      worker.submit(scope, { kind: "complete", outputs: [], completionEvidence: [] } as never),
     ).rejects.toBeInstanceOf(WorkerApiError);
     expect(reached).toBe(false);
   });
@@ -77,7 +77,7 @@ describe("worker channel", () => {
           { name: "plan", value: { a: 1 } },
           { name: "plan", value: { a: 2 } },
         ],
-        evidence: [],
+        completionEvidence: [],
       } as never),
     ).rejects.toBeInstanceOf(WorkerApiError);
   });
