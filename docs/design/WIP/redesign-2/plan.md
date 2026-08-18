@@ -422,6 +422,9 @@ Acceptance:
 * [x] Drive the agent side end to end from the command line: dispatch, read
   context and output schema, complete, and see the run advance.
 
+* [ ] Decide whether a workflow whose last phase closes ends its own run, and
+  make `status` and `advance` agree either way.
+
 ## Phase 10: Sessions, model routing, and steering
 
 Agent policy belongs together because session scope, route changes, and steering

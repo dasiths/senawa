@@ -2021,3 +2021,20 @@ Phase outputs are now listed alongside proposed assets, presented in the shape
 the listing already reads. The digest, byte length, and media type come from the
 submission, so the stored asset verifies and the entry reads
 `verified-stored` rather than `metadata-only`.
+
+### A finished workflow is not a finished run
+
+`advance` returns `finished` when the last phase closes and no next phase
+exists. It does not end the run, so `senawa status` keeps reporting
+`mode: running` for a workflow that has nothing left to do. Two commands
+describe the same run and disagree.
+
+This is not obviously a bug to fix by making `advance` end the run. `end-run`
+sits with `pause-run` and `resume-run` in the trusted human authority group, so
+ending a run is currently something a person does, and having the driver do it
+silently would take that away without anyone deciding to.
+
+The contradiction is real either way, so it is a plan item rather than a quiet
+change: either the last phase closing ends the run, or `advance` stops saying
+`finished` about a run that is still open, and `status` says what is actually
+left. Both are defensible; picking one without asking is not.
