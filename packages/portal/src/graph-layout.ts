@@ -483,6 +483,6 @@ function translate(placement: Placement, offsetX: number, offsetY: number): Plac
   });
 }
 
-export function compareIdentity(left: string, right: string): number {
+function compareIdentity(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }

@@ -527,8 +527,10 @@ Acceptance:
 
 Acceptance:
 
-* [ ] No exported production symbol lacks a production caller unless it is a
-  documented adapter extension point.
+* [x] No exported production symbol lacks a production caller unless it is a
+  documented adapter extension point. **`pnpm check:exports` gates it. The rule
+  had to be narrowed three times to be sound; F-016 records why types, star
+  re-exports, and internals under test are all legitimate.**
 * [x] Boundary and dependency checks still pass.
 
 ## Phase 14: Name it v1 and rewrite every document in plain language

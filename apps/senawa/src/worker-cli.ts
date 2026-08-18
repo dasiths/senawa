@@ -10,8 +10,8 @@ import type { CliResult } from "./cli.js";
  * A token in the environment cannot be withdrawn from a process that already
  * read it and propagates to every descendant; a path can be unlinked.
  */
-export const WORKER_CREDENTIAL_PATH_VARIABLE = "SENAWA_WORKER_CREDENTIAL";
-export const WORKER_DISPATCH_VARIABLE = "SENAWA_WORKER_DISPATCH";
+const WORKER_CREDENTIAL_PATH_VARIABLE = "SENAWA_WORKER_CREDENTIAL";
+const WORKER_DISPATCH_VARIABLE = "SENAWA_WORKER_DISPATCH";
 
 export interface WorkerCliOptions {
   readonly socketPath: string;

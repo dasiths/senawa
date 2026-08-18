@@ -2,7 +2,7 @@ import type { PortalHumanNeed } from "@senawa/protocol";
 
 export const QUESTION_OVERDUE_MS = 60_000;
 export const PORTAL_TITLE = "Senawa Portal";
-export const ATTENTION_TITLE_PREFIX = "\u25cf Answer needed \u2014 ";
+const ATTENTION_TITLE_PREFIX = "\u25cf Answer needed \u2014 ";
 /** Display ceiling so a long-abandoned question can never grow an unbounded label. */
 const MAX_ELAPSED_HOURS = 99;
 

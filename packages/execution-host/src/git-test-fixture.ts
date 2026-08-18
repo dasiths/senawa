@@ -28,7 +28,7 @@ export interface TemporaryGitRepository {
   cleanup(): Promise<void>;
 }
 
-export class AuditedGitCommandPort implements GitCommandPort {
+class AuditedGitCommandPort implements GitCommandPort {
   readonly operations: { readonly rootDirectory: string; readonly args: readonly string[] }[] = [];
 
   constructor(readonly delegate: GitCommandPort) {}

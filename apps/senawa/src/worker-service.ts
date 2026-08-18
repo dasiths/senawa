@@ -117,7 +117,7 @@ export class SenawaWorkerApi implements WorkerApi {
 }
 
 /** Validates a submission's shape, refusing anything the channel does not offer. */
-export function parseWorkerSubmission(submission: JsonValue): WorkerSubmission {
+function parseWorkerSubmission(submission: JsonValue): WorkerSubmission {
   const record = asRecord(submission);
   const kind = record.kind;
   if (kind === "complete") {

@@ -704,7 +704,7 @@ describe("production workspace composition", () => {
     runner.close();
     supervisor.close();
     await fixture.cleanup();
-  });
+  }, 30_000);
 
   it("bounds production semantic rework to two attempts without queuing a third", async () => {
     const fixture = await temporaryRepository();

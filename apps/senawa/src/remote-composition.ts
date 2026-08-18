@@ -26,7 +26,7 @@ import {
 const ENROLLMENT_VERSION = "senawa.dev/remote-connector-enrollment/v1";
 const MAX_ENROLLMENT_BYTES = 64 * 1024;
 const MAX_REMOTE_RESPONSE_BYTES = PROTOCOL_LIMITS.maxWireBytes;
-export const REMOTE_NETWORK_LIMITS = Object.freeze({
+const REMOTE_NETWORK_LIMITS = Object.freeze({
   maxEndpointCharacters: 2_048,
   defaultResponseTimeoutMs: 10_000,
   maxResponseTimeoutMs: 300_000,

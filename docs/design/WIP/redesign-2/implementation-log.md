@@ -2442,3 +2442,31 @@ change or removal, so the distinction exists and is unwired rather than absent.
 
 Not built here. Recorded with its evidence so it is a decision waiting to be
 executed rather than a question waiting to be asked again.
+
+## F-016: the dead-export acceptance measures three different things
+
+"No exported production symbol lacks a production caller" sounds like one rule.
+Building the check found it is three, with very different truth values.
+
+The first draft counted every exported symbol and reported 670 findings, which is
+not a gate, it is noise nobody will read. Narrowing it three times, and checking
+each level against the source rather than accepting the count:
+
+* **Types are not dead when nothing names them.** A type describing a function's
+  parameters is used by every caller who writes an object literal. Condemning
+  those would delete the vocabulary the codebase is written in. Values only.
+* **`export *` is invisible to identifier counting.** Half the remaining
+  findings were symbols a package's `index.ts` republishes wholesale. Resolving
+  star re-exports dropped 236 findings to 59.
+* **A symbol its own test imports is an internal under test.** Those 59 included
+  symbols exported only so a unit test could reach them, which is a reason to
+  export, not a defect. Condemning them would buy a tidier surface with worse
+  tests.
+
+What survives is unambiguous: an exported value that no other file mentions at
+all. Twelve of those existed and are now module-private. `pnpm check:exports`
+runs in the pipeline, and reintroducing one is proven to fail it.
+
+The lesson generalises past this check. A criterion stated in one sentence can
+still be three rules, and the count a first implementation produces is evidence
+about the rule rather than about the code.

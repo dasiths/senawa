@@ -11,6 +11,7 @@
     "benchmark:sqlite-authority": "pnpm build && node scripts/benchmark-sqlite-authority.mjs",
     "build": "tsc -b && node scripts/stage-standard-template.mjs && pnpm --filter @senawa/portal build && node scripts/stage-portal-assets.mjs && pnpm --filter @senawa/execution-host build:native",
     "check:boundaries": "node scripts/check-boundaries.mjs",
+    "check:exports": "node scripts/check-exports.mjs",
     "docs:links": "node scripts/check-markdown-links.mjs",
     "format": "biome format --write .",
     "lint": "biome check .",

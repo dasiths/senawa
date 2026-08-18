@@ -171,7 +171,7 @@ export function clearPortalSession(storage: SessionStorageLike): void {
   storage.removeItem(SESSION_KEY);
 }
 
-export function pendingStorageKey(): string {
+function pendingStorageKey(): string {
   return PENDING_KEY;
 }
 

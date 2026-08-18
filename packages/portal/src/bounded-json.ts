@@ -1,7 +1,7 @@
 import type { JsonValue } from "@senawa/protocol";
 
-export const JSON_NODE_LIMIT = 500;
-export const JSON_STRING_PREFIX = 4_096;
+const JSON_NODE_LIMIT = 500;
+const JSON_STRING_PREFIX = 4_096;
 
 export type BoundedJsonNode =
   | {

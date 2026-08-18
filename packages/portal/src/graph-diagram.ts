@@ -70,7 +70,7 @@ declare global {
   }
 }
 
-export const GRAPH_SCALE_STEPS: readonly number[] = Object.freeze([0.5, 0.75, 1, 1.5, 2, 3]);
+const GRAPH_SCALE_STEPS: readonly number[] = Object.freeze([0.5, 0.75, 1, 1.5, 2, 3]);
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const LABEL_PADDING = 10;
@@ -211,7 +211,7 @@ export interface GraphViewBox {
   readonly height: number;
 }
 
-export function graphViewBox(layout: GraphLayout, viewport: PortalGraphViewport): GraphViewBox {
+function graphViewBox(layout: GraphLayout, viewport: PortalGraphViewport): GraphViewBox {
   const scale = clampScale(viewport.scale);
   const width = Math.max(1, Math.round(layout.width / scale));
   const height = Math.max(1, Math.round(layout.height / scale));

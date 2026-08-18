@@ -45,6 +45,9 @@ jobs:
       - name: Architecture boundaries
         run: pnpm check:boundaries
 
+      - name: Exported values
+        run: pnpm check:exports
+
       - name: Documentation links
         run: pnpm docs:links
 
