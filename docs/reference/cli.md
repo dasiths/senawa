@@ -65,8 +65,16 @@ senawa worker escalate <reason>
 ```
 
 These require `SENAWA_WORKER_DISPATCH` and `SENAWA_WORKER_CREDENTIAL`, which
-senawa sets on a dispatched agent. An agent never writes these by hand: the
-generated operating contract in its prompt tells it which are available.
+senawa sets on a dispatched agent. `SENAWA_WORKER_CREDENTIAL` names a file
+rather than carrying a token, so the credential can be withdrawn from a process
+that already read it. `senawa start` prints both values when it dispatches. An
+agent never writes these by hand: the generated operating contract in its prompt
+tells it which are available.
+
+`context` and `output-schema` answer today. `complete`, `ask`, and `escalate`
+refuse with a message saying submissions are not accepted yet, rather than
+accepting work and dropping it. The channel is served by the local supervisor,
+so it needs `senawa service start`.
 
 ### Managing the service
 
