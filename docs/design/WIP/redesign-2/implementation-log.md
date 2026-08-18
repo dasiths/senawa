@@ -1634,3 +1634,18 @@ The directory name is now folded into a valid identity, and falls back to
 The second test asserts the refusal for a broken prompt names `prompts/planner.md`
 and does not mention `workflow.json`, which is the F-010 regression held at the
 command surface rather than only at the library boundary.
+
+## The CLI reference led with the wrong thing
+
+It opened with `senawa service start` and never documented the run loop at all.
+A consumer reading it top to bottom learned how to manage a daemon before
+learning how to start a run.
+
+It now opens with the loop in the order a consumer uses it, a table of what each
+outcome means, and the rule that a gate refusal exits non-zero while waiting for
+an agent or a person does not. The worker channel is documented with the note
+that an agent never writes those commands by hand, because the generated
+operating contract tells it which are available.
+
+One error found by checking rather than drafting: the credential variable is
+`SENAWA_WORKER_CREDENTIAL`, not `SENAWA_WORKER_CREDENTIAL_PATH`.

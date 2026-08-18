@@ -7,6 +7,69 @@ ms.topic: reference
 
 ## Commands
 
+### The run loop
+
+These are the commands a consumer uses, in the order they use them.
+
+```bash
+senawa init                         # write a working .senawa tree
+senawa doctor                       # compile it and report every problem at once
+senawa start request.json [run-id]  # start a run and drive it
+senawa advance <repository> <run>   # drive an existing run one step at a time
+```
+
+`start` blocks and reports what the run is waiting for. Pass `--detach` to
+return as soon as the first phase is dispatched.
+
+Both `start` and `advance` stop as soon as the run needs something senawa cannot
+supply, and say which:
+
+| Output | Meaning |
+|---|---|
+| `dispatched <phase> as <id>` | An agent has work |
+| `waiting for the agent working on <phase>` | The agent has not finished |
+| `waiting for a decision on <phase>` | A person owes an approval |
+| `<phase> did not pass: <sensor>` | A blocking gate refused |
+| `closed <phase>` | The phase closed and the run moved on |
+| `finished` | No phase remains |
+
+A gate refusal exits non-zero. Waiting for an agent or a person does not,
+because neither is a failure.
+
+### Deciding
+
+```bash
+senawa approve <repository> <run>
+senawa reject <repository> <run> <reason>
+```
+
+A rejection must carry a reason. The next attempt is a guess without one.
+
+### Measuring
+
+```bash
+senawa run-gates <phase>
+```
+
+Runs the phase's sensors and reports what they measured. It spends no attempt,
+so an agent or a person can ask before submitting.
+
+### The agent channel
+
+```bash
+senawa worker context
+senawa worker output-schema
+senawa worker complete --output <name>=<file> [--evidence <kind>=<file>] [--summary <text>]
+senawa worker ask <question>
+senawa worker escalate <reason>
+```
+
+These require `SENAWA_WORKER_DISPATCH` and `SENAWA_WORKER_CREDENTIAL`, which
+senawa sets on a dispatched agent. An agent never writes these by hand: the
+generated operating contract in its prompt tells it which are available.
+
+### Managing the service
+
 Start the local supervisor as a detached process, or retain foreground process
 ownership:
 
