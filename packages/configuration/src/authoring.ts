@@ -861,7 +861,10 @@ function readPhases(
     const approve = raw.approve;
     const approveRole =
       isRecord(approve) && typeof approve.role === "string" ? approve.role : undefined;
-    const onFailure = typeof raw.onFailure === "string" ? raw.onFailure : "fail-fast";
+    // The run is fail-fast when any phase says so, so a phase that says nothing
+    // has to continue. Defaulting to fail-fast made every run fail-fast and the
+    // authored value unable to express anything.
+    const onFailure = typeof raw.onFailure === "string" ? raw.onFailure : "continue";
     if (!FAILURE_POLICIES.has(onFailure)) {
       add(
         collector,

@@ -64,6 +64,8 @@ export interface ScenarioOptions {
   readonly unknownField?: boolean;
   /** Stops the run on the first failing member instead of continuing. */
   readonly failFast?: boolean;
+  /** Authors `onFailure: continue`, which the default is not. */
+  readonly continueOnFailure?: boolean;
   /** Fans out over a phase that already fans out. */
   readonly nestedFanOut?: boolean;
   /** Authors an ordered route list with explicit per-route limits on `definer`. */
@@ -91,6 +93,14 @@ export async function compileScenario(
   const project = await authoredProject(options);
   const loaded = await loadAuthoredWorkflow(project, dependencies.sha256);
   return loaded.diagnostics ?? [];
+}
+
+/** Compiles an authored project and returns its snapshot, for lowering checks. */
+export async function compileSnapshot(options: ScenarioOptions): Promise<unknown> {
+  const project = await authoredProject(options);
+  const loaded = await loadAuthoredWorkflow(project, dependencies.sha256);
+  if (loaded.snapshot === undefined) throw new Error("Scenario workflow does not compile");
+  return loaded.snapshot;
 }
 
 /** Builds an authored project and starts a run against it. */
@@ -333,7 +343,11 @@ function fanOutPhase(options: ScenarioOptions): string {
     collection: schemas/tasks.schema.json
     input: schemas/task.schema.json
     output: schemas/verification.schema.json${
-      options.failFast === true ? "\n    onFailure: fail-fast" : ""
+      options.failFast === true
+        ? "\n    onFailure: fail-fast"
+        : options.continueOnFailure === true
+          ? "\n    onFailure: continue"
+          : ""
     }
 `;
   if (options.nestedFanOut === true) {

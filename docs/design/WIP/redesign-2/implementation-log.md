@@ -2075,3 +2075,23 @@ The D-023 rename is finished: the bare `evidence` in a complete request is now
 `completionEvidence`, matching the field the authority already judged it by. The
 remaining `evidence` identifiers belong to git integration and remote receipts,
 which are different evidence about different things.
+
+## The failure policy could not say anything
+
+Asserting that an authored `onFailure` reaches the compiled run found that it
+never could. `failurePolicy` is run-wide and derived with `some`, so the run is
+fail-fast when any phase says so. The authoring default was also `fail-fast`, so
+every phase said so, so every run was fail-fast and no authored value could
+change it. Writing `onFailure: continue` on a phase changed nothing at all.
+
+A phase that says nothing now continues. That is the only default that makes
+`some` mean something: the run stops early because an author asked a phase to
+stop it, not because nobody mentioned it.
+
+This is the second half of the same finding as the derived failure policy. The
+first half was a value discarded on the way to execution; this half was a
+default that made the value unable to differ. Neither shows up as a failure.
+
+`onFailure` appears nowhere in the authoring guide, which is how a setting can
+have an inverted default for this long. That belongs to the undescribed
+capabilities sweep.

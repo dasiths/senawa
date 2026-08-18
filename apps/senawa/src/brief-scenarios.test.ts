@@ -10,6 +10,7 @@ import {
   agentTurn,
   BASE,
   compileScenario,
+  compileSnapshot,
   dependencies,
   disposeScenarios,
   NOW,
@@ -60,6 +61,18 @@ describe("fan-out in sequence", () => {
   it("carries an authored fail-fast policy into the compiled run", async () => {
     const stopping = await compileScenario({ fanOut: "complete", failFast: true });
     expect(stopping).toEqual([]);
+
+    // The policy has to come from the YAML rather than a constant, and the
+    // default has to be the other one.
+    const stated = (await compileSnapshot({ fanOut: "complete", failFast: true })) as {
+      readonly execution: { readonly failurePolicy: string };
+    };
+    const carrying = (await compileSnapshot({
+      continueOnFailure: true,
+      fanOut: "complete",
+    })) as { readonly execution: { readonly failurePolicy: string } };
+    expect(stated.execution.failurePolicy).toBe("fail-fast");
+    expect(carrying.execution.failurePolicy).toBe("continue");
   });
 
   it("compiles a fan-out that names both the collection and the element", async () => {

@@ -327,7 +327,7 @@ inside `lowerAuthoredWorkflow`.
 * [x] Add named gate declarations with blocking and advisory rules, the internal
   comparison and Boolean operators, named reading fields compiled to strict
   pointers, and expected values.
-* [ ] Preserve the anchor invariant across composed Boolean rules: every path to
+* [x] Preserve the anchor invariant across composed Boolean rules: every path to
   a blocking acceptance must depend on a deterministic reading. **Moot for now: authored rules do not compose with Boolean operators, so the existing anchor check still holds.**
 * [x] Add sensor policy for working directory, timeout, output limits, inherited
   environment, attempts, and reconciliation attempts. Keep containment and the
@@ -339,13 +339,13 @@ inside `lowerAuthoredWorkflow`.
 
 Acceptance:
 
-* [ ] One authored phase retries twice after red gates and then escalates; a
+* [x] One authored phase retries twice after red gates and then escalates; a
   second fails immediately; both behaviours follow YAML rather than constants.
 * [x] An advisory coverage reading is visible but does not block, while a
   blocking coverage threshold below its expected value refuses completion.
 * [x] A blocking gate with a Boolean path that can bypass every deterministic
   reading is rejected at authoring time.
-* [ ] The default two-phase template remains concise and compiles to the same
+* [x] The default two-phase template remains concise and compiles to the same
   policy it uses today.
 
 ## Phase 8: The autonomous driver and human loop
