@@ -479,8 +479,10 @@ F-004 is closed by evidence, not by counting lines.
 * [x] Audit every constant in `lowerAuthoredWorkflow`. Classify it as a derived
   mechanism, an overridable default, a host-enforced safety bound, or a deliberate
   removed capability with a recorded reason.
-* [ ] Replace line-count acceptance with two fixtures: a concise default workflow
-  and a fully explicit workflow exercising the advanced surface.
+* [x] Replace line-count acceptance with two fixtures: a concise default workflow
+  and a fully explicit workflow exercising the advanced surface. **The scaffold
+  `init` writes and the repository's own tree, both compiled in
+  `authored-parity.test.ts`.**
 * [x] Remove the lowered-document authoring escape hatch from consumer guidance
   and production scaffolding.
 
@@ -488,8 +490,10 @@ Acceptance:
 
 * [ ] Every capability promised by the brief is reachable from authored YAML and
   the command line.
-* [ ] The concise fixture stays small because defaults are available; the explicit
-  fixture loses no policy because defaults are overridable.
+* [x] The concise fixture stays small because defaults are available; the explicit
+  fixture loses no policy because defaults are overridable. **Each override is
+  asserted against the compiled document, so a value that is parsed and
+  discarded fails the test.**
 * [ ] No consumer acceptance test has to write `WorkflowConfigurationDocument`
   directly.
 

@@ -2622,3 +2622,23 @@ simply wrong for a suite that spawns processes, and a repository-wide
 now 30 seconds, and the per-test annotations added while chasing the individual
 flakes are removed, because a workaround left in place after the cause is fixed
 reads as a fact about that test.
+
+## The two fixtures F-004 asked for, and the assertion that nearly did nothing
+
+The concise fixture is what `senawa init` scaffolds and the explicit one is the
+repository's own tree. The concise test asserts the scaffold states no
+`attempts`, `sensitivity`, `completionEvidence`, or `onGateRejected`, and that
+the compiled run carries the documented defaults for all four anyway. The
+explicit test asserts each overridden value reaches the compiled document.
+
+One of the four assertions was worthless when written. It checked that
+`workflow.yaml` contained `onFailure: continue`, which is the text of the input
+rather than the effect, and the repository authors the same value the default
+produces. Hardcoding the lowering to ignore the field left the test green. It was
+removed rather than repaired, because the scenario suite already proves that one
+properly by compiling both policies and comparing them.
+
+The three that remain were each checked by discarding the authored value in the
+lowering, and each fails. That is what makes this an acceptance rather than a
+description: it catches the specific failure F-004 found four separate times, a
+value parsed, validated, and then not threaded through.
