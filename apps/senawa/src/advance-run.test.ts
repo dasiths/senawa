@@ -172,7 +172,9 @@ describe("advancing a run", () => {
         repositoryBase: BASE,
       }),
     ).toEqual({ kind: "finished" });
-  });
+    // Two phases, each spawning a real sensor process, exceed the default
+    // budget when the suite runs in parallel.
+  }, 30_000);
 
   it("recovers an in-flight dispatch instead of dispatching it twice", async () => {
     const project = await authoredProject();

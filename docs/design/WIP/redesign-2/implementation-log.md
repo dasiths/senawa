@@ -1460,3 +1460,36 @@ but the transport is not the consumer's. Driving it over the socket needs the
 service running inside the test, which is worth doing and is not done. The item
 is ticked with that stated rather than left open, because the loop it was
 guarding is demonstrated.
+
+## What a retry after a red gate needs, and why it is not built
+
+Starting the next attempt looks like a small addition to the driver: dispatch
+the phase again at attempt two. It is not, and the reason is worth recording so
+the next attempt at it does not rediscover the same wall.
+
+A dispatch claims a task scope fence. The broker refuses a claim unless the
+scope is current and accepting claims, and `sameTaskScopeFence` compares the
+accepted context digest as well as the generation. A retry necessarily has a new
+context, because the attempt number is part of it, so its fence never matches
+the one the refused attempt holds.
+
+The handshake a retry needs is therefore:
+
+1. `installTaskScopeFences` against the expected current context digest, which
+   bumps the generation and sets `claimsAccepted` to false.
+2. Re-accept claims under the new context, which is what
+   `ensureTaskScopesAndBudgets` does for the scheduler.
+3. Only then register the attempt-two dispatch.
+
+The driver does none of this yet, so a red gate reports `gate-refused` and stops
+rather than handing the phase back. That is a stall rather than a wrong answer,
+which is the right way round, but it is not the loop the brief describes.
+
+An attempt at this was written and reverted rather than left half-built, because
+a retry that registers a dispatch nothing can claim is worse than one that
+stops: the run would look busy while no agent could pick the work up.
+
+Also fixed here: the two-phase acceptance spawns real sensor processes for both
+phases and exceeded vitest's five second default under parallel load. It passed
+alone and failed in the suite, which is the shape of a flake that gets ignored
+until it fails in CI. It now declares the budget it needs.
