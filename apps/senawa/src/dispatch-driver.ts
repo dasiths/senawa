@@ -3,12 +3,14 @@ import type { AssetSensitivity, ContextBudget, DataMappingDeclaration } from "@s
 import {
   type CanonicalValue,
   canonicalDigest,
+  canonicalValue,
   consumerKey,
   createWorkerContextBase,
   createWorkerDispatch,
   createWorkerModelRouteSelection,
   deriveCompletionRequirements,
   runId as kernelRunId,
+  type MappingSourceBinding,
   type Sha256Digest,
   sha256Digest,
   type WorkerContextBase,
@@ -26,6 +28,7 @@ import { runtimeSchemaContract } from "./dataflow-composition.js";
 /** The snapshot shapes this driver reads. The compiler stores them untyped. */
 interface SnapshotPhase {
   readonly key: string;
+  readonly dependsOn?: readonly string[];
   readonly input: {
     readonly schema: string;
     readonly mappings: readonly DataMappingDeclaration[];
@@ -70,11 +73,25 @@ export interface DispatchPhaseInput {
   readonly repositoryId: string;
   readonly runId: string;
   readonly phaseKey: string;
-  /** The run's bound workflow input: its binding digest and the value itself. */
+  /**
+   * The run's bound workflow input. A phase with dependencies also reads the
+   * published output of each phase it depends on, supplied as `upstream`.
+   */
   readonly workflowInput: {
     readonly bindingDigest: Sha256Digest;
     readonly value: CanonicalValue;
   };
+  /** Published upstream outputs this phase reads, empty for the root phase. */
+  readonly upstream?: readonly {
+    readonly phase: string;
+    readonly output: string;
+    readonly bindingDigest: Sha256Digest;
+    /** Proof the output was accepted. A produced-but-unaccepted output is not readable. */
+    readonly acceptanceDigest: Sha256Digest;
+    readonly value: CanonicalValue;
+  }[];
+  /** Which attempt this is. A retry after a red gate dispatches attempt two. */
+  readonly attempt?: number;
   readonly repositoryBase: {
     readonly commitDigest: Sha256Digest;
     readonly treeDigest: Sha256Digest;
@@ -122,32 +139,56 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
   const promptEntry = requiredPrompt(snapshot, role.prompt);
   const prompt = promptEntry;
 
+  const upstream = input.upstream ?? [];
+  const sourceBindings: readonly MappingSourceBinding[] = [
+    {
+      source: { kind: "workflow-input" as const },
+      sourceBindingDigest: input.workflowInput.bindingDigest,
+      value: input.workflowInput.value,
+    },
+    ...upstream.map((entry) => ({
+      source: {
+        kind: "phase-output" as const,
+        phase: consumerKey(entry.phase),
+        output: consumerKey(entry.output),
+      },
+      sourceBindingDigest: entry.bindingDigest,
+      acceptanceDigest: entry.acceptanceDigest,
+      value: entry.value,
+    })),
+  ];
+  // The upstream set is what makes a retry after an amended dependency a
+  // different attempt, so it is derived from the bindings rather than fixed.
+  const upstreamSetDigest = canonicalDigest(
+    canonicalValue(sourceBindings.map(({ sourceBindingDigest }) => sourceBindingDigest).sort()),
+    sha256,
+  );
+
   const started = input.dataflow.startPhaseAttempt({
     repositoryId: input.repositoryId,
     runId: input.runId,
     phase: {
       phaseId: phaseNode.definition.id,
       definitionGeneration: phaseNode.definition.generation,
-      attempt: 1,
+      attempt: input.attempt ?? 1,
     },
     graphRevisionDigest: snapshot.graph.revisionDigest,
     configurationSnapshotDigest: snapshot.snapshotDigest,
     executorDigest: roleEntry.digest,
-    upstreamClosureSetDigest: sha256Digest("0".repeat(64)),
-    upstreamOutputSetDigest: sha256Digest("0".repeat(64)),
+    upstreamClosureSetDigest: upstreamSetDigest,
+    upstreamOutputSetDigest: upstreamSetDigest,
     schema: runtimeSchemaContract(snapshot, declaration.input.schema, sha256),
     mappings: declaration.input.mappings,
-    // Phase 2 dispatches the root phase, whose only source is the workflow input.
-    sourceBindings: [
-      {
-        source: { kind: "workflow-input" as const },
-        sourceBindingDigest: input.workflowInput.bindingDigest,
-        value: input.workflowInput.value,
-      },
-    ],
+    sourceBindings,
     mappingPolicy: {
-      dependencyPhases: [],
-      declaredPhaseOutputs: [],
+      dependencyPhases: (declaration.dependsOn ?? []).map(consumerKey),
+      declaredPhaseOutputs: snapshot.phaseDataflow.flatMap((entry) => {
+        const value = registryValue<SnapshotPhase>(entry);
+        return value.outputs.map(({ key }) => ({
+          phase: consumerKey(value.key),
+          output: consumerKey(key),
+        }));
+      }),
       completionEvidenceViews: [],
       allowCurrentItem: false,
     },
