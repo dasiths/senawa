@@ -1882,3 +1882,21 @@ the same rows must not each grant the whole budget, so spending is an `UPDATE`
 against the row rather than a counter on an object. The test spends from both
 stores in turn and expects the third attempt to be refused; running the same
 test against the in-memory default fails, which is the regression it exists for.
+
+### The dispatch records had the same problem as the credentials
+
+`SenawaWorkerApi` kept what a dispatch may read in a `Map` filled by `register`,
+which only the dispatching process ever calls. The daemon would have answered
+`unknown-dispatch` to every agent even with a valid credential.
+
+It now takes an optional lookup port and falls back to it, and the app supplies
+one backed by the context broker. Nothing registered has to change, and the
+daemon reads back what the dispatching process already wrote, because everything
+an agent may read was durable all along.
+
+Two mistakes worth keeping. Handing the broker a stub `sha256` made it recompute
+the packaged migration checksums and refuse the database, which is the migration
+guard doing its job against a test that lied to it. And the first assertion
+looked for the dispatch identity inside the worker context, which does not carry
+it; the context base and the dispatch are different records, and the test was
+asserting a shape that never existed rather than a behaviour that broke.

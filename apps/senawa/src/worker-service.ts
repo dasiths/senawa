@@ -31,6 +31,17 @@ export interface AcceptedWorkerSubmission {
   readonly submission: WorkerSubmission;
 }
 
+/**
+ * Resolves what a dispatch may read when this process did not register it.
+ *
+ * Dispatch happens in whichever process ran `start` or `advance`, and the
+ * daemon serving this channel is a different process, so an in-memory
+ * registration alone leaves every real agent talking to an empty map.
+ */
+export interface WorkerDispatchLookup {
+  find(dispatchId: string): WorkerDispatchRecord | undefined;
+}
+
 /** Where accepted submissions go. The channel never decides anything itself. */
 export interface WorkerSubmissionSink {
   accept(accepted: AcceptedWorkerSubmission): Promise<JsonValue>;
@@ -47,13 +58,16 @@ export class SenawaWorkerApi implements WorkerApi {
   readonly #records = new Map<string, WorkerDispatchRecord>();
   readonly #sink: WorkerSubmissionSink;
   readonly #sha256: { digest(bytes: Uint8Array): string };
+  readonly #lookup: WorkerDispatchLookup | undefined;
 
   constructor(options: {
     readonly sink: WorkerSubmissionSink;
     readonly sha256: { digest(bytes: Uint8Array): string };
+    readonly lookup?: WorkerDispatchLookup;
   }) {
     this.#sink = options.sink;
     this.#sha256 = options.sha256;
+    this.#lookup = options.lookup;
   }
 
   /** Publishes what one dispatch may read. Called when the dispatch registers. */
@@ -89,7 +103,7 @@ export class SenawaWorkerApi implements WorkerApi {
   }
 
   #required(scope: WorkerCredentialScope): WorkerDispatchRecord {
-    const record = this.#records.get(scope.dispatchId);
+    const record = this.#records.get(scope.dispatchId) ?? this.#lookup?.find(scope.dispatchId);
     if (record === undefined) {
       throw new WorkerApiError("unknown-dispatch", "Dispatch is not accepting worker traffic");
     }
