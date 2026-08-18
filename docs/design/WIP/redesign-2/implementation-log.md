@@ -1924,3 +1924,40 @@ whole lesson of this phase applied to itself: a channel that accepted a
 completion and dropped it would look exactly like success to the agent that sent
 it, and the run would sit there waiting forever for work that had already been
 handed in.
+
+## An agent can finally hand in work
+
+The sink is built and wired, and a real agent turn now runs from the command
+line: `start` dispatches and prints a credential, `worker output-schema` says
+what is wanted, and `worker complete --output plan=plan.json` is accepted and
+lands in both the completion and phase-output outboxes.
+
+Four defects stood between those two sentences, and every one of them was found
+by driving the commands rather than by a test.
+
+The daemon crashed with `Runner stage identity is already bound to different
+content` the moment a submission arrived. The worktree scheduler checks whether
+a worker effect already exists for a dispatch before enqueuing one; the
+repository scheduler did not. The command line dispatches in its own process, so
+the second enqueue collided and took the service down with it.
+
+`senawa worker complete` refused ordinary JSON with "is not valid JSON". The
+file was valid; it was not *canonical*, because canonical JSON wants sorted keys
+and no trailing newline. An agent writing a plan file cannot be expected to know
+that, and the message blamed it for the wrong thing. Parsing before decoding
+canonicalises on the agent's behalf, and genuinely invalid JSON still says so.
+
+Every other failure arrived as `Supervisor request failed`, because anything
+that is not a `WorkerApiError` falls through to a generic internal error. The
+sink now converts what it catches, which immediately revealed the next two: a
+derived submission identity one character past the 64-character bound, and a
+principal identity taken from the credential scope instead of the dispatch.
+
+The sink also uses a broker without the fact bridges. The daemon's own broker
+turns facts into runner commands, which needs a configured runner run and drives
+execution from inside the request that delivered the work. An agent handing in a
+plan should leave a fact for `advance` to act on, not start driving.
+
+Still open: `advance` after a real handoff fails with "Canonical values must
+contain only finite JSON values and plain objects" while submitting the gate
+evaluation. The work is durable and the run is not yet moving past it.

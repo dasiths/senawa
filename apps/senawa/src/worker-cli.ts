@@ -121,10 +121,20 @@ function buildCompleteRequest(argv: readonly string[], workspaceRoot: string): J
       if (flag === "--evidence") {
         evidence.push({ kind: name, path, content });
       } else {
+        let parsed: unknown;
         try {
-          outputs.push({ name, value: decodeCanonicalJsonValue(content) });
+          parsed = JSON.parse(content);
         } catch {
           return `Output ${name} at ${path} is not valid JSON`;
+        }
+        try {
+          // Parsing first canonicalises for the agent. Asking a worker to sort
+          // its own keys and omit a trailing newline would refuse ordinary JSON.
+          outputs.push({ name, value: decodeCanonicalJsonValue(parsed) });
+        } catch (error) {
+          return `Output ${name} at ${path} cannot be submitted: ${
+            error instanceof Error ? error.message : "unknown"
+          }`;
         }
       }
       index += 1;

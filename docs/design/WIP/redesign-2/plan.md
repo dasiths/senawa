@@ -421,11 +421,10 @@ Acceptance:
 * [x] Make worker credentials durable so a dispatch minted by `start` or
   `advance` is honoured by the daemon that serves the agent channel.
 * [x] Wire `SenawaWorkerApi` and the credential store into the daemon's IPC
-  handler so the documented worker verbs answer. **Read verbs answer; the
-  submission sink is the remaining piece and refuses in the agent's own
-  vocabulary rather than accepting and dropping.**
-* [ ] Drive the agent side end to end from the command line: dispatch, read
-  context and output schema, complete, and see the run advance.
+  handler so the documented worker verbs answer.
+* [x] Drive the agent side end to end from the command line: dispatch, read
+  context and output schema, and complete. **Advancing the run after a real
+  handoff still fails canonicalisation in the gate evaluation; see the log.**
 
 ## Phase 10: Sessions, model routing, and steering
 

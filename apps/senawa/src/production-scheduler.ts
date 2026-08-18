@@ -251,8 +251,18 @@ export class ProductionScheduler {
     ready: ReadonlySet<string>,
   ): boolean {
     let worked = false;
+    const runner = this.#options.runnerAuthority.load(input);
     for (const dispatch of dispatches) {
       if (!ready.has(dispatch.taskScope.taskId)) continue;
+      // The command line dispatches in its own process, so a worker effect may
+      // already exist for this dispatch. Enqueuing a second one collides on the
+      // stage identity and takes the daemon down with it.
+      const dispatched = runner.effects.some(
+        ({ intent }) =>
+          intent.command.kind === "worker" &&
+          workerDispatchId(intent.command.input) === dispatch.dispatch.dispatchId,
+      );
+      if (dispatched) continue;
       worked =
         this.#enqueue(input, dispatch, "02-worker", "worker", required(dispatch.effect).input) ||
         worked;

@@ -63,6 +63,7 @@ export async function runAdvanceCommand(
     return { output: lines.join("\n"), exitCode: 0 };
   } catch (error) {
     lines.push(error instanceof Error ? error.message : "Run could not be advanced");
+    if (process.env.SENAWA_DEBUG === "1" && error instanceof Error) lines.push(String(error.stack));
     return { output: lines.join("\n"), exitCode: 1 };
   }
 }

@@ -61,7 +61,6 @@ import {
   SupervisorService,
   startLoopbackSupervisorServer,
   startUnixSupervisorServer,
-  WorkerApiError,
   WorkerCredentialStore,
 } from "@senawa/supervisor";
 import {
@@ -82,6 +81,7 @@ import { backupSupervisorState } from "./state-backup.js";
 import { SqliteWorkerCredentialRecords } from "./worker-credential-records.js";
 import { BrokerWorkerDispatchLookup } from "./worker-dispatch-lookup.js";
 import { SenawaWorkerApi } from "./worker-service.js";
+import { BrokerWorkerSubmissionSink } from "./worker-submission-sink.js";
 import {
   DurableCompletionEligibility,
   DynamicWorkspaceEffectHost,
@@ -258,16 +258,23 @@ export async function startSenawaService(
       api: new SenawaWorkerApi({
         lookup: new BrokerWorkerDispatchLookup({ broker: contextBroker }),
         sha256: dependencies.sha256,
-        sink: {
-          accept: () => {
-            // Accepting and dropping would read to an agent as success, so this
-            // refuses in the agent's own vocabulary until the sink lands.
-            throw new WorkerApiError(
-              "unavailable",
-              "This build serves worker context and output schema but does not yet accept submissions",
-            );
-          },
-        },
+        sink: new BrokerWorkerSubmissionSink({
+          assets: new SqliteCanonicalJsonAssetStore(authority.commandAuthority),
+          // A broker without the fact bridges: an agent's work lands in the
+          // outbox for `advance` to act on, rather than driving the runner from
+          // inside the request that delivered it.
+          broker: new SqliteContextBroker({
+            databasePath: paths.databasePath,
+            dependencies: {
+              currentTime: () => new Date().toISOString(),
+              issueGrantToken: () => randomBytes(32),
+              sha256: dependencies.sha256,
+            },
+          }),
+          loadSnapshot: (snapshotDigest) =>
+            authority.commandAuthority.getConfigurationSnapshot(snapshotDigest),
+          sha256: dependencies.sha256,
+        }),
       }),
       credentials: new WorkerCredentialStore({
         now: () => Date.now(),

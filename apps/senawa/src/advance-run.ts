@@ -27,7 +27,7 @@ import {
   SqliteContextBroker,
   SqlitePortalQueryAuthority,
 } from "@senawa/storage-sqlite";
-import { CompletionFactCommandBridge, SqliteSupervisorAuthority } from "@senawa/supervisor";
+import { SqliteSupervisorAuthority } from "@senawa/supervisor";
 import {
   configurationRuntimeSchemaValidator,
   runtimeSchemaContract,

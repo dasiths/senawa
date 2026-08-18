@@ -121,10 +121,36 @@ describe("the command surface end to end", () => {
       const schema = await senawa(project, stateRoot, "worker", "output-schema", agent);
       expect(schema.stdout).toContain("schemaKey");
 
-      // Accepting a submission and dropping it would read as success, so the
-      // refusal has to name what does work.
-      const asked = await senawa(project, stateRoot, "worker", "ask", "why", agent);
-      expect(asked.stdout).toContain("does not yet accept submissions");
+      // The agent hands in work the phase declared, and it is accepted.
+      await writeFile(
+        join(project, "plan.json"),
+        JSON.stringify({ plan: "Add a health endpoint." }),
+      );
+      const handed = await senawa(
+        project,
+        stateRoot,
+        "worker",
+        "complete",
+        "--output",
+        "plan=plan.json",
+        "--summary",
+        "did it",
+        agent,
+      );
+      expect(handed.stdout).toContain('"status": "accepted"');
+
+      // Output that does not satisfy the declared schema is refused by name.
+      await writeFile(join(project, "wrong.json"), JSON.stringify({ nope: 1 }));
+      const refused = await senawa(
+        project,
+        stateRoot,
+        "worker",
+        "complete",
+        "--output",
+        "plan=wrong.json",
+        agent,
+      );
+      expect(refused.stdout).toContain("does not satisfy plan");
     } finally {
       await senawa(project, stateRoot, "service", "stop");
     }
