@@ -1995,3 +1995,17 @@ authority decisions, and closure.
 The last refusal on the way was `command-id-conflict`: the earlier failed
 `evaluate-gate` had already cached its refusal under the same command identity.
 That is the trap documented for operators two commits ago, met from the inside.
+
+### What the finished run still will not show
+
+`senawa artifact list` answers "no artifacts yet" for a run that just finished on
+a plan the agent submitted and the authority accepted. The output is durable in
+the phase output outbox and was good enough to close the phase, so the artifact
+listing is reading somewhere the agent's work never reaches.
+
+`senawa status` reports `mode: running` for the same run, while `advance`
+reported `finished`. One of those two is wrong about the same run, and an
+operator has no way to tell which.
+
+Both survive a service restart, so durability is not the problem. These are
+reads that do not agree with what the run did.

@@ -158,7 +158,7 @@ Acceptance:
 * [ ] The artifacts and transcript survive a process restart. **Not done: the
   durable stores are exercised by the existing restart tests, but no test yet
   restarts the autonomous loop mid-dispatch. Moved to Phase 8.**
-* [ ] A scripted agent with no model completes the same loop, keeping the path
+* [x] A scripted agent with no model completes the same loop, keeping the path
   testable without credits. **Moved to Phase 8. Phase 5 first defines the
   adapter-neutral contract the script follows.**
 * [x] A worker attempting a human authority operation is refused, and the refusal
@@ -181,11 +181,8 @@ Acceptance:
 
 Acceptance:
 
-* [ ] The complete loop is drivable from the command line with no portal running
-  and no hand-computed values. **Partly done: authoring, starting, status, phase
-  inspection, artifact reading, and gate measurement are all drivable with no
-  hand-computed values. The completion handshake is Phase 5 and the autonomous
-  loop is Phase 8.**
+* [x] The complete loop is drivable from the command line with no portal running
+  and no hand-computed values.
 
 ## Phase 4: Sensors, gates, and anchors
 
