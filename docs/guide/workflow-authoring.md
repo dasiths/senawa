@@ -146,8 +146,10 @@ planner:
   prompt: prompts/planner.md
 ```
 
-Senawa uses the first that works and records why it moved on. A route may also
-set `submissions` and `spend`. Declare either `model` or `models`, never both.
+Senawa uses the first route and enforces the limits you declare on it. Moving on
+to a later route when the first is exhausted is not wired yet, so extra routes
+record your intent rather than change behaviour. A route may also set
+`submissions` and `spend`. Declare either `model` or `models`, never both.
 
 ### Session scope
 
@@ -158,8 +160,11 @@ implementor:
   session: element
 ```
 
-`session: element` gives each fan-out member its own conversation. The default
-keeps one conversation for the phase.
+`session: element` asks for each fan-out member to get its own conversation, and
+the default asks for one conversation across the phase. The setting is read,
+validated, and carried into the compiled workflow, but no runner acts on it yet,
+so today it changes nothing you can observe. Write what you mean and expect it
+to start mattering rather than to matter now.
 
 ## Prompts
 

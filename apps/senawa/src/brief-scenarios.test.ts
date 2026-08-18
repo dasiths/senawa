@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { loadAuthoredWorkflow } from "@senawa/execution-host";
 import { canonicalBytes, canonicalValue, sha256Digest } from "@senawa/kernel";
 import { decodeCommandEnvelope, PROTOCOL_VERSION } from "@senawa/protocol";
@@ -93,6 +94,32 @@ describe("what an author can state", () => {
     // as the feature being broken rather than the spelling being wrong.
     expect(diagnostics.map(({ code }) => code)).toContain("unknown-field");
     expect(diagnostics.map(({ message }) => message).join(" ")).toContain("aproove");
+  });
+
+  it("dispatches under the limits the first authored route declares", async () => {
+    const scenario = await startScenario("routed", { routeLimits: true });
+    const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+    let state: string;
+    try {
+      const row = database
+        .prepare(`SELECT canonical_json AS json FROM context_authority_state`)
+        .get() as { readonly json: string };
+      state = row.json;
+    } finally {
+      database.close();
+    }
+
+    const selection = JSON.parse(state) as Record<string, unknown>;
+    const found = JSON.stringify(selection);
+
+    // The authored route declares 7 turns, 3 submissions, and 250 spend. Those
+    // have to be the limits carried into the dispatch rather than the defaults,
+    // and the first route has to be the one selected.
+    expect(found).toContain('"maxTurns":7');
+    expect(found).toContain('"maxSubmissions":3');
+    expect(found).toContain('"maxMillidollars":250');
+    expect(found).toContain('"model":"gpt-5"');
+    expect(found).not.toContain("gpt-5-mini");
   });
 
   it("lowers ordered model routes with their per-route limits", async () => {

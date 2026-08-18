@@ -1772,3 +1772,22 @@ than being ticked on the strength of the value existing.
 Ordered model routes are done and now proven: the repository's planner declares
 two routes with different turn budgets, and a test asserts both the order and
 the per-route limits survive lowering.
+
+## Sweeping the authoring guide for things it promises
+
+Two claims in the authoring guide were writing cheques the code does not cash.
+
+`session: element` was described as giving each fan-out member its own
+conversation. It gives nothing yet: the value is validated and compiled, and no
+runner reads it.
+
+Ordered routes were described as Senawa using "the first that works" and
+recording why it moved on. The first half is generous and the second is
+invented. The driver hardcodes route index zero and never falls back. What is
+true, and worth keeping, is that the driver reads the declared route's provider,
+model, turn, submission, and spend limits rather than substituting defaults, so
+the limits an author writes are the limits enforced.
+
+Both are now described as intent that does not yet change behaviour. That
+reads worse and is worth it: an author who believes a fallback exists will not
+understand why a run stops at a limit instead of moving to the cheaper model.

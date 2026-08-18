@@ -66,6 +66,8 @@ export interface ScenarioOptions {
   readonly failFast?: boolean;
   /** Fans out over a phase that already fans out. */
   readonly nestedFanOut?: boolean;
+  /** Authors an ordered route list with explicit per-route limits on `definer`. */
+  readonly routeLimits?: boolean;
 }
 
 export interface Scenario {
@@ -233,6 +235,22 @@ export async function agentTurn(
   }
 }
 
+const AGENTS_ROUTED = `
+definer:
+  models:
+    - model: gpt-5
+      turns: 7
+      submissions: 3
+      spend: 250
+    - model: gpt-5-mini
+      turns: 2
+  prompt: prompts/definer.md
+
+verifier:
+  model: gpt-5
+  prompt: prompts/verifier.md
+`;
+
 const AGENTS = `
 definer:
   model: gpt-5
@@ -249,7 +267,10 @@ async function authoredProject(options: ScenarioOptions): Promise<string> {
   const configuration = join(root, ".senawa");
   await mkdir(join(configuration, "prompts"), { recursive: true });
   await mkdir(join(configuration, "schemas"), { recursive: true });
-  await writeFile(join(configuration, "agents.yaml"), AGENTS);
+  await writeFile(
+    join(configuration, "agents.yaml"),
+    options.routeLimits === true ? AGENTS_ROUTED : AGENTS,
+  );
   await writeFile(join(configuration, "workflow.yaml"), workflow(options));
   await writeFile(join(configuration, "sensors.yaml"), sensors(options));
   await writeFile(
