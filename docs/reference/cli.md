@@ -65,6 +65,18 @@ senawa worker ask <question>
 senawa worker escalate <reason>
 ```
 
+A phase that requires completion evidence refuses a completion that owes it,
+naming the kind and how much is still missing:
+
+```text
+This completion owes evidence: this completion needs 2 of task-completion and carries 0
+```
+
+Nothing is published by a refused completion, so the phase is left exactly as it
+was and the next call can carry the missing files. Write `--evidence
+<kind>@<criterion>=<file>` when the phase counts evidence per criterion rather
+than per completion; a bare kind is evidence for the completion itself.
+
 These require `SENAWA_WORKER_DISPATCH` and `SENAWA_WORKER_CREDENTIAL`, which
 senawa sets on a dispatched agent. `SENAWA_WORKER_CREDENTIAL` names a file
 rather than carrying a token, so the credential can be withdrawn from a process

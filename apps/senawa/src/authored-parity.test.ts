@@ -39,7 +39,10 @@ describe("the authored workflow senawa ships for itself", () => {
     const template = snapshot.taskTemplates.find((entry) => entry.key === "implement-work")
       ?.value as unknown as Record<string, never>;
     expect(template?.completionPolicy).toMatchObject({
-      completionEvidencePolicy: { mode: "task" },
+      completionEvidencePolicy: {
+        mode: "task",
+        requirements: [{ kind: "task-completion", minimumCount: 1 }],
+      },
     });
     // The loop is authored, including a phase that refuses to retry.
     expect(phase("verify")?.iteration).toMatchObject({ onGateRejected: "fail" });

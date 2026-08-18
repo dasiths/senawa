@@ -11,13 +11,16 @@ import {
   BASE,
   compileScenario,
   compileSnapshot,
+  completeThroughSink,
   dependencies,
   disposeScenarios,
   NOW,
+  promptPackText,
   type Scenario,
   startScenario,
 } from "./brief-scenarios.js";
 import { decidePhase } from "./decide.js";
+import { listArtifacts } from "./inspect.js";
 import { runGates } from "./run-gates.js";
 
 afterEach(disposeScenarios);
@@ -204,6 +207,70 @@ describe("one phase in sequence", () => {
     expect(outcome).toMatchObject({ kind: "output-refused", phaseKey: "define" });
     if (outcome.kind !== "output-refused") throw new Error("expected a refusal");
     expect(outcome.reasons.join(" ")).toContain("define");
+  });
+
+  it("keeps a confidential output labelled and its content out of the prompt", async () => {
+    const scenario = await startScenario("confidential", { confidentialOutput: true });
+    const secret = "the-confidential-body";
+
+    // The contract tells the agent what it is producing, which is a label and
+    // never the content of anything.
+    const pack = await promptPackText(scenario, scenario.dispatchId);
+    const contract = JSON.parse(pack).sections.find(
+      (section: { kind: string }) => section.kind === "senawa-operating-contract",
+    ) as { value: { completion: { requiredOutputs: { sensitivity: string }[] } } };
+    expect(contract.value.completion.requiredOutputs).toEqual([
+      expect.objectContaining({ sensitivity: "confidential" }),
+    ]);
+    expect(pack).not.toContain(secret);
+
+    await completeThroughSink(scenario, scenario.dispatchId, [
+      { name: "define", value: canonicalValue({ definition: secret }) },
+    ]);
+    expect(await advance(scenario)).toEqual({ kind: "finished" });
+
+    // Whoever reads the listing has to be able to see which artifacts carry a
+    // classification before deciding to share one.
+    const listed = listArtifacts({
+      ...scenario.paths,
+      repositoryId: scenario.repositoryId,
+      runId: scenario.runId,
+      dependencies,
+      currentTime: NOW,
+    });
+    expect(listed.output).toContain("confidential");
+    expect(listed.output).not.toContain(secret);
+  });
+
+  it("refuses a completion that owes evidence, naming the kind and the count", async () => {
+    const scenario = await startScenario("owed", { requireEvidence: 2 });
+
+    const refused = await completeThroughSink(scenario, scenario.dispatchId, [
+      { name: "define", value: canonicalValue({ definition: "x" }) },
+    ]);
+
+    expect(refused.status).toBe("refused");
+    expect(refused.reason).toContain("2 of definition-note");
+    expect(refused.reason).toContain("carries 0");
+    // Nothing was published, so the phase is still waiting on the agent.
+    expect(await advance(scenario)).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
+  });
+
+  it("grants the same completion once the evidence it owed is attached", async () => {
+    const scenario = await startScenario("owed-met", { requireEvidence: 2 });
+
+    const accepted = await completeThroughSink(
+      scenario,
+      scenario.dispatchId,
+      [{ name: "define", value: canonicalValue({ definition: "x" }) }],
+      [
+        { kind: "definition-note", path: "notes/one.md", content: "first" },
+        { kind: "definition-note", path: "notes/two.md", content: "second" },
+      ],
+    );
+
+    expect(accepted).toEqual({ status: "accepted" });
+    expect(await advance(scenario)).toEqual({ kind: "finished" });
   });
 
   it("leaves the dispatch awaiting completion when the agent only writes output", async () => {

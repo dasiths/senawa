@@ -1,5 +1,6 @@
 import type { ConfigurationSnapshot } from "@senawa/configuration";
 import {
+  assessCompletionAccounting,
   type CanonicalValue,
   canonicalBytes,
   canonicalDigest,
@@ -91,6 +92,39 @@ export class BrokerWorkerSubmissionSink implements WorkerSubmissionSink {
     }
 
     const results: JsonValue[] = [];
+    const completionEvidence = submission.completionEvidence.map((item) => {
+      const descriptor = canonicalValue({ path: item.path, kind: item.kind });
+      const installed = this.#options.assets.install(
+        canonicalValue({ content: item.content, path: item.path }),
+      );
+      return {
+        assetId: `asset_${String(installed.contentDigest)}`,
+        kind: item.kind,
+        descriptor,
+        ...(item.criterionId === undefined ? {} : { criterionId: item.criterionId }),
+      };
+    });
+    const completion = {
+      task: stored.dispatch.task,
+      disposition: "completed",
+      summary: submission.summary ?? "Submitted by the agent",
+      criteria: stored.completionRequirements.criteria.map(({ criterionId }) => ({
+        criterionId,
+        disposition: "satisfied" as const,
+      })),
+      completionEvidence,
+    };
+
+    // Evidence is judged before anything is published, so a completion that
+    // owes evidence leaves the phase exactly as it was.
+    const owed = unsatisfiedEvidence(stored.completionRequirements, completion);
+    if (owed.length > 0) {
+      throw new WorkerApiError(
+        "invalid-submission",
+        `This completion owes evidence: ${owed.join("; ")}`,
+      );
+    }
+
     for (const output of submission.outputs) {
       results.push(this.#publish(stored, scope, snapshot, submissionId, output.name, output.value));
     }
@@ -102,16 +136,7 @@ export class BrokerWorkerSubmissionSink implements WorkerSubmissionSink {
         "completion",
         BrokerWorkerSubmissionSink.#derive(submissionId, "c"),
         "completion",
-        {
-          task: stored.dispatch.task,
-          disposition: "completed",
-          summary: submission.summary ?? "Submitted by the agent",
-          criteria: stored.completionRequirements.criteria.map(({ criterionId }) => ({
-            criterionId,
-            disposition: "satisfied" as const,
-          })),
-          completionEvidence: [],
-        },
+        completion,
       ),
     );
     return await Promise.resolve(results[results.length - 1] as JsonValue);
@@ -224,4 +249,30 @@ export class BrokerWorkerSubmissionSink implements WorkerSubmissionSink {
     }
     return { status: result.status, submissionId } as JsonValue;
   }
+}
+
+/** Names each evidence kind still owed, and how much of it, in the agent's words. */
+function unsatisfiedEvidence(requirements: unknown, completion: unknown): readonly string[] {
+  const assessment = assessCompletionAccounting(
+    requirements as Parameters<typeof assessCompletionAccounting>[0],
+    completion as Parameters<typeof assessCompletionAccounting>[1],
+  );
+  if (assessment.completionEvidenceSatisfied) return [];
+  const shortfalls = [
+    ...assessment.taskEvidence.map((item) => ({ scope: "this completion", item })),
+    ...assessment.criteria.flatMap((criterion) =>
+      criterion.completionEvidence.map((item) => ({
+        scope: `criterion ${String(criterion.criterionId)}`,
+        item,
+      })),
+    ),
+  ];
+  return shortfalls
+    .filter(({ item }) => !item.satisfied)
+    .map(
+      ({ scope, item }) =>
+        `${scope} needs ${item.minimumCount} of ${
+          typeof item.kind === "string" ? item.kind : JSON.stringify(item.kind)
+        } and carries ${item.attachmentCount}`,
+    );
 }

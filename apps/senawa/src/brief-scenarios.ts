@@ -11,7 +11,9 @@ import {
 } from "@senawa/kernel";
 import {
   createRoleAuthorizationPolicy,
+  DEFAULT_PROMPT_PACK_MAX_BYTES,
   type RuntimeDependencies,
+  renderPromptPack,
   SimulatedSerialWorkerAdapter,
 } from "@senawa/runtime";
 import {
@@ -23,6 +25,7 @@ import { runtimePrincipal } from "@senawa/testing";
 import { runtimeDependencies as productionDependencies } from "./daemon.js";
 import { runtimeSchemaContract } from "./dataflow-composition.js";
 import { startAuthoredRun } from "./start-run.js";
+import { BrokerWorkerSubmissionSink } from "./worker-submission-sink.js";
 
 export const NOW = "2026-08-18T00:00:00.000Z";
 export const BASE = {
@@ -70,6 +73,10 @@ export interface ScenarioOptions {
   readonly nestedFanOut?: boolean;
   /** Authors an ordered route list with explicit per-route limits on `definer`. */
   readonly routeLimits?: boolean;
+  /** Requires completion evidence of a named kind before the phase can close. */
+  readonly requireEvidence?: number;
+  /** Declares the phase output confidential rather than the default internal. */
+  readonly confidentialOutput?: boolean;
 }
 
 export interface Scenario {
@@ -245,6 +252,88 @@ export async function agentTurn(
   }
 }
 
+/** The prompt pack a dispatch was rendered with, as the agent receives it. */
+export async function promptPackText(scenario: Scenario, dispatchId: string): Promise<string> {
+  const broker = new SqliteContextBroker({
+    databasePath: scenario.paths.databasePath,
+    dependencies: {
+      sha256: dependencies.sha256,
+      currentTime: () => NOW,
+      issueGrantToken: () => new Uint8Array(32),
+    },
+  });
+  try {
+    const stored = broker
+      .listWorkerDispatches(scenario.repositoryId, scenario.runId)
+      .find((entry) => entry.dispatch.dispatchId === dispatchId);
+    if (stored === undefined) throw new Error("Dispatch was not stored");
+    const pack = renderPromptPack(
+      stored.context,
+      stored.dispatch,
+      dependencies.sha256,
+      DEFAULT_PROMPT_PACK_MAX_BYTES,
+    );
+    return await Promise.resolve(new TextDecoder().decode(pack.utf8Bytes));
+  } finally {
+    broker.close();
+  }
+}
+
+/**
+ * Runs one turn through the sink a real agent reaches over the worker channel.
+ *
+ * `agentTurn` drives the broker directly, which skips schema validation,
+ * evidence ingestion, and the atomicity the complete request promises. This
+ * exercises the path `senawa worker complete` actually takes.
+ */
+export async function completeThroughSink(
+  scenario: Scenario,
+  dispatchId: string,
+  outputs: readonly { readonly name: string; readonly value: CanonicalValue }[],
+  completionEvidence: readonly {
+    readonly kind: string;
+    readonly path: string;
+    readonly content: string;
+    readonly criterionId?: string;
+  }[] = [],
+): Promise<SubmissionResult> {
+  const loaded = await loadAuthoredWorkflow(scenario.project, dependencies.sha256);
+  const snapshot = loaded.snapshot;
+  if (snapshot === undefined) throw new Error("Scenario workflow does not compile");
+  const authority = new SqliteAuthority({ ...scenario.paths, dependencies });
+  const broker = new SqliteContextBroker({
+    databasePath: scenario.paths.databasePath,
+    dependencies: {
+      sha256: dependencies.sha256,
+      currentTime: () => NOW,
+      issueGrantToken: () => new Uint8Array(32),
+    },
+  });
+  try {
+    const sink = new BrokerWorkerSubmissionSink({
+      broker,
+      assets: new SqliteCanonicalJsonAssetStore(authority),
+      loadSnapshot: () => snapshot,
+      sha256: dependencies.sha256,
+    });
+    await sink.accept({
+      submissionId: `submission_${dispatchId.replace("dispatch_", "").slice(0, 30)}s`,
+      scope: {
+        repositoryId: scenario.repositoryId,
+        runId: scenario.runId,
+        dispatchId,
+      } as never,
+      submission: { kind: "complete", outputs, completionEvidence, summary: "Scripted work" },
+    });
+    return { status: "accepted" };
+  } catch (error) {
+    return { status: "refused", reason: error instanceof Error ? error.message : "refused" };
+  } finally {
+    broker.close();
+    authority.close();
+  }
+}
+
 const AGENTS_ROUTED = `
 definer:
   models:
@@ -383,9 +472,17 @@ input: schemas/request.schema.json
 phases:
   - name: define
     agent: definer
-    output: schemas/definition.schema.json
+    output: ${
+      options.confidentialOutput === true
+        ? "\n      schema: schemas/definition.schema.json\n      sensitivity: confidential"
+        : "schemas/definition.schema.json"
+    }
     gates: [check]${options.unknownField === true ? "\n    aproove: true" : ""}${options.approval === true ? "\n    approve: true" : ""}${
       options.attempts === undefined ? "" : `\n    attempts: ${options.attempts}`
+    }${
+      options.requireEvidence === undefined
+        ? ""
+        : `\n    completionEvidence:\n      mode: task\n      require:\n        - kind: definition-note\n          min: ${options.requireEvidence}`
     }
 ${second}${fanOutPhase(options)}`;
 }

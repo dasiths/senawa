@@ -63,7 +63,7 @@ A later phase may not regress one of them.
 | 3 | The consumer command line | Complete |
 | 4 | Sensors, gates, and anchors | Complete |
 | 5 | The agent operating contract | Contract, verbs, and one Copilot tool built |
-| 6 | Evidence and output policy are authorable | Policy, views, and the D-023 rename all landed |
+| 6 | Evidence and output policy are authorable | Policy, views, contract, and the evidence refusal all landed |
 | 7 | Loops, gates, sensors, and approval are authorable | Authoring built; acceptances unproven |
 | 8 | The autonomous driver and human loop | Loop drives, closes, advances, and waits for people; rerun moved to Phase 9 |
 | 9 | Fan-out and fan-in | Lowering built; member phases open |
@@ -308,11 +308,13 @@ This phase closes the most consequential part of F-004.
 
 Acceptance:
 
-* [ ] The old standard template's `task-completion` evidence requirement compiles
+* [x] The old standard template's `task-completion` evidence requirement compiles
   from authored YAML without a lowered-document escape hatch.
-* [ ] A completion request missing required evidence is refused with the missing
-  kind and count, and the next attempt receives that reason.
-* [ ] Confidential output remains confidential through context assembly, portal
+* [x] A completion request missing required evidence is refused with the missing
+  kind and count, and the next attempt receives that reason. **The refusal names
+  scope, kind, minimum, and carried count, and publishes nothing. Supplying the
+  reason as mapped input to the next attempt waits on the rerun in Phase 9.**
+* [x] Confidential output remains confidential through context assembly, portal
   projection, report export, and the generated operating contract.
 
 ## Phase 7: Loops, gates, sensors, and approval are authorable

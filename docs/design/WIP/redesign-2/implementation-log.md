@@ -2208,3 +2208,55 @@ passed on the pre-existing duplicate-registration check instead of the new one,
 and stayed green with the invariant disabled. It now registers a fresh dispatch
 whose requirements disagree with its context.
 
+## F-014: the path a real agent takes had no test, and it was lying twice
+
+The scenario harness drove the broker directly, and every acceptance went that
+way, so `BrokerWorkerSubmissionSink` had no test at all. It is the only thing a
+real agent reaches over the worker channel, and it did two things no test could
+see:
+
+* It discarded every evidence item the agent attached. `senawa worker complete
+  --evidence` read the files, sent them, and the sink replaced the list with an
+  empty one.
+* It reported every criterion satisfied whatever the agent said.
+
+So a phase authoring `completionEvidence: { mode: task, require: [...] }` had its
+completion accepted with no evidence at all. The policy was authored, compiled,
+carried into the context, and then not consulted. That is the same shape as the
+discarded `onFailure` and the ignored `completionEvidenceFrom`, and it is the
+third time it has been found on the path between an authored value and the
+behaviour it names.
+
+Evidence is now ingested into assets during the complete call, per D-022, and
+judged before any output is published, so a completion that owes evidence leaves
+the phase untouched. The refusal names the scope, the kind, the minimum, and what
+was actually carried:
+
+```text
+This completion owes evidence: this completion needs 2 of definition-note and carries 0
+```
+
+`completeThroughSink` exists so that path is exercised in future rather than
+skipped again. Both new tests were checked by breaking the code: removing the
+evidence check makes the refusal test fail.
+
+### An evidence item can name the criterion it supports
+
+The kernel counts task-scoped evidence and criterion-scoped evidence separately,
+matching on `criterionId`, so a policy of `required-criteria` or `all-satisfied`
+was unreachable from the command line: every attachment was task-scoped.
+`--evidence <kind>@<criterion>=<file>` binds one, and a bare kind stays task
+evidence, which is what the common case wants.
+
+### The artifact listing hid the one thing a sharer needs
+
+`senawa artifact list` printed identity, media type, size, and availability. The
+sensitivity was in the metadata and dropped on the way to the line, so a person
+deciding whether to send a run's artifacts anywhere could not see which of them
+carried a classification. It is now in the line.
+
+The confidential acceptance follows one authored `sensitivity: confidential`
+output through the contract, the prompt pack, and the listing, and asserts the
+body never appears in the first two while the label appears in all three.
+
+

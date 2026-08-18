@@ -17,6 +17,7 @@ export type WorkerSubmission =
         readonly kind: string;
         readonly path: string;
         readonly content: string;
+        readonly criterionId?: string;
       }[];
       readonly summary?: string;
     }

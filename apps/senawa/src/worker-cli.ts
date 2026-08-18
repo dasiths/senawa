@@ -87,7 +87,6 @@ export async function runWorkerCli(
     ].join("\n"),
   };
 }
-
 /**
  * Turns named files into the complete request.
  *
@@ -96,7 +95,12 @@ export async function runWorkerCli(
  */
 function buildCompleteRequest(argv: readonly string[], workspaceRoot: string): JsonValue | string {
   const outputs: { name: string; value: JsonValue }[] = [];
-  const completionEvidence: { kind: string; path: string; content: string }[] = [];
+  const completionEvidence: {
+    kind: string;
+    path: string;
+    content: string;
+    criterionId?: string;
+  }[] = [];
   let summary = "";
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -119,7 +123,19 @@ function buildCompleteRequest(argv: readonly string[], workspaceRoot: string): J
         return `Cannot read ${path}: ${error instanceof Error ? error.message : "unknown"}`;
       }
       if (flag === "--evidence") {
-        completionEvidence.push({ kind: name, path, content });
+        // kind@criterion binds the item to one criterion; a bare kind is evidence
+        // for the completion itself, which is what a task-scoped policy counts.
+        const at = name.indexOf("@");
+        completionEvidence.push(
+          at <= 0
+            ? { kind: name, path, content }
+            : {
+                kind: name.slice(0, at),
+                path,
+                content,
+                criterionId: name.slice(at + 1),
+              },
+        );
       } else {
         let parsed: unknown;
         try {
