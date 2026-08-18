@@ -83,7 +83,7 @@ other-project/.senawa: unable to durably publish standard workflow (ENOENT)
 ### `unable to read workflow configuration (ENOENT)`
 
 ```text
-.senawa/workflow.json: unable to read workflow configuration (ENOENT)
+.senawa/workflow.yaml: unable to read workflow configuration (ENOENT)
 Run senawa init to create it.
 ```
 
@@ -259,10 +259,7 @@ that escalates instead of running unbounded.
 
 * No hosted Senawa service and no production control-plane server. The optional
   connector is outbound only and speaks to a service you operate.
-* No CLI command instantiates a run, registers a configuration snapshot, or
-  drives a phase directly. The only workflow entry point is
-  `senawa command submit`.
-* No automatic migration command from the earlier root `senawa.json` location.
+* No automatic migration command from any earlier configuration location.
 * No portal control applies an amendment, and no portal route reaches daemon
   lifecycle operations.
 * No retention or pruning policy for receipts, events, assets, snapshots,

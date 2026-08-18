@@ -252,10 +252,9 @@ senawa init [project-directory]
 
 With no directory, init targets the current project root. An explicit argument
 selects an existing project directory. In both forms, init publishes a
-`.senawa` tree containing `workflow.json`, five external agent prompts, and the
-external workflow, phase, output, plan task, implementation task, and
-verification schemas used by the standard define, research, plan, implement,
-and verify workflow.
+`.senawa` tree containing `workflow.yaml`, `agents.yaml`, `sensors.yaml`, the
+agent prompts, and the schemas the standard workflow declares. The authored
+surface is YAML; there is no lowered document to write by hand.
 
 Init creates a private lock and staging directory beneath the project root. It
 creates every file exclusively with private permissions, syncs each file,
@@ -277,37 +276,17 @@ diagnostics:
 senawa doctor [workflow-path|project-directory]
 ```
 
-With no path, doctor reads `.senawa/workflow.json` relative to the current
-directory. A directory argument resolves its `.senawa/workflow.json`; a JSON
-argument reads that exact file and resolves declared resources relative to its
-parent. Doctor does not search ancestors or fall back to `senawa.json`. A
-missing default file exits with code `1` and includes a stable migration hint.
-Doctor refuses workflow files above 256 KiB before complete buffering or JSON
-parsing.
+With no path, doctor reads `.senawa/workflow.yaml` relative to the current
+directory. A directory argument resolves that same file beneath it. Doctor does
+not search ancestors. A missing file exits with code `1`. Doctor refuses
+workflow files above 256 KiB before complete buffering or parsing.
 
-A valid document exits with code `0`. Invalid configuration, invalid JSON, and
-read failures exit with code `1`. JSON failures include a normalized syntax
-category and line and column. Filesystem failures expose an allowlisted error
+A valid document exits with code `0`. Invalid configuration and read failures exit with
+code `1`. Parse failures name the file and where in it the problem is. Filesystem failures expose an allowlisted error
 code without stack traces or internal paths. Doctor loads every declared prompt
 and schema through the confined, symlink-refusing resource reader and compiles
 the complete immutable snapshot. It does not execute sensors, start work,
-invoke models, or contact a runner. A v1 document receives a deterministic
-migration diagnostic and is never reinterpreted as v1.
-
-Inspect both locations before moving a file by hand. The CLI
-does not overwrite the destination or provide an automatic migration command:
-
-```bash
-mkdir .senawa
-mv senawa.json .senawa/workflow.json
-senawa doctor
-```
-
-You can validate the earlier location without moving it:
-
-```bash
-senawa doctor senawa.json
-```
+invoke models, or contact a runner.
 
 Display command help or senawa version:
 

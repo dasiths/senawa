@@ -472,7 +472,7 @@ F-004 is closed by evidence, not by counting lines.
   removed capability with a recorded reason.
 * [ ] Replace line-count acceptance with two fixtures: a concise default workflow
   and a fully explicit workflow exercising the advanced surface.
-* [ ] Remove the lowered-document authoring escape hatch from consumer guidance
+* [x] Remove the lowered-document authoring escape hatch from consumer guidance
   and production scaffolding.
 
 Acceptance:

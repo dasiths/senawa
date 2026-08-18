@@ -2106,3 +2106,20 @@ against the submission it names.
 
 The help text is pinned by a test, which caught the new verb being undocumented
 in the same commit that added it. That is the pin doing its job.
+
+## The reference still described a document nobody writes
+
+`senawa init` publishes `workflow.yaml`, `agents.yaml`, `sensors.yaml`, prompts,
+and schemas. The CLI reference described it publishing `workflow.json`, told
+readers doctor reads `.senawa/workflow.json`, and offered a worked example for
+migrating a `senawa.json` from a location that no longer exists.
+
+It also claimed "a v1 document receives a deterministic migration diagnostic and
+is never reinterpreted as v1", which the v1 rename turned into a sentence saying
+nothing twice.
+
+The troubleshooting guide carried the worst of them: "No CLI command instantiates
+a run, registers a configuration snapshot, or drives a phase directly. The only
+workflow entry point is `senawa command submit`." Both `start` and `advance` do
+exactly that, and have for some time. A reader trusting that line would not have
+found the loop at all.
