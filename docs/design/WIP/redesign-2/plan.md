@@ -341,9 +341,9 @@ Acceptance:
 
 * [ ] One authored phase retries twice after red gates and then escalates; a
   second fails immediately; both behaviours follow YAML rather than constants.
-* [ ] An advisory coverage reading is visible but does not block, while a
+* [x] An advisory coverage reading is visible but does not block, while a
   blocking coverage threshold below its expected value refuses completion.
-* [ ] A blocking gate with a Boolean path that can bypass every deterministic
+* [x] A blocking gate with a Boolean path that can bypass every deterministic
   reading is rejected at authoring time.
 * [ ] The default two-phase template remains concise and compiles to the same
   policy it uses today.

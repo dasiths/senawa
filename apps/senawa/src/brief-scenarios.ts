@@ -54,6 +54,12 @@ export interface ScenarioOptions {
   readonly strictOutput?: boolean;
   /** Adds a fan-out phase, optionally omitting the element schema it needs. */
   readonly fanOut?: "complete" | "no-item-schema";
+  /** Adds an advisory rule alongside the blocking one. */
+  readonly advisory?: boolean;
+  /** Declares a gate with no deterministic sensor behind it. */
+  readonly unanchored?: boolean;
+  /** How many attempts the phase may take. */
+  readonly attempts?: number;
 }
 
 export interface Scenario {
@@ -320,20 +326,37 @@ phases:
   - name: define
     agent: definer
     output: schemas/definition.schema.json
-    gates: [check]${options.approval === true ? "\n    approve: true" : ""}
+    gates: [check]${options.approval === true ? "\n    approve: true" : ""}${
+      options.attempts === undefined ? "" : `\n    attempts: ${options.attempts}`
+    }
 ${second}${fanOutPhase(options)}`;
 }
 
 function sensors(options: ScenarioOptions): string {
+  const advisory =
+    options.advisory === true
+      ? `    advisory:
+      - sensor: opinion
+        exitCode: 0
+`
+      : "";
+  const opinion =
+    options.advisory === true || options.unanchored === true
+      ? `  opinion:
+    run: "false"
+    deterministic: false
+`
+      : "";
+  const blocking = options.unanchored === true ? "opinion" : "measure";
   return `sensors:
   measure:
     run: "${options.sensorCommand ?? "true"}"
     deterministic: true
-
+${opinion}
 gates:
   check:
     blocking:
-      - sensor: measure
+      - sensor: ${blocking}
         exitCode: 0
-`;
+${advisory}`;
 }

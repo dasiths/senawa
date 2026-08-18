@@ -55,6 +55,37 @@ describe("fan-out in sequence", () => {
   });
 });
 
+describe("what an author can state", () => {
+  it("refuses a blocking gate with no deterministic reading behind it", async () => {
+    const diagnostics = await compileScenario({ unanchored: true });
+
+    // A gate resting on a non-deterministic reading agrees with whoever
+    // submitted the work, which is the property the product exists to keep.
+    expect(diagnostics.length).toBeGreaterThan(0);
+    expect(diagnostics.map(({ message }) => message).join(" ")).toMatch(/anchor|deterministic/iu);
+  });
+
+  it("records an advisory reading without letting it refuse", async () => {
+    const scenario = await startScenario("advisory", { advisory: true });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+
+    // The advisory sensor exits non-zero. The phase must still close.
+    expect(await advance(scenario)).toEqual({ kind: "finished" });
+  });
+
+  it("compiles the attempt limit an author writes", async () => {
+    const diagnostics = await compileScenario({ attempts: 2 });
+
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("refuses an attempt limit outside the supported range", async () => {
+    const diagnostics = await compileScenario({ attempts: 99 });
+
+    expect(diagnostics.map(({ message }) => message).join(" ")).toContain("attempts must be");
+  });
+});
+
 describe("one phase in sequence", () => {
   it("dispatches the assignment when the run starts", async () => {
     const scenario = await startScenario("dispatch");
