@@ -1802,3 +1802,17 @@ so the operator who follows both bullets fixes the problem, resubmits, reads the
 same refusal, and concludes the fix did not work.
 
 The safety property and its cost now sit in the same sentence.
+
+## Proving the credential claim on every surface it names
+
+The operations guide says the IPC credential never appears in errors, logs,
+status, or diagnostics. Logs had a test. The other three had the claim.
+
+A claim about a bearer token is worth more than a sentence, so the command
+surface now starts a real service, reads the credential from its private file,
+and asserts the value appears in neither `service status`, `doctor`, nor any
+file in a generated diagnostics bundle. Injecting the credential into the
+checked output makes the test fail, so it is testing the thing it names.
+
+The diagnostics argument is a bundle directory rather than a file, which the
+first attempt got wrong and the filesystem said so immediately.

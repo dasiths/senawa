@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -55,6 +55,41 @@ describe("the command surface end to end", () => {
     expect(started.stdout).toContain("run: run_cli");
     expect(started.stdout).toContain("phase: plan");
     expect(started.stdout).toContain("waiting for the agent");
+  }, 60_000);
+
+  it("keeps the IPC credential out of status and diagnostics", async () => {
+    const project = await mkdtemp(join(tmpdir(), "senawa-cli-"));
+    roots.add(project);
+    const stateRoot = join(project, "state");
+
+    await senawa(project, stateRoot, "init");
+    await senawa(project, stateRoot, "service", "start");
+    try {
+      const credential = (
+        await readFile(join(stateRoot, "run", "senawa", "credential"), "utf8")
+      ).trim();
+      expect(credential.length).toBeGreaterThan(16);
+
+      const surfaces = await Promise.all([
+        senawa(project, stateRoot, "service", "status"),
+        senawa(project, stateRoot, "diagnostics", "create", "diagnostics"),
+        senawa(project, stateRoot, "doctor"),
+      ]);
+
+      // The bearer token is the whole of local trust. It has to stay in its
+      // private file rather than leaking through an operator-facing surface.
+      for (const surface of surfaces) {
+        expect(surface.stdout).not.toContain(credential);
+      }
+      const bundle = join(project, "diagnostics");
+      for (const entry of await readdir(bundle, { recursive: true, withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        const contents = await readFile(join(entry.parentPath, entry.name), "utf8");
+        expect(contents).not.toContain(credential);
+      }
+    } finally {
+      await senawa(project, stateRoot, "service", "stop");
+    }
   }, 60_000);
 
   it("refuses to validate an authored tree with a broken prompt", async () => {
