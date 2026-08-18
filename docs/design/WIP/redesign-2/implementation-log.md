@@ -1698,3 +1698,26 @@ write and cannot see.
 The remaining pinned values are deliberate: two follow from the v1 sequential
 decision, and two are ceilings the host enforces rather than policy. Naming them
 as such closes the audit instead of leaving the item open forever.
+
+## Where the acceptances already had evidence
+
+Several Phase 5 acceptances were open while the behaviour they describe was
+already covered somewhere else. Ticking them needed reading the suite rather
+than writing more of it:
+
+* Removing a capability removes its instruction and its tool. Covered by
+  `prompt-renderer.test.ts` "never offers an absent capability" and
+  `copilot-worker.test.ts` "exposes only six capability and grant filtered
+  tools".
+* A response with no complete call leaves the dispatch awaiting completion.
+  Covered by the scenario "leaves the dispatch awaiting completion when the
+  agent only writes output".
+* A refused complete publishes nothing. Covered by "publishes nothing when a
+  completion carries an invalid output", which was written for D-028 and proves
+  this too.
+* Refusal details reach the worker. The Copilot adapter returns the structured
+  finding list; the CLI surfaces the code and the message together, which was
+  added when `invalid-command` turned out to hide the real cause.
+
+Leaving an item open when its evidence exists is its own kind of inaccuracy: it
+hides which work is genuinely left.

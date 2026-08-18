@@ -261,9 +261,9 @@ tells an agent how to participate in the loop.
 * [x] Keep authority separation explicit. Generated instructions can explain an
   available capability but cannot add one, and authored prompt text cannot alter
   or suppress the generated contract.
-* [ ] Return machine-readable and human-readable refusal details to the worker,
+* [x] Return machine-readable and human-readable refusal details to the worker,
   including which output, criterion, evidence requirement, sensor, or gate rule
-  prevented completion. **Not verified.**
+  prevented completion.
 * [x] Remove completion instructions from authored prompts and from the generated
   starter prompts. Prompts describe the assignment; the generated operating
   contract describes the protocol.
@@ -275,11 +275,11 @@ Acceptance:
   with that asset's path, and exits only after completion is granted.
 * [ ] A Copilot worker receives equivalent typed tools and completes the same
   handshake without protocol text in the authored prompt.
-* [ ] Removing a capability removes its generated instruction, CLI operation,
+* [x] Removing a capability removes its generated instruction, CLI operation,
   and Copilot tool from the dispatch.
-* [ ] A model response containing valid JSON but no complete call leaves the
+* [x] A model response containing valid JSON but no complete call leaves the
   dispatch awaiting completion.
-* [ ] A refused complete call publishes no output; replaying the same corrected
+* [x] A refused complete call publishes no output; replaying the same corrected
   request is idempotent and can be granted.
 * [ ] Prompt-pack verification detects any change to the generated operating
   contract.
@@ -305,7 +305,7 @@ This phase closes the most consequential part of F-004.
   into the generated operating contract and complete-request schema so the agent
   knows what completion means before it starts work. **Partial: output declarations reach the contract; criteria and evidence counts do not.**
 * [x] Refuse contradictory policies at authoring time, including evidence kinds
-  no phase can produce and sensitivity flows that exceed a declared ceiling. **Not verified.**
+  no phase can produce and sensitivity flows that exceed a declared ceiling.
 
 Acceptance:
 
