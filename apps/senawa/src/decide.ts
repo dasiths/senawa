@@ -115,3 +115,75 @@ export function decidePhase(input: DecideInput): CliResult {
     authority.close();
   }
 }
+
+export interface AnswerInput extends Omit<DecideInput, "decision" | "reason"> {
+  readonly answer: string;
+}
+
+/** Answers a worker's question, so a blocked agent is not the portal's problem alone. */
+export function answerQuestion(input: AnswerInput): CliResult {
+  if (input.answer.length === 0) return { exitCode: 2, output: "An answer must carry text" };
+  let pending: { readonly sourceId: string; readonly title: string };
+  let portal: SqlitePortalQueryAuthority;
+  try {
+    portal = new SqlitePortalQueryAuthority({
+      assetDirectory: input.assetDirectory,
+      databasePath: input.databasePath,
+      dependencies: input.dependencies,
+    });
+  } catch {
+    return { exitCode: 1, output: `${input.runId}: no such run` };
+  }
+  try {
+    const asked = portal
+      .listHumanNeeds(input.repositoryId, input.runId)
+      .needs.find((need) => need.kind === "question");
+    if (asked === undefined) return { exitCode: 1, output: "Nothing is waiting for an answer" };
+    pending = { sourceId: asked.sourceId, title: asked.title };
+  } finally {
+    portal.close();
+  }
+
+  const authority = new SqliteAuthority({
+    assetDirectory: input.assetDirectory,
+    databasePath: input.databasePath,
+    dependencies: input.dependencies,
+  });
+  try {
+    const payload = { answer: input.answer, submissionId: pending.sourceId };
+    const commandId = `command_answer-${input.dependencies.sha256
+      .digest(canonicalBytes(payload))
+      .slice(0, 32)}`;
+    let allocation = 0;
+    const receipt = authority.submit(
+      decodeCommandEnvelope({
+        apiVersion: PROTOCOL_VERSION,
+        commandId,
+        intent: { type: "answer-question" },
+        payload,
+        payloadDigest: input.dependencies.sha256.digest(canonicalBytes(payload)),
+        principal: input.principal,
+        repositoryId: input.repositoryId,
+        runId: input.runId,
+        transport: { kind: "cli", requestId: `request_${commandId}` },
+      }),
+      {
+        allocateId: (kind) => {
+          allocation += 1;
+          return `${kind}_${commandId.slice(8)}${allocation}`;
+        },
+        currentTime: input.currentTime,
+        facts: { source: "cli-answer" },
+      },
+    );
+    if (receipt.status !== "completed") {
+      return {
+        exitCode: 1,
+        output: `refused: ${receipt.error?.code ?? "unknown"}: ${receipt.error?.message ?? ""}`,
+      };
+    }
+    return { exitCode: 0, output: `answered: ${pending.title}` };
+  } finally {
+    authority.close();
+  }
+}

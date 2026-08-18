@@ -366,7 +366,7 @@ absorbs the unfinished acceptance from Phases 2, 3, and the former Phase 5.
   evidence rather than an agent-authored account of failure.
 * [x] Record human decisions with principal, timestamp, reasoning, and a digest
   that binds the reason.
-* [ ] Expose approve, reject with reasons, answer, and escalation response from
+* [x] Expose approve, reject with reasons, answer, and escalation response from
   the command line. The portal remains optional.
 * [x] Make `senawa start` block and stream by default, with an explicit
   non-blocking option.

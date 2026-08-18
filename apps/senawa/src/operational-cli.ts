@@ -38,7 +38,7 @@ import { restoreSupervisorStateRoot, verifySupervisorStateBackup } from "./state
 const MAX_OPERATIONAL_ARGUMENT_LENGTH = 4_096;
 
 import { runAdvanceCommand } from "./advance-command.js";
-import { decidePhase } from "./decide.js";
+import { answerQuestion, decidePhase } from "./decide.js";
 import {
   type InspectOptions,
   inspectPhase,
@@ -146,6 +146,18 @@ export async function runOperationalCli(
       principal: startPrincipal,
       dependencies,
       currentTime: new Date().toISOString(),
+    });
+  }
+  if (group === "answer" && action !== undefined && rest.length >= 2) {
+    return answerQuestion({
+      answer: rest.slice(1).join(" "),
+      assetDirectory: paths.assetDirectory,
+      currentTime: new Date().toISOString(),
+      databasePath: paths.databasePath,
+      dependencies,
+      principal: startPrincipal,
+      repositoryId: action,
+      runId: rest[0] ?? "",
     });
   }
   if (group === "run-gates" && action !== undefined && rest.length === 0) {

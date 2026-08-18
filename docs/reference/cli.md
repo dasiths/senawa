@@ -41,6 +41,7 @@ because neither is a failure.
 ```bash
 senawa approve <repository> <run>
 senawa reject <repository> <run> <reason>
+senawa answer <repository> <run> <text>
 ```
 
 A rejection must carry a reason. The next attempt is a guess without one.

@@ -2095,3 +2095,14 @@ default that made the value unable to differ. Neither shows up as a failure.
 `onFailure` appears nowhere in the authoring guide, which is how a setting can
 have an inverted default for this long. That belongs to the undescribed
 capabilities sweep.
+
+## Answering a worker without the portal
+
+`approve` and `reject` were on the command line; answering a worker's question
+was not, so a run blocked on a question needed the portal to get moving again.
+`senawa answer <repository> <run> <text>` now resolves the pending question the
+same way `decidePhase` resolves a pending approval: read the human need, submit
+against the submission it names.
+
+The help text is pinned by a test, which caught the new verb being undocumented
+in the same commit that added it. That is the pin doing its job.
