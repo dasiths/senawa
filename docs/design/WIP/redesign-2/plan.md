@@ -556,7 +556,7 @@ Acceptance:
 
 * [ ] A new consumer can scaffold, author, validate, run, inspect, intervene, and
   finish a workflow without reading an internal contract.
-* [ ] No v1 guide instructs an author to put senawa protocol text in an agent
+* [x] No v1 guide instructs an author to put senawa protocol text in an agent
   prompt.
 * [ ] No document explains a behaviour in words the canonical behaviours table
   says more simply.
@@ -579,7 +579,7 @@ way it is. They belong back once the system can demonstrate them.
   journal no agent can write, a frozen set the optimizer cannot weaken, and a
   human who decides what better means.
 * [x] Sweep every document for unsupported claims and undescribed capabilities.
-* [ ] Record which promises v1 keeps, changes, or drops.
+* [x] Record which promises v1 keeps, changes, or drops.
 
 Acceptance:
 

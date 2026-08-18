@@ -2123,3 +2123,35 @@ a run, registers a configuration snapshot, or drives a phase directly. The only
 workflow entry point is `senawa command submit`." Both `start` and `advance` do
 exactly that, and have for some time. A reader trusting that line would not have
 found the loop at all.
+
+## What v1 keeps, changes, and drops
+
+**Kept.** An authored workflow drives real agents to completion from the command
+line. Every phase output is validated against the schema its phase declared
+before it is published. Refusals are durable outcomes carrying reasons, not
+transient errors. The kernel stays free of filesystem, process, network, clock,
+and randomness. The IPC credential never reaches an operator surface, now proven
+against status, doctor, and a generated diagnostics bundle rather than logs
+alone. Prompt packs are reproducible from the context and the dispatch, which is
+why completion criteria could not be added to the contract without moving them
+into the context first.
+
+**Changed.** Authoring is YAML; there is no lowered document to write by hand,
+and the reference no longer describes one. A phase that declares no gate now
+presents an empty gate rather than no gate. A phase that says nothing about
+failure continues rather than failing fast, because the run-wide derivation
+takes `some` and the old default made every run fail-fast. Worker credentials
+and dispatch records are durable, because the process that dispatches and the
+process that serves the agent are not the same one. The complete request names
+its evidence `completionEvidence`, matching the field the authority judges.
+
+**Dropped.** The claim that the only workflow entry point is `senawa command
+submit`. The `senawa.json` migration guidance. The promise that Senawa uses the
+first model route that works, which was never wired. The promise that
+`session: element` gives each fan-out member its own conversation, which is
+validated, compiled, and read by nothing.
+
+**Deferred, and said so in the guides rather than left implied.** Model route
+fallback. Session scope. Completion criteria and evidence counts in the
+operating contract. Whether a workflow whose last phase closes ends its own run,
+which stays with the person who holds that authority.
