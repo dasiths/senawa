@@ -2,6 +2,21 @@
 
 These instructions apply to the entire repository.
 
+## Prime directive: keep working
+
+Given a plan or a multi-phase task, continue until everything is done. Do not
+stop after each phase for an update.
+
+* Do not end a turn with a status report. A summary that ends the turn hands
+  control back, which is the same failure as asking permission.
+* Do not ask whether to continue. The next planned step is already approved.
+* Chain phases in one turn: implement, validate, commit, push, next phase.
+* Put findings, deviations, and judgement calls in the implementation log. The
+  log is the reporting channel, not the chat turn.
+* Stop only for a product decision that cannot be inferred, an irreversible or
+  shared action, or a real blocker.
+* Summarise only when the whole task is finished.
+
 ## Architecture boundaries
 
 * Keep the kernel deterministic and free of filesystem, process, network,
