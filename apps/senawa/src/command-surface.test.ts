@@ -157,6 +157,17 @@ describe("the command surface end to end", () => {
       const repository = /^repository: (.+)$/m.exec(started.stdout)?.[1] ?? "";
       const advanced = await senawa(project, stateRoot, "advance", repository, "run_agent");
       expect(advanced.stdout).toContain("finished");
+
+      // A finished run has to show what it produced.
+      const artifacts = await senawa(
+        project,
+        stateRoot,
+        "artifact",
+        "list",
+        repository,
+        "run_agent",
+      );
+      expect(artifacts.stdout).toContain("verified-stored");
     } finally {
       await senawa(project, stateRoot, "service", "stop");
     }

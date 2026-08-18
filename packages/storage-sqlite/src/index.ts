@@ -4086,7 +4086,8 @@ export class SqlitePortalQueryAuthority {
     const rows = this.#database
       .prepare<[string, string, string, number], { canonical_submission: string }>(
         `SELECT canonical_submission FROM context_submissions
-         WHERE repository_id = ? AND run_id = ? AND submission_type = 'asset'
+         WHERE repository_id = ? AND run_id = ?
+           AND submission_type IN ('asset', 'phase-output')
            AND submission_id > ? ORDER BY submission_id LIMIT ?`,
       )
       .all(repositoryId, runId, after ?? "", limit + 1);
@@ -4095,7 +4096,12 @@ export class SqlitePortalQueryAuthority {
         decodeCanonicalJsonValue(canonical_submission),
         "Portal worker asset submission",
       );
-      const asset = requiredJsonRecord(submission.asset, "Portal worker asset metadata");
+      // A phase output is the thing the workflow exists to produce. Listing only
+      // proposed assets hid it from everyone who finished a run.
+      const asset =
+        submission.asset === undefined
+          ? phaseOutputAsAsset(requiredJsonRecord(submission.output, "Portal phase output"))
+          : requiredJsonRecord(submission.asset, "Portal worker asset metadata");
       return this.#artifactMetadata(submission, asset);
     });
     return decodePortalArtifactPage({
@@ -16125,4 +16131,19 @@ function isSqliteLockError(error: unknown): error is Error & { readonly code: st
     typeof error.code === "string" &&
     (error.code.startsWith("SQLITE_BUSY") || error.code.startsWith("SQLITE_LOCKED"))
   );
+}
+
+/** Presents a phase output in the shape the artifact listing reads. */
+function phaseOutputAsAsset(
+  output: Readonly<Record<string, JsonValue>>,
+): Readonly<Record<string, JsonValue>> {
+  const contentDigest = String(output.contentDigest);
+  return {
+    assetId: `asset_${contentDigest}`,
+    byteLength: output.byteLength ?? 0,
+    contentDigest,
+    mediaType: output.mediaType ?? "application/json",
+    sensitivity: output.sensitivity ?? "internal",
+    summary: `phase output ${String(output.outputName)}`,
+  };
 }

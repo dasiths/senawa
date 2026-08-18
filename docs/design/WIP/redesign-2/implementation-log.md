@@ -2009,3 +2009,15 @@ operator has no way to tell which.
 
 Both survive a service restart, so durability is not the problem. These are
 reads that do not agree with what the run did.
+
+### Listing what the run actually produced
+
+The artifact listing read `submission_type = 'asset'` only. An agent's phase
+output is stored as `phase-output`, so the one thing a workflow exists to
+produce was the one thing the listing could not show. A finished run reported
+"no artifacts yet" about its own plan.
+
+Phase outputs are now listed alongside proposed assets, presented in the shape
+the listing already reads. The digest, byte length, and media type come from the
+submission, so the stored asset verifies and the entry reads
+`verified-stored` rather than `metadata-only`.
