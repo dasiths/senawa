@@ -9,6 +9,7 @@ import {
   digestPhaseOutputSet,
   digestSelectedTaskSet,
   evaluateGate,
+  type PhaseOutputPublication,
   type Sha256Digest,
   sha256Digest,
   type TaskGenerationReference,
@@ -21,7 +22,11 @@ import {
   PROTOCOL_VERSION,
 } from "@senawa/protocol";
 import { RuntimeDataflowAuthority, type RuntimeDependencies } from "@senawa/runtime";
-import { SqliteCanonicalJsonAssetStore, SqliteContextBroker } from "@senawa/storage-sqlite";
+import {
+  SqliteCanonicalJsonAssetStore,
+  SqliteContextBroker,
+  SqlitePortalQueryAuthority,
+} from "@senawa/storage-sqlite";
 import { CompletionFactCommandBridge, SqliteSupervisorAuthority } from "@senawa/supervisor";
 import {
   configurationRuntimeSchemaValidator,
@@ -36,6 +41,11 @@ export type AdvanceOutcome =
   | { readonly kind: "awaiting-approval"; readonly phaseKey: string }
   | {
       readonly kind: "gate-refused";
+      readonly phaseKey: string;
+      readonly reasons: readonly string[];
+    }
+  | {
+      readonly kind: "output-refused";
       readonly phaseKey: string;
       readonly reasons: readonly string[];
     }
@@ -67,7 +77,10 @@ interface SnapshotPhase {
   readonly key: string;
   readonly dependsOn?: readonly string[];
   readonly outputs: readonly { readonly key: string }[];
-  readonly exit?: { readonly gate?: string };
+  readonly exit?: {
+    readonly gate?: string;
+    readonly approval?: { readonly policy?: string };
+  };
 }
 
 interface GateRule {
@@ -171,16 +184,33 @@ async function step(
   const published = state.phaseOutputOutbox.filter((entry) => entry.fact.dispatchId === dispatchId);
   if (!completed || published.length === 0) return { kind: "awaiting-agent", phaseKey };
 
-  const publications = published.map(({ fact }) =>
-    dataflow.publishPhaseOutput({
-      schema: runtimeSchemaContract(
-        snapshot,
-        String(fact.output.schemaKey),
-        input.dependencies.sha256,
-      ),
-      fact,
-    }),
-  );
+  // Publication is where the declared schema is enforced. A refusal here means
+  // the agent's output never becomes readable, so the phase is left unchanged.
+  const publications: PhaseOutputPublication[] = [];
+  for (const { fact } of published) {
+    try {
+      publications.push(
+        dataflow.publishPhaseOutput({
+          schema: runtimeSchemaContract(
+            snapshot,
+            String(fact.output.schemaKey),
+            input.dependencies.sha256,
+          ),
+          fact,
+        }),
+      );
+    } catch (error) {
+      return {
+        kind: "output-refused",
+        phaseKey,
+        reasons: [
+          `${String(fact.output.outputName)}: ${
+            error instanceof Error ? error.message : "output was refused"
+          }`,
+        ],
+      };
+    }
+  }
   const assessments = state.completionOutbox
     .filter((entry) => entry.fact.dispatchId === dispatchId)
     .map((entry) => ({
@@ -247,7 +277,10 @@ async function step(
     }
   }
 
-  submit(
+  // A candidate that already exists is this phase's, recorded by an earlier
+  // call that then stopped for a decision.
+  submitTolerating(
+    ["candidate-exists"],
     supervisor,
     input,
     `gate-${phaseKey}`,
@@ -266,11 +299,15 @@ async function step(
     },
   );
 
-  // An authored approval is a human's to give. The driver stops here and the
-  // run waits, rather than recording a decision nobody made.
-  if (requiresApproval(phase)) return { kind: "awaiting-approval", phaseKey };
+  // An authored approval is a human's to give. Submitting close-phase while one
+  // is owed would cache a refusal against that command id and replay it after
+  // the decision arrives, so the driver asks what the human is asked.
+  if (requiresApproval(phase) && approvalPending(input)) {
+    return { kind: "awaiting-approval", phaseKey };
+  }
 
-  submit(
+  const closed = submitTolerating(
+    ["decision-required"],
     supervisor,
     input,
     `close-${phaseKey}`,
@@ -279,6 +316,9 @@ async function step(
     candidate.candidateDigest,
     {},
   );
+  if (closed === "decision-required") {
+    return { kind: "awaiting-approval", phaseKey };
+  }
   const next = nextPhase(snapshot, phaseKey);
   if (next === undefined) return { kind: "finished" };
   submit(
@@ -297,10 +337,7 @@ async function step(
 }
 
 function requiresApproval(phase: SnapshotPhase): boolean {
-  return (
-    (phase as unknown as { readonly approval?: { readonly policy?: string } }).approval?.policy ===
-    "required"
-  );
+  return phase.exit?.approval?.policy === "required";
 }
 
 /** The phase that becomes current once this one closes, in declaration order. */
@@ -386,6 +423,44 @@ function deliverFacts(
       String(entry.fact.assessment.submission.task.contextRevisionDigest),
     );
     broker.deliverCompletionFact(entry.submissionId);
+  }
+}
+
+/** True when a person still owes this run a decision. */
+function approvalPending(input: AdvanceRunInput): boolean {
+  const portal = new SqlitePortalQueryAuthority({
+    databasePath: input.databasePath,
+    assetDirectory: input.assetDirectory,
+    dependencies: input.dependencies,
+  });
+  try {
+    return portal
+      .listHumanNeeds(input.repositoryId, input.runId)
+      .needs.some((need: { readonly kind: string }) => need.kind === "candidate-approval");
+  } finally {
+    portal.close();
+  }
+}
+
+/** Submits a command, returning the refusal code for outcomes the caller expects. */
+function submitTolerating(
+  tolerated: readonly string[],
+  supervisor: SqliteSupervisorAuthority,
+  input: AdvanceRunInput,
+  suffix: string,
+  intent: string,
+  graphRevision: string,
+  exactObjectDigest: string | undefined,
+  payload: unknown,
+): string | undefined {
+  try {
+    submit(supervisor, input, suffix, intent, graphRevision, exactObjectDigest, payload);
+    return undefined;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    const matched = tolerated.find((code) => message.includes(code));
+    if (matched === undefined) throw error;
+    return matched;
   }
 }
 

@@ -97,14 +97,18 @@ export function decidePhase(input: DecideInput): CliResult {
       {
         currentTime: input.currentTime,
         facts: { source: "cli-decision" },
+        // Identities are globally unique, so they carry the command they serve.
         allocateId: (kind) => {
           allocation += 1;
-          return `${kind}-decide-${allocation}`;
+          return `${kind}_${commandId.slice(8)}${allocation}`;
         },
       },
     );
     if (receipt.status !== "completed") {
-      return { exitCode: 1, output: `refused: ${receipt.error?.code ?? "unknown"}` };
+      return {
+        exitCode: 1,
+        output: `refused: ${receipt.error?.code ?? "unknown"}: ${receipt.error?.message ?? ""}`,
+      };
     }
     return { exitCode: 0, output: `${input.decision}d: ${pending.title}` };
   } finally {

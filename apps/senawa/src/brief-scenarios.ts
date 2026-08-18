@@ -1,0 +1,296 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadAuthoredWorkflow } from "@senawa/execution-host";
+import {
+  type CanonicalValue,
+  canonicalBytes,
+  canonicalDigest,
+  canonicalValue,
+  sha256Digest,
+} from "@senawa/kernel";
+import {
+  createRoleAuthorizationPolicy,
+  type RuntimeDependencies,
+  SimulatedSerialWorkerAdapter,
+} from "@senawa/runtime";
+import {
+  SqliteAuthority,
+  SqliteCanonicalJsonAssetStore,
+  SqliteContextBroker,
+} from "@senawa/storage-sqlite";
+import { runtimePrincipal } from "@senawa/testing";
+import { runtimeDependencies as productionDependencies } from "./daemon.js";
+import { runtimeSchemaContract } from "./dataflow-composition.js";
+import { startAuthoredRun } from "./start-run.js";
+
+export const NOW = "2026-08-18T00:00:00.000Z";
+export const BASE = {
+  commitDigest: sha256Digest("1".repeat(64)),
+  treeDigest: sha256Digest("2".repeat(64)),
+};
+
+export const dependencies: RuntimeDependencies = {
+  sha256: productionDependencies.sha256,
+  authorization: createRoleAuthorizationPolicy([
+    { intent: "instantiate-run", roles: ["release-manager"] },
+    { intent: "submit-completion", roles: ["release-manager"] },
+    { intent: "evaluate-gate", roles: ["release-manager"] },
+    { intent: "record-authority-decision", roles: ["release-manager"] },
+    { intent: "close-phase", roles: ["release-manager"] },
+    { intent: "start-phase-attempt", roles: ["release-manager"] },
+    { intent: "create-escalation", roles: ["release-manager"] },
+  ]),
+};
+
+export interface ScenarioOptions {
+  /** The command the gate's sensor runs. `false` makes the gate refuse. */
+  readonly sensorCommand?: string;
+  /** Adds a second phase that depends on the first. */
+  readonly secondPhase?: boolean;
+  /** Makes the phase wait for a person before it closes. */
+  readonly approval?: boolean;
+  /** Refuses any output that is not an object with a boolean `verified`. */
+  readonly strictOutput?: boolean;
+}
+
+export interface Scenario {
+  readonly project: string;
+  readonly paths: { readonly databasePath: string; readonly assetDirectory: string };
+  readonly repositoryId: string;
+  readonly runId: string;
+}
+
+const roots = new Set<string>();
+
+export async function disposeScenarios(): Promise<void> {
+  await Promise.all([...roots].map((root) => rm(root, { recursive: true, force: true })));
+  roots.clear();
+}
+
+/** Builds an authored project and starts a run against it. */
+export async function startScenario(
+  name: string,
+  options: ScenarioOptions = {},
+): Promise<Scenario & { readonly dispatchId: string; readonly phaseKey: string }> {
+  const project = await authoredProject(options);
+  const scenario: Scenario = {
+    project,
+    paths: {
+      databasePath: join(project, "authority.db"),
+      assetDirectory: join(project, "assets"),
+    },
+    repositoryId: `repository_${name}`,
+    runId: `run_${name}`,
+  };
+  const started = await startAuthoredRun({
+    projectRoot: project,
+    ...scenario.paths,
+    dependencies,
+    repositoryId: scenario.repositoryId,
+    runId: scenario.runId,
+    principal: runtimePrincipal,
+    input: canonicalValue({ request: "Add a health endpoint" }),
+    currentTime: NOW,
+    repositoryBase: BASE,
+  });
+  return { ...scenario, dispatchId: started.dispatchId, phaseKey: started.phaseKey };
+}
+
+export interface SubmissionResult {
+  readonly status: string;
+  readonly reason?: string;
+}
+
+/**
+ * Runs one scripted agent turn against a dispatch.
+ *
+ * `output` is submitted as the phase output. Passing a value the schema refuses
+ * is how the schema-violation branch of the brief is exercised.
+ */
+export async function agentTurn(
+  scenario: Scenario,
+  dispatchId: string,
+  output: CanonicalValue,
+  options: { readonly omitOutput?: boolean; readonly omitCompletion?: boolean } = {},
+): Promise<SubmissionResult> {
+  const loaded = await loadAuthoredWorkflow(scenario.project, dependencies.sha256);
+  const snapshot = loaded.snapshot;
+  if (snapshot === undefined) throw new Error("Scenario workflow does not compile");
+  const authority = new SqliteAuthority({ ...scenario.paths, dependencies });
+  const assets = new SqliteCanonicalJsonAssetStore(authority);
+  const broker = new SqliteContextBroker({
+    databasePath: scenario.paths.databasePath,
+    dependencies: {
+      sha256: dependencies.sha256,
+      currentTime: () => NOW,
+      issueGrantToken: () => new Uint8Array(32),
+    },
+  });
+  try {
+    const stored = broker
+      .listWorkerDispatches(scenario.repositoryId, scenario.runId)
+      .find((entry) => entry.dispatch.dispatchId === dispatchId);
+    if (stored === undefined) throw new Error("Dispatch was not stored");
+    const declaration = stored.context.phaseOutputDeclarations[0];
+    if (declaration === undefined) throw new Error("Phase declares no output");
+    const installed = assets.install(output);
+    const contract = runtimeSchemaContract(
+      snapshot,
+      String(declaration.schemaKey),
+      dependencies.sha256,
+    );
+    const receipt = canonicalDigest(
+      canonicalValue({
+        boundary: "phase output",
+        schemaKey: String(contract.key),
+        schemaResourceDigest: String(contract.schemaResourceDigest),
+        validatorProfileDigest: String(contract.validatorProfileDigest),
+        contentDigest: String(installed.contentDigest),
+        findings: [],
+      }),
+      dependencies.sha256,
+    );
+    broker.installCanonicalOutputAsset(
+      {
+        contentDigest: installed.contentDigest,
+        byteLength: installed.byteLength,
+        mediaType: "application/json",
+        schemaResourceDigest: declaration.schemaResourceDigest,
+        validationReceiptDigest: receipt,
+      },
+      canonicalBytes(output),
+    );
+    const suffix = dispatchId.replace("dispatch_", "").slice(0, 30);
+    let refusal: string | undefined;
+    const result = await new SimulatedSerialWorkerAdapter(broker).run(
+      { dispatch: stored.dispatch },
+      (session) => {
+        try {
+          if (options.omitOutput !== true) {
+            session.submitOutput(`submission_${suffix}o`, {
+              phase: stored.context.phaseAttempt.phase,
+              outputName: declaration.outputName,
+              schemaKey: declaration.schemaKey,
+              schemaResourceDigest: declaration.schemaResourceDigest,
+              contentDigest: installed.contentDigest,
+              byteLength: installed.byteLength,
+              mediaType: "application/json",
+              sensitivity: declaration.sensitivity,
+              graphRevisionDigest: stored.context.graphRevisionDigest,
+              configurationSnapshotDigest: stored.context.configurationSnapshotDigest,
+              inputBindingDigest: stored.context.phaseInputBinding.bindingDigest,
+              validationReceiptDigest: receipt,
+            });
+          }
+          if (options.omitCompletion !== true) {
+            session.complete(`submission_${suffix}c`, {
+              task: stored.dispatch.task,
+              disposition: "completed",
+              summary: "Scripted work",
+              criteria: stored.completionRequirements.criteria.map(({ criterionId }) => ({
+                criterionId,
+                disposition: "satisfied" as const,
+              })),
+              completionEvidence: [],
+            });
+          }
+        } catch (error) {
+          refusal = error instanceof Error ? error.message : "refused";
+          throw error;
+        }
+      },
+    );
+    return refusal === undefined
+      ? { status: result.status }
+      : { status: result.status, reason: refusal };
+  } finally {
+    broker.close();
+    authority.close();
+  }
+}
+
+const AGENTS = `
+definer:
+  model: gpt-5
+  prompt: prompts/definer.md
+
+verifier:
+  model: gpt-5
+  prompt: prompts/verifier.md
+`;
+
+async function authoredProject(options: ScenarioOptions): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "senawa-scenario-"));
+  roots.add(root);
+  const configuration = join(root, ".senawa");
+  await mkdir(join(configuration, "prompts"), { recursive: true });
+  await mkdir(join(configuration, "schemas"), { recursive: true });
+  await writeFile(join(configuration, "agents.yaml"), AGENTS);
+  await writeFile(join(configuration, "workflow.yaml"), workflow(options));
+  await writeFile(join(configuration, "sensors.yaml"), sensors(options));
+  await writeFile(
+    join(configuration, "prompts", "definer.md"),
+    "Define the work.\n\nRequest: ${{ input.request }}\n",
+  );
+  await writeFile(join(configuration, "prompts", "verifier.md"), "Verify the work.\n");
+  for (const [name, id] of [
+    ["request.schema.json", "urn:senawa:request"],
+    ["definition.schema.json", "urn:senawa:definition"],
+    ["verification.schema.json", "urn:senawa:verification"],
+  ]) {
+    const strict = options.strictOutput === true && name === "definition.schema.json";
+    await writeFile(
+      join(configuration, "schemas", String(name)),
+      `${JSON.stringify({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: id,
+        type: "object",
+        ...(strict
+          ? {
+              required: ["verified"],
+              properties: { verified: { type: "boolean" } },
+              additionalProperties: false,
+            }
+          : { additionalProperties: true }),
+      })}\n`,
+    );
+  }
+  return root;
+}
+
+function workflow(options: ScenarioOptions): string {
+  const second =
+    options.secondPhase === true
+      ? `
+  - name: verify
+    agent: verifier
+    needs: [define]
+    output: schemas/verification.schema.json
+    gates: [check]
+`
+      : "";
+  return `
+name: delivery
+input: schemas/request.schema.json
+phases:
+  - name: define
+    agent: definer
+    output: schemas/definition.schema.json
+    gates: [check]${options.approval === true ? "\n    approve: true" : ""}
+${second}`;
+}
+
+function sensors(options: ScenarioOptions): string {
+  return `sensors:
+  measure:
+    run: "${options.sensorCommand ?? "true"}"
+    deterministic: true
+
+gates:
+  check:
+    blocking:
+      - sensor: measure
+        exitCode: 0
+`;
+}

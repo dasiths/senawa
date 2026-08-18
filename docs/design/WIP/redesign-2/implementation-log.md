@@ -1533,3 +1533,33 @@ rather than as instruction.
 
 Operations, portal, and security still describe the earlier surface and are not
 yet rewritten.
+
+## The brief's sequence diagram is now a test suite
+
+Each branch of "one phase in sequence" is a test. Writing them found four
+defects, none of which the existing suite could reach.
+
+* **Approval was read from the wrong place.** The compiler lowers an authored
+  `approve` to `exit.approval`, and both the driver and the run instantiation
+  read `approval` at the top level. Every phase that asked for a person closed
+  without one. This is the most serious of the four: the approval gate silently
+  did nothing.
+* **An output that violates its declared schema was published.** Validation
+  happens when the driver publishes, and the driver let the error escape as a
+  crash rather than a refusal. It now returns `output-refused` naming the
+  output, and nothing is published, so the phase is left exactly as it was.
+* **The decision command allocated a malformed identity.** Approval identities
+  must be `approval_` followed by lowercase characters, and the allocator
+  produced `approval-decide-1`. The authority wrapped the resulting type error
+  as `invalid-command`, which says nothing about what was wrong. The refusal
+  message is now surfaced alongside the code for exactly this reason.
+* **The driver replayed its own refusal forever.** Command receipts are
+  idempotent by command id. Submitting `close-phase` while an approval was owed
+  cached a `decision-required` refusal against that id, and every later call got
+  the cached refusal back even after the human approved. The driver now asks the
+  portal whether a decision is pending, which is the same question the human is
+  asked, and does not submit a command it knows will be refused.
+
+The last one is worth generalising: a driver that retries a command must not
+reuse a command id across a state change that should alter the answer. Where the
+answer depends on something outside the command, ask first.

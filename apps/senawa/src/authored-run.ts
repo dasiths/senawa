@@ -94,8 +94,11 @@ function approvalPolicyFor(
 ): { readonly policy: string; readonly authority?: AuthenticatedPrincipal } {
   const approved = snapshot.phaseDataflow.some(
     (entry) =>
-      (entry.value as unknown as { readonly approval?: { readonly policy?: string } }).approval
-        ?.policy === "required",
+      (
+        entry.value as unknown as {
+          readonly exit?: { readonly approval?: { readonly policy?: string } };
+        }
+      ).exit?.approval?.policy === "required",
   );
   return approved
     ? { policy: "approval-required", authority: principal }
