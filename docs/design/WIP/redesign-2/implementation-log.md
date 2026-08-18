@@ -1674,3 +1674,27 @@ Two fixes:
 The general lesson, now stated twice in this log: silence is the worst refusal.
 An unknown field, a discarded value, and a swallowed error all read to a
 consumer as the feature being broken.
+
+## The constant audit, finished
+
+F-004 catalogued the values `lowerAuthoredWorkflow` pinned. Every one is now
+classified rather than listed:
+
+| Constant | Classification |
+|---|---|
+| `maximumAttempts: 3` | Default, overridden by a phase's `attempts` |
+| `maxTurns: 12` | Default, overridden by a route's `turns` |
+| Sensor `maxAttempts: 3` | Was pinned. Now `attempts` on the sensor |
+| Sensor `maxReconciliationAttempts: 2` | Was pinned. Now `reconciliationAttempts` |
+| `maxWriterConcurrency: 1` | Pinned by the v1 decision that members run one at a time |
+| `maxConcurrency: 1` | Same decision, same reason |
+| `maxSelectedItems: 64`, `maxTotalTasks: 256` | Host ceilings, not policy an author sets |
+
+The two sensor values were the ones Phase 7 asked for and the ones still
+missing. They take a whole number between 1 and 16 and are refused outside it,
+rather than clamped, because a clamped value is a policy the author did not
+write and cannot see.
+
+The remaining pinned values are deliberate: two follow from the v1 sequential
+decision, and two are ceilings the host enforces rather than policy. Naming them
+as such closes the audit instead of leaving the item open forever.

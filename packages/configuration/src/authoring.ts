@@ -180,8 +180,8 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
         maxStdoutBytes: sensor.maxOutputBytes,
         maxStderrBytes: sensor.maxOutputBytes,
         inheritedEnvironment: [...new Set(sensor.environment)].sort(compare),
-        maxAttempts: 3,
-        maxReconciliationAttempts: 2,
+        maxAttempts: sensor.maxAttempts,
+        maxReconciliationAttempts: sensor.maxReconciliationAttempts,
       }))
       .sort((left, right) => compare(left.key, right.key)),
     gates: phases
@@ -392,6 +392,24 @@ interface AuthoredSensor {
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
   readonly environment: readonly string[];
+  readonly maxAttempts: number;
+  readonly maxReconciliationAttempts: number;
+}
+
+/** A small positive count, refused rather than clamped when it is out of range. */
+function boundedCount(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  value: unknown,
+  fallback: number,
+): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 16) {
+    add(collector, "invalid-field", path, pointer, "Must be a whole number between 1 and 16");
+    return fallback;
+  }
+  return value;
 }
 
 /** Accepts a plain count, or a duration such as 10m, and refuses anything else. */
@@ -731,6 +749,14 @@ function readSensors(
       timeoutMs: readDuration(collector, path, `${pointer}/timeout`, raw.timeout, 300_000),
       maxOutputBytes: readDuration(collector, path, `${pointer}/maxOutput`, raw.maxOutput, 65_536),
       environment: Array.isArray(raw.env) ? ["PATH", ...raw.env.filter(isString)] : ["PATH"],
+      maxAttempts: boundedCount(collector, path, `${pointer}/attempts`, raw.attempts, 3),
+      maxReconciliationAttempts: boundedCount(
+        collector,
+        path,
+        `${pointer}/reconciliationAttempts`,
+        raw.reconciliationAttempts,
+        2,
+      ),
     });
   }
   return sensors;

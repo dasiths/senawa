@@ -452,9 +452,9 @@ F-004 is closed by evidence, not by counting lines.
   approval, model policy, sensitivity, and iteration policy.
 * [ ] Compare the compiled graph and policy semantics with the old internal
   template. Byte identity is not required; externally meaningful behaviour is.
-* [ ] Audit every constant in `lowerAuthoredWorkflow`. Classify it as a derived
+* [x] Audit every constant in `lowerAuthoredWorkflow`. Classify it as a derived
   mechanism, an overridable default, a host-enforced safety bound, or a deliberate
-  removed capability with a recorded reason. **Partial: F-004 catalogued them; seven were closed by Phases 6 and 7.**
+  removed capability with a recorded reason.
 * [ ] Replace line-count acceptance with two fixtures: a concise default workflow
   and a fully explicit workflow exercising the advanced surface.
 * [ ] Remove the lowered-document authoring escape hatch from consumer guidance

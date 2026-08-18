@@ -193,7 +193,14 @@ sensors:
     run: pnpm test --coverage --reporter=json
     deterministic: true
     timeout: 10m
+    attempts: 2
+    reconciliationAttempts: 1
 ```
+
+`attempts` is how many times senawa will run the command before treating it as
+unable to measure. `reconciliationAttempts` is how many times it will re-read a
+disagreeing result. Both default to sensible values and take a whole number
+between 1 and 16.
 
 `deterministic: true` means the same input gives the same reading. Only a
 deterministic reading can anchor a blocking gate, because a gate resting on a
