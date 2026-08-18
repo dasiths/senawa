@@ -2642,3 +2642,24 @@ The three that remain were each checked by discarding the authored value in the
 lowering, and each fails. That is what makes this an acceptance rather than a
 description: it catches the specific failure F-004 found four separate times, a
 value parsed, validated, and then not threaded through.
+
+## The default view was changed and changed back
+
+"The default view shows the workflow and working agent" reads as a one-line
+change: the router returns `graph` instead of `overview`. It compiled, the unit
+tests moved with it, and five browser tests failed for a reason worth recording.
+
+Run controls live on the overview. Pause, resume, and end are reachable only
+after navigating there, so nine clicks across the journey and panel suites
+stopped finding their buttons. Adding a navigation before each would have made
+them pass while quietly settling a product question: whether a person should have
+to navigate to pause a run.
+
+The direction is not in doubt, because the brief says graph and terminal are the
+right primary surfaces. What the direction needs is the run controls in the
+persistent rail, and that is a layout decision with visual consequences rather
+than a router default. Changed back rather than shipped with nine tests churned
+to enshrine a layout I could not defend.
+
+The substantive half of the phase stands: the depth is behind disclosure, and the
+browser suite proves both that it is hidden and that it is one action away.

@@ -518,7 +518,10 @@ Acceptance:
 
 Acceptance:
 
-* [ ] The default view shows the workflow and working agent.
+* [ ] The default view shows the workflow and working agent. **Attempted and
+  reverted: run controls live on the overview, so a graph default makes a person
+  navigate to pause a run. It needs the controls in the persistent rail, which is
+  a layout decision rather than a router default.**
 * [x] Completion evidence, outputs, sensor readings, and decision reasons are
   reachable in one action and absent until asked for. **The browser suite asserts
   both halves: hidden before the disclosure is opened, visible after.**
