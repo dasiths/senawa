@@ -261,21 +261,10 @@ async function step(
     ),
   );
 
-  if (gate !== undefined) {
-    const evaluation = evaluateGate(
-      gate,
-      readings,
-      candidate.candidateDigest,
-      input.dependencies.sha256,
-    );
-    if (evaluation.decision !== "accepted") {
-      return {
-        kind: "gate-refused",
-        phaseKey,
-        reasons: readings.map((reading) => `${String(reading.sensorKey)} did not pass`),
-      };
-    }
-  }
+  const evaluation =
+    gate === undefined
+      ? undefined
+      : evaluateGate(gate, readings, candidate.candidateDigest, input.dependencies.sha256);
 
   // A candidate that already exists is this phase's, recorded by an earlier
   // call that then stopped for a decision.
@@ -298,6 +287,17 @@ async function step(
       readings,
     },
   );
+
+  // The evidence is recorded before the refusal is reported, because an
+  // escalation carries that evidence and there is nothing to escalate with
+  // otherwise.
+  if (evaluation !== undefined && evaluation.decision !== "accepted") {
+    return {
+      kind: "gate-refused",
+      phaseKey,
+      reasons: readings.map((reading) => `${String(reading.sensorKey)} did not pass`),
+    };
+  }
 
   // An authored approval is a human's to give. Submitting close-phase while one
   // is owed would cache a refusal against that command id and replay it after

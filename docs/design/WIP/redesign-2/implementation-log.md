@@ -1595,3 +1595,20 @@ that does not exist:
   D-025 deviation.
 
 Those are named here rather than left as silence in the suite.
+
+## A refused gate now records what it measured
+
+The driver evaluated a gate, and on a refusal returned before submitting
+`evaluate-gate`. The measurement was therefore never durable, and the brief's
+escalation branch was unreachable: an escalation carries the recorded gate
+evidence, and there was none. Escalating a refused phase failed with
+`candidate-required`, which reads as "nothing has been measured" when in truth
+something had been measured and thrown away.
+
+The evaluation is now submitted first and the refusal reported after. A refused
+phase has durable evidence, so it can be escalated, and the escalation carries
+what the sensors actually said.
+
+The scenario test asserts the refusal is no longer `candidate-required`. Moving
+the record back after the refusal makes it fail, so it measures the ordering
+rather than agreeing with it.

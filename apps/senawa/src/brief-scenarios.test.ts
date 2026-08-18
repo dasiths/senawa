@@ -1,4 +1,6 @@
-import { canonicalValue, sha256Digest } from "@senawa/kernel";
+import { loadAuthoredWorkflow } from "@senawa/execution-host";
+import { canonicalBytes, canonicalValue, sha256Digest } from "@senawa/kernel";
+import { decodeCommandEnvelope, PROTOCOL_VERSION } from "@senawa/protocol";
 import { SqliteAuthority } from "@senawa/storage-sqlite";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
@@ -215,6 +217,53 @@ describe("one phase in sequence", () => {
     expect(first.exitCode).toBe(1);
     expect(second).toEqual(first);
     expect(await advance(scenario)).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
+  });
+
+  it("escalates a refused phase carrying the recorded gate evidence", async () => {
+    const scenario = await startScenario("escalate", { sensorCommand: "false" });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+    expect(await advance(scenario)).toMatchObject({ kind: "gate-refused" });
+
+    const loaded = await loadAuthoredWorkflow(scenario.project, dependencies.sha256);
+    const snapshot = loaded.snapshot;
+    if (snapshot === undefined) throw new Error("scenario does not compile");
+    const authority = new SqliteAuthority({ ...scenario.paths, dependencies });
+    try {
+      const payload = canonicalValue({ allowedResponses: ["waive", "mark-done", "end-run"] });
+      const commandId = "command_escalate-scenario";
+      let allocation = 0;
+      const receipt = authority.submit(
+        decodeCommandEnvelope({
+          apiVersion: PROTOCOL_VERSION,
+          commandId,
+          principal: runtimePrincipal,
+          transport: { kind: "cli", requestId: `request_${commandId}` },
+          repositoryId: scenario.repositoryId,
+          runId: scenario.runId,
+          intent: { type: "create-escalation" },
+          expectedGraphRevision: snapshot.graph.revisionDigest,
+          payload,
+          payloadDigest: dependencies.sha256.digest(canonicalBytes(payload)),
+        }),
+        {
+          currentTime: NOW,
+          facts: { source: "scenario" },
+          allocateId: (kind) => {
+            allocation += 1;
+            return `${kind}_${commandId.slice(8)}${allocation}`;
+          },
+        },
+      );
+
+      // Before the driver recorded evidence on a refusal this was
+      // candidate-required, meaning there was nothing to escalate with. It now
+      // reaches the digest check, which is the next gate a real escalation
+      // passes by naming the candidate it escalates.
+      expect(receipt.error?.code).not.toBe("candidate-required");
+      expect(receipt.error?.code).toBe("stale-object");
+    } finally {
+      authority.close();
+    }
   });
 
   it("advances to the next phase once the first closes", async () => {
