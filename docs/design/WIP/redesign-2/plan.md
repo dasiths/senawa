@@ -481,10 +481,10 @@ Acceptance:
   attempt, route, and latest refusal reason.
 * [ ] Drive approval, reasoned rejection, question response, member override, and
   steering by pointing and clicking.
-* [ ] Rename the portal asset source `evidence` to `completion-evidence` under
+* [x] Rename the portal asset source `evidence` to `completion-evidence` under
   D-023, and label completion evidence and gate evidence distinctly wherever both
   are shown, because a reader deciding an override needs to know which one they
-  are looking at. **Blocked on the D-023 rename in Phase 6.**
+  are looking at.
 
 Acceptance:
 
@@ -527,7 +527,7 @@ unknown and fail closed". Both are exact; only one can be read once.
 * [ ] Publish references for authoring defaults and expanded forms, worker
   commands, refusal responses, session policy, and portal decisions.
 * [ ] Rewrite the design set to describe what exists after this plan.
-* [ ] Sweep every document in `docs/` and every package README into the plain
+* [x] Sweep every document in `docs/` and every package README into the plain
   register, including the ones this redesign did not touch.
 * [ ] Rewrite refusal messages, CLI help, and diagnostics in the same register,
   because they are the prose a consumer reads most and the only prose they read

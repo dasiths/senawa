@@ -136,7 +136,7 @@ symbolic-link components; the socket must be owned by the current user with mode
 `0600`. Every request presents a 32-byte base64url bearer credential compared in
 constant time and never echoed.
 
-Node does not expose peer credentials for a Unix socket. The alpha therefore
+Node does not expose peer credentials for a Unix socket. Senawa therefore
 claims the private directory, private socket, and private credential together as
 the boundary, and does not claim kernel peer-credential authentication. Anyone
 who can read those files can drive the service. Protect them the way you protect

@@ -101,7 +101,7 @@ redacted before commit. The log table retains the latest 10,000 entries.
 
 Receipts, events, assets, configuration snapshots, contexts, SDK session
 references, remote records, and reports have no automatic age or count pruning
-in this alpha. They stay immutable while referenced.
+in v1. They stay immutable while referenced.
 
 ## Backup
 
@@ -150,7 +150,7 @@ restored root before starting again.
 
 Restore walks every existing destination ancestor from the filesystem root,
 rejects symbolic links and noncanonical resolution, and rechecks the destination
-parent's device and inode before publication. The alpha uses pathname-only
+parent's device and inode before publication. v1 uses pathname-only
 filesystem APIs, so it cannot prevent a hostile process from swapping an ancestor
 between the final identity check and the create or rename. Restore into a
 directory only you control.

@@ -22,7 +22,7 @@ Every IPC request presents the credential as an `Authorization: Bearer` token.
 Comparison is constant-time, and the credential is never included in errors or
 logs.
 
-Node does not expose `SO_PEERCRED`. The accepted alpha IPC boundary is therefore
+Node does not expose `SO_PEERCRED`. The accepted IPC boundary is therefore
 the private runtime directory, private socket, and private bearer credential
 together. This design does not claim kernel peer-credential authentication.
 
@@ -140,7 +140,7 @@ pages. ANSI escapes, control characters, bearer values, and sensitive
 structured fields are removed or redacted before commit. The log table retains
 the latest 10,000 entries. Receipts, events, assets, configuration snapshots,
 contexts, SDK session references, remote inbox and outbox records, reports, and
-other authority history have no automatic age or count pruning in this alpha.
+other authority history have no automatic age or count pruning in v1.
 They remain immutable while referenced. Backup and export do not delete source
 history, and no retention interval is claimed for operator-created bundles.
 

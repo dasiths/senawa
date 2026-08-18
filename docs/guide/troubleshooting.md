@@ -5,7 +5,7 @@ ms.date: 2026-08-16
 ms.topic: troubleshooting
 ---
 
-This page covers what the alpha requires, what it deliberately does not do, and
+This page covers what senawa requires, what it deliberately does not do, and
 what its failure messages mean.
 
 ## Platform matrix
@@ -19,12 +19,12 @@ what its failure messages mean.
 | Package manager for source builds | pnpm 10.34.5 | Declared in `packageManager` |
 | Public executable | `senawa` | The only supported public binary |
 
-macOS, Windows, arm64, and musl are not supported by this alpha. There is no
+macOS, Windows, arm64, and musl are not supported. There is no
 hosted Senawa service; everything runs on your host.
 
 ## Native build tools
 
-Installing the packaged alpha never compiles native code. If an install log
+Installing the packaged release never compiles native code. If an install log
 mentions `node-gyp`, `gyp info`, `cmake`, or building from source, something is
 wrong with the environment rather than with the package; the packaging check
 treats that evidence as a failure.
@@ -252,7 +252,7 @@ Model routes carry their own `maxTurns`, `maxSubmissions`, and
 `maxMillidollars` ceilings, and every autonomous loop carries a finite budget
 that escalates instead of running unbounded.
 
-## Not implemented in this alpha
+## Not implemented in v1
 
 * No hosted Senawa service and no production control-plane server. The optional
   connector is outbound only and speaks to a service you operate.

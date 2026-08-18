@@ -1,6 +1,6 @@
 ---
 title: Getting started with Senawa
-description: Install the alpha, create a workflow tree, start the local supervisor, submit a command, and shut down
+description: Install senawa, author a workflow, start a run, and drive it to completion
 ms.date: 2026-08-16
 ms.topic: tutorial
 ---
@@ -11,7 +11,7 @@ shutdown. Every step runs on your machine and spends no model credits.
 
 ## What you need
 
-The alpha supports Linux x64 with glibc 2.34 or newer and Node.js 22.12.0 or
+Senawa supports Linux x64 with glibc 2.34 or newer and Node.js 22.12.0 or
 newer. The published `senawa` package declares that platform, and installation
 never compiles native code.
 
@@ -40,15 +40,15 @@ Build and install the deterministic local bundle when you want an installed
 package that resolves no workspace paths:
 
 ```bash
-pnpm package:alpha
-cp -r dist/alpha /tmp/senawa-install
+pnpm package:release
+cp -r dist/release /tmp/senawa-install
 cd /tmp/senawa-install
 npm install --no-audit --no-fund
 export PATH="$PWD/node_modules/.bin:$PATH"
 senawa --version
 ```
 
-`dist/alpha` contains the public `senawa` package plus exact local tarballs for
+`dist/release` contains the public `senawa` package plus exact local tarballs for
 its internal workspace dependencies. It is a local verification bundle, not a
 registry publication. The rest of this guide writes `senawa` for the executable.
 
@@ -315,7 +315,7 @@ authority. See [Authority model](../design/authority-model.md) for why.
 
 An `instantiate-run` command carries the compiled workflow graph, the
 configuration snapshot digest, the execution policy, the first phase, the
-approval policy, and the escalation and allowance policies. The alpha ships no
+approval policy, and the escalation and allowance policies. Senawa ships no
 command that composes that payload for you, and no CLI flag registers a
 configuration snapshot. Driving a complete delivery run therefore requires a
 composition that compiles the configuration and submits the instantiation

@@ -1,6 +1,6 @@
 ---
 title: CLI Reference
-description: Local supervisor, workflow, and configuration commands for Senawa alpha
+description: The senawa command surface: the run loop, decisions, and the local supervisor
 ms.date: 2026-08-15
 ms.topic: reference
 ---
@@ -149,10 +149,10 @@ active database, assets, or SDK store in place.
 SDK backup and restore walk every existing fresh-destination ancestor from the
 absolute filesystem root, reject symbolic links and noncanonical resolution,
 and recheck the destination parent's device and inode before publication. The
-alpha uses pathname-only Node filesystem APIs, so it cannot prevent a hostile
+Senawa uses pathname-only Node filesystem APIs, so it cannot prevent a hostile
 process from swapping an ancestor between the final identity check and the
 path-based create or rename. Descriptor-relative publication is not part of
-this alpha contract.
+v1 contract.
 
 Inspect and package sanitized maintenance evidence:
 
@@ -285,7 +285,7 @@ the complete immutable snapshot. It does not execute sensors, start work,
 invoke models, or contact a runner. A v1 document receives a deterministic
 migration diagnostic and is never reinterpreted as v1.
 
-Inspect both locations before manually moving an earlier alpha file. The CLI
+Inspect both locations before moving a file by hand. The CLI
 does not overwrite the destination or provide an automatic migration command:
 
 ```bash
@@ -300,7 +300,7 @@ You can validate the earlier location without moving it:
 senawa doctor senawa.json
 ```
 
-Display command help or the alpha version:
+Display command help or senawa version:
 
 ```bash
 senawa --help
@@ -313,7 +313,7 @@ available and uses the same lease fence.
 
 ## Package support
 
-The alpha package supports Node.js 22.12.0 or newer on Linux x64 with glibc
+Senawa package supports Node.js 22.12.0 or newer on Linux x64 with glibc
 2.34 or newer. The only supported public executable is `senawa`; service
 ownership remains available through `senawa service start` and
 `senawa service run`.
