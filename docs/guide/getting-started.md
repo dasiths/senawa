@@ -140,6 +140,41 @@ this:
 Doctor reads `.senawa` relative to the current directory. Passing a directory
 reads that directory's `.senawa` instead.
 
+## Start a run
+
+Write what you want done, then start the run.
+
+```bash
+echo '{"request": "Add a health endpoint"}' > request.json
+senawa start request.json
+```
+
+`start` compiles the workflow, creates the run, dispatches the first phase, and
+then drives the run until it needs something it cannot supply:
+
+```text
+run: run_9f2c1a...
+repository: repository_myproject
+phase: plan
+dispatch: dispatch_5b4511...
+waiting for the agent working on plan
+```
+
+That last line is the honest answer: the phase is dispatched and no agent has
+finished it. Nothing is stuck, and nothing has been claimed that did not happen.
+
+Pass `--detach` to return as soon as the first phase is dispatched rather than
+driving the run.
+
+To drive an existing run:
+
+```bash
+senawa advance repository_myproject run_9f2c1a
+```
+
+Both stop and say what they are waiting for. A gate refusal exits non-zero;
+waiting for an agent or a person does not, because neither is a failure.
+
 ## Start the local supervisor
 
 The supervisor owns the SQLite authority, the command queue, the fenced runner,
