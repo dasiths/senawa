@@ -297,8 +297,8 @@ This phase closes the most consequential part of F-004.
 * [x] Add concise YAML for completion criteria and evidence policy, including
   `none`, `task`, `required-criteria`, and `all-satisfied`, per-kind minimum
   counts, and waiver authority where the internal contract supports it.
-* [ ] Add authored completion-evidence views and derive their strict internal
-  mappings. Authors name phases, outputs, and evidence kinds, not JSON Pointers. **Not done: authored in .senawa, not lowered.**
+* [x] Add authored completion-evidence views and derive their strict internal
+  mappings. Authors name phases, outputs, and evidence kinds, not JSON Pointers.
 * [x] Let an output declare schema, sensitivity, maximum bytes, and an optional
   repository path while retaining the current scalar schema form as shorthand.
 * [ ] Put the exact required output assets, criteria, and evidence requirements
