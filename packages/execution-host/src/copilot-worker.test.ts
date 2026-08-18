@@ -1331,6 +1331,7 @@ function harness(
         criteria: [],
         completionEvidencePolicy: { mode: "none", requirements: [] },
       },
+      priorRefusals: [],
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 4 }],
     },

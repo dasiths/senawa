@@ -45,6 +45,8 @@ export const WORKER_DISPATCH_API_VERSION = "senawa.dev/worker-dispatch/v1";
 export const WORKER_MODEL_ROUTE_SELECTION_API_VERSION =
   "senawa.dev/worker-model-route-selection/v1";
 
+const MAX_PRIOR_REFUSALS = 32;
+
 export const CONTEXT_CONTRACT_KINDS = [
   "completion-policy",
   "gate-policy",
@@ -177,6 +179,7 @@ export interface WorkerContextBaseInput {
   readonly phaseInputBinding: PhaseInputBinding;
   readonly phaseOutputDeclarations: readonly PhaseOutputDeclarationInput[];
   readonly completionPolicy: CompletionPolicy;
+  readonly priorRefusals: readonly string[];
   readonly capabilities: readonly string[];
   readonly budgets: readonly ContextBudget[];
 }
@@ -199,6 +202,7 @@ export interface WorkerContextBase {
   readonly phaseOutputDeclarations: readonly PhaseOutputDeclaration[];
   readonly phaseOutputDeclarationsDigest: Sha256Digest;
   readonly completionPolicy: CompletionPolicy;
+  readonly priorRefusals: readonly string[];
   readonly capabilities: readonly string[];
   readonly budgets: readonly ContextBudget[];
   readonly contextDigest: Sha256Digest;
@@ -363,6 +367,7 @@ export function validateWorkerContextBase(value: unknown, sha256: Sha256): Worke
     "phaseOutputDeclarations",
     "phaseOutputDeclarationsDigest",
     "completionPolicy",
+    "priorRefusals",
     "capabilities",
     "budgets",
     "contextDigest",
@@ -426,6 +431,7 @@ export function validateWorkerContextBase(value: unknown, sha256: Sha256): Worke
       };
     }),
     completionPolicy: snapshot.completionPolicy,
+    priorRefusals: snapshot.priorRefusals,
     capabilities: snapshot.capabilities,
     budgets: snapshot.budgets,
   };
@@ -639,6 +645,7 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
     "phaseInputBinding",
     "phaseOutputDeclarations",
     "completionPolicy",
+    "priorRefusals",
     "capabilities",
     "budgets",
   ]);
@@ -678,6 +685,7 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
     sha256,
   );
   const completionPolicy = contextCompletionPolicy(value.completionPolicy);
+  const priorRefusals = contextPriorRefusals(value.priorRefusals);
   const capabilities = capabilitySet(value.capabilities, "invalid-context");
   const budgets = contextBudgets(value.budgets);
   const content = {
@@ -698,6 +706,7 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
     phaseOutputDeclarations,
     phaseOutputDeclarationsDigest,
     completionPolicy,
+    priorRefusals,
     capabilities,
     budgets,
   };
@@ -720,6 +729,26 @@ function contextCompletionPolicy(value: unknown): CompletionPolicy {
       `Worker context completion policy is invalid: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+/** Why the previous attempt was refused, bounded so a loop cannot grow the context. */
+function contextPriorRefusals(value: unknown): readonly string[] {
+  if (!Array.isArray(value))
+    fail("invalid-context", "Worker context priorRefusals must be an array");
+  if (value.length > MAX_PRIOR_REFUSALS) {
+    fail(
+      "invalid-context",
+      `Worker context carries more than ${MAX_PRIOR_REFUSALS} prior refusals`,
+    );
+  }
+  return Object.freeze(
+    value.map((reason) => {
+      if (typeof reason !== "string" || reason.length === 0 || reason.length > 1_024) {
+        fail("invalid-context", "Each prior refusal must be a bounded non-empty string");
+      }
+      return reason;
+    }),
+  );
 }
 
 function outputDeclarations(value: unknown, sha256: Sha256): readonly PhaseOutputDeclaration[] {

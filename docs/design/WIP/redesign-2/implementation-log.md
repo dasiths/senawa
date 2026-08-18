@@ -2277,3 +2277,82 @@ Prompt-pack verification covering the contract is now asserted directly: two
 contexts differing only in completion policy render different pack digests, so a
 contract that changed without its dispatch changing cannot survive the broker's
 re-render.
+
+## F-012 was half right, and the half that was wrong blocked the whole loop
+
+F-012 concluded that a retry was impossible by construction: a task scope is a
+one-shot claim, `claimsAccepted` is set true exactly once and never reset, so a
+second attempt at the same task can never be dispatched, and retrying therefore
+needs amendment machinery to supersede the task.
+
+The first two clauses are true. The conclusion is not, and reading
+`registerDispatch` rather than reasoning from the fence model is what showed it.
+
+A retry never touches `claimsAccepted`, because nothing fences anything: no
+amendment is proposed, so the scope stays open. What refused the retry was one
+line of `sameTaskScopeFence`, comparing the accepted context digest. A retry
+necessarily has a new context, so it failed a comparison that exists to detect an
+amendment changing a task definition under a live claim, in a situation where no
+definition changed at all.
+
+The amendment route would not have worked anyway. `compileAmendmentGraph` refuses
+to add a task to a phase that has candidate history, and a phase whose gate was
+evaluated has exactly that. So the recorded plan for retry could not have been
+built as written.
+
+### D-031: a later attempt takes the task scope over
+
+* Date: 2026-08-18
+* Status: Accepted
+* Decision: `registerDispatch` accepts a dispatch for an existing task scope when
+  the scope is still accepting claims and its fence generation is unchanged, and
+  advances the scope's accepted context digest to the new dispatch's. The
+  takeover is refused unless the new context's phase attempt ordinal is strictly
+  greater than the one the scope currently accepts.
+* Alternatives: superseding the task by amendment, which the candidate-history
+  refusal blocks; or dropping the digest comparison entirely, which would let a
+  dispatch built against an older context claim a scope a newer one holds.
+* Why it is not a weakening: fencing is what closes a scope, and fencing sets
+  `claimsAccepted` false and bumps the generation, both of which still refuse.
+  The digest comparison was doing "this is the current dispatch", and monotonic
+  attempt ordinals say that more precisely.
+* Consequence, and the part that makes it correct rather than merely permissive:
+  `admitSubmission` still uses the strict comparison, so once the retry takes the
+  scope over, the refused attempt's late submissions become stale rather than
+  being accepted into the phase. The runner refuses to claim its effects for the
+  same reason. That is exactly the behaviour a retry needs.
+
+Two invariants downstream had assumed one accepted context per scope forever:
+
+* The durable mirror threw `Context and runner task-scope currentness diverge`
+  when the context authority advanced the digest. Only the context authority ever
+  writes that field, and fencing moves the other two, so the mirror now carries a
+  digest-only change and still refuses a divergence in fence generation or
+  claim acceptance.
+* Rehydration required every stored dispatch's fence to equal the scope's
+  accepted digest, which the superseded attempt's dispatch no longer does.
+  `isHistoricalTaskScopeFence` now means what its name says, and no longer
+  compares the digest that a takeover is defined to change.
+
+### The next attempt is told what the last one failed
+
+A retry that is not told what to change only spends an attempt. The reasons
+cannot go in the mapped input, because that is validated against the phase's
+declared input schema and an extra key would be refused. They travel in the
+worker context as `priorRefusals`, bounded at 32 entries of 1,024 characters, and
+the generated contract states them:
+
+```text
+This is attempt 2. The last one was refused for these reasons, so change what they name:
+- measure did not pass
+```
+
+That is the same route `completionPolicy` took, and for the same reason: the
+prompt pack is reproducible from the context and the dispatch, so anything the
+contract says has to live in one of them.
+
+The driver now reads `maximumAttempts` and `onGateRejected` from the authored
+phase, so the loop the brief describes is the loop the workflow states. Three
+existing scenarios asserted a terminal refusal under the default policy, which
+now retries; they declare `attempts: 1` so they still measure the refusal rather
+than being rewritten to agree with the new behaviour.

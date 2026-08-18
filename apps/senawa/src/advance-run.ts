@@ -39,6 +39,13 @@ import { dispatchPhase } from "./dispatch-driver.js";
 /** What the driver did, and what it is now waiting for. */
 export type AdvanceOutcome =
   | { readonly kind: "dispatched"; readonly phaseKey: string; readonly dispatchId: string }
+  | {
+      readonly kind: "retrying";
+      readonly phaseKey: string;
+      readonly attempt: number;
+      readonly dispatchId: string;
+      readonly reasons: readonly string[];
+    }
   | { readonly kind: "awaiting-agent"; readonly phaseKey: string }
   | { readonly kind: "awaiting-approval"; readonly phaseKey: string }
   | {
@@ -79,6 +86,10 @@ interface SnapshotPhase {
   readonly key: string;
   readonly dependsOn?: readonly string[];
   readonly outputs: readonly { readonly key: string }[];
+  readonly iteration?: {
+    readonly maximumAttempts?: number;
+    readonly onGateRejected?: string;
+  };
   readonly exit?: {
     readonly gate?: string;
     readonly approval?: { readonly policy?: string };
@@ -151,11 +162,16 @@ async function step(
   const phase = phaseValue(snapshot, phaseKey);
 
   const state = broker.authority.snapshot();
-  const dispatch = state.dispatches.find(
-    (candidate) =>
-      candidate.runId === input.runId &&
-      phaseKeyByTask(snapshot, candidate.task.taskId) === phaseKey,
-  );
+  // The latest attempt is the live one. An earlier attempt's dispatch is still
+  // stored, and treating it as current would gate work the retry replaced.
+  const dispatch = state.dispatches
+    .filter(
+      (candidate) =>
+        candidate.runId === input.runId &&
+        phaseKeyByTask(snapshot, candidate.task.taskId) === phaseKey,
+    )
+    .sort((left, right) => left.ordinal - right.ordinal)
+    .at(-1);
 
   const dataflow = new RuntimeDataflowAuthority(
     input.dependencies.sha256,
@@ -294,11 +310,36 @@ async function step(
   // escalation carries that evidence and there is nothing to escalate with
   // otherwise.
   if (evaluation !== undefined && evaluation.decision !== "accepted") {
-    return {
-      kind: "gate-refused",
-      phaseKey,
-      reasons: readings.map((reading) => `${String(reading.sensorKey)} did not pass`),
-    };
+    const reasons = readings.map((reading) => `${String(reading.sensorKey)} did not pass`);
+    const attempt = dispatch.ordinal;
+    const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
+    if (phase.iteration?.onGateRejected === "iterate" && attempt < maximumAttempts) {
+      // The next attempt is told what the last one failed, because a retry that
+      // is not told what to change only spends an attempt.
+      const retried = dispatchPhase({
+        snapshot,
+        dataflow,
+        contextBroker: broker,
+        dependencies: input.dependencies,
+        repositoryId: input.repositoryId,
+        runId: input.runId,
+        phaseKey,
+        workflowInput: input.workflowInput,
+        upstream: upstreamOutputs(snapshot, phase, state),
+        repositoryBase: input.repositoryBase,
+        currentTime: input.currentTime,
+        attempt: attempt + 1,
+        priorRefusals: reasons,
+      });
+      return {
+        kind: "retrying",
+        phaseKey,
+        attempt: attempt + 1,
+        dispatchId: retried.dispatch.dispatchId,
+        reasons,
+      };
+    }
+    return { kind: "gate-refused", phaseKey, reasons };
   }
 
   // An authored approval is a human's to give. Submitting close-phase while one

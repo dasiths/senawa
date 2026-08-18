@@ -92,6 +92,8 @@ export interface DispatchPhaseInput {
   }[];
   /** Which attempt this is. A retry after a red gate dispatches attempt two. */
   readonly attempt?: number;
+  /** Why the previous attempt was refused, so the next one is told what to change. */
+  readonly priorRefusals?: readonly string[];
   readonly repositoryBase: {
     readonly commitDigest: Sha256Digest;
     readonly treeDigest: Sha256Digest;
@@ -121,6 +123,7 @@ const DEFAULT_TIMEOUT_MS = 300_000;
 export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
   const { snapshot, dependencies } = input;
   const sha256 = dependencies.sha256;
+  const attempt = input.attempt ?? 1;
   const declaration = registryValue<SnapshotPhase>(
     registryEntry(snapshot.phaseDataflow, input.phaseKey),
   );
@@ -170,7 +173,7 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
     phase: {
       phaseId: phaseNode.definition.id,
       definitionGeneration: phaseNode.definition.generation,
-      attempt: input.attempt ?? 1,
+      attempt,
     },
     graphRevisionDigest: snapshot.graph.revisionDigest,
     configurationSnapshotDigest: snapshot.snapshotDigest,
@@ -249,6 +252,7 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
       // The same policy the broker judges completion by, so the generated
       // contract cannot promise the agent different terms.
       completionPolicy: taskNode.definition.completionPolicy,
+      priorRefusals: input.priorRefusals ?? [],
       capabilities,
       budgets: declaration.executor.budgets,
     },
@@ -258,8 +262,10 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
   const dispatchInput = {
     repositoryId: input.repositoryId,
     runId: kernelRunId(input.runId),
-    ordinal: 1,
-    workerPrincipalId: `principal_${input.phaseKey}-1`,
+    ordinal: attempt,
+    // A retry is a different worker identity, so an earlier attempt's principal
+    // cannot submit against the attempt that replaced it.
+    workerPrincipalId: `principal_${input.phaseKey}-${attempt}`,
     roleKey: consumerKey(roleEntry.key),
     capabilities,
     promptResource: {

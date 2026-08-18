@@ -212,6 +212,7 @@ export function createWorkerExecutionFixture(
         criteria: [{ criterionId: runtimeFixture.criterionId, required: true }],
         completionEvidencePolicy: { mode: "none", requirements: [] },
       },
+      priorRefusals: [],
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 2_000 }],
     },

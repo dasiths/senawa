@@ -361,8 +361,11 @@ absorbs the unfinished acceptance from Phases 2, 3, and the former Phase 5.
 * [x] Remove the public `publish-phase-output` step. Output publication is an
   internal consequence of a granted complete request, not an operation an agent
   coordinates separately. No declared intent may remain as a false promise.
-* [ ] On gate or approval rejection, start the next attempt with structured
+* [x] On gate or approval rejection, start the next attempt with structured
   reasons in its mapped input and operating contract, using the same agent scope.
+  **The reasons travel in the worker context as `priorRefusals` and the contract
+  states them. The mapped input cannot carry them without violating the phase's
+  declared input schema. D-031.**
 * [x] Implement escalation as an authority operation derived from recorded gate
   evidence rather than an agent-authored account of failure.
 * [x] Record human decisions with principal, timestamp, reasoning, and a digest
@@ -383,9 +386,10 @@ Acceptance:
   completion with no model, driven through advanceRun. The scripted agent still
   submits through the broker rather than through senawa worker over the socket.**
 * [ ] An opt-in live test drives a real Copilot agent through the same path.
-* [ ] A rejected phase reruns with the exact human or gate reasons supplied.
-  **Moved to Phase 9: a task scope is a one-shot claim, so a rerun supersedes
-  the task rather than re-dispatching it, which is amendment machinery.**
+* [x] A rejected phase reruns with the exact human or gate reasons supplied.
+  **F-012 was wrong about why this was blocked: a retry never fences anything, so
+  the refusal came from the accepted-context comparison rather than from a closed
+  scope. A later attempt now takes the scope over. D-031.**
 * [x] Artifacts, transcript, attempt history, and accepted submissions survive a
   process restart.
 * [x] The complete loop is drivable from the command line with no portal and no

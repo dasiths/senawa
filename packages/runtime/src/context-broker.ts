@@ -1363,11 +1363,29 @@ export class ContextBroker implements ContextBrokerClient {
     const currentness = this.authority.taskScopes.get(scopeKey);
     if (currentness === undefined) {
       this.authority.taskScopes.set(scopeKey, deepFreeze({ ...taskScope, claimsAccepted: true }));
-    } else if (!currentness.claimsAccepted || !sameTaskScopeFence(taskScope, currentness)) {
+    } else if (
+      !currentness.claimsAccepted ||
+      currentness.fenceGeneration !== taskScope.fenceGeneration
+    ) {
       throw new ContextBrokerError(
         "binding-mismatch",
         "Dispatch task scope is not current and accepting claims",
       );
+    } else if (currentness.acceptedContextDigest !== taskScope.acceptedContextDigest) {
+      // A later attempt at the same task definition takes the scope over, which
+      // is what makes the refused attempt's late work stale rather than
+      // acceptable. Going backwards is refused, so takeover is monotonic.
+      const accepted = this.authority.contexts.get(`context_${currentness.acceptedContextDigest}`);
+      if (
+        accepted === undefined ||
+        context.phaseAttempt.phase.attempt <= accepted.phaseAttempt.phase.attempt
+      ) {
+        throw new ContextBrokerError(
+          "binding-mismatch",
+          "Dispatch task scope is not current and accepting claims",
+        );
+      }
+      this.authority.taskScopes.set(scopeKey, deepFreeze({ ...taskScope, claimsAccepted: true }));
     }
     this.authority.contexts.set(context.contextId, context);
     this.authority.dispatches.set(
@@ -2328,6 +2346,14 @@ function sameTaskScopeFence(left: TaskScopeFence, right: TaskScopeFence): boolea
   );
 }
 
+/**
+ * Whether a stored dispatch belongs to this scope's history.
+ *
+ * The accepted context digest is deliberately not compared: a later attempt
+ * takes the scope over, which leaves the earlier attempt's dispatch stored
+ * against a digest the scope no longer accepts. Staleness for submissions is
+ * decided by `sameTaskScopeFence`, which does compare it.
+ */
 function isHistoricalTaskScopeFence(
   dispatch: TaskScopeFence,
   currentness: TaskScopeCurrentness,
@@ -2336,7 +2362,6 @@ function isHistoricalTaskScopeFence(
     dispatch.runId === currentness.runId &&
     dispatch.taskId === currentness.taskId &&
     dispatch.definitionGeneration === currentness.definitionGeneration &&
-    dispatch.acceptedContextDigest === currentness.acceptedContextDigest &&
     dispatch.fenceGeneration <= currentness.fenceGeneration
   );
 }

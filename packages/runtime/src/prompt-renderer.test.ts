@@ -229,6 +229,7 @@ function fixture(
   mappedValue: unknown,
   inputPaths: readonly string[],
   completionPolicy: CompletionPolicy = EMPTY_COMPLETION_POLICY,
+  priorRefusals: readonly string[] = [],
 ) {
   const prompt = promptFixture(template, inputPaths);
   const mapped = canonicalValue(mappedValue);
@@ -289,6 +290,7 @@ function fixture(
       phaseInputBinding,
       phaseOutputDeclarations: [],
       completionPolicy,
+      priorRefusals,
       capabilities: ["completion.submit"],
       budgets: [{ unit: "work-attempt", limit: 3 }],
     },

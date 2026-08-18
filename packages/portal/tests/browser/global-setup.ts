@@ -849,6 +849,7 @@ function workerForRun(
         criteria: [{ criterionId: runtimeFixture.criterionId, required: true }],
         completionEvidencePolicy: { mode: "none" as const, requirements: [] },
       },
+      priorRefusals: [],
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 2_000 }],
     },

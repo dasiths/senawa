@@ -190,6 +190,10 @@ function operatingContract(
       permitted: capabilities.has(COMPLETION_CAPABILITY),
     },
     selfCheck: { operation: "run-gates", spendsAttempt: false },
+    attempt: {
+      ordinal: context.phaseAttempt.phase.attempt,
+      priorRefusals: context.priorRefusals.map((reason) => String(reason)),
+    },
     mayAskQuestion: capabilities.has(QUESTION_CAPABILITY),
     mayReadAssets: capabilities.has(ASSET_READ_CAPABILITY),
   });
@@ -229,6 +233,12 @@ function operatingInstructions(
   }
   for (const line of completionEvidenceInstructions(context.completionPolicy)) {
     lines.push(line);
+  }
+  if (context.priorRefusals.length > 0) {
+    lines.push(
+      `This is attempt ${context.phaseAttempt.phase.attempt}. The last one was refused for these reasons, so change what they name:`,
+      ...context.priorRefusals.map((reason) => `- ${String(reason)}`),
+    );
   }
   if (capabilities.has(QUESTION_CAPABILITY)) {
     lines.push("Ask a question rather than guessing when the assignment is ambiguous.");

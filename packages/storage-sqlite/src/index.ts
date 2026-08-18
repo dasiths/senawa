@@ -11168,9 +11168,24 @@ function synchronizeContextTaskScopes(
       current_context_digest: row.current_context_digest,
       claims_accepted: row.claims_accepted,
     };
-    if (canonicalStringify(existing) !== canonicalStringify(expected)) {
-      throw new Error("Context and runner task-scope currentness diverge");
+    if (canonicalStringify(existing) === canonicalStringify(expected)) continue;
+    // Only the context authority writes the accepted digest, and it advances it
+    // when a later attempt takes the scope over. Fencing moves the other two
+    // fields, so a difference there is a genuine divergence.
+    if (
+      existing.fence_generation === row.fence_generation &&
+      existing.claims_accepted === row.claims_accepted &&
+      existing.run_id === row.run_id
+    ) {
+      database
+        .prepare(
+          `UPDATE amendment_work_fences SET current_context_digest = ?
+           WHERE run_key = ? AND task_id = ? AND definition_generation = ?`,
+        )
+        .run(row.current_context_digest, row.run_key, row.task_id, row.definition_generation);
+      continue;
     }
+    throw new Error("Context and runner task-scope currentness diverge");
   }
 }
 

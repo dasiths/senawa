@@ -1288,6 +1288,7 @@ function registerBoundDispatch(
         criteria: [{ criterionId: criterionId("criterion_done"), required: true }],
         completionEvidencePolicy: { mode: "none", requirements: [] },
       },
+      priorRefusals: [],
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 4 }],
     },

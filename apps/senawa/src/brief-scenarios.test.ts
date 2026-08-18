@@ -283,8 +283,32 @@ describe("one phase in sequence", () => {
     expect(await advance(scenario)).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
   });
 
+  it("retries a refused phase with the reasons the gate gave", async () => {
+    const scenario = await startScenario("retry", { sensorCommand: "false", attempts: 3 });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+
+    const outcome = await advance(scenario);
+
+    expect(outcome).toMatchObject({ kind: "retrying", phaseKey: "define", attempt: 2 });
+    if (outcome.kind !== "retrying") throw new Error("expected a retry");
+    expect(outcome.reasons.join(" ")).toContain("measure");
+
+    // The next attempt has to be told what the last one failed, or it spends an
+    // attempt learning nothing.
+    const pack = await promptPackText(scenario, outcome.dispatchId);
+    expect(pack).toContain("This is attempt 2");
+    expect(pack).toContain("measure did not pass");
+  });
+
+  it("stops at the authored attempt ceiling rather than retrying forever", async () => {
+    const scenario = await startScenario("ceiling", { sensorCommand: "false", attempts: 1 });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+
+    expect(await advance(scenario)).toMatchObject({ kind: "gate-refused", phaseKey: "define" });
+  });
+
   it("refuses when a blocking rule is red, naming the sensor", async () => {
-    const scenario = await startScenario("red", { sensorCommand: "false" });
+    const scenario = await startScenario("red", { sensorCommand: "false", attempts: 1 });
     await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
 
     const outcome = await advance(scenario);
@@ -297,6 +321,7 @@ describe("one phase in sequence", () => {
   it("fails closed when a sensor cannot produce a reading", async () => {
     const scenario = await startScenario("nosensor", {
       sensorCommand: "senawa-no-such-command",
+      attempts: 1,
     });
     await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
 
@@ -412,7 +437,7 @@ describe("one phase in sequence", () => {
   });
 
   it("escalates a refused phase carrying the recorded gate evidence", async () => {
-    const scenario = await startScenario("escalate", { sensorCommand: "false" });
+    const scenario = await startScenario("escalate", { sensorCommand: "false", attempts: 1 });
     await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
     expect(await advance(scenario)).toMatchObject({ kind: "gate-refused" });
 

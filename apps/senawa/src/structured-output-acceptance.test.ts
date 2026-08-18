@@ -842,6 +842,7 @@ function buildFixture(): Fixture {
         criteria: [{ criterionId: criterionId("criterion_verified"), required: true }],
         completionEvidencePolicy: { mode: "none", requirements: [] },
       },
+      priorRefusals: [],
       capabilities: CAPABILITIES,
       budgets: [{ unit: "work-attempt", limit: 4 }],
     },
