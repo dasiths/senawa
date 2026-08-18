@@ -478,6 +478,22 @@ button:disabled {
   padding: 12px;
 }
 
+.disclosure {
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--surface);
+  padding: 8px 12px;
+}
+
+.disclosure-summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.disclosure[open] .disclosure-summary {
+  margin-bottom: 8px;
+}
+
 .view-toolbar {
   position: sticky;
   z-index: 20;

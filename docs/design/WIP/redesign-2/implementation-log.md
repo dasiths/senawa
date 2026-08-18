@@ -2590,6 +2590,32 @@ which condemn legitimate code.
 **Deferred, and said so where an author would otherwise assume otherwise.**
 Fan-out execution, which needs member materialisation by amendment and settles an
 authority question F-015 records. Session scope and model route fallback, both
-compiled and read by nothing. Portal progressive disclosure. Live steering.
+compiled and read by nothing. Live steering. The agent-pool view.
 Whether a finished workflow ends its own run, which stays with the person who
 holds that authority.
+
+## Progressive disclosure, and the assertion that makes it mean something
+
+The overview led with six counters, two of which answer "why is nothing moving"
+rather than "what is this run", and an authority vector panel of digests. The
+delivery view led with two revision numbers. All of them are what a reader wants
+once they have a question and noise before they do, so they are behind a
+`details` element now.
+
+`details` rather than a custom toggle, because it is keyboard reachable and
+readable by assistive technology with no code here, and because the browser
+already knows how to render it.
+
+The assertion is the part worth keeping. The existing browser test checked that
+"Dataflow revision" was visible, which the change broke correctly. Rewriting it
+to open the disclosure first would have been agreeing with the change; it now
+asserts the text is *hidden*, opens the disclosure, and asserts it is visible.
+That is both halves of the acceptance in one test, and removing the disclosure
+makes it fail.
+
+Two more parallel-load timeouts surfaced while running the full suite repeatedly:
+a workspace restart acceptance and a git binary-conflict case, both passing alone
+and both spawning real processes. They declare their budgets now. That is the
+third time this shape has appeared, which suggests the five second default is
+simply wrong for a suite that spawns processes, and a repository-wide
+`testTimeout` would be the better fix than annotating them one at a time.

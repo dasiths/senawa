@@ -63,6 +63,10 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
 
   await navigate(page, "Delivery");
   await expect(page.getByRole("heading", { name: "Standard delivery authority" })).toBeVisible();
+  // Depth is one action away and absent until asked for, which is what
+  // progressive disclosure has to mean to be worth anything.
+  await expect(page.getByText("Dataflow revision", { exact: true })).toBeHidden();
+  await page.getByText("Revisions", { exact: true }).click();
   await expect(page.getByText("Dataflow revision", { exact: true })).toBeVisible();
   await expect(page.getByText("Task frontier revision", { exact: true })).toBeVisible();
   await expect(page.getByText("No phase delivery metadata has been recorded.")).toBeVisible();

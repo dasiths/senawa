@@ -559,17 +559,24 @@ function renderOverview(state: PortalState, actions: PortalRenderActions): HTMLE
     ["Tasks", overview.counts.tasks],
     ["Criteria", overview.counts.criteria],
     ["Human needs", overview.counts.humanNeeds],
+  ] as const)
+    appendMetric(counts, label, value);
+  // Effect counters answer "why is nothing moving", which is a question a
+  // reader arrives at rather than starts with.
+  const effects = element("dl", "count-grid");
+  for (const [label, value] of [
     ["Active effects", overview.counts.activeEffects],
     ["Uncertain effects", overview.counts.uncertainEffects],
   ] as const)
-    appendMetric(counts, label, value);
-  const vector = element("section", "vector-panel");
-  vector.append(textElement("h2", "compact-heading", "Authority vector"));
+    appendMetric(effects, label, value);
   const vectorFacts = element("dl", "dense-facts");
   for (const [label, value] of Object.entries(overview.sync))
     appendFact(vectorFacts, label, String(value));
-  vector.append(vectorFacts);
-  section.append(modeBand, counts, vector);
+  section.append(
+    modeBand,
+    counts,
+    disclosure("Effects and authority vector", effects, vectorFacts),
+  );
   return section;
 }
 
@@ -589,7 +596,7 @@ function renderDelivery(state: PortalState): HTMLElement {
   appendFact(facts, "Dataflow revision", String(page.dataflowRevision));
   appendFact(facts, "Task frontier revision", String(page.taskFrontierRevision));
   appendFact(facts, "Loaded records", String(page.records.length));
-  section.append(summary, facts);
+  section.append(summary, disclosure("Revisions", facts));
   if (page.records.length === 0) {
     section.append(
       textElement("p", "empty-state", "No phase delivery metadata has been recorded."),
@@ -1491,6 +1498,20 @@ function textElement<Tag extends keyof HTMLElementTagNameMap>(
 
 function appendFact(list: HTMLElement, label: string, value: string): void {
   list.append(textElement("dt", "", label), textElement("dd", "mono", value));
+}
+
+/**
+ * Wraps depth a reader can ask for rather than has to look past.
+ *
+ * Digests, sync vectors, and effect counters are what a reader wants once they
+ * have a question, and noise before they do. `details` keeps them one action
+ * away and, unlike a custom toggle, is reachable by keyboard and readable by
+ * assistive technology without any code here.
+ */
+function disclosure(label: string, ...children: readonly Node[]): HTMLElement {
+  const wrapper = element("details", "disclosure");
+  wrapper.append(textElement("summary", "disclosure-summary", label), ...children);
+  return wrapper;
 }
 
 function appendMetric(list: HTMLElement, label: string, value: number): void {

@@ -497,9 +497,11 @@ Acceptance:
 
 * [ ] Keep the graph, terminal, question banner, and review dialog as the primary
   surface.
-* [ ] Move authority sync vectors, raw event and receipt trees, amendment dumps,
+* [x] Move authority sync vectors, raw event and receipt trees, amendment dumps,
   delivery and workspace tabs, effect counters, full digests, and pending
-  receipts behind progressive disclosure.
+  receipts behind progressive disclosure. **Sync vectors, effect counters, and
+  delivery revisions are behind `details`. The raw trees and dumps are already
+  on their own routes rather than in the default view.**
 * [x] Stop fetching needs, events, and receipts on every route change.
 * [ ] Add an agent-pool view showing the active persona, session, phase or member,
   attempt, route, and latest refusal reason.
@@ -513,8 +515,9 @@ Acceptance:
 Acceptance:
 
 * [ ] The default view shows the workflow and working agent.
-* [ ] Completion evidence, outputs, sensor readings, and decision reasons are
-  reachable in one action and absent until asked for.
+* [x] Completion evidence, outputs, sensor readings, and decision reasons are
+  reachable in one action and absent until asked for. **The browser suite asserts
+  both halves: hidden before the disclosure is opened, visible after.**
 
 ## Phase 13: Remove what the evidence condemns
 
