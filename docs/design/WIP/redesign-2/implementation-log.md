@@ -2356,3 +2356,47 @@ phase, so the loop the brief describes is the loop the workflow states. Three
 existing scenarios asserted a terminal refusal under the default policy, which
 now retries; they declare `attempts: 1` so they still measure the refusal rather
 than being rewritten to agree with the new behaviour.
+
+## A rejection is a retry too, and the reason is read back rather than paraphrased
+
+`onApprovalRejected` was authored and unread, the same shape as `onFailure`
+before it. `close-phase` refuses a rejected candidate with `rejected-authority`,
+which the driver now tolerates: it reads the reason back out of the recorded
+decision, dispatches the next attempt with it, and reports `rejected` when the
+policy or the attempt ceiling says to stop.
+
+Reading it back matters. The reason is bound into the decision digest precisely
+so it cannot drift from what the person said, and a driver that summarised it
+would hand the agent a paraphrase of the only sentence that mattered.
+
+Two latent collisions had to be fixed for any of this to work twice. The
+candidate carried `attempt: 1` regardless, so a second attempt would have built
+an identical candidate and hit `candidate-exists` forever. And the gate and close
+commands used one identity per phase, so an attempt-two evaluation would have
+replayed attempt one's cached refusal. Both now carry the attempt.
+
+## Liveness is a compile error, not a paragraph
+
+The plan asked for proof that no reachable state leaves a run unable to progress,
+await a person, fail, or escalate. Prose cannot hold that; an exhaustive switch
+can. `classifyOutcome` maps every `AdvanceOutcome` to `progress`,
+`awaiting-human`, or `refused`, with a `never` default, so adding an outcome
+without classifying it fails to compile. The tests enumerate every kind, assert
+each classifies, and assert every refusal carries at least one reason, because a
+refusal that names nothing gives a person no basis to escalate on.
+
+Writing it found that `describe` in the advance command had a `default` branch
+that reported everything unrecognised as "every phase is done". A retry would
+have printed that. It is now exhaustive too, and a run that retried says so.
+
+## The live path is opt-in and honest about what it adds
+
+`live-loop.test.ts` drives a real Copilot agent through a scenario dispatch and
+then advances the run to completion. It is skipped unless `SENAWA_COPILOT_LIVE`
+and the cost acknowledgement are both set.
+
+What it adds over the scripted acceptances is narrow and worth stating: the
+scripted worker is told the protocol by the harness, and a model has to find it
+in the generated contract. The first draft stubbed the route selection with a
+cast, which would have made it pass while proving nothing; `startAuthoredRun` now
+returns the real selection instead.

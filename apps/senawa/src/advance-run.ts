@@ -25,6 +25,7 @@ import {
 } from "@senawa/protocol";
 import { RuntimeDataflowAuthority, type RuntimeDependencies } from "@senawa/runtime";
 import {
+  SqliteAuthority,
   SqliteCanonicalJsonAssetStore,
   SqliteContextBroker,
   SqlitePortalQueryAuthority,
@@ -54,12 +55,50 @@ export type AdvanceOutcome =
       readonly reasons: readonly string[];
     }
   | {
+      readonly kind: "rejected";
+      readonly phaseKey: string;
+      readonly reasons: readonly string[];
+    }
+  | {
       readonly kind: "output-refused";
       readonly phaseKey: string;
       readonly reasons: readonly string[];
     }
   | { readonly kind: "closed"; readonly phaseKey: string }
   | { readonly kind: "finished" };
+
+/**
+ * What a caller can do next about an outcome.
+ *
+ * Every outcome must classify, so there is no reachable state in which a run can
+ * neither make progress, await a declared human decision, nor be refused with
+ * reasons a person can escalate. Adding an outcome without classifying it fails
+ * to compile, which is the only way this stays true.
+ */
+export type AdvanceDisposition = "progress" | "awaiting-human" | "refused";
+
+export function classifyOutcome(outcome: AdvanceOutcome): AdvanceDisposition {
+  switch (outcome.kind) {
+    case "dispatched":
+    case "retrying":
+    case "closed":
+    case "finished":
+      return "progress";
+    // The agent is working, and a person can escalate or steer it. This is a
+    // wait, not a stall.
+    case "awaiting-agent":
+    case "awaiting-approval":
+      return "awaiting-human";
+    case "gate-refused":
+    case "rejected":
+    case "output-refused":
+      return "refused";
+    default: {
+      const unreachable: never = outcome;
+      throw new Error(`Unclassified advance outcome ${JSON.stringify(unreachable)}`);
+    }
+  }
+}
 
 export interface AdvanceRunInput {
   readonly projectRoot: string;
@@ -89,6 +128,7 @@ interface SnapshotPhase {
   readonly iteration?: {
     readonly maximumAttempts?: number;
     readonly onGateRejected?: string;
+    readonly onApprovalRejected?: string;
   };
   readonly exit?: {
     readonly gate?: string;
@@ -248,10 +288,11 @@ async function step(
   // The candidate must cover every active task the phase owns, not only the one
   // this dispatch carried.
   const tasks = dispatchedPhaseTasks(snapshot, state, input.runId, phaseKey);
+  const attempt = dispatch.ordinal;
   const candidate = createPhaseCandidate(
     {
       phase: scheduling.phase,
-      phaseAttempt: { ...scheduling.phase, attempt: 1 },
+      phaseAttempt: { ...scheduling.phase, attempt },
       graphRevisionDigest: snapshot.graph.revisionDigest,
       inputBindingDigest: publications[0]?.inputBindingDigest ?? sha256Digest("0".repeat(64)),
       requiredOutputPublications: publications,
@@ -290,7 +331,10 @@ async function step(
     ["candidate-exists"],
     supervisor,
     input,
-    `gate-${phaseKey}`,
+    // A retry is a different decision, so it needs a different command identity.
+    // Receipts are idempotent by identity, so reusing one replays the refusal
+    // this attempt exists to move past.
+    `gate-${phaseKey}-${attempt}`,
     "evaluate-gate",
     snapshot.graph.revisionDigest,
     candidate.candidateDigest,
@@ -311,7 +355,6 @@ async function step(
   // otherwise.
   if (evaluation !== undefined && evaluation.decision !== "accepted") {
     const reasons = readings.map((reading) => `${String(reading.sensorKey)} did not pass`);
-    const attempt = dispatch.ordinal;
     const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
     if (phase.iteration?.onGateRejected === "iterate" && attempt < maximumAttempts) {
       // The next attempt is told what the last one failed, because a retry that
@@ -350,10 +393,10 @@ async function step(
   }
 
   const closed = submitTolerating(
-    ["decision-required"],
+    ["decision-required", "rejected-authority"],
     supervisor,
     input,
-    `close-${phaseKey}`,
+    `close-${phaseKey}-${attempt}`,
     "close-phase",
     snapshot.graph.revisionDigest,
     candidate.candidateDigest,
@@ -361,6 +404,37 @@ async function step(
   );
   if (closed === "decision-required") {
     return { kind: "awaiting-approval", phaseKey };
+  }
+  if (closed === "rejected-authority") {
+    // A person refused this candidate. Their reason is what the next attempt
+    // has to act on, so it is read back rather than paraphrased.
+    const reasons = rejectionReasons(input) ?? ["a person rejected this phase"];
+    const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
+    if (phase.iteration?.onApprovalRejected === "iterate" && attempt < maximumAttempts) {
+      const retried = dispatchPhase({
+        snapshot,
+        dataflow,
+        contextBroker: broker,
+        dependencies: input.dependencies,
+        repositoryId: input.repositoryId,
+        runId: input.runId,
+        phaseKey,
+        workflowInput: input.workflowInput,
+        upstream: upstreamOutputs(snapshot, phase, state),
+        repositoryBase: input.repositoryBase,
+        currentTime: input.currentTime,
+        attempt: attempt + 1,
+        priorRefusals: reasons,
+      });
+      return {
+        kind: "retrying",
+        phaseKey,
+        attempt: attempt + 1,
+        dispatchId: retried.dispatch.dispatchId,
+        reasons,
+      };
+    }
+    return { kind: "rejected", phaseKey, reasons };
   }
   const next = nextPhase(snapshot, phaseKey);
   if (next === undefined) return { kind: "finished" };
@@ -491,6 +565,30 @@ function approvalPending(input: AdvanceRunInput): boolean {
       .needs.some((need: { readonly kind: string }) => need.kind === "candidate-approval");
   } finally {
     portal.close();
+  }
+}
+
+/**
+ * The reason a person gave when they rejected this phase.
+ *
+ * A rejection must carry one and it is bound into the decision digest, so it is
+ * read back from the record rather than reconstructed by the driver.
+ */
+function rejectionReasons(input: AdvanceRunInput): readonly string[] | undefined {
+  const authority = new SqliteAuthority({
+    databasePath: input.databasePath,
+    assetDirectory: input.assetDirectory,
+    dependencies: input.dependencies,
+  });
+  try {
+    const recorded = JSON.stringify(authority.queryReceiptHistory(input.repositoryId, input.runId));
+    const reasons = [...recorded.matchAll(/"reason":"((?:[^"\\]|\\.)*)"/gu)]
+      .map(([, reason]) => JSON.parse(`"${reason ?? ""}"`) as string)
+      .filter((reason) => reason.length > 0);
+    const last = reasons[reasons.length - 1];
+    return last === undefined ? undefined : Object.freeze([last]);
+  } finally {
+    authority.close();
   }
 }
 

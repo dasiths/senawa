@@ -1,5 +1,10 @@
 import { compileAuthoredWorkflow } from "@senawa/execution-host";
-import { type CanonicalValue, canonicalValue, type Sha256Digest } from "@senawa/kernel";
+import {
+  type CanonicalValue,
+  canonicalValue,
+  type Sha256Digest,
+  type WorkerModelRouteSelection,
+} from "@senawa/kernel";
 import type { AuthenticatedPrincipal } from "@senawa/protocol";
 import { RuntimeDataflowAuthority, type RuntimeDependencies } from "@senawa/runtime";
 import {
@@ -39,6 +44,8 @@ export interface StartedAuthoredRun {
   readonly dispatchId: string;
   readonly contextId: string;
   readonly graphRevision: Sha256Digest;
+  /** The route the dispatched phase runs under, which a worker adapter needs. */
+  readonly routeSelection: WorkerModelRouteSelection;
 }
 
 /**
@@ -126,6 +133,7 @@ export async function startAuthoredRun(input: StartAuthoredRunInput): Promise<St
       dispatchId: dispatched.dispatch.dispatchId,
       contextId: dispatched.dispatch.contextId,
       graphRevision: snapshot.graph.revisionDigest,
+      routeSelection: dispatched.routeSelection,
     };
   } finally {
     contextBroker.close();

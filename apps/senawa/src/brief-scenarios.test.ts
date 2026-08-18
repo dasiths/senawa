@@ -5,7 +5,7 @@ import { decodeCommandEnvelope, PROTOCOL_VERSION } from "@senawa/protocol";
 import { SqliteAuthority } from "@senawa/storage-sqlite";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { advanceRun } from "./advance-run.js";
+import { type AdvanceOutcome, advanceRun, classifyOutcome } from "./advance-run.js";
 import {
   agentTurn,
   BASE,
@@ -183,6 +183,45 @@ describe("what an author can state", () => {
   });
 });
 
+describe("a run always has somewhere to go", () => {
+  const outcomes: readonly AdvanceOutcome[] = [
+    { kind: "dispatched", phaseKey: "define", dispatchId: "dispatch_x" },
+    { kind: "retrying", phaseKey: "define", attempt: 2, dispatchId: "dispatch_y", reasons: ["a"] },
+    { kind: "awaiting-agent", phaseKey: "define" },
+    { kind: "awaiting-approval", phaseKey: "define" },
+    { kind: "gate-refused", phaseKey: "define", reasons: ["a"] },
+    { kind: "rejected", phaseKey: "define", reasons: ["a"] },
+    { kind: "output-refused", phaseKey: "define", reasons: ["a"] },
+    { kind: "closed", phaseKey: "define" },
+    { kind: "finished" },
+  ];
+
+  it("classifies every outcome as progress, a human's turn, or a refusal", () => {
+    // There is no fourth disposition, so no outcome means stuck with nothing to
+    // do and no way out. The exhaustive switch is what keeps this true as
+    // outcomes are added.
+    for (const outcome of outcomes) {
+      expect(["progress", "awaiting-human", "refused"]).toContain(classifyOutcome(outcome));
+    }
+  });
+
+  it("gives a person something to act on with every refusal", () => {
+    for (const outcome of outcomes) {
+      if (classifyOutcome(outcome) !== "refused") continue;
+      if (!("reasons" in outcome)) throw new Error(`${outcome.kind} carries no reasons`);
+      // An escalation is built from what was measured, so a refusal that named
+      // nothing would hand a person a decision with no basis.
+      expect(outcome.reasons.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("refuses an outcome nobody classified", () => {
+    expect(() => classifyOutcome({ kind: "invented" } as unknown as AdvanceOutcome)).toThrow(
+      /Unclassified/u,
+    );
+  });
+});
+
 describe("one phase in sequence", () => {
   it("dispatches the assignment when the run starts", async () => {
     const scenario = await startScenario("dispatch");
@@ -281,6 +320,33 @@ describe("one phase in sequence", () => {
     });
 
     expect(await advance(scenario)).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
+  });
+
+  it("retries with the human's reason after they reject", async () => {
+    const scenario = await startScenario("rejected-retry", { approval: true, attempts: 3 });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+    await advance(scenario);
+
+    const decision = decidePhase({
+      ...scenario.paths,
+      repositoryId: scenario.repositoryId,
+      runId: scenario.runId,
+      decision: "reject",
+      reason: "the endpoint returns the wrong status",
+      principal: runtimePrincipal,
+      dependencies,
+      currentTime: NOW,
+    });
+    if (decision.exitCode !== 0) throw new Error(decision.output);
+
+    const outcome = await advance(scenario);
+
+    expect(outcome).toMatchObject({ kind: "retrying", phaseKey: "define", attempt: 2 });
+    if (outcome.kind !== "retrying") throw new Error("expected a retry");
+    // The person's own words, not the driver's summary of them.
+    expect(await promptPackText(scenario, outcome.dispatchId)).toContain(
+      "the endpoint returns the wrong status",
+    );
   });
 
   it("retries a refused phase with the reasons the gate gave", async () => {

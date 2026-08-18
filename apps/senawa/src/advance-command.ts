@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { canonicalValue, sha256Digest } from "@senawa/kernel";
 import type { AuthenticatedPrincipal } from "@senawa/protocol";
 import type { RuntimeDependencies } from "@senawa/runtime";
-import { type AdvanceOutcome, advanceRun } from "./advance-run.js";
+import { type AdvanceOutcome, advanceRun, classifyOutcome } from "./advance-run.js";
 import type { CliResult } from "./cli.js";
 
 export interface AdvanceCommandOptions {
@@ -55,8 +55,11 @@ export async function runAdvanceCommand(
         },
       });
       lines.push(describe(outcome));
-      if (outcome.kind !== "closed" && outcome.kind !== "dispatched") {
-        return { output: lines.join("\n"), exitCode: outcome.kind === "gate-refused" ? 1 : 0 };
+      if (classifyOutcome(outcome) !== "progress" || outcome.kind === "finished") {
+        return {
+          output: lines.join("\n"),
+          exitCode: classifyOutcome(outcome) === "refused" ? 1 : 0,
+        };
       }
     }
     lines.push("stopped after the step limit");
@@ -72,17 +75,27 @@ function describe(outcome: AdvanceOutcome): string {
   switch (outcome.kind) {
     case "dispatched":
       return `dispatched ${outcome.phaseKey} as ${outcome.dispatchId}`;
+    case "retrying":
+      return `retrying ${outcome.phaseKey}, attempt ${outcome.attempt}: ${outcome.reasons.join(", ")}`;
     case "awaiting-agent":
       return `waiting for the agent working on ${outcome.phaseKey}`;
     case "awaiting-approval":
       return `waiting for a decision on ${outcome.phaseKey}`;
     case "gate-refused":
       return `${outcome.phaseKey} did not pass: ${outcome.reasons.join(", ")}`;
+    case "rejected":
+      return `${outcome.phaseKey} was rejected: ${outcome.reasons.join(", ")}`;
+    case "output-refused":
+      return `${outcome.phaseKey} produced an output senawa refused: ${outcome.reasons.join(", ")}`;
     case "closed":
       return `closed ${outcome.phaseKey}`;
-    default:
+    case "finished":
       // The run stays open: ending one carries human authority the driver has
       // no business fabricating.
       return "every phase is done; end the run when you are satisfied";
+    default: {
+      const unreachable: never = outcome;
+      throw new Error(`Undescribed advance outcome ${JSON.stringify(unreachable)}`);
+    }
   }
 }

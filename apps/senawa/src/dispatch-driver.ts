@@ -15,6 +15,7 @@ import {
   sha256Digest,
   type WorkerContextBase,
   type WorkerDispatch,
+  type WorkerModelRouteSelection,
 } from "@senawa/kernel";
 import { decodeCanonicalJsonValue } from "@senawa/protocol";
 import {
@@ -107,6 +108,8 @@ export interface DispatchPhaseInput {
 export interface DispatchPhaseResult {
   readonly context: WorkerContextBase;
   readonly dispatch: WorkerDispatch;
+  /** The route this dispatch runs under, which a worker adapter needs to run it. */
+  readonly routeSelection: WorkerModelRouteSelection;
 }
 
 const PROMPT_PACK_MAX_BYTES = 65_536;
@@ -310,6 +313,7 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   return {
     context,
+    routeSelection,
     dispatch: input.contextBroker.registerDispatch({
       context,
       dispatch,

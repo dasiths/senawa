@@ -65,7 +65,7 @@ A later phase may not regress one of them.
 | 5 | The agent operating contract | Complete: contract, verbs, typed Copilot tool, digest coverage |
 | 6 | Evidence and output policy are authorable | Policy, views, contract, and the evidence refusal all landed |
 | 7 | Loops, gates, sensors, and approval are authorable | Authoring built; acceptances unproven |
-| 8 | The autonomous driver and human loop | Loop drives, closes, advances, and waits for people; rerun moved to Phase 9 |
+| 8 | The autonomous driver and human loop | Complete: drives, retries with reasons, closes, advances, waits for people |
 | 9 | Fan-out and fan-in | Lowering built; member phases open |
 | 10 | Sessions, model routing, and steering | Not started |
 | 11 | Prove authored-surface parity | Tree compiles; comparison with the old template open |
@@ -376,8 +376,10 @@ absorbs the unfinished acceptance from Phases 2, 3, and the former Phase 5.
   non-blocking option.
 * [x] Recover an in-flight dispatch and continue the same loop after process
   restart without duplicating accepted output or completion.
-* [ ] Prove there is no reachable state in which a run can neither make progress,
-  await a declared human decision, fail, nor escalate.
+* [x] Prove there is no reachable state in which a run can neither make progress,
+  await a declared human decision, fail, nor escalate. **`classifyOutcome` is an
+  exhaustive switch with a `never` default, so an unclassified outcome fails to
+  compile, and every refusal is asserted to carry reasons.**
 
 Acceptance:
 
@@ -385,7 +387,9 @@ Acceptance:
   completion through the public command surface. **Partial: the workflow runs to
   completion with no model, driven through advanceRun. The scripted agent still
   submits through the broker rather than through senawa worker over the socket.**
-* [ ] An opt-in live test drives a real Copilot agent through the same path.
+* [x] An opt-in live test drives a real Copilot agent through the same path.
+  **`live-loop.test.ts`, skipped unless `SENAWA_COPILOT_LIVE` and the cost
+  acknowledgement are set.**
 * [x] A rejected phase reruns with the exact human or gate reasons supplied.
   **F-012 was wrong about why this was blocked: a retry never fences anything, so
   the refusal came from the accepted-context comparison rather than from a closed

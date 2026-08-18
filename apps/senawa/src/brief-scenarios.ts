@@ -24,7 +24,7 @@ import {
 import { runtimePrincipal } from "@senawa/testing";
 import { runtimeDependencies as productionDependencies } from "./daemon.js";
 import { runtimeSchemaContract } from "./dataflow-composition.js";
-import { startAuthoredRun } from "./start-run.js";
+import { type StartedAuthoredRun, startAuthoredRun } from "./start-run.js";
 import { BrokerWorkerSubmissionSink } from "./worker-submission-sink.js";
 
 export const NOW = "2026-08-18T00:00:00.000Z";
@@ -114,7 +114,13 @@ export async function compileSnapshot(options: ScenarioOptions): Promise<unknown
 export async function startScenario(
   name: string,
   options: ScenarioOptions = {},
-): Promise<Scenario & { readonly dispatchId: string; readonly phaseKey: string }> {
+): Promise<
+  Scenario & {
+    readonly dispatchId: string;
+    readonly phaseKey: string;
+    readonly routeSelection: StartedAuthoredRun["routeSelection"];
+  }
+> {
   const project = await authoredProject(options);
   const scenario: Scenario = {
     project,
@@ -136,7 +142,12 @@ export async function startScenario(
     currentTime: NOW,
     repositoryBase: BASE,
   });
-  return { ...scenario, dispatchId: started.dispatchId, phaseKey: started.phaseKey };
+  return {
+    ...scenario,
+    dispatchId: started.dispatchId,
+    phaseKey: started.phaseKey,
+    routeSelection: started.routeSelection,
+  };
 }
 
 export interface SubmissionResult {
