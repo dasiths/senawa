@@ -1612,3 +1612,25 @@ what the sensors actually said.
 The scenario test asserts the refusal is no longer `candidate-required`. Moving
 the record back after the refusal makes it fail, so it measures the ordering
 rather than agreeing with it.
+
+## The command surface, exercised as a consumer uses it
+
+Two tests spawn the built executable with its own state root and drive it the
+way a person would: init, doctor, start. They found one defect immediately.
+
+`senawa start` derived the repository identity from the working directory name
+and passed it straight into the protocol, which requires a lowercase bounded
+token. Starting a run in a directory named with capitals, spaces, or anything
+else ordinary failed with:
+
+```text
+$.repositoryId must be an opaque ASCII identity token
+```
+
+That is a protocol error surfaced for something the consumer did not do wrong.
+The directory name is now folded into a valid identity, and falls back to
+`repository_workspace` when nothing usable survives folding.
+
+The second test asserts the refusal for a broken prompt names `prompts/planner.md`
+and does not mention `workflow.json`, which is the F-010 regression held at the
+command surface rather than only at the library boundary.

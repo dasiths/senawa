@@ -97,7 +97,7 @@ export async function runOperationalCli(
       {
         projectRoot: process.cwd(),
         requestPath: action,
-        repositoryId: `repository_${basename(process.cwd())}`,
+        repositoryId: repositoryIdFor(process.cwd()),
         ...(positional[0] === undefined ? {} : { runId: positional[0] }),
         ...(detached ? { detach: true } : {}),
       },
@@ -426,6 +426,22 @@ export async function runOperationalCli(
     return success(`${origin}${bootstrap.path}`);
   }
   return invalid("Unknown operational command");
+}
+
+/**
+ * A repository identity derived from the directory name.
+ *
+ * Identities are lowercase and bounded, so a directory named with capitals or
+ * spaces must be folded rather than refused with a protocol error the consumer
+ * did not cause.
+ */
+function repositoryIdFor(directory: string): string {
+  const folded = basename(directory)
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9._:-]/gu, "-")
+    .replace(/^[^a-z0-9]+/u, "")
+    .slice(0, 96);
+  return `repository_${folded.length === 0 ? "workspace" : folded}`;
 }
 
 export function createBackupRequest(

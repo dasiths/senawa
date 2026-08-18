@@ -387,7 +387,7 @@ Acceptance:
   the task rather than re-dispatching it, which is amendment machinery.**
 * [x] Artifacts, transcript, attempt history, and accepted submissions survive a
   process restart.
-* [ ] The complete loop is drivable from the command line with no portal and no
+* [x] The complete loop is drivable from the command line with no portal and no
   hand-computed digest or revision.
 
 ## Phase 9: Fan-out and fan-in
