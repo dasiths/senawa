@@ -1493,3 +1493,27 @@ Also fixed here: the two-phase acceptance spawns real sensor processes for both
 phases and exceeded vitest's five second default under parallel load. It passed
 alone and failed in the suite, which is the shape of a flake that gets ignored
 until it fails in CI. It now declares the budget it needs.
+
+## F-012: a task scope is a one-shot claim, so a rerun is an amendment
+
+The retry wall has a definite answer, and it is not a missing handshake.
+
+The broker sets `claimsAccepted` to true exactly once, when it first sees a task
+scope, and `installTaskScopeFences` sets it to false. Nothing anywhere sets it
+back to true. A fenced scope is closed to claims permanently, and the scope key
+is run, task, and definition generation, all of which a retry keeps.
+
+So a second attempt at the same task cannot be dispatched, by construction. That
+is not an oversight. `TaskDefinition.supersedes` exists, and `activePhaseTasks`
+filters superseded tasks out, which is the shape of a system where retrying
+means replacing the task rather than re-running it.
+
+The consequence for the plan: "a rejected phase reruns with the exact reasons
+supplied" is not a driver feature. It needs a graph amendment that supersedes
+the refused task with a new one carrying the reasons, which is Phase 9's
+machinery. The item moves there rather than staying open in Phase 8 where it
+would be built against the grain of the fencing model.
+
+What Phase 8 does today on a red gate is stop and say which sensor refused. That
+is a stall rather than a wrong answer, and the run is recoverable by amendment
+once Phase 9 exists.

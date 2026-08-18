@@ -383,6 +383,8 @@ Acceptance:
   submits through the broker rather than through senawa worker over the socket.**
 * [ ] An opt-in live test drives a real Copilot agent through the same path.
 * [ ] A rejected phase reruns with the exact human or gate reasons supplied.
+  **Moved to Phase 9: a task scope is a one-shot claim, so a rerun supersedes
+  the task rather than re-dispatching it, which is amendment machinery.**
 * [x] Artifacts, transcript, attempt history, and accepted submissions survive a
   process restart.
 * [ ] The complete loop is drivable from the command line with no portal and no
