@@ -5,6 +5,7 @@ import {
   type WorkerAssetSubmission,
   type WorkerDiscoverySubmission,
   type WorkerQuestionSubmission,
+  type WorkerSubmission,
 } from "@senawa/protocol";
 import type {
   AssetReadInput,
@@ -54,6 +55,11 @@ export interface SimulatedWorkerSession {
     submissionId: string,
     amendment: WorkerAmendmentProposalSubmission["amendment"],
   ): SubmissionAdmissionResult;
+  /** Publishes one declared output. A completion without its outputs is refused. */
+  submitOutput(
+    submissionId: string,
+    output: Extract<WorkerSubmission, { readonly type: "phase-output" }>["output"],
+  ): SubmissionAdmissionResult;
   complete(submissionId: string, completion: CompletionSubmission): SubmissionAdmissionResult;
 }
 
@@ -78,9 +84,15 @@ export class SimulatedSerialWorkerAdapter {
     const submissions: SubmissionAdmissionResult[] = [];
     let admittedCompletionDisposition: CompletionSubmission["disposition"] | undefined;
     const submit = (
-      type: "question" | "asset" | "discovery" | "amendment-proposal" | "completion",
+      type:
+        | "question"
+        | "asset"
+        | "discovery"
+        | "amendment-proposal"
+        | "completion"
+        | "phase-output",
       submissionId: string,
-      payloadKey: "question" | "asset" | "discovery" | "amendment" | "completion",
+      payloadKey: "question" | "asset" | "discovery" | "amendment" | "completion" | "output",
       payload: unknown,
     ): SubmissionAdmissionResult => {
       const result = this.broker.admitSubmission({
@@ -114,6 +126,10 @@ export class SimulatedSerialWorkerAdapter {
         submissionId: string,
         amendment: WorkerAmendmentProposalSubmission["amendment"],
       ) => submit("amendment-proposal", submissionId, "amendment", amendment),
+      submitOutput: (
+        submissionId: string,
+        output: Extract<WorkerSubmission, { readonly type: "phase-output" }>["output"],
+      ) => submit("phase-output", submissionId, "output", output),
       complete: (submissionId: string, completion: CompletionSubmission) => {
         const result = submit("completion", submissionId, "completion", completion);
         if (result.status === "accepted" && result.completionFact !== undefined)

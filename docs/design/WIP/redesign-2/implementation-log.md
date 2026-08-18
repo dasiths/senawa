@@ -1307,3 +1307,37 @@ Two refusals are deliberate:
 
 Proven by breaking it: removing the completion guard makes the waiting test
 fail, so the test measures the guard rather than agreeing with it.
+
+## Phase 8 next steps, found by trying to close a phase end to end
+
+Driving a scripted phase all the way to closure got within two steps of working
+and surfaced four things the driver must handle. Recording them because each was
+found by running the path rather than reading it.
+
+* Commands must carry `expectedGraphRevision`. Without it the authority refuses
+  `evaluate-gate` as `stale-graph`. The driver was ignoring the receipt status,
+  so the refusal was invisible and the driver reported a closure that had not
+  happened. `submit` now throws on any status other than completed; a driver
+  that reports progress the authority refused is worse than one that stops.
+* Allocated identities must be globally unique across commands, not just within
+  one. They now carry the command they belong to.
+* A gate definition holds `blocking` and `advisory` rule lists, not `rules`, and
+  each rule names its sensor at `condition.accessor.sensorKey`.
+* A sensor reading is evidence about one candidate and must be bound to that
+  candidate's digest. Readings taken before the candidate exists have to be
+  rebound to it, which means the candidate has to be built before the gate is
+  evaluated rather than after.
+
+The remaining refusal is `task-set-mismatch`: the candidate's selected task set
+has to match what the authority accepted for the phase, which the driver
+currently derives from the dispatch alone.
+
+The closure test was written, failed honestly, and is not committed, because a
+test that cannot pass is not evidence. The two committed tests cover what does
+work: the driver waits for the agent rather than evaluating a gate over absent
+work, and refuses a run it cannot find.
+
+One earlier version of the closure test passed while `close-phase` was deleted,
+because it asserted the reported outcome rather than the recorded closure. That
+is the failure mode the plan warns about, so it is written down: assert what the
+authority durably recorded, never what the code under test said it did.
