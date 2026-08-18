@@ -1341,3 +1341,36 @@ One earlier version of the closure test passed while `close-phase` was deleted,
 because it asserted the reported outcome rather than the recorded closure. That
 is the failure mode the plan warns about, so it is written down: assert what the
 authority durably recorded, never what the code under test said it did.
+
+## Phase 8: a phase now closes on its own
+
+A scripted agent with no model publishes its output, completes, and the driver
+runs the phase's sensors, evaluates the gate, and closes the phase. That path
+had never run end to end before.
+
+Five things had to be true, and each was found by running the path rather than
+reading it:
+
+* Commands carry `expectedGraphRevision`, or the authority refuses `stale-graph`.
+* Allocated identities are unique across commands, not only within one.
+* A gate definition holds `blocking` and `advisory` rule lists, and each rule
+  names its sensor at `condition.accessor.sensorKey`.
+* A sensor reading is evidence about one candidate, so it is bound to that
+  candidate's digest. The candidate therefore has to exist before the gate is
+  evaluated, and readings taken earlier are rebound to it.
+* The authority derives a phase's accepted tasks from delivered completion
+  facts. Until a fact crosses from the broker to the authority the phase has no
+  accepted task, and evaluating a gate refuses with `task-set-mismatch`. The
+  driver now drains that outbox. `SqliteSupervisorAuthority.accept` enqueues for
+  a service loop to drain later, so the driver submits to the command authority
+  directly and stays synchronous.
+
+The driver refused to report any of this while it was broken, because `submit`
+now throws on any receipt that is not completed. Before that it ignored receipt
+status and reported a closure the authority had refused, which is the worst
+possible failure for a component whose job is to say what happened.
+
+The test asserts the receipts the authority durably recorded, not the outcome
+the driver returned. An earlier version asserted the return value and passed
+with `close-phase` deleted. This one was checked the same way and fails when
+the closure is removed.

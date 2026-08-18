@@ -4,12 +4,14 @@ import {
   type CanonicalValue,
   canonicalValue,
   createPhaseCandidate,
+  createSensorReading,
   digestAccountingAssessment,
   digestPhaseOutputSet,
   digestSelectedTaskSet,
   evaluateGate,
   type Sha256Digest,
   sha256Digest,
+  type TaskGenerationReference,
 } from "@senawa/kernel";
 import {
   type AuthenticatedPrincipal,
@@ -20,7 +22,7 @@ import {
 } from "@senawa/protocol";
 import { RuntimeDataflowAuthority, type RuntimeDependencies } from "@senawa/runtime";
 import { SqliteCanonicalJsonAssetStore, SqliteContextBroker } from "@senawa/storage-sqlite";
-import { SqliteSupervisorAuthority } from "@senawa/supervisor";
+import { CompletionFactCommandBridge, SqliteSupervisorAuthority } from "@senawa/supervisor";
 import {
   configurationRuntimeSchemaValidator,
   runtimeSchemaContract,
@@ -66,6 +68,10 @@ interface SnapshotPhase {
   readonly dependsOn?: readonly string[];
   readonly outputs: readonly { readonly key: string }[];
   readonly exit?: { readonly gate?: string };
+}
+
+interface GateRule {
+  readonly condition: { readonly accessor: { readonly sensorKey: string } };
 }
 
 interface SnapshotGateValue {
@@ -185,8 +191,15 @@ async function step(
       ),
     }));
 
+  // The authority derives the phase's accepted tasks from delivered completion
+  // facts, so anything still sitting in the outbox has to be handed over first.
+  deliverFacts(input, supervisor, broker, state, dispatchId);
+
   const gate = gateFor(snapshot, phase);
-  const readings = gate === undefined ? [] : await readGate(input, snapshot, gate);
+  const measured = gate === undefined ? [] : await readGate(input, snapshot, gate);
+  // The candidate must cover every active task the phase owns, not only the one
+  // this dispatch carried.
+  const tasks = dispatchedPhaseTasks(snapshot, state, input.runId, phaseKey);
   const candidate = createPhaseCandidate(
     {
       phase: scheduling.phase,
@@ -195,14 +208,27 @@ async function step(
       inputBindingDigest: publications[0]?.inputBindingDigest ?? sha256Digest("0".repeat(64)),
       requiredOutputPublications: publications,
       outputSetDigest: digestPhaseOutputSet(publications, input.dependencies.sha256),
-      selectedTaskSetDigest: digestSelectedTaskSet([dispatch.task], input.dependencies.sha256),
-      tasks: [dispatch.task],
+      selectedTaskSetDigest: digestSelectedTaskSet(tasks, input.dependencies.sha256),
+      tasks,
       acceptedAccountingAssessments: assessments,
       dependencyBarrierDigest: sha256Digest("0".repeat(64)),
       gatePolicyDigest: gate?.policyDigest ?? sha256Digest("0".repeat(64)),
     },
     snapshot.graph,
     input.dependencies.sha256,
+  );
+
+  // A reading is evidence about one candidate, so it is bound to that candidate.
+  const readings = measured.map((reading) =>
+    createSensorReading(
+      {
+        sensorKey: reading.sensorKey,
+        inputDigest: candidate.candidateDigest,
+        outcome: reading.outcome,
+        ...(reading.outcome === "succeeded" ? { data: reading.data } : { error: reading.error }),
+      } as Parameters<typeof createSensorReading>[0],
+      input.dependencies.sha256,
+    ),
   );
 
   if (gate !== undefined) {
@@ -221,22 +247,38 @@ async function step(
     }
   }
 
-  submit(supervisor, input, `gate-${phaseKey}`, "evaluate-gate", candidate.candidateDigest, {
-    phase: candidate.phase,
-    phaseAttempt: candidate.phaseAttempt,
-    inputBindingDigest: candidate.inputBindingDigest,
-    requiredOutputPublications: candidate.requiredOutputPublications,
-    outputSetDigest: candidate.outputSetDigest,
-    dependencyBarrierDigest: candidate.dependencyBarrierDigest,
-    gateDefinition: gate,
-    readings,
-  });
+  submit(
+    supervisor,
+    input,
+    `gate-${phaseKey}`,
+    "evaluate-gate",
+    snapshot.graph.revisionDigest,
+    candidate.candidateDigest,
+    {
+      phase: candidate.phase,
+      phaseAttempt: candidate.phaseAttempt,
+      inputBindingDigest: candidate.inputBindingDigest,
+      requiredOutputPublications: candidate.requiredOutputPublications,
+      outputSetDigest: candidate.outputSetDigest,
+      dependencyBarrierDigest: candidate.dependencyBarrierDigest,
+      gateDefinition: gate,
+      readings,
+    },
+  );
 
   // An authored approval is a human's to give. The driver stops here and the
   // run waits, rather than recording a decision nobody made.
   if (requiresApproval(phase)) return { kind: "awaiting-approval", phaseKey };
 
-  submit(supervisor, input, `close-${phaseKey}`, "close-phase", candidate.candidateDigest, {});
+  submit(
+    supervisor,
+    input,
+    `close-${phaseKey}`,
+    "close-phase",
+    snapshot.graph.revisionDigest,
+    candidate.candidateDigest,
+    {},
+  );
   const next = nextPhase(snapshot, phaseKey);
   if (next === undefined) return { kind: "finished" };
   submit(
@@ -244,6 +286,7 @@ async function step(
     input,
     `advance-${next.key}`,
     "start-phase-attempt",
+    snapshot.graph.revisionDigest,
     candidate.candidateDigest,
     {
       phaseId: next.id,
@@ -281,7 +324,7 @@ async function readGate(
   snapshot: ConfigurationSnapshot,
   gate: NonNullable<ReturnType<typeof gateFor>>,
 ) {
-  const sensorKeys = [...new Set(gate.rules.map(({ sensor }) => String(sensor)))].sort();
+  const sensorKeys = [...new Set(gateSensorKeys(gate))].sort();
   if (sensorKeys.length === 0) return [];
   const result = await runSensors({
     snapshot,
@@ -292,12 +335,19 @@ async function readGate(
   return result.readings;
 }
 
+/** Every sensor the gate reads, blocking and advisory alike. */
+function gateSensorKeys(gate: NonNullable<ReturnType<typeof gateFor>>): readonly string[] {
+  const rules = [...(gate.blocking ?? []), ...(gate.advisory ?? [])];
+  return rules.map((rule) => String(rule.condition.accessor.sensorKey));
+}
+
 function gateFor(
   snapshot: ConfigurationSnapshot,
   phase: SnapshotPhase,
 ):
   | (Parameters<typeof evaluateGate>[0] & {
-      readonly rules: readonly { readonly sensor: string }[];
+      readonly blocking?: readonly GateRule[];
+      readonly advisory?: readonly GateRule[];
     })
   | undefined {
   const gateKey = phase.exit?.gate;
@@ -307,19 +357,54 @@ function gateFor(
   return (entry.value as unknown as SnapshotGateValue).definition as never;
 }
 
+/**
+ * Hands the broker's pending completion and output facts to the authority.
+ *
+ * The broker records what an agent submitted; the authority decides what it
+ * means. Until a fact crosses that line the authority has no accepted task for
+ * the phase, and evaluating a gate refuses with a task set mismatch.
+ */
+function deliverFacts(
+  input: AdvanceRunInput,
+  supervisor: SqliteSupervisorAuthority,
+  broker: SqliteContextBroker,
+  state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
+  dispatchId: string,
+): void {
+  for (const entry of state.completionOutbox) {
+    if (entry.delivered || entry.fact.dispatchId !== dispatchId) continue;
+    const stored = broker.loadWorkerDispatch(entry.fact.dispatchId);
+    if (stored === undefined) continue;
+    submit(
+      supervisor,
+      input,
+      `completion-${entry.submissionId.replace("submission_", "").slice(0, 20)}`,
+      "submit-completion",
+      String(stored.context.graphRevisionDigest),
+      undefined,
+      { submission: entry.fact.assessment.submission },
+      String(entry.fact.assessment.submission.task.contextRevisionDigest),
+    );
+    broker.deliverCompletionFact(entry.submissionId);
+  }
+}
+
+/** Submits one command and refuses to continue when the authority did not accept it. */
 function submit(
   supervisor: SqliteSupervisorAuthority,
   input: AdvanceRunInput,
   suffix: string,
   intent: string,
-  exactObjectDigest: string,
+  graphRevision: string,
+  exactObjectDigest: string | undefined,
   payload: unknown,
+  expectedDefinitionRevision?: string,
 ): DurableReceipt {
   const commandId = `command_${suffix}-${input.dependencies.sha256
     .digest(canonicalBytes(canonicalValue({ runId: input.runId, suffix })))
     .slice(0, 24)}`;
   let allocation = 0;
-  return supervisor.commandAuthority.submit(
+  const receipt = supervisor.commandAuthority.submit(
     decodeCommandEnvelope({
       apiVersion: PROTOCOL_VERSION,
       commandId,
@@ -330,18 +415,49 @@ function submit(
       intent: { type: intent },
       payload: payload as never,
       payloadDigest: input.dependencies.sha256.digest(canonicalBytes(canonicalValue(payload))),
-      expectedGraphRevision: undefined,
-      exactObjectDigest,
+      expectedGraphRevision: graphRevision,
+      ...(exactObjectDigest === undefined ? {} : { exactObjectDigest }),
+      ...(expectedDefinitionRevision === undefined ? {} : { expectedDefinitionRevision }),
     } as never),
     {
       currentTime: input.currentTime,
       facts: { source: "advance-run" },
+      // Identities must be globally unique, so they carry the command they serve.
       allocateId: (kind: string) => {
         allocation += 1;
-        return `${kind}-advance-${allocation}`;
+        return `${kind}-${commandId.slice(8)}-${allocation}`;
       },
     },
   );
+  // A driver that reports progress the authority refused is worse than one that stops.
+  if (receipt.status !== "completed") {
+    throw new Error(
+      `${intent} was ${receipt.status}${receipt.error === undefined ? "" : `: ${receipt.error.code}`}`,
+    );
+  }
+  return receipt;
+}
+
+/**
+ * Every task the phase has dispatched, in the order the candidate expects.
+ *
+ * The candidate must cover the phase's active tasks exactly. Their context
+ * revision is known only to the dispatch, so the set is read from dispatches
+ * rather than rebuilt from the graph.
+ */
+function dispatchedPhaseTasks(
+  snapshot: ConfigurationSnapshot,
+  state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
+  runId: string,
+  phaseKey: string,
+): readonly TaskGenerationReference[] {
+  return state.dispatches
+    .filter(
+      (candidate) =>
+        candidate.runId === runId && phaseKeyByTask(snapshot, candidate.task.taskId) === phaseKey,
+    )
+    .map((candidate) => candidate.task)
+    .sort((left, right) => (left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0));
 }
 
 function phaseValue(snapshot: ConfigurationSnapshot, key: string): SnapshotPhase {

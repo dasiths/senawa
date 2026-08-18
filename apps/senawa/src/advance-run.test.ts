@@ -1,12 +1,23 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalValue, sha256Digest } from "@senawa/kernel";
-import { createRoleAuthorizationPolicy, type RuntimeDependencies } from "@senawa/runtime";
+import { loadAuthoredWorkflow } from "@senawa/execution-host";
+import { canonicalBytes, canonicalDigest, canonicalValue, sha256Digest } from "@senawa/kernel";
+import {
+  createRoleAuthorizationPolicy,
+  type RuntimeDependencies,
+  SimulatedSerialWorkerAdapter,
+} from "@senawa/runtime";
+import {
+  SqliteAuthority,
+  SqliteCanonicalJsonAssetStore,
+  SqliteContextBroker,
+} from "@senawa/storage-sqlite";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { advanceRun } from "./advance-run.js";
 import { runtimeDependencies as productionDependencies } from "./daemon.js";
+import { runtimeSchemaContract } from "./dataflow-composition.js";
 import { startAuthoredRun } from "./start-run.js";
 
 const roots = new Set<string>();
@@ -14,6 +25,7 @@ const dependencies: RuntimeDependencies = {
   sha256: productionDependencies.sha256,
   authorization: createRoleAuthorizationPolicy([
     { intent: "instantiate-run", roles: ["release-manager"] },
+    { intent: "submit-completion", roles: ["release-manager"] },
     { intent: "evaluate-gate", roles: ["release-manager"] },
     { intent: "record-authority-decision", roles: ["release-manager"] },
     { intent: "close-phase", roles: ["release-manager"] },
@@ -70,6 +82,58 @@ describe("advancing a run", () => {
     expect(outcome).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
   });
 
+  it("closes a phase after a scripted agent publishes its output and completes", async () => {
+    const project = await authoredProject();
+    const paths = {
+      databasePath: join(project, "authority.db"),
+      assetDirectory: join(project, "assets"),
+    };
+    const started = await startAuthoredRun({
+      projectRoot: project,
+      ...paths,
+      dependencies,
+      repositoryId: "repository_close",
+      runId: "run_close",
+      principal: runtimePrincipal,
+      input: canonicalValue({ request: "Add a health endpoint" }),
+      currentTime: NOW,
+      repositoryBase: BASE,
+    });
+
+    await completeDispatch(project, paths, started.dispatchId);
+
+    const outcome = await advanceRun({
+      projectRoot: project,
+      ...paths,
+      repositoryId: "repository_close",
+      runId: "run_close",
+      principal: runtimePrincipal,
+      dependencies,
+      currentTime: NOW,
+      workflowInput: {
+        bindingDigest: sha256Digest("3".repeat(64)),
+        value: canonicalValue({ request: "Add a health endpoint" }),
+      },
+      repositoryBase: BASE,
+    });
+
+    expect(outcome).toEqual({ kind: "finished" });
+
+    // The outcome alone would also be reported by a driver that closed nothing,
+    // so assert the closure the authority durably recorded.
+    const authority = new SqliteAuthority({ ...paths, dependencies });
+    try {
+      const completed = authority
+        .queryReceiptHistory("repository_close", "run_close")
+        .filter((receipt) => receipt.status === "completed")
+        .map((receipt) => String(receipt.commandId));
+      expect(completed.some((id) => id.startsWith("command_gate-"))).toBe(true);
+      expect(completed.some((id) => id.startsWith("command_close-"))).toBe(true);
+    } finally {
+      authority.close();
+    }
+  });
+
   it("refuses to advance a run it cannot find", async () => {
     const project = await authoredProject();
     await expect(
@@ -105,6 +169,7 @@ phases:
   - name: define
     agent: definer
     output: schemas/definition.schema.json
+    gates: [define]
 `;
 
 async function authoredProject(): Promise<string> {
@@ -115,7 +180,20 @@ async function authoredProject(): Promise<string> {
   await mkdir(join(configuration, "schemas"), { recursive: true });
   await writeFile(join(configuration, "agents.yaml"), AGENTS);
   await writeFile(join(configuration, "workflow.yaml"), WORKFLOW);
-  await writeFile(join(configuration, "sensors.yaml"), "sensors: {}\n");
+  await writeFile(
+    join(configuration, "sensors.yaml"),
+    `sensors:
+  always-ready:
+    run: "true"
+    deterministic: true
+
+gates:
+  define:
+    blocking:
+      - sensor: always-ready
+        exitCode: 0
+`,
+  );
   await writeFile(
     join(configuration, "prompts", "definer.md"),
     "Define the work.\n\nRequest: ${{ input.request }}\n",
@@ -135,4 +213,107 @@ async function authoredProject(): Promise<string> {
     );
   }
   return root;
+}
+
+/** Drives one dispatch to a published output and an accepted completion, with no model. */
+async function completeDispatch(
+  projectRoot: string,
+  paths: { readonly databasePath: string; readonly assetDirectory: string },
+  dispatchId: string,
+): Promise<void> {
+  const loaded = await loadAuthoredWorkflow(projectRoot, dependencies.sha256);
+  const snapshot = loaded.snapshot;
+  if (snapshot === undefined) throw new Error("Fixture workflow does not compile");
+  const authority = new SqliteAuthority({ ...paths, dependencies });
+  const assets = new SqliteCanonicalJsonAssetStore(authority);
+  const broker = new SqliteContextBroker({
+    databasePath: paths.databasePath,
+    dependencies: {
+      sha256: dependencies.sha256,
+      currentTime: () => NOW,
+      issueGrantToken: () => new Uint8Array(32),
+    },
+  });
+  try {
+    const stored = broker
+      .listWorkerDispatches("repository_close", "run_close")
+      .find((entry) => entry.dispatch.dispatchId === dispatchId);
+    if (stored === undefined) throw new Error("Dispatch was not stored");
+    const declaration = stored.context.phaseOutputDeclarations[0];
+    if (declaration === undefined) throw new Error("Phase declares no output");
+    const value = canonicalValue({ definition: "Scripted definition" });
+    const installed = assets.install(value);
+    const contract = runtimeSchemaContract(
+      snapshot,
+      String(declaration.schemaKey),
+      dependencies.sha256,
+    );
+    const receipt = canonicalDigest(
+      canonicalValue({
+        boundary: "phase output",
+        schemaKey: String(contract.key),
+        schemaResourceDigest: String(contract.schemaResourceDigest),
+        validatorProfileDigest: String(contract.validatorProfileDigest),
+        contentDigest: String(installed.contentDigest),
+        findings: [],
+      }),
+      dependencies.sha256,
+    );
+    broker.installCanonicalOutputAsset(
+      {
+        contentDigest: installed.contentDigest,
+        byteLength: installed.byteLength,
+        mediaType: "application/json",
+        schemaResourceDigest: declaration.schemaResourceDigest,
+        validationReceiptDigest: receipt,
+      },
+      canonicalBytes(value),
+    );
+    const suffix = dispatchId.replace("dispatch_", "").slice(0, 30);
+    let scriptError: unknown;
+    const result = await adapterRun(broker, stored, (session) => {
+      try {
+        session.submitOutput(`submission_${suffix}o`, {
+          phase: stored.context.phaseAttempt.phase,
+          outputName: declaration.outputName,
+          schemaKey: declaration.schemaKey,
+          schemaResourceDigest: declaration.schemaResourceDigest,
+          contentDigest: installed.contentDigest,
+          byteLength: installed.byteLength,
+          mediaType: "application/json",
+          sensitivity: declaration.sensitivity,
+          graphRevisionDigest: stored.context.graphRevisionDigest,
+          configurationSnapshotDigest: stored.context.configurationSnapshotDigest,
+          inputBindingDigest: stored.context.phaseInputBinding.bindingDigest,
+          validationReceiptDigest: receipt,
+        });
+        session.complete(`submission_${suffix}c`, {
+          task: stored.dispatch.task,
+          disposition: "completed",
+          summary: "Scripted definition",
+          criteria: stored.completionRequirements.criteria.map(({ criterionId }) => ({
+            criterionId,
+            disposition: "satisfied" as const,
+          })),
+          completionEvidence: [],
+        });
+      } catch (error) {
+        scriptError = error;
+        throw error;
+      }
+    });
+    if (scriptError !== undefined) throw scriptError;
+    if (result.status !== "completed") throw new Error(`Scripted worker was ${result.status}`);
+  } finally {
+    broker.close();
+    authority.close();
+  }
+}
+
+function adapterRun(
+  broker: SqliteContextBroker,
+  stored: { readonly dispatch: Parameters<SimulatedSerialWorkerAdapter["run"]>[0]["dispatch"] },
+  script: Parameters<SimulatedSerialWorkerAdapter["run"]>[1],
+) {
+  return new SimulatedSerialWorkerAdapter(broker).run({ dispatch: stored.dispatch }, script);
 }
