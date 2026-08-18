@@ -51,6 +51,8 @@ it appears.
 
 ## References
 
+* [Authoring reference](../reference/authoring.md) lists every authored field,
+  its default, and the refusal it produces.
 * [CLI reference](../reference/cli.md) is the complete command surface.
 * [Local supervisor HTTP](../reference/local-supervisor-http.md) is the exact
   route, transport, and local security boundary.

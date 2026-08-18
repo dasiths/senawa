@@ -84,9 +84,11 @@ target.
 * [Troubleshooting and limits](docs/guide/troubleshooting.md) documents the
   platform matrix, common failures, and deferred behavior.
 
-The references define exact surfaces: the [CLI reference](docs/reference/cli.md),
-the [local supervisor HTTP reference](docs/reference/local-supervisor-http.md),
-and the [remote control-plane reference](docs/reference/remote-control-plane.md).
+The references define exact surfaces: the [authoring
+reference](docs/reference/authoring.md), the [CLI
+reference](docs/reference/cli.md), the [local supervisor HTTP
+reference](docs/reference/local-supervisor-http.md), and the [remote
+control-plane reference](docs/reference/remote-control-plane.md).
 
 The [design set](docs/design/README.md) explains why the system behaves this way,
 with the [v1 brief](docs/design/WIP/redesign-2/brief.md) carrying the canonical

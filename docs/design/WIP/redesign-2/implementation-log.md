@@ -2498,3 +2498,20 @@ text and the `describe` switch rather than from memory, which caught two errors
 before they shipped: the credential lives under `dispatches/<id>/credential`
 rather than a `worker/` directory, and `output-refused` was missing from the
 outcome table.
+
+## The authoring reference is the reader, written down
+
+Every field, default, bound, and diagnostic in `docs/reference/authoring.md` was
+read out of `authoring.ts` rather than recalled. Several would have been wrong
+from memory: `onFailure` defaults to `continue` and not `fail-fast`, a sensor's
+timeout is 300000 rather than 30000, and `field` is required for every gate
+comparison except `exitCode`.
+
+The page states the deferred things where an author would otherwise assume them:
+`session` and the order of `models` are compiled and validated and read by no
+runtime, and a fan-out compiles without running. An author who believes a route
+fallback exists will not understand why a run stops at a limit rather than moving
+to the cheaper model, so the sentence that reads worse is the one that ships.
+
+The host limits are listed as limits rather than as defaults an author forgot to
+change, which is the distinction F-004 said the plan kept blurring.

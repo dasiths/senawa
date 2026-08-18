@@ -550,8 +550,11 @@ unknown and fail closed". Both are exact; only one can be read once.
   operating contract, and the command line loop. **Operations, portal, and
   security carried no false claims but omitted the run loop entirely, and
   security omitted the worker credential. Both are now covered.**
-* [ ] Publish references for authoring defaults and expanded forms, worker
-  commands, refusal responses, session policy, and portal decisions.
+* [x] Publish references for authoring defaults and expanded forms, worker
+  commands, refusal responses, session policy, and portal decisions. **The
+  authoring reference carries every field, default, expanded form, host limit,
+  and diagnostic code. Worker commands and refusals are in the CLI reference;
+  portal decisions are in the portal guide.**
 * [ ] Rewrite the design set to describe what exists after this plan.
 * [x] Sweep every document in `docs/` and every package README into the plain
   register, including the ones this redesign did not touch.

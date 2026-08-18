@@ -277,5 +277,6 @@ Common refusals:
 ## Related
 
 * [Getting started](getting-started.md) walks the first run end to end.
+* [Authoring reference](../reference/authoring.md) lists every field and default.
 * [CLI reference](../reference/cli.md) lists every command.
 * [Dataflow](../design/dataflow.md) explains how output moves between phases.
