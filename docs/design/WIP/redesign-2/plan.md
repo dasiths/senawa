@@ -63,15 +63,15 @@ A later phase may not regress one of them.
 | 3 | The consumer command line | Complete |
 | 4 | Sensors, gates, and anchors | Complete |
 | 5 | The agent operating contract | Complete: contract, verbs, typed Copilot tool, digest coverage |
-| 6 | Evidence and output policy are authorable | Policy, views, contract, and the evidence refusal all landed |
-| 7 | Loops, gates, sensors, and approval are authorable | Authoring built; acceptances unproven |
+| 6 | Evidence and output policy are authorable | Complete: policy, views, contract, and the evidence refusal |
+| 7 | Loops, gates, sensors, and approval are authorable | Complete |
 | 8 | The autonomous driver and human loop | Complete: drives, retries with reasons, closes, advances, waits for people |
-| 9 | Fan-out and fan-in | Lowering built; member phases open |
+| 9 | Fan-out and fan-in | Compiles and refuses honestly; execution needs the authority decision in F-015 |
 | 10 | Sessions, model routing, and steering | Not started |
-| 11 | Prove authored-surface parity | Tree compiles; comparison with the old template open |
-| 12 | The portal earns its density | Route fetching fixed; disclosure open |
-| 13 | Remove what the evidence condemns | Intents and budget units cleared; two items blocked |
-| 14 | Name it v1 and rewrite every document in plain language | Renamed; every document rewrite open |
+| 11 | Prove authored-surface parity | Two fixtures prove defaults are available and overridable; old-template comparison open |
+| 12 | The portal earns its density | Disclosure landed; the default view needs run controls in the rail |
+| 13 | Remove what the evidence condemns | Complete except two items blocked on Phases 10 and 11 |
+| 14 | Name it v1 and rewrite every document in plain language | Guides, design set, references, and refusals rewritten |
 | 15 | Restore the loop engineering narrative | README carries the loops, the vocabulary, and the honesty |
 
 ## Phase 0: Settle the shape
@@ -612,8 +612,9 @@ Acceptance:
 
 * [ ] A reader who has never seen the project understands the three loops and the
   backpressure model from the README alone.
-* [ ] Every vocabulary term in the design set is defined once and used
-  consistently.
+* [x] Every vocabulary term in the design set is defined once and used
+  consistently. **The design index carries the fourteen terms, each defined
+  once, and the pages use them without redefining them.**
 * [ ] Every testable documentation claim is linked to an executable acceptance.
 
 ## Cross-cutting: continuous integration

@@ -2663,3 +2663,25 @@ to enshrine a layout I could not defend.
 
 The substantive half of the phase stands: the depth is behind disclosure, and the
 browser suite proves both that it is hidden and that it is one action away.
+
+## Terms used everywhere and defined nowhere
+
+`anchor`, `backpressure`, and `frozen set` appeared in the README and in no
+design page. `completion evidence` and `gate evidence` are the pair whose
+confusion D-023 exists to prevent, and the distinction was stated in the brief
+and nowhere a reader of the design set would find it.
+
+The design index now defines fourteen terms once each, and the pages use them
+without redefining them. The two evidence entries carry the property that decides
+correctness in their definition rather than in a paragraph elsewhere: completion
+evidence can be argued with and therefore never backs a gate.
+
+Checking the counted claims on the same pass found two more that had drifted.
+Durability described thirteen migrations and `CURRENT_SCHEMA_VERSION` as 13; D-027
+collapsed the chain into one baseline and set the version to 1. The page now says
+so, and says why the collapse was safe, because a reader who knows migrations
+exist to carry an installed base forward should be told that v1 has none.
+
+Two counted claims were checked and are correct: twelve components, and eight
+manifests read by the boundary script. Counting them was cheap and the alternative
+was leaving two more numbers nobody had verified.

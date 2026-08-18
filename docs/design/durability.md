@@ -9,7 +9,7 @@ Senawa keeps all authority in one SQLite database plus one content-addressed
 asset directory. Both are local files. There is no server, no cache tier, and no
 second writer.
 
-`CURRENT_SCHEMA_VERSION` is `13`, declared in
+`CURRENT_SCHEMA_VERSION` is `1`, declared in
 [packages/storage-sqlite/src/index.ts](../../packages/storage-sqlite/src/index.ts).
 Opening a database whose `user_version` exceeds that value throws
 `UnsupportedSchemaVersionError` rather than proceeding against an unknown shape.
@@ -41,23 +41,17 @@ a process kill.
 
 Migrations are ordered SQL files in
 [packages/storage-sqlite/migrations](../../packages/storage-sqlite/migrations).
-Thirteen exist:
+One exists:
 
 | Version | File | Schema family |
 |---------|------|---------------|
-| 1 | `001-initial.sql` | Core authority: runs, commands, receipt history, event frames, assets, leases, claims, effect intents and outcomes |
-| 2 | `002-runner-authority.sql` | Runner authority: budgets, effect commands, claims, outcomes, escalations, receipts, events, projections |
-| 3 | `003-context-broker.sql` | Immutable context: bases, dispatches, asset bindings and chunks, grants, read attempts, audit receipts, submissions, questions, completions |
-| 4 | `004-supervisor.sql` | Local control plane: repositories, runs, commands, receipts, wakes, service state, logs |
-| 5 | `005-additive-amendments.sql` | Amendments: configuration snapshots, proposals, decisions, withdrawals, applications, work fences, fenced dispatches |
-| 6 | `006-parallel-workspaces.sql` | Capacity and workspaces: reservations, execution bindings, workspaces, results, integration attempts, members, gates, completion eligibility |
-| 7 | `007-human-authority-run-control.sql` | Human authority: question answers, fresh dispatch requirements, allowance policies and resolutions, run control state and events |
-| 8 | `008-portal-query-revisions.sql` | Portal read revisions |
-| 9 | `009-remote-delivery.sql` | Remote delivery: peer state, history commitments, stream checkpoints, command inbox, report outbox, synchronization vectors, run event checkpoints |
-| 10 | `010-phase-dataflow.sql` | Phase dataflow: workflow input bindings, phase attempts, input bindings and sources, output assets, publications, acceptances |
-| 11 | `011-task-frontier-authority.sql` | Task frontier: attempt transitions, agent session resume bindings, fan-out evaluations and members, diff decisions, plan imports |
-| 12 | `012-phase-output-attempts.sql` | Durable phase output attempt ledger |
-| 13 | `013-agent-transcript.sql` | Bounded agent transcript lines |
+| 1 | `001-baseline.sql` | Every table: core authority, runner authority, immutable context, local control plane, amendments, capacity and workspaces, human authority, portal read revisions, remote delivery, phase dataflow, task frontier, phase output attempts, and agent transcripts |
+
+Thirteen migrations preceded it. They were collapsed once v1 settled its protocol
+identifiers, because a chain exists to carry an installed base forward and v1 has
+none. The baseline was produced by applying the chain and dumping the result, so
+it is the schema the chain built rather than a transcription of it, and it
+carries the seed rows the runtime requires at startup.
 
 Application is checked, not assumed. `loadMigrations` reads every file matching
 `^\d{3}-[a-z0-9-]+\.sql$` in sorted order, computes its SHA-256 checksum, and
