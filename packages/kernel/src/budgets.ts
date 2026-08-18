@@ -27,8 +27,6 @@ export const BUDGET_UNITS = [
   "review-iteration",
   "integration-attempt",
   "rebase-attempt",
-  "elapsed-time-ms",
-  "spend-nano",
 ] as const;
 
 export type BudgetUnit = (typeof BUDGET_UNITS)[number];

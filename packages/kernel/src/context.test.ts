@@ -537,10 +537,7 @@ function contextInput(kind: "software" | "non-software") {
     phaseInputBinding,
     phaseOutputDeclarations: [],
     capabilities: ["asset.read", "completion.submit"],
-    budgets: [
-      { unit: "work-attempt" as const, limit: 3 },
-      { unit: "spend-nano" as const, limit: 2_000_000 },
-    ],
+    budgets: [{ unit: "work-attempt" as const, limit: 3 }],
   };
 }
 

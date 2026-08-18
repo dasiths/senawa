@@ -70,7 +70,7 @@ A later phase may not regress one of them.
 | 10 | Sessions, model routing, and steering | Not started |
 | 11 | Prove authored-surface parity | Tree compiles; comparison with the old template open |
 | 12 | The portal earns its density | Route fetching fixed; disclosure open |
-| 13 | Remove what the evidence condemns | Dead intent removed |
+| 13 | Remove what the evidence condemns | Intents and budget units cleared; two items blocked |
 | 14 | Name it v1 and rewrite every document in plain language | Renamed; every document rewrite open |
 | 15 | Restore the loop engineering narrative | README restored; guides and references open |
 
@@ -491,18 +491,18 @@ Acceptance:
 
 ## Phase 13: Remove what the evidence condemns
 
-* [ ] Delete or implement every declared but unimplemented intent. **Partial: publish-phase-output removed under D-021; authority.ts still refuses at least one intent as unimplemented.**
-* [ ] Remove unenforced budget units and planning code that pretends to use them.
+* [x] Delete or implement every declared but unimplemented intent.
+* [x] Remove unenforced budget units and planning code that pretends to use them.
 * [ ] Remove the dead resume binding after Phase 10 replaces it. **Blocked on Phase 10.**
 * [ ] Remove the old internal standard-template generator once Phase 11 no longer
   needs it as a comparison oracle. **Blocked on the Phase 11 comparison above.**
-* [ ] Compile workspace fault injection out of production builds. **No fault-injection symbol found in source; confirm the target still exists.**
+* [x] Compile workspace fault injection out of production builds. **Nothing to remove: no fault-injection symbol exists. The item described a plan that was never built.**
 
 Acceptance:
 
 * [ ] No exported production symbol lacks a production caller unless it is a
   documented adapter extension point.
-* [ ] Boundary and dependency checks still pass.
+* [x] Boundary and dependency checks still pass.
 
 ## Phase 14: Name it v1 and rewrite every document in plain language
 

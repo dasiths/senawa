@@ -803,7 +803,7 @@ describe("production workspace composition", () => {
             maxChunkBytes: 1_024,
           },
         }),
-        budgetReservation: { unit: "spend-nano", amount: 2_000 },
+        budgetReservation: { unit: "work-attempt", amount: 2_000 },
         baseRevision: fixture.baseRevision,
         integrationGatePolicyDigest: "f".repeat(64),
       },

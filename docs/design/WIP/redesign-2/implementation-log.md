@@ -1184,3 +1184,29 @@ tool was correct but five acceptance tests failed for a reason not yet
 understood, and guessing at fixture changes to make them pass would have been
 worse than stopping. The cause was ordinary once found: that harness requires a
 criterion to be satisfied, and the migration had passed empty criteria.
+
+## D-029: two budget units were vocabulary, not enforcement
+
+`BUDGET_UNITS` declared eight units. `elapsed-time-ms` appeared nowhere else in
+the repository, not even in a test. `spend-nano` appeared only in fixtures and
+was never read by any production path, so nothing could exceed it. Both are
+removed. Credits are out of scope for v1, which settles `spend-nano` regardless.
+
+The fixtures that carried a `spend-nano` budget were first renamed onto
+`work-attempt` and that was wrong: several already declared `work-attempt`, so
+the rename produced a duplicate the kernel refuses by design. They now drop the
+credit budget rather than rename it, which is what removing an unenforced unit
+should have meant.
+
+Two Phase 13 items resolved differently from how they were written:
+
+* Every one of the twenty-one declared intents has a handler. The
+  `unsupported-intent` refusal is the exhaustiveness guard on that switch, not
+  evidence of a missing implementation. The item is satisfied.
+* There is no workspace fault-injection symbol to compile out. The item
+  described something that was never built, so it is closed as nothing to do
+  rather than left open.
+
+Still blocked, and correctly so: the dead resume binding waits on Phase 10 to
+replace it, and the internal standard-template generator waits on Phase 11 to
+stop needing it as a comparison oracle.

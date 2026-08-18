@@ -230,7 +230,7 @@ describe("SQLite Phase 11A human authority", () => {
           escalationDigest,
           expectedLimit: 1,
           increaseBy: 4,
-          unit: "spend-nano",
+          unit: "work-attempt",
         }),
         admission(),
       ),

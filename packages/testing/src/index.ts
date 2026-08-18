@@ -209,7 +209,7 @@ export function createWorkerExecutionFixture(
         },
       ],
       capabilities,
-      budgets: [{ unit: "spend-nano", limit: 2_000 }],
+      budgets: [{ unit: "work-attempt", limit: 2_000 }],
     },
     deterministicSha256,
   );

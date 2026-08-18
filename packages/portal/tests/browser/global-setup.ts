@@ -846,7 +846,7 @@ function workerForRun(
       phaseInputBinding,
       phaseOutputDeclarations: [],
       capabilities,
-      budgets: [{ unit: "spend-nano", limit: 2_000 }],
+      budgets: [{ unit: "work-attempt", limit: 2_000 }],
     },
     productionSha256,
   );
