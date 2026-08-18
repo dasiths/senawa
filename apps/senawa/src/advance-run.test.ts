@@ -153,6 +153,61 @@ describe("advancing a run", () => {
     expect(next).toMatchObject({ kind: "dispatched", phaseKey: "verify" });
   });
 
+  it("recovers an in-flight dispatch instead of dispatching it twice", async () => {
+    const project = await authoredProject();
+    const paths = {
+      databasePath: join(project, "authority.db"),
+      assetDirectory: join(project, "assets"),
+    };
+    const started = await startAuthoredRun({
+      projectRoot: project,
+      ...paths,
+      dependencies,
+      repositoryId: "repository_restart",
+      runId: "run_restart",
+      principal: runtimePrincipal,
+      input: canonicalValue({ request: "Add a health endpoint" }),
+      currentTime: NOW,
+      repositoryBase: BASE,
+    });
+
+    // Every call opens the state root fresh, so this is what a restart sees.
+    const advance = () =>
+      advanceRun({
+        projectRoot: project,
+        ...paths,
+        repositoryId: "repository_restart",
+        runId: "run_restart",
+        principal: runtimePrincipal,
+        dependencies,
+        currentTime: NOW,
+        workflowInput: {
+          bindingDigest: sha256Digest("3".repeat(64)),
+          value: canonicalValue({ request: "Add a health endpoint" }),
+        },
+        repositoryBase: BASE,
+      });
+
+    expect(await advance()).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
+    expect(await advance()).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
+
+    const broker = new SqliteContextBroker({
+      databasePath: paths.databasePath,
+      dependencies: {
+        sha256: dependencies.sha256,
+        currentTime: () => NOW,
+        issueGrantToken: () => new Uint8Array(32),
+      },
+    });
+    try {
+      // A driver that re-dispatched would leave the phase with two agents.
+      const dispatches = broker.listWorkerDispatches("repository_restart", "run_restart");
+      expect(dispatches.map(({ dispatch }) => dispatch.dispatchId)).toEqual([started.dispatchId]);
+    } finally {
+      broker.close();
+    }
+  });
+
   it("refuses to advance a run it cannot find", async () => {
     const project = await authoredProject();
     await expect(

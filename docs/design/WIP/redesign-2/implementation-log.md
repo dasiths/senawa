@@ -1433,3 +1433,15 @@ suffix is restored.
 `senawa start` now blocks by default and reports what the run is waiting for,
 with `--detach` to return as soon as the first phase is dispatched. Live event
 streaming is still not built; the command reports outcomes, not a feed.
+
+## Restart recovery came from the shape of the driver
+
+`advanceRun` opens the state root, takes one step, and closes it. Nothing is
+held between calls, so a call after a crash sees exactly what a call before it
+would have seen. Restart recovery is therefore a property of the design rather
+than a feature bolted on.
+
+The test proves the part that could still go wrong: advancing twice over an
+unfinished dispatch leaves one dispatch, not two. A driver that re-dispatched
+would put a second agent on the same phase, which is worse than stalling. The
+test fails when the existing-dispatch check is removed.

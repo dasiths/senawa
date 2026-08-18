@@ -370,7 +370,7 @@ absorbs the unfinished acceptance from Phases 2, 3, and the former Phase 5.
   the command line. The portal remains optional.
 * [x] Make `senawa start` block and stream by default, with an explicit
   non-blocking option.
-* [ ] Recover an in-flight dispatch and continue the same loop after process
+* [x] Recover an in-flight dispatch and continue the same loop after process
   restart without duplicating accepted output or completion.
 * [ ] Prove there is no reachable state in which a run can neither make progress,
   await a declared human decision, fail, nor escalate.
