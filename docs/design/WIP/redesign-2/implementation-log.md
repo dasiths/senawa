@@ -2537,3 +2537,59 @@ dispatch, and which two refusals are load bearing.
 
 The remaining `alpha` sentences went with it. D-027 renamed the product and left
 prose behind in two design files.
+
+## Refusals that named a problem and no next step
+
+Six consumer-facing messages said what was wrong and stopped there. A refusal is
+the prose a consumer reads while something is going wrong, so it is the worst
+place to make them work out what to do:
+
+| Was | Is |
+|---|---|
+| A rejection must carry a reason | ...The next attempt is given it word for word. |
+| Nothing is waiting for a decision on this run | ...Run senawa status to see what it is waiting for. |
+| An answer must carry text | ...The agent that asked reads it as written. |
+| Nothing is waiting for an answer | ...Run senawa status to see what it is waiting for. |
+| not available as verified stored content | senawa never verified these bytes against their digest, so it will not serve them... |
+| Supervisor did not become ready | ...Read senawa service logs for what it refused. |
+
+The artifact one is the clearest gain. The old wording named a state a consumer
+has no vocabulary for; the new one says what senawa declined to do and why, which
+is the same fact in words that answer the question the reader is actually asking.
+
+## What this redesign accepted, changed, disproved, and deferred
+
+Recorded once, at the end, so a later reader can tell a settled contract from a
+guess that survived.
+
+**Accepted, and proven by executable checks.** An authored workflow drives real
+agents from the command line. Completion is granted against sensors that execute
+real code, never against a claim. A refusal publishes nothing and carries reasons
+the next attempt is given. The kernel stays free of clock, randomness, network,
+filesystem, and process. Worker and operator identities are separate and
+mutually unreachable. Every phase output is validated against the schema its
+phase declared before publication. There is no reachable outcome that means
+stuck, and that is a compile error rather than a claim.
+
+**Changed, with the reason recorded.** Authoring is YAML and there is no lowered
+document to hand-write. A phase declaring no gate presents an empty gate rather
+than no gate. A phase saying nothing about failure continues rather than failing
+fast, because the run-wide derivation takes `some` and the old default made every
+run fail-fast. Worker credentials and dispatch records are durable, because the
+process that dispatches and the process that serves the agent are different ones.
+A later attempt takes a task scope over rather than being refused by it.
+
+**Disproved, having been believed.** F-012 said a retry needed amendment
+machinery because a task scope is a one-shot claim; a retry never fences
+anything, and the amendment route was blocked anyway by the candidate-history
+refusal. The plan said the operations, portal, and security guides described an
+earlier surface; they described the current one accurately and omitted the run
+loop entirely. The dead-export acceptance read as one rule and was three, two of
+which condemn legitimate code.
+
+**Deferred, and said so where an author would otherwise assume otherwise.**
+Fan-out execution, which needs member materialisation by amendment and settles an
+authority question F-015 records. Session scope and model route fallback, both
+compiled and read by nothing. Portal progressive disclosure. Live steering.
+Whether a finished workflow ends its own run, which stays with the person who
+holds that authority.

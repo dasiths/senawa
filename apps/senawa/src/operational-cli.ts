@@ -506,7 +506,10 @@ async function startService(
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
     }
   }
-  return { output: "Supervisor did not become ready", exitCode: 1 };
+  return {
+    output: "Supervisor did not become ready. Read senawa service logs for what it refused.",
+    exitCode: 1,
+  };
 }
 
 function pageRequest(arguments_: readonly string[]) {

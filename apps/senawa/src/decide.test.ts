@@ -32,7 +32,10 @@ describe("recording a decision from the command line", () => {
     const result = decidePhase({ ...(await scope()), decision: "reject" });
     // The reason becomes the next attempt's input, so a rejection without one
     // spends an attempt and teaches nothing.
-    expect(result).toEqual({ exitCode: 2, output: "A rejection must carry a reason" });
+    expect(result).toEqual({
+      exitCode: 2,
+      output: "A rejection must carry a reason. The next attempt is given it word for word.",
+    });
   });
 
   it("names the run rather than leaking a storage error", async () => {

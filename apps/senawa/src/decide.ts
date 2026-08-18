@@ -29,7 +29,10 @@ export interface DecideInput {
  */
 export function decidePhase(input: DecideInput): CliResult {
   if (input.decision === "reject" && (input.reason ?? "").length === 0) {
-    return { exitCode: 2, output: "A rejection must carry a reason" };
+    return {
+      exitCode: 2,
+      output: "A rejection must carry a reason. The next attempt is given it word for word.",
+    };
   }
   let pending: {
     readonly expectedGraphRevision: string;
@@ -55,7 +58,11 @@ export function decidePhase(input: DecideInput): CliResult {
       candidate?.expectedGraphRevision === undefined ||
       candidate.exactObjectDigest === undefined
     ) {
-      return { exitCode: 1, output: "Nothing is waiting for a decision on this run" };
+      return {
+        exitCode: 1,
+        output:
+          "Nothing is waiting for a decision on this run. Run senawa status to see what it is waiting for.",
+      };
     }
     pending = {
       expectedGraphRevision: candidate.expectedGraphRevision,
@@ -122,7 +129,11 @@ export interface AnswerInput extends Omit<DecideInput, "decision" | "reason"> {
 
 /** Answers a worker's question, so a blocked agent is not the portal's problem alone. */
 export function answerQuestion(input: AnswerInput): CliResult {
-  if (input.answer.length === 0) return { exitCode: 2, output: "An answer must carry text" };
+  if (input.answer.length === 0)
+    return {
+      exitCode: 2,
+      output: "An answer must carry text. The agent that asked reads it as written.",
+    };
   let pending: { readonly sourceId: string; readonly title: string };
   let portal: SqlitePortalQueryAuthority;
   try {
@@ -138,7 +149,12 @@ export function answerQuestion(input: AnswerInput): CliResult {
     const asked = portal
       .listHumanNeeds(input.repositoryId, input.runId)
       .needs.find((need) => need.kind === "question");
-    if (asked === undefined) return { exitCode: 1, output: "Nothing is waiting for an answer" };
+    if (asked === undefined)
+      return {
+        exitCode: 1,
+        output:
+          "Nothing is waiting for an answer. Run senawa status to see what it is waiting for.",
+      };
     pending = { sourceId: asked.sourceId, title: asked.title };
   } finally {
     portal.close();

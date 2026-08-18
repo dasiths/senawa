@@ -560,13 +560,14 @@ unknown and fail closed". Both are exact; only one can be read once.
   language were corrected, and the driver is described where it lives.**
 * [x] Sweep every document in `docs/` and every package README into the plain
   register, including the ones this redesign did not touch.
-* [ ] Rewrite refusal messages, CLI help, and diagnostics in the same register,
+* [x] Rewrite refusal messages, CLI help, and diagnostics in the same register,
   because they are the prose a consumer reads most and the only prose they read
-  while something is going wrong.
+  while something is going wrong. **Six messages named a problem and no next
+  step; each now says what to do.**
 * [ ] Replace jargon that survives with the word the canonical behaviours use,
   and define any term that genuinely cannot be replaced where a reader first
   meets it.
-* [ ] Record which contracts were accepted, changed, disproved, or deferred.
+* [x] Record which contracts were accepted, changed, disproved, or deferred.
 
 Acceptance:
 
@@ -576,7 +577,7 @@ Acceptance:
   prompt.
 * [ ] No document explains a behaviour in words the canonical behaviours table
   says more simply.
-* [ ] Every refusal a consumer can trigger names what failed, where, and what to
+* [x] Every refusal a consumer can trigger names what failed, where, and what to
   do next, in one sentence.
 
 ## Phase 15: Restore the loop engineering narrative

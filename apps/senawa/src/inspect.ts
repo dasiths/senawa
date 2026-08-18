@@ -95,7 +95,10 @@ export function readArtifact(options: InspectOptions, artifactId: string): CliRe
       // An unverified artifact is deliberately unreadable: serving bytes whose
       // digest was never checked would make evidence indistinguishable from
       // whatever happened to be on disk.
-      return { exitCode: 1, output: `${artifactId}: not available as verified stored content` };
+      return {
+        exitCode: 1,
+        output: `${artifactId}: senawa never verified these bytes against their digest, so it will not serve them. Run senawa artifact list to see which artifacts are stored.`,
+      };
     }
     return { exitCode: 0, output: content.content };
   } finally {
