@@ -423,8 +423,7 @@ Acceptance:
 * [x] Wire `SenawaWorkerApi` and the credential store into the daemon's IPC
   handler so the documented worker verbs answer.
 * [x] Drive the agent side end to end from the command line: dispatch, read
-  context and output schema, and complete. **Advancing the run after a real
-  handoff still fails canonicalisation in the gate evaluation; see the log.**
+  context and output schema, complete, and see the run advance.
 
 ## Phase 10: Sessions, model routing, and steering
 

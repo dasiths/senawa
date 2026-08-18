@@ -5,11 +5,13 @@ import {
   canonicalValue,
   createPhaseCandidate,
   createSensorReading,
+  defineGate,
   digestAccountingAssessment,
   digestPhaseOutputSet,
   digestSelectedTaskSet,
   evaluateGate,
   type PhaseOutputPublication,
+  type Sha256,
   type Sha256Digest,
   sha256Digest,
   type TaskGenerationReference,
@@ -225,7 +227,7 @@ async function step(
   // facts, so anything still sitting in the outbox has to be handed over first.
   deliverFacts(input, supervisor, broker, state, dispatchId);
 
-  const gate = gateFor(snapshot, phase);
+  const gate = gateFor(snapshot, phase, input.dependencies.sha256);
   const measured = gate === undefined ? [] : await readGate(input, snapshot, gate);
   // The candidate must cover every active task the phase owns, not only the one
   // this dispatch carried.
@@ -381,6 +383,7 @@ function gateSensorKeys(gate: NonNullable<ReturnType<typeof gateFor>>): readonly
 function gateFor(
   snapshot: ConfigurationSnapshot,
   phase: SnapshotPhase,
+  sha256: Sha256,
 ):
   | (Parameters<typeof evaluateGate>[0] & {
       readonly blocking?: readonly GateRule[];
@@ -388,7 +391,15 @@ function gateFor(
     })
   | undefined {
   const gateKey = phase.exit?.gate;
-  if (gateKey === undefined) return undefined;
+  // A phase may declare no gate. Every downstream record still expects gate
+  // evidence, so an empty gate is the honest shape: nothing to satisfy, and
+  // nothing pretending to have been checked.
+  if (gateKey === undefined) {
+    return defineGate(
+      { advisory: [], blocking: [], key: `${phase.key}-open` } as never,
+      sha256,
+    ) as never;
+  }
   const entry = snapshot.gates.find((candidate) => candidate.key === gateKey);
   if (entry === undefined) return undefined;
   return (entry.value as unknown as SnapshotGateValue).definition as never;
@@ -478,6 +489,7 @@ function submit(
   const commandId = `command_${suffix}-${input.dependencies.sha256
     .digest(canonicalBytes(canonicalValue({ runId: input.runId, suffix })))
     .slice(0, 24)}`;
+  refuseUncanonicalPayload(intent, payload);
   let allocation = 0;
   const receipt = supervisor.commandAuthority.submit(
     decodeCommandEnvelope({
@@ -589,4 +601,31 @@ function upstreamOutputs(
     });
   }
   return found;
+}
+
+/**
+ * Names the field a payload cannot canonicalise on.
+ *
+ * `canonicalValue` refuses the whole object without saying which part offended,
+ * which turns a one-field mistake into a hunt through the entire submission.
+ */
+function refuseUncanonicalPayload(intent: string, payload: unknown): void {
+  try {
+    canonicalValue(payload);
+    return;
+  } catch {
+    // Fall through to locate the offending path.
+  }
+  const locate = (value: unknown, path: string): string => {
+    if (value === null || typeof value !== "object") return path;
+    for (const [key, entry] of Object.entries(value)) {
+      try {
+        canonicalValue(entry as never);
+      } catch {
+        return locate(entry, `${path}.${key}`);
+      }
+    }
+    return path;
+  };
+  throw new TypeError(`Cannot submit ${intent}: ${locate(payload, "payload")} is not canonical`);
 }

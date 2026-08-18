@@ -151,6 +151,12 @@ describe("the command surface end to end", () => {
         agent,
       );
       expect(refused.stdout).toContain("does not satisfy plan");
+
+      // The whole point of the redesign: an authored workflow, driven from the
+      // command line, reaching the end on the strength of an agent's work.
+      const repository = /^repository: (.+)$/m.exec(started.stdout)?.[1] ?? "";
+      const advanced = await senawa(project, stateRoot, "advance", repository, "run_agent");
+      expect(advanced.stdout).toContain("finished");
     } finally {
       await senawa(project, stateRoot, "service", "stop");
     }

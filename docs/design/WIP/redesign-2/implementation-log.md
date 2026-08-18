@@ -1961,3 +1961,37 @@ plan should leave a fact for `advance` to act on, not start driving.
 Still open: `advance` after a real handoff fails with "Canonical values must
 contain only finite JSON values and plain objects" while submitting the gate
 evaluation. The work is durable and the run is not yet moving past it.
+
+## The loop closes
+
+```text
+senawa start request.json run_e2e     -> dispatch + credential
+senawa worker complete --output plan=plan.json -> accepted
+senawa advance repository run_e2e     -> finished
+```
+
+An authored workflow now drives an agent to completion from the command line.
+That sentence is what this redesign was for.
+
+Two defects between the accepted submission and `finished`, and the first one
+paid for a diagnostic worth keeping. `canonicalValue` refuses a whole payload
+without saying which field offended, so `submit` now locates the offending path
+first and refuses with `payload.gateDefinition is not canonical`. Hunting that
+by hand through a candidate submission would have taken far longer than writing
+the locator.
+
+The field was `gateDefinition: undefined`, because the standard template's plan
+phase declares no gate and an explicit `undefined` property is not canonical.
+Omitting the key made the payload canonical and the authority refuse it instead:
+`evaluate-gate` requires a gate definition, and every record downstream expects
+gate evidence.
+
+So a phase with no gate now presents an empty gate rather than no gate. Nothing
+to satisfy, and nothing pretending to have been checked, which is the honest
+shape and leaves every downstream invariant intact. Changing the authority to
+make gate evidence optional would have spread that absence through candidates,
+authority decisions, and closure.
+
+The last refusal on the way was `command-id-conflict`: the earlier failed
+`evaluate-gate` had already cached its refusal under the same command identity.
+That is the trap documented for operators two commits ago, met from the inside.
