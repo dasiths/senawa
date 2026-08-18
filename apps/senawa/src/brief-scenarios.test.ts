@@ -95,6 +95,23 @@ describe("what an author can state", () => {
     expect(diagnostics.map(({ message }) => message).join(" ")).toContain("aproove");
   });
 
+  it("lowers ordered model routes with their per-route limits", async () => {
+    const loaded = await loadAuthoredWorkflow(process.cwd(), dependencies.sha256);
+    const snapshot = loaded.snapshot;
+    if (snapshot === undefined) throw new Error("the repository tree does not compile");
+
+    const planner = snapshot.modelPolicies
+      .map((entry) => entry.value as { readonly key: string; readonly routes: readonly unknown[] })
+      .find((policy) => policy.key === "planner");
+    if (planner === undefined) throw new Error("planner has no model policy");
+
+    // The repository's planner declares two routes with different turn budgets,
+    // so order and per-route limits both have to survive lowering.
+    expect(planner.routes.length).toBe(2);
+    expect(planner.routes[0]).toMatchObject({ model: "gpt-5", maxTurns: 24 });
+    expect(planner.routes[1]).toMatchObject({ model: "gpt-5-mini", maxTurns: 12 });
+  });
+
   it("lowers an authored completion evidence view", async () => {
     const loaded = await loadAuthoredWorkflow(process.cwd(), dependencies.sha256);
     const snapshot = loaded.snapshot;

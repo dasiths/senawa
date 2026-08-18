@@ -1752,3 +1752,23 @@ runtime, or not at all.
 It is now refused at authoring time, naming the phase that already fans out and
 saying v1 supports one level. The bound is a property of the D-025 deviation
 rather than an arbitrary limit, so it moves when members become phases.
+
+## Session scope is threaded, and then nobody reads it
+
+An authored `session` was almost the fourth discarded value. It is not: it
+lowers to `resumeAcrossAttempts` on the phase executor, and the repository's own
+`implementor` writing `session: element` produces `resumeAcrossAttempts: false`.
+Checking before fixing was worth the minute it cost.
+
+The discard is one layer later. `resumeAcrossAttempts` is compiled, validated by
+the strict reader, and read by no runtime or driver code at all. The value is
+correct, durable, and inert.
+
+Honouring it needs what Phase 10 is for: a session identity the dispatch carries,
+a turn position recorded against it, and a rule for reusing a session rather than
+starting one. That is a feature rather than plumbing, so it stays open rather
+than being ticked on the strength of the value existing.
+
+Ordered model routes are done and now proven: the repository's planner declares
+two routes with different turn budgets, and a test asserts both the order and
+the per-route limits survive lowering.

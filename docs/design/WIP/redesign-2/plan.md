@@ -423,7 +423,7 @@ Acceptance:
 Agent policy belongs together because session scope, route changes, and steering
 all change what an attempt actually sees.
 
-* [ ] Make authored model policy support ordered routes and per-route turn,
+* [x] Make authored model policy support ordered routes and per-route turn,
   submission, credit, and spend ceilings. Keep one route as shorthand.
 * [ ] Make session scope durable across phases by declared agent identity and
   fresh per fan-out element by default. Replace the current strict-equality
