@@ -1210,3 +1210,49 @@ Two Phase 13 items resolved differently from how they were written:
 Still blocked, and correctly so: the dead resume binding waits on Phase 10 to
 replace it, and the internal standard-template generator waits on Phase 11 to
 stop needing it as a comparison oracle.
+
+## F-010: writing the guide found a refusal that lied
+
+Rewriting the authoring guide meant compiling every example rather than trusting
+the draft. Three of them were wrong, and the third exposed a defect.
+
+* Model routes are objects with a `model` key, not bare model names. The draft
+  wrote a list of strings.
+* Every gate needs at least one blocking rule. The draft showed an advisory-only
+  gate, which senawa refuses because it measures without ever refusing.
+* An invalid prompt template threw out of `lowerAuthoredWorkflow` instead of
+  becoming a diagnostic.
+
+The third one mattered beyond the guide. `doctorAuthored` treats a thrown loader
+as "no authored tree here" and falls back to the JSON document path, so the
+consumer saw:
+
+```text
+.senawa/workflow.json: unable to read workflow configuration (ENOENT)
+```
+
+They have no `workflow.json`, were never asked for one, and the actual problem
+was a typo in a prompt. The refusal named a file the author never wrote and said
+nothing about the file they did.
+
+Two fixes:
+
+* `readAgents` catches the template error and reports
+  `invalid-prompt-template` against the prompt path.
+* `isMissingDocument` now only counts a read failure of one of the three
+  authored documents. A missing prompt or schema means the tree exists and is
+  wrong, not that it is absent.
+
+The refusal now reads:
+
+```text
+./.senawa: invalid (2 diagnostics)
+- [invalid-prompt-template] prompts/implementor.md: Invalid prompt template token at character offset 20
+- [unknown-reference] workflow.yaml#/phases/1/agent: Unknown agent implementor
+```
+
+A regression test holds the distinction, because the fallback is a reasonable
+thing to reintroduce by accident.
+
+The stale migration hint pointing at `senawa.json` and "the earlier alpha
+binary" is gone. D-027 made it false.

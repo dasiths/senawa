@@ -350,6 +350,19 @@ function readAgents(
     }
     // Declaring input paths by hand is what the compiler already cross-checks
     // against the template, so read them from the template instead.
+    let inputPaths: readonly string[];
+    try {
+      inputPaths = [...parsePromptTemplate(text).inputPaths].sort(compare);
+    } catch (error) {
+      add(
+        collector,
+        "invalid-prompt-template",
+        prompt,
+        "",
+        error instanceof Error ? error.message : "Prompt template is invalid",
+      );
+      continue;
+    }
     agents.set(key, {
       key,
       prompt,
@@ -357,7 +370,7 @@ function readAgents(
       routes,
       session,
       credits: typeof raw.credits === "number" && raw.credits > 0 ? raw.credits : 1,
-      inputPaths: [...parsePromptTemplate(text).inputPaths].sort(compare),
+      inputPaths,
     });
   }
   return agents;

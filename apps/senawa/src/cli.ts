@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import {
+  AUTHORED_DOCUMENT_NAMES,
   type ConfigurationResourceReader,
   createAuthoredTemplateFiles,
   doctorWorkflowConfiguration,
@@ -170,8 +171,15 @@ async function doctorAuthored(
 }
 
 /** True when a diagnostic only says the authored tree is not there at all. */
-function isMissingDocument(diagnostic: { readonly code: string }): boolean {
-  return diagnostic.code === "resource-read-failed";
+function isMissingDocument(diagnostic: {
+  readonly code: string;
+  readonly locator: string;
+}): boolean {
+  // A missing prompt or schema means the tree exists and is wrong, not absent.
+  return (
+    diagnostic.code === "resource-read-failed" &&
+    (AUTHORED_DOCUMENT_NAMES as readonly string[]).includes(diagnostic.locator)
+  );
 }
 
 async function doctor(
@@ -185,9 +193,7 @@ async function doctor(
   } catch (error) {
     const code = safeFilesystemCode(error);
     const migrationHint =
-      isDefaultPath && code === "ENOENT"
-        ? "\nRun senawa init to create it. Earlier alpha files at senawa.json must be moved to .senawa/workflow.json or passed explicitly."
-        : "";
+      isDefaultPath && code === "ENOENT" ? "\nRun senawa init to create it." : "";
     return {
       output: `${path}: unable to read workflow configuration (${code})${migrationHint}`,
       exitCode: 1,

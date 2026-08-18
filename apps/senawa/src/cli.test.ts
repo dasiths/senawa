@@ -81,6 +81,29 @@ describe("renderCli", () => {
 });
 
 describe("runCli", () => {
+  it("reports a broken authored tree instead of calling it absent", async () => {
+    const memory = new MemoryCliDependencies();
+    memory.checkAuthored = () =>
+      Promise.resolve({
+        diagnostics: [
+          {
+            code: "resource-read-failed",
+            locator: "prompts/planner.md",
+            pointer: "",
+            message: "Could not read prompt prompts/planner.md",
+          },
+        ],
+      });
+
+    const result = await runCli(["doctor"], memory);
+
+    // A missing prompt means the tree is wrong, not missing, so doctor must not
+    // fall back to reporting a workflow.json the author never wrote.
+    expect(result.output).toContain("prompts/planner.md");
+    expect(result.output).not.toContain("workflow.json");
+    expect(result.exitCode).toBe(1);
+  });
+
   it("doctors a valid document without an execution dependency", async () => {
     const memory = new MemoryCliDependencies();
     memory.files.set("workflow.json", JSON.stringify(createExampleWorkflowConfiguration()));
@@ -200,7 +223,7 @@ describe("runCli", () => {
 
     expect(await runCli(["doctor"], memory)).toEqual({
       output:
-        ".senawa/workflow.json: unable to read workflow configuration (ENOENT)\nRun senawa init to create it. Earlier alpha files at senawa.json must be moved to .senawa/workflow.json or passed explicitly.",
+        ".senawa/workflow.json: unable to read workflow configuration (ENOENT)\nRun senawa init to create it.",
       exitCode: 1,
     });
     expect(memory.readPaths).toEqual([DEFAULT_WORKFLOW_PATH]);
@@ -428,7 +451,7 @@ describe("built executable", () => {
       execute(process.execPath, [executable.pathname, "doctor"], { cwd: migrationRoot }),
     ).rejects.toMatchObject({
       code: 1,
-      stdout: expect.stringContaining("Earlier alpha files at senawa.json"),
+      stdout: expect.stringContaining("Run senawa init to create it."),
     });
     expect(
       (
@@ -493,6 +516,7 @@ class MemoryCliDependencies implements CliDependencies {
   readonly files = new Map<string, string>();
   readonly directories = new Set<string>(["."]);
   readonly symlinks = new Set<string>();
+  checkAuthored?: NonNullable<CliDependencies["checkAuthored"]>;
   readonly sha256 = {
     digest(bytes: Uint8Array) {
       let accumulator = 0x811c9dc5;
