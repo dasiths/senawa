@@ -1,10 +1,12 @@
 import { canonicalValue, sha256Digest } from "@senawa/kernel";
+import { SqliteAuthority } from "@senawa/storage-sqlite";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { advanceRun } from "./advance-run.js";
 import {
   agentTurn,
   BASE,
+  compileScenario,
   dependencies,
   disposeScenarios,
   NOW,
@@ -12,6 +14,7 @@ import {
   startScenario,
 } from "./brief-scenarios.js";
 import { decidePhase } from "./decide.js";
+import { runGates } from "./run-gates.js";
 
 afterEach(disposeScenarios);
 
@@ -31,6 +34,24 @@ function advance(scenario: Scenario) {
     repositoryBase: BASE,
   });
 }
+
+describe("fan-out in sequence", () => {
+  it("refuses a fan-out that does not name the shape of one element", async () => {
+    const diagnostics = await compileScenario({ fanOut: "no-item-schema" });
+
+    // A member reads one item, so the element schema is not optional.
+    expect(diagnostics.map(({ code }) => code)).toContain("missing-field");
+    expect(diagnostics.map(({ message }) => message).join(" ")).toContain(
+      "must name that item's schema",
+    );
+  });
+
+  it("compiles a fan-out that names both the collection and the element", async () => {
+    const scenario = await startScenario("fanout", { fanOut: "complete" });
+
+    expect(scenario.phaseKey).toBe("define");
+  });
+});
 
 describe("one phase in sequence", () => {
   it("dispatches the assignment when the run starts", async () => {
@@ -143,6 +164,57 @@ describe("one phase in sequence", () => {
 
     if (decision.exitCode !== 0) throw new Error(decision.output);
     expect(await advance(scenario)).toEqual({ kind: "finished" });
+  });
+
+  it("carries the human's reason back when they reject", async () => {
+    const scenario = await startScenario("rejected", { approval: true });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+    await advance(scenario);
+
+    const decision = decidePhase({
+      ...scenario.paths,
+      repositoryId: scenario.repositoryId,
+      runId: scenario.runId,
+      decision: "reject",
+      reason: "the endpoint returns the wrong status",
+      principal: runtimePrincipal,
+      dependencies,
+      currentTime: NOW,
+    });
+
+    if (decision.exitCode !== 0) throw new Error(decision.output);
+    // The reason has to survive the decision, because the next attempt is a
+    // guess without it.
+    const authority = new SqliteAuthority({ ...scenario.paths, dependencies });
+    try {
+      const recorded = JSON.stringify(
+        authority.queryReceiptHistory(scenario.repositoryId, scenario.runId),
+      );
+      expect(recorded).toContain("the endpoint returns the wrong status");
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("lets an agent measure the gate without spending an attempt", async () => {
+    const scenario = await startScenario("selfcheck", { sensorCommand: "false" });
+
+    const first = await runGates({
+      projectRoot: scenario.project,
+      phaseKey: "define",
+      dependencies,
+    });
+    const second = await runGates({
+      projectRoot: scenario.project,
+      phaseKey: "define",
+      dependencies,
+    });
+
+    // A self-check reports the same measurement twice and changes nothing, so
+    // an agent can ask before submitting.
+    expect(first.exitCode).toBe(1);
+    expect(second).toEqual(first);
+    expect(await advance(scenario)).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
   });
 
   it("advances to the next phase once the first closes", async () => {

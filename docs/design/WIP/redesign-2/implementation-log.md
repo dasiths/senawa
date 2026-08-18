@@ -1563,3 +1563,35 @@ defects, none of which the existing suite could reach.
 The last one is worth generalising: a driver that retries a command must not
 reuse a command id across a state change that should alter the answer. Where the
 answer depends on something outside the command, ask first.
+
+## Fan-out authoring, and a guide that was wrong about it
+
+A fan-out phase needs three schemas, not two: the collection it iterates, the
+element one member reads, and the output a member produces. Omitting the element
+schema is refused clearly:
+
+```text
+- [missing-field] workflow.yaml#/phases/1/input: A fan-out member reads one item, so the phase must name that item's schema
+```
+
+The authoring guide's fan-out example omitted `input`, so an author following it
+would have hit that refusal with no idea why. The example now names all three
+and quotes the refusal, and a scenario test holds the refusal so the example
+cannot drift from it again.
+
+This is the second time writing a test against the brief found the guide wrong
+rather than the code. Compiling every example is worth the minutes it costs.
+
+## What the sequence diagrams do and do not cover yet
+
+Fifteen branches of the brief's two diagrams are tests. The rest need machinery
+that does not exist:
+
+* A rerun after a refusal needs task supersession, recorded as F-012.
+* Escalation to a human with waive, mark done, steer, or end responses has its
+  refusals covered but not its acceptance path, which needs the supervisor
+  socket running inside the test.
+* Every fan-out branch past compilation needs members as phases, which is the
+  D-025 deviation.
+
+Those are named here rather than left as silence in the suite.

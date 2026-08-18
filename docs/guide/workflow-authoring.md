@@ -108,11 +108,18 @@ A phase can run once per item in an earlier phase's output:
     needs: [plan]
     forEach: plan.tasks
     collection: schemas/task-collection.schema.json
+    input: schemas/task.schema.json
+    output: schemas/implementation.schema.json
 ```
 
-`collection` names the shape of the array being iterated. Senawa validates the
-collection separately from the phase output, so you say it rather than letting it
-be inferred.
+`collection` names the shape of the array being iterated. `input` names the shape
+of one element, because a member reads one item rather than the whole list.
+Senawa validates the two separately, so you say both rather than letting either
+be inferred. Omitting `input` is refused:
+
+```text
+- [missing-field] workflow.yaml#/phases/1/input: A fan-out member reads one item, so the phase must name that item's schema
+```
 
 ## agents.yaml
 

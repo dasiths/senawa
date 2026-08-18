@@ -52,6 +52,8 @@ export interface ScenarioOptions {
   readonly approval?: boolean;
   /** Refuses any output that is not an object with a boolean `verified`. */
   readonly strictOutput?: boolean;
+  /** Adds a fan-out phase, optionally omitting the element schema it needs. */
+  readonly fanOut?: "complete" | "no-item-schema";
 }
 
 export interface Scenario {
@@ -66,6 +68,15 @@ const roots = new Set<string>();
 export async function disposeScenarios(): Promise<void> {
   await Promise.all([...roots].map((root) => rm(root, { recursive: true, force: true })));
   roots.clear();
+}
+
+/** Compiles an authored project without starting a run, for authoring refusals. */
+export async function compileScenario(
+  options: ScenarioOptions,
+): Promise<readonly { readonly code: string; readonly message: string }[]> {
+  const project = await authoredProject(options);
+  const loaded = await loadAuthoredWorkflow(project, dependencies.sha256);
+  return loaded.diagnostics ?? [];
 }
 
 /** Builds an authored project and starts a run against it. */
@@ -256,7 +267,39 @@ async function authoredProject(options: ScenarioOptions): Promise<string> {
       })}\n`,
     );
   }
+  await writeFile(
+    join(configuration, "schemas", "tasks.schema.json"),
+    `${JSON.stringify({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $id: "urn:senawa:tasks",
+      type: "array",
+      items: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+    })}\n`,
+  );
+  await writeFile(
+    join(configuration, "schemas", "task.schema.json"),
+    `${JSON.stringify({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $id: "urn:senawa:task",
+      type: "object",
+      required: ["id"],
+      properties: { id: { type: "string" } },
+      additionalProperties: true,
+    })}\n`,
+  );
   return root;
+}
+
+function fanOutPhase(options: ScenarioOptions): string {
+  if (options.fanOut === undefined) return "";
+  return `
+  - name: implement
+    agent: verifier
+    needs: [define]
+    forEach: define.tasks
+    collection: schemas/tasks.schema.json
+${options.fanOut === "complete" ? "    input: schemas/task.schema.json\n" : ""}    output: schemas/verification.schema.json
+`;
 }
 
 function workflow(options: ScenarioOptions): string {
@@ -278,7 +321,7 @@ phases:
     agent: definer
     output: schemas/definition.schema.json
     gates: [check]${options.approval === true ? "\n    approve: true" : ""}
-${second}`;
+${second}${fanOutPhase(options)}`;
 }
 
 function sensors(options: ScenarioOptions): string {
