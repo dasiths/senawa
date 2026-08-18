@@ -49,9 +49,21 @@ when it runs.
 get to continue by insisting, and it cannot lower the bar it is measured
 against.
 
+A **frozen set** is the part of a workflow the run may not weaken while it is
+running. Attempt limits, blocking gates, and declared outputs are frozen: an
+agent that could relax them would optimise against the measurement rather than
+the work.
+
 Four things keep this honest: deterministic sensors that execute real code, a
 journal no agent can write, a frozen set the optimizer cannot weaken, and a
 human who decides what better means.
+
+This is loop engineering: the system is a graph of loops, and the design work is
+deciding what each loop optimises, what measures it, and who may change the
+target. The inner loop optimises one phase against its gates. The middle loop
+optimises the run against its workflow. The outer loop optimises the workflow
+against what the human actually wanted, and only that loop may change the
+target.
 
 ## Documentation
 

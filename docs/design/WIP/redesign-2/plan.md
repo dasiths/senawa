@@ -72,7 +72,7 @@ A later phase may not regress one of them.
 | 12 | The portal earns its density | Route fetching fixed; disclosure open |
 | 13 | Remove what the evidence condemns | Intents and budget units cleared; two items blocked |
 | 14 | Name it v1 and rewrite every document in plain language | Renamed; every document rewrite open |
-| 15 | Restore the loop engineering narrative | README restored; guides and references open |
+| 15 | Restore the loop engineering narrative | README carries the loops, the vocabulary, and the honesty |
 
 ## Phase 0: Settle the shape
 
@@ -556,13 +556,13 @@ way it is. They belong back once the system can demonstrate them.
 * [x] Restore the three nested loops, naming who runs each, over what period, and
   where the human sits.
 * [x] Restore sensor, gate, anchor, and frozen set, each defined where a reader
-  first meets it. **Partial: frozen set is named but not defined.**
+  first meets it.
 * [x] Restore backpressure as the organising idea, showing completion granted
   rather than claimed against the implemented handshake.
-* [ ] Restore the loop engineering and graph-of-loops references, and state what
+* [x] Restore the loop engineering and graph-of-loops references, and state what
   keeps the system honest: deterministic sensors that execute real code, a
   journal no agent can write, a frozen set the optimizer cannot weaken, and a
-  human who decides what better means. **Partial: the honesty sentence landed; the references did not.**
+  human who decides what better means.
 * [ ] Sweep every document for unsupported claims and undescribed capabilities.
 * [ ] Record which promises v1 keeps, changes, or drops.
 
