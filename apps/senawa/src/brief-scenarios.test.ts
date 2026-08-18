@@ -73,6 +73,27 @@ describe("what an author can state", () => {
     expect(await advance(scenario)).toEqual({ kind: "finished" });
   });
 
+  it("refuses a field it does not know rather than ignoring it", async () => {
+    const diagnostics = await compileScenario({ unknownField: true });
+
+    // A misspelled `approve` configured nothing and said nothing, which reads
+    // as the feature being broken rather than the spelling being wrong.
+    expect(diagnostics.map(({ code }) => code)).toContain("unknown-field");
+    expect(diagnostics.map(({ message }) => message).join(" ")).toContain("aproove");
+  });
+
+  it("lowers an authored completion evidence view", async () => {
+    const loaded = await loadAuthoredWorkflow(process.cwd(), dependencies.sha256);
+    const snapshot = loaded.snapshot;
+    if (snapshot === undefined) throw new Error("the repository tree does not compile");
+
+    // The repository's own workflow reads implement's evidence from verify.
+    // Before this the field was accepted and discarded, so an author who wrote
+    // it got silence.
+    const views = snapshot.completionEvidenceViews.map((entry) => entry.key);
+    expect(views).toContain("verify-from-implement");
+  });
+
   it("compiles the attempt limit an author writes", async () => {
     const diagnostics = await compileScenario({ attempts: 2 });
 

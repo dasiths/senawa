@@ -196,7 +196,14 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
         };
       })
       .sort((left, right) => compare(left.key, right.key)),
-    completionEvidenceViews: [],
+    completionEvidenceViews: phases.flatMap((phase) =>
+      phase.completionEvidenceFrom.map((view) => ({
+        key: `${phase.name}-from-${view.phase}`,
+        phase: view.phase,
+        evidenceKinds: [...view.kinds].sort(compare),
+        sensitivityCeiling: view.maxSensitivity,
+      })),
+    ),
     forEach: phases
       .filter((phase) => phase.forEach !== undefined)
       .map((phase) => {
@@ -285,6 +292,7 @@ interface AuthoredPhase {
   };
   readonly onFailure: string;
   readonly completionEvidence: AuthoredCompletionEvidence;
+  readonly completionEvidenceFrom: readonly AuthoredCompletionEvidenceView[];
   readonly iteration: AuthoredIteration;
   readonly approveRole?: string;
 }
@@ -749,6 +757,11 @@ function readPhases(
   );
   const phases: AuthoredPhase[] = [];
   const seen = new Set<string>();
+  const declaredNames = new Set(
+    value.phases.flatMap((entry) =>
+      isRecord(entry) && typeof entry.name === "string" ? [entry.name] : [],
+    ),
+  );
   for (const [index, raw] of value.phases.entries()) {
     const pointer = `/phases/${index}`;
     if (!isRecord(raw)) {
@@ -756,6 +769,7 @@ function readPhases(
       continue;
     }
     const name = requiredString(collector, path, pointer, raw, "name");
+    refuseUnknownFields(collector, path, pointer, raw, PHASE_FIELDS);
     const agent = requiredString(collector, path, pointer, raw, "agent");
     const output = readOutput(collector, path, pointer, raw);
     if (name === undefined || agent === undefined || output === undefined) continue;
@@ -845,6 +859,13 @@ function readPhases(
       ...(forEach === undefined ? {} : { forEach }),
       onFailure,
       completionEvidence: readCompletionEvidence(collector, path, pointer, raw),
+      completionEvidenceFrom: readCompletionEvidenceFrom(
+        collector,
+        path,
+        pointer,
+        raw,
+        declaredNames,
+      ),
       iteration: readIteration(collector, path, pointer, raw, defaults),
       ...(approveRole === undefined ? {} : { approveRole }),
     });
@@ -858,6 +879,112 @@ function readPhases(
  * These were constants until now, which meant the loop the product is built
  * around was the one thing an author could not describe.
  */
+/** One earlier phase's accepted completion evidence, made readable to a later one. */
+export interface AuthoredCompletionEvidenceView {
+  readonly phase: string;
+  readonly kinds: readonly string[];
+  readonly maxSensitivity: "public" | "internal" | "confidential" | "restricted";
+}
+
+/**
+ * Reads the phases whose accepted completion evidence this phase may read.
+ *
+ * The kinds are an allowlist and the ceiling caps what may cross, so a
+ * confidential attachment cannot reach a phase cleared for less.
+ */
+function readCompletionEvidenceFrom(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+  declaredPhases: ReadonlySet<string>,
+): readonly AuthoredCompletionEvidenceView[] {
+  const declared = raw.completionEvidenceFrom;
+  if (declared === undefined) return [];
+  if (!Array.isArray(declared)) {
+    add(collector, "invalid-field", path, `${pointer}/completionEvidenceFrom`, "Must be a list");
+    return [];
+  }
+  const views: AuthoredCompletionEvidenceView[] = [];
+  for (const [index, entry] of declared.entries()) {
+    const at = `${pointer}/completionEvidenceFrom/${index}`;
+    if (!isRecord(entry)) {
+      add(collector, "invalid-field", path, at, "Must be a mapping");
+      continue;
+    }
+    const phase = requiredString(collector, path, at, entry, "phase");
+    if (phase === undefined) continue;
+    if (!declaredPhases.has(phase)) {
+      add(collector, "unknown-reference", path, `${at}/phase`, `Unknown phase ${phase}`);
+      continue;
+    }
+    const kinds = Array.isArray(entry.kinds)
+      ? entry.kinds.filter((kind): kind is string => typeof kind === "string")
+      : [];
+    if (kinds.length === 0) {
+      add(collector, "missing-field", path, `${at}/kinds`, "Name at least one evidence kind");
+      continue;
+    }
+    const ceiling = typeof entry.maxSensitivity === "string" ? entry.maxSensitivity : "internal";
+    if (!OUTPUT_SENSITIVITIES.has(ceiling)) {
+      add(
+        collector,
+        "invalid-field",
+        path,
+        `${at}/maxSensitivity`,
+        `Must be one of ${[...OUTPUT_SENSITIVITIES].sort().join(", ")}`,
+      );
+      continue;
+    }
+    views.push({
+      phase,
+      kinds,
+      maxSensitivity: ceiling as AuthoredCompletionEvidenceView["maxSensitivity"],
+    });
+  }
+  return views;
+}
+
+/** Every field a phase may declare. A typo here silently did nothing before. */
+const PHASE_FIELDS = new Set([
+  "name",
+  "agent",
+  "needs",
+  "input",
+  "output",
+  "gates",
+  "approve",
+  "forEach",
+  "collection",
+  "onFailure",
+  "completionEvidence",
+  "completionEvidenceFrom",
+  "attempts",
+  "onGateRejected",
+  "onApprovalRejected",
+  "onUpstreamChanged",
+  "onExhausted",
+]);
+
+/**
+ * Refuses a field the reader does not know.
+ *
+ * Ignoring an unknown field means a misspelled `approve` configures nothing and
+ * says nothing, which reads as the feature being broken rather than misspelled.
+ */
+function refuseUnknownFields(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+  allowed: ReadonlySet<string>,
+): void {
+  for (const key of Object.keys(raw).sort()) {
+    if (allowed.has(key)) continue;
+    add(collector, "unknown-field", path, `${pointer}/${key}`, `${key} is not a phase field`);
+  }
+}
+
 /** The workflow-level defaults block, read with the same rules as a phase. */
 function asDefaults(value: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
   return isRecord(value.defaults) ? value.defaults : {};

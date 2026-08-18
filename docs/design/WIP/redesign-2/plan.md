@@ -63,7 +63,7 @@ A later phase may not regress one of them.
 | 3 | The consumer command line | Complete |
 | 4 | Sensors, gates, and anchors | Complete |
 | 5 | The agent operating contract | Contract, verbs, and one Copilot tool built |
-| 6 | Evidence and output policy are authorable | Policy authorable; D-023 rename and evidence views open |
+| 6 | Evidence and output policy are authorable | Policy, views, and the D-023 rename all landed |
 | 7 | Loops, gates, sensors, and approval are authorable | Authoring built; acceptances unproven |
 | 8 | The autonomous driver and human loop | Loop drives, closes, advances, and waits for people; rerun moved to Phase 9 |
 | 9 | Fan-out and fan-in | Lowering built; member phases open |
@@ -304,7 +304,7 @@ This phase closes the most consequential part of F-004.
 * [ ] Put the exact required output assets, criteria, and evidence requirements
   into the generated operating contract and complete-request schema so the agent
   knows what completion means before it starts work. **Partial: output declarations reach the contract; criteria and evidence counts do not.**
-* [ ] Refuse contradictory policies at authoring time, including evidence kinds
+* [x] Refuse contradictory policies at authoring time, including evidence kinds
   no phase can produce and sensitivity flows that exceed a declared ceiling. **Not verified.**
 
 Acceptance:

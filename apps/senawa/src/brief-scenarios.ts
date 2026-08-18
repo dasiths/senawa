@@ -60,6 +60,8 @@ export interface ScenarioOptions {
   readonly unanchored?: boolean;
   /** How many attempts the phase may take. */
   readonly attempts?: number;
+  /** Adds a field the reader does not know, to check it is refused. */
+  readonly unknownField?: boolean;
 }
 
 export interface Scenario {
@@ -326,7 +328,7 @@ phases:
   - name: define
     agent: definer
     output: schemas/definition.schema.json
-    gates: [check]${options.approval === true ? "\n    approve: true" : ""}${
+    gates: [check]${options.unknownField === true ? "\n    aproove: true" : ""}${options.approval === true ? "\n    approve: true" : ""}${
       options.attempts === undefined ? "" : `\n    attempts: ${options.attempts}`
     }
 ${second}${fanOutPhase(options)}`;

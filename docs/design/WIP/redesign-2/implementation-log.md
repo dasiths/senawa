@@ -1649,3 +1649,28 @@ operating contract tells it which are available.
 
 One error found by checking rather than drafting: the credential variable is
 `SENAWA_WORKER_CREDENTIAL`, not `SENAWA_WORKER_CREDENTIAL_PATH`.
+
+## An unknown phase field did nothing and said nothing
+
+`completionEvidenceFrom` was in the repository's own workflow, documented in the
+brief, and read by nothing. It compiled clean because the phase reader ignored
+every field it did not know.
+
+That is the same failure as the approval bug found an hour earlier: a feature
+that silently does nothing reads as broken rather than as misconfigured. A
+misspelled `approve` would have behaved identically, and the author would have
+concluded approvals do not work.
+
+Two fixes:
+
+* The phase reader now refuses a field it does not know, naming it. A test
+  writes `aproove` and expects the refusal.
+* `completionEvidenceFrom` is read and lowered into `completionEvidenceViews`,
+  which was hardcoded to an empty list. The kinds are an allowlist and the
+  sensitivity ceiling caps what may cross, both refused at authoring time when
+  they are wrong. The repository's own `verify` phase now produces a real
+  `verify-from-implement` view, asserted by a test.
+
+The general lesson, now stated twice in this log: silence is the worst refusal.
+An unknown field, a discarded value, and a swallowed error all read to a
+consumer as the feature being broken.
