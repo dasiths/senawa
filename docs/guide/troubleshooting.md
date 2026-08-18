@@ -38,20 +38,22 @@ The core install also does not declare, resolve, install, or load the Copilot SD
 or Koffi. A live-enabled installation must make `@github/copilot-sdk` version
 `1.0.9` available separately.
 
-## Configuration is JSON only
+## What the configuration is
 
-`.senawa/workflow.json` is JSON. There is no YAML form, no comment syntax, no
-include or import mechanism, and no environment interpolation. Duplicate object
-members are rejected rather than last-one-wins.
+You write three YAML files under `.senawa`: `workflow.yaml`, `agents.yaml`, and
+`sensors.yaml`. Comments are allowed. There is no include mechanism and no
+environment interpolation, because a workflow that reads its meaning from the
+surrounding shell is not reproducible.
 
 Workflow files are refused above 256 KiB before buffering or parsing. Prompt
 files are capped at 32 KiB, schema files at 256 KiB, and all declared resources
 together at 8 MiB.
 
-JSON syntax errors report a normalized category with a line and column:
+Every problem is reported at once, naming the file and the place in it:
 
 ```text
-.senawa/workflow.json: invalid JSON: expected a property name at line 12, column 3
+./.senawa: invalid (1 diagnostic)
+- [resource-read-failed] .senawa/workflow.yaml#/schemas/1/path: schema resource could not be read (not-found)
 ```
 
 ## Common failures
@@ -82,18 +84,11 @@ other-project/.senawa: unable to durably publish standard workflow (ENOENT)
 
 ```text
 .senawa/workflow.json: unable to read workflow configuration (ENOENT)
-Run senawa init to create it. Earlier alpha files at senawa.json must be moved to .senawa/workflow.json or passed explicitly.
+Run senawa init to create it.
 ```
 
-Doctor reads `.senawa/workflow.json` relative to the current directory. It does
-not search ancestor directories and does not fall back to the earlier root
-`senawa.json` location. Migrate manually:
-
-```bash
-mkdir .senawa
-mv senawa.json .senawa/workflow.json
-senawa doctor
-```
+Doctor reads `.senawa` relative to the current directory. It does not search
+ancestor directories, so run it from the project root or pass the directory.
 
 Filesystem failures expose an allowlisted code such as `EACCES`, `EISDIR`,
 `ELOOP`, `ENOENT`, `ENOTDIR`, or `EPERM`, never a stack trace or an internal
@@ -101,13 +96,13 @@ path.
 
 ### `invalid (N diagnostics)`
 
-Doctor reports every diagnostic at once, each with a stable code, a locator, and
-a JSON Pointer:
+Doctor reports every problem at once, each with a stable code, the file, and
+where in it:
 
 ```text
-.senawa/workflow.json: invalid (2 diagnostics)
-- [unknown-reference] .senawa/workflow.json#/phases/0/executor/inputSchema: Input schema definition-inpt is not declared
-- [unknown-reference] .senawa/workflow.json#/phases/0/input/schema: Phase input schema definition-inpt is not declared
+./.senawa: invalid (2 diagnostics)
+- [invalid-prompt-template] prompts/implementor.md: Invalid prompt template token at character offset 20
+- [unknown-reference] workflow.yaml#/phases/1/agent: Unknown agent implementor
 ```
 
 Fix all of them rather than the first. [Workflow authoring](workflow-authoring.md)

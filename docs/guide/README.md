@@ -22,7 +22,7 @@ it appears.
 ## Configure and run work
 
 * [Workflow authoring](workflow-authoring.md) explains every field of
-  `.senawa/workflow.json`: workflow input, phases, executors, roles, external
+  `.senawa/workflow.yaml`, `agents.yaml`, and `sensors.yaml`: phases, agents,
   prompt and schema files, mapped inputs, phase outputs, template substitution,
   schema-selected task loops, plan import, iteration and rework, approvals,
   gates, sensors, budgets, model policy, projected work, and

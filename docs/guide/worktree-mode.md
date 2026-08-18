@@ -104,7 +104,7 @@ git branch integration
 senawa init
 ```
 
-Then edit `.senawa/workflow.json` to set `workspaceMode` and `integrationRef`,
+Then edit `.senawa/workflow.yaml` to set `workspaceMode` and `integrationRef`,
 run `senawa doctor`, and point the daemon at that directory with
 `SENAWA_REPOSITORY_DIR` when you are ready to dispatch work.
 

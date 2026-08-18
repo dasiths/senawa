@@ -78,31 +78,25 @@ Init publishes one `.senawa` directory with mode `0700` directories and mode
 
 ```text
 .senawa/
-  workflow.json
-  prompts/definer.md
-  prompts/implementor.md
+  workflow.yaml
+  agents.yaml
+  sensors.yaml
   prompts/planner.md
-  prompts/researcher.md
-  prompts/verifier.md
-  schemas/definition-input.schema.json
-  schemas/definition-output.schema.json
-  schemas/implementation-task-input.schema.json
-  schemas/plan-input.schema.json
-  schemas/plan-output.schema.json
-  schemas/plan-task-collection.schema.json
-  schemas/plan-task-item.schema.json
-  schemas/research-input.schema.json
-  schemas/research-output.schema.json
-  schemas/verification-input.schema.json
-  schemas/verification-output.schema.json
-  schemas/workflow-input.schema.json
+  prompts/implementor.md
+  schemas/request.schema.json
+  schemas/plan.schema.json
+  schemas/implementation.schema.json
 ```
 
-`workflow.json` is the complete standard delivery workflow: a `define`,
-`research`, `plan`, `implement`, `verify` sequence with roles, model policy,
-sensors, gates, a task loop over the imported plan, and per-phase approvals. The
-prompts and schemas are external files that `workflow.json` references by
-relative path. [Workflow authoring](workflow-authoring.md) explains every field.
+Three files describe the workflow. `workflow.yaml` names the phases and what
+each produces, `agents.yaml` names who does the work, and `sensors.yaml` names
+the commands that measure it. The prompts and schemas they reference are
+ordinary files beside them. [Workflow authoring](workflow-authoring.md) explains
+each one.
+
+The generated workflow plans and then implements, with a gate on the implement
+phase that refuses while the working tree is dirty. It is small on purpose: a
+working example you change rather than a template you delete.
 
 Init creates a private lock directory and a staging directory beneath the
 project root, writes and syncs every file, renames the complete staged tree into
@@ -122,32 +116,29 @@ senawa init explicit
 senawa doctor
 ```
 
-A valid tree prints the exact path it validated:
+A valid tree prints the path it validated:
 
 ```text
-.senawa/workflow.json: valid
+./.senawa: valid
 ```
 
-Doctor compiles the complete immutable snapshot. It loads every declared prompt
-and schema through a confined, symbolic-link-refusing reader, checks JSON Pointer
-mappings, gate accessors, budgets, roles, and model routes, and reports all
-diagnostics at once. It never executes a sensor, invokes a model, starts work, or
-contacts a runner, so it is always free to run.
+Doctor compiles the complete immutable snapshot. It reads every declared prompt
+and schema through a confined reader that refuses symbolic links, checks the
+mappings between phases, the gate rules, the roles, and the model routes, and
+reports every problem at once. It never runs a sensor, calls a model, starts
+work, or contacts a runner, so it is always free to run.
 
-An invalid document exits with code `1` and lists one diagnostic per line with a
-stable code, the locator, and a JSON Pointer. Misspelling one schema key in the
-first phase produces exactly this:
+An invalid tree exits with code `1` and gives one diagnostic per line: a stable
+code, the file, and where in it. Misspelling one schema path produces exactly
+this:
 
 ```text
-.senawa/workflow.json: invalid (2 diagnostics)
-- [unknown-reference] .senawa/workflow.json#/phases/0/executor/inputSchema: Input schema definition-inpt is not declared
-- [unknown-reference] .senawa/workflow.json#/phases/0/input/schema: Phase input schema definition-inpt is not declared
+./.senawa: invalid (1 diagnostic)
+- [resource-read-failed] .senawa/workflow.yaml#/schemas/1/path: schema resource could not be read (not-found)
 ```
 
-Doctor reads `.senawa/workflow.json` relative to the current directory. Passing a
-directory resolves that directory's `.senawa/workflow.json`. Passing a path that
-ends in `.json` validates exactly that file and resolves its declared resources
-relative to its parent.
+Doctor reads `.senawa` relative to the current directory. Passing a directory
+reads that directory's `.senawa` instead.
 
 ## Start the local supervisor
 

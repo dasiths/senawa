@@ -1517,3 +1517,19 @@ would be built against the grain of the fencing model.
 What Phase 8 does today on a red gate is stop and say which sensor refused. That
 is a stall rather than a wrong answer, and the run is recoverable by amendment
 once Phase 9 exists.
+
+## The guides described a product that no longer exists
+
+Getting started listed a `.senawa` tree with a `workflow.json` and eleven
+schemas that `init` has not produced for some time. Troubleshooting had a
+heading reading "Configuration is JSON only" and the sentence "There is no YAML
+form", which is now exactly backwards. Both were rewritten against output
+captured from the built binary rather than from memory, including the real
+diagnostic text for a misspelled schema path.
+
+The one surviving `workflow.json` in troubleshooting is correct: it is the
+literal message the CLI emits when no authored tree is found, quoted as output
+rather than as instruction.
+
+Operations, portal, and security still describe the earlier surface and are not
+yet rewritten.
