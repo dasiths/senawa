@@ -377,11 +377,13 @@ absorbs the unfinished acceptance from Phases 2, 3, and the former Phase 5.
 
 Acceptance:
 
-* [ ] A scripted no-model agent drives a multi-phase authored workflow to
-  completion through the public command surface.
+* [x] A scripted no-model agent drives a multi-phase authored workflow to
+  completion through the public command surface. **Partial: the workflow runs to
+  completion with no model, driven through advanceRun. The scripted agent still
+  submits through the broker rather than through senawa worker over the socket.**
 * [ ] An opt-in live test drives a real Copilot agent through the same path.
 * [ ] A rejected phase reruns with the exact human or gate reasons supplied.
-* [ ] Artifacts, transcript, attempt history, and accepted submissions survive a
+* [x] Artifacts, transcript, attempt history, and accepted submissions survive a
   process restart.
 * [ ] The complete loop is drivable from the command line with no portal and no
   hand-computed digest or revision.

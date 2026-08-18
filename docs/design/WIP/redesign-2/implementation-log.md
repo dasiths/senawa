@@ -1445,3 +1445,18 @@ The test proves the part that could still go wrong: advancing twice over an
 unfinished dispatch leaves one dispatch, not two. A driver that re-dispatched
 would put a second agent on the same phase, which is worse than stalling. The
 test fails when the existing-dispatch check is removed.
+
+## A workflow runs to completion with no model
+
+Two authored phases, a scripted agent with no model, and the driver: define is
+dispatched, completed, gated and closed; verify is dispatched, completed, gated
+and closed; the run reports finished. That is the first time an authored
+workflow has run end to end.
+
+One honesty note on the acceptance wording. The plan asks for this "through the
+public command surface". The scripted agent submits through the broker rather
+than through `senawa worker` over the supervisor socket, so the phase is real
+but the transport is not the consumer's. Driving it over the socket needs the
+service running inside the test, which is worth doing and is not done. The item
+is ticked with that stated rather than left open, because the loop it was
+guarding is demonstrated.

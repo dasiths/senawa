@@ -151,6 +151,27 @@ describe("advancing a run", () => {
       repositoryBase: BASE,
     });
     expect(next).toMatchObject({ kind: "dispatched", phaseKey: "verify" });
+
+    // Drive the second phase too, so the workflow reaches its end rather than
+    // merely proving one hand-off.
+    if (next.kind !== "dispatched") throw new Error("verify was not dispatched");
+    await completeDispatch(project, paths, next.dispatchId);
+    expect(
+      await advanceRun({
+        projectRoot: project,
+        ...paths,
+        repositoryId: "repository_close",
+        runId: "run_close",
+        principal: runtimePrincipal,
+        dependencies,
+        currentTime: NOW,
+        workflowInput: {
+          bindingDigest: sha256Digest("3".repeat(64)),
+          value: canonicalValue({ request: "Add a health endpoint" }),
+        },
+        repositoryBase: BASE,
+      }),
+    ).toEqual({ kind: "finished" });
   });
 
   it("recovers an in-flight dispatch instead of dispatching it twice", async () => {
