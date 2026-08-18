@@ -189,7 +189,10 @@ names the exact reason:
 ```
 
 `retryable` tells you whether resubmitting can help. Resubmitting the identical
-command file always reuses the same durable command identity.
+command file always reuses the same durable command identity, which means it
+replays the recorded outcome instead of being judged again. When you have fixed
+the cause of a refusal, give the command a new identity. Otherwise the refusal
+you are reading is the old one and tells you nothing about the fix.
 
 ### `backup-refused`, `restore-refused`, `repair-refused`
 

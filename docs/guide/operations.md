@@ -327,7 +327,11 @@ the default, never invokes Git.
 * Command submission failures return a safe error envelope. A refusal is a
   durable outcome with a reason, not a transient error.
 * An exact retry of the same command file reuses the same durable command
-  identity, so retrying is safe.
+  identity, so retrying is safe: the command applies once no matter how many
+  times you submit it. That same property means a refused command keeps
+  returning its original refusal. After you fix a precondition, change the
+  command identity before resubmitting, or you will read the stale refusal and
+  conclude the fix did not work.
 * If the portal shell reports itself unavailable, the portal asset manifest is
   missing or invalid. Service and query commands stay operational.
 * If `senawa service start` reports `Supervisor did not become ready`, read

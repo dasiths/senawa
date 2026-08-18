@@ -1791,3 +1791,14 @@ the limits an author writes are the limits enforced.
 Both are now described as intent that does not yet change behaviour. That
 reads worse and is worth it: an author who believes a fallback exists will not
 understand why a run stops at a limit instead of moving to the cheaper model.
+
+## Two bullets that contradicted each other
+
+The operations guide told an operator to fix the precondition and retry, and
+four lines later told them an exact retry reuses the same durable command
+identity. Both are true. Together they are a trap: the identity reuse that makes
+retrying safe also makes a refused command replay its original refusal forever,
+so the operator who follows both bullets fixes the problem, resubmits, reads the
+same refusal, and concludes the fix did not work.
+
+The safety property and its cost now sit in the same sentence.
