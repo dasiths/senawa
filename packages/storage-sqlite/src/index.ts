@@ -5402,7 +5402,7 @@ export class SqlitePortalQueryAuthority {
          LEFT JOIN context_question_answers a ON a.submission_id = q.submission_id
          LEFT JOIN context_fresh_dispatch_requirements f ON f.submission_id = q.submission_id
          WHERE q.repository_id = ? AND q.run_id = ? AND a.submission_id IS NULL
-         ORDER BY q.submission_id`,
+         ORDER BY q.rowid`,
       )
       .all(repositoryId, runId)) {
       const submission = requiredJsonRecord(
@@ -14400,11 +14400,13 @@ function verifyAmendmentTables(
     .all()) {
     const command = parseRunnerValue<QueuedEffectCommand>(row.canonical_command);
     const current = requireTaskScopeCurrentness(database, row.run_key, command.taskScope);
-    if (
-      command.taskScope.acceptedContextDigest !== current.acceptedContextDigest ||
-      command.taskScope.fenceGeneration > current.fenceGeneration ||
-      (current.claimsAccepted && command.taskScope.fenceGeneration !== current.fenceGeneration)
-    ) {
+    // A queued command is a durable record of what was asked for, and a later
+    // attempt taking the scope over does not rewrite history: after a takeover
+    // every earlier command names an earlier context, which this read used to
+    // call corruption and refuse to open the database on. What no command may
+    // ever be is ahead of the fence. Claim time is where a stale command is
+    // stopped from running, in `persistIntent`.
+    if (command.taskScope.fenceGeneration > current.fenceGeneration) {
       throw new Error("SQLite runner command diverges from shared task-scope currentness");
     }
   }
@@ -15257,8 +15259,14 @@ function verifyNormalizedContextRows(
 ): void {
   if (actual.length !== expected.length)
     throw new Error(`SQLite ${table} row count diverges from canonical context authority`);
-  for (let index = 0; index < expected.length; index += 1) {
-    if (canonicalStringify(actual[index]) !== canonicalStringify(expected[index]))
+  // Every row here is keyed, so the two sides hold a set rather than a
+  // sequence. Reading the table in key order and the authority in the order
+  // things happened made a second question look like corruption and refused to
+  // open the database at all.
+  const left = [...actual].map((row) => canonicalStringify(row)).sort(compareText);
+  const right = [...expected].map((row) => canonicalStringify(row)).sort(compareText);
+  for (let index = 0; index < right.length; index += 1) {
+    if (left[index] !== right[index])
       throw new Error(`SQLite ${table} row ${index} diverges from canonical context authority`);
   }
 }

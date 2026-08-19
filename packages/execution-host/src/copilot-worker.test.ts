@@ -765,7 +765,9 @@ describe("CopilotSerialWorkerAdapter", () => {
 
     const result = await fixture.adapter.run(fixture.input);
 
-    expect(result.status).toBe("missing-completion");
+    // The first question was admitted, so this turn ended waiting on a person
+    // rather than having produced nothing.
+    expect(result.status).toBe("awaiting-answer");
     expect(fixture.broker.submissions).toHaveLength(1);
     expect(outputs.map(({ resultType }) => resultType)).toEqual(["success", "failure"]);
     expect(required(sdk.createCalls[0]).sessionLimits).toEqual({ maxAiCredits: 1.25 });

@@ -91,7 +91,12 @@ export interface CopilotWorkerRunInput {
 
 export type CopilotWorkerRunResult =
   | {
-      readonly status: "completed" | "blocked" | "missing-completion" | "aborted";
+      readonly status:
+        | "completed"
+        | "blocked"
+        | "missing-completion"
+        | "awaiting-answer"
+        | "aborted";
       readonly dispatchId: string;
       readonly submissions: readonly SubmissionAdmissionResult[];
       /** Present only when durable transcript capture refused at least one line. */
@@ -224,9 +229,12 @@ export class CopilotSerialWorkerAdapter {
         status = "aborted";
       } else if (state.completionDisposition !== undefined) {
         status = state.completionDisposition === "blocked" ? "blocked" : "completed";
+      } else if (state.askedQuestion === true) {
+        // An agent that stopped to ask has not failed. Calling it a failure
+        // fences its own task, which is what made its question unanswerable.
+        status = "awaiting-answer";
       }
     } catch (error) {
-      console.error("LIVE-CRASH", error);
       status = "crashed";
     } finally {
       scope.active = false;
@@ -322,6 +330,7 @@ interface RunState {
   rejectedPhaseOutputs: number;
   transcriptRefusals: number;
   completionDisposition?: CompletionSubmission["disposition"];
+  askedQuestion?: true;
 }
 
 interface RunScope {
@@ -744,6 +753,7 @@ function submissionTool(
           },
         });
         state.submissions.push(result);
+        if (type === "question" && result.status === "accepted") state.askedQuestion = true;
         if (
           type === "completion" &&
           result.status === "accepted" &&

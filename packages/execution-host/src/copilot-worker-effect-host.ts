@@ -189,9 +189,13 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
     const status =
       result.status === "aborted"
         ? "cancelled"
-        : (result.status === "completed" || result.status === "blocked") && acceptedCompletion
-          ? "completed"
-          : "failed";
+        : // A turn that ended on a question is suspended, not failed: a failure
+          // fences the task, and a fenced task cannot accept the answer.
+          result.status === "awaiting-answer"
+          ? "cancelled"
+          : (result.status === "completed" || result.status === "blocked") && acceptedCompletion
+            ? "completed"
+            : "failed";
     const details: JsonValue = {
       dispatchId: result.dispatchId,
       workerStatus: result.status,

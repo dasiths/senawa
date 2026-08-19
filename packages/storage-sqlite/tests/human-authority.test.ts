@@ -179,6 +179,53 @@ describe("SQLite Phase 11A human authority", () => {
     fixture.dispose();
   });
 
+  it("stays readable after a later attempt takes a task scope over", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    const runner = configuredRunner(fixture, 100);
+    const broker = new SqliteContextBroker({
+      databasePath: fixture.databasePath,
+      dependencies: contextDependencies(),
+    });
+    const first = createWorkerExecutionFixture(createRuntimeGraph(), ["worker.submit.completion"]);
+    broker.registerDispatch({
+      context: first.context,
+      dispatch: first.dispatch,
+      completionRequirements: first.completionRequirements,
+      taskScope: taskScope(first.context.contextDigest),
+    });
+    runner.enqueue({
+      ...effectCommand(),
+      contextDigest: first.context.contextDigest,
+      taskScope: taskScope(first.context.contextDigest),
+    });
+
+    const second = createWorkerExecutionFixture(
+      createRuntimeGraph(),
+      ["worker.submit.completion"],
+      2,
+      2,
+    );
+    broker.registerDispatch({
+      context: second.context,
+      dispatch: second.dispatch,
+      completionRequirements: second.completionRequirements,
+      taskScope: taskScope(second.context.contextDigest),
+    });
+    broker.close();
+    runner.close();
+    authority.close();
+
+    // The queued command is a durable record of what was asked for at the time,
+    // so after a takeover it names an earlier context by construction. Calling
+    // that corruption made the database refuse to open for every process, which
+    // is what a retry after any real worker effect produces.
+    const reopened = new SqliteAuthority(fixture.options);
+    reopened.close();
+    fixture.dispose();
+  });
+
   it("grants one policy-bounded allowance without changing reserved, spent, or unreported accounting", () => {
     const fixture = createFixture();
     let authority = new SqliteAuthority(fixture.options);

@@ -141,13 +141,15 @@ export function createWorkerExecutionFixture(
   graph = createRuntimeGraph(),
   capabilities: readonly string[] = ["worker.submit.completion"],
   ordinal = 1,
+  /** Which phase attempt this context is for. A later one takes the task scope over. */
+  attemptOrdinal = 1,
 ) {
   const contextTask = {
     taskId: runtimeFixture.task.taskId,
     definitionGeneration: runtimeFixture.task.definitionGeneration,
   };
   const mappedInput = testingMappedInput(deterministicSha256);
-  const phaseAttemptReference = { ...runtimeFixture.phase, attempt: 1 };
+  const phaseAttemptReference = { ...runtimeFixture.phase, attempt: attemptOrdinal };
   const sourceSetDigest = canonicalDigest(canonicalValue({ mappings: [] }), deterministicSha256);
   const phaseInputBinding = createPhaseInputBinding(
     {

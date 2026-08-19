@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:rpi:task",
+  "title": "One independently verifiable piece of work",
+  "type": "object",
+  "required": ["id", "title", "change", "verification"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+      "description": "Identifies this member. Senawa selects the collection by this."
+    },
+    "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "change": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "description": "What this task changes, in enough detail to carry out alone."
+    },
+    "verification": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "How a reviewer would know it worked."
+    }
+  },
+  "additionalProperties": false
+}

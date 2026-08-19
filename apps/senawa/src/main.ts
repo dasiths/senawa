@@ -22,5 +22,11 @@ function safeOperationalError(error: unknown): string {
   ) {
     return error.message;
   }
-  return "Operational command failed";
+  // An unsafe message may name a path or a credential, so it is withheld unless
+  // the operator asks for it. Withholding it with no way to ask made every
+  // unexpected failure unreportable.
+  if (process.env.SENAWA_DEBUG === "1" && error instanceof Error) {
+    return `Operational command failed: ${error.stack ?? error.message}`;
+  }
+  return "Operational command failed. Re-run with SENAWA_DEBUG=1 for the detail.";
 }

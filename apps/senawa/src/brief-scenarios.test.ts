@@ -925,6 +925,30 @@ describe("an agent that stops to ask", () => {
     }
   });
 
+  it("stays readable after a second question", async () => {
+    const scenario = await startScenario("ask-twice", {});
+    // The second identity sorts before the first, which is the case a table read
+    // in key order and an authority read in the order things happened disagree on.
+    await askThroughSink(scenario, scenario.dispatchId, "which endpoint is authoritative?", "b");
+    await askThroughSink(scenario, scenario.dispatchId, "and which port does it listen on?", "a");
+
+    // The integrity check read the table in key order and the authority in the
+    // order things happened. One question cannot tell those apart; two can, and
+    // the second made every process that opened the database fail to open it.
+    const authority = new SqliteAuthority({ ...scenario.paths, dependencies });
+    authority.close();
+
+    const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+    try {
+      const row = database.prepare("SELECT COUNT(*) AS total FROM context_questions").get() as {
+        readonly total: number;
+      };
+      expect(row.total).toBe(2);
+    } finally {
+      database.close();
+    }
+  });
+
   it("takes the answer from the command line and binds it to the question asked", async () => {
     const scenario = await startScenario("answer", {});
     await askThroughSink(scenario, scenario.dispatchId, "which endpoint is authoritative?");

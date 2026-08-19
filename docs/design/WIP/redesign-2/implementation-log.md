@@ -2901,3 +2901,40 @@ upstream, which is why nothing had noticed.
 the command dispatches on what the run was actually given. The scenario harness
 did the same thing with a fixed fake digest, and now reads it back the same way,
 so the tests exercise the path the command uses.
+
+## F-023: asking twice made the database refuse to open
+
+The first live run with a question-asking prompt asked three. Every process
+that opened the authority afterwards died on
+`SQLite context_questions row 0 diverges from canonical context authority`.
+
+The integrity check reads the table `ORDER BY submission_id` and the canonical
+authority in the order things happened, then compares them row by row. A
+submission id is a digest, so with one question the two agree by having only one
+element, and with two they agree only by luck. Every row in these tables is
+keyed, so the two sides hold a set rather than a sequence; the check now sorts
+both sides before comparing, which keeps it exact about content and stops it
+inventing an ordering invariant nobody holds.
+
+## F-024: a real retry corrupted the run, and only a real one could show it
+
+Delivering the answer dispatches the phase again, which took the task scope over
+with a later attempt, which broke `verifyAmendmentTables`:
+`SQLite runner command diverges from shared task-scope currentness`.
+
+The check demanded every queued runner command name the scope's *current*
+accepted context. A queued command is a durable record of what was asked for at
+the time, so after a takeover every earlier command names an earlier context by
+construction. What actually must not happen is a command ahead of the fence, and
+staleness is stopped where it matters, in `persistIntent` at claim time.
+
+The reason this was never seen: `advanceRun`'s retry path is exercised only by
+the scenario harness, which submits through the broker sink and never queues a
+runner command. Every test of a retry therefore ran without the one row that
+made a retry fail. The new test enqueues a command, registers a later attempt,
+and reopens the authority; the old check refuses it.
+
+Both defects were reachable by any run that retried a phase after a real worker
+effect, which is to say by any real run, and neither had anything to do with
+questions. Asking three questions is simply what finally produced two of
+something the suite only ever produced one of.

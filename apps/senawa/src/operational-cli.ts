@@ -528,17 +528,28 @@ async function startService(
     stdio: ["ignore", descriptor, descriptor],
     env: environment,
   });
+  // A supervisor that has died is never going to answer, and waiting the full
+  // ceiling on it reports a timeout for what was a refusal.
+  let exited = false;
+  child.once("exit", () => {
+    exited = true;
+  });
   child.unref();
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  // Opening the database and connecting the agent SDK takes seconds on a cold
+  // start, and reporting a failure the operator then finds running is worse
+  // than waiting.
+  for (let attempt = 0; attempt < 600 && !exited; attempt += 1) {
     try {
       const status = await clientFor(paths).status();
       return success(`Supervisor started (pid ${status.processId})`);
     } catch {
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
     }
   }
   return {
-    output: "Supervisor did not become ready. Read senawa service logs for what it refused.",
+    output: exited
+      ? "Supervisor exited during startup. Read senawa service logs for what it refused."
+      : "Supervisor did not become ready. Read senawa service logs for what it refused.",
     exitCode: 1,
   };
 }

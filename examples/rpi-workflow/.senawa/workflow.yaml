@@ -1,0 +1,47 @@
+# Research, then plan, then implement.
+#
+# Senawa works out how data moves between phases. This file names schemas and
+# dependencies; senawa binds each named input property to the upstream output
+# that provides it. There are no JSON Pointers here by design.
+
+name: rpi
+input: schemas/request.schema.json
+
+defaults:
+  attempts: 3
+  onGateRejected: iterate
+  onApprovalRejected: iterate
+  onUpstreamChanged: iterate
+  onExhausted: escalate
+
+phases:
+  # Establish what is true before anyone proposes a change. No gate: this phase
+  # produces a reading of the world, and its schema is what constrains it.
+  - name: research
+    agent: researcher
+    output: schemas/research.schema.json
+
+  # Turn the request and the research into independent pieces of work.
+  - name: plan
+    agent: planner
+    needs: [research]
+    # Two sources feed this phase, so the merged shape is named rather than
+    # guessed.
+    input: schemas/plan-input.schema.json
+    output: schemas/plan.schema.json
+
+  # One member per planned task, each running its own loop.
+  - name: implement
+    agent: implementor
+    needs: [plan]
+    forEach: plan.tasks
+    # The kernel validates the selected array on its own, so its shape is named
+    # rather than inferred from the shape of one element.
+    collection: schemas/task-collection.schema.json
+    # A member reads its own task, not the whole plan.
+    input: schemas/task.schema.json
+    output: schemas/implementation.schema.json
+    gates: [tests]
+    attempts: 3
+    # A member that cannot pass does not block the ones that did.
+    onFailure: continue

@@ -377,6 +377,7 @@ export async function askThroughSink(
   scenario: Scenario,
   dispatchId: string,
   question: string,
+  ordinal = "q",
 ): Promise<unknown> {
   const loaded = await loadAuthoredWorkflow(scenario.project, dependencies.sha256);
   const snapshot = loaded.snapshot;
@@ -399,7 +400,7 @@ export async function askThroughSink(
       sha256: dependencies.sha256,
     });
     return await sink.accept({
-      submissionId: `submission_${dispatchId.replace("dispatch_", "").slice(0, 30)}q`,
+      submissionId: `submission_${dispatchId.replace("dispatch_", "").slice(0, 30)}${ordinal}`,
       scope: {
         repositoryId: scenario.repositoryId,
         runId: scenario.runId,
