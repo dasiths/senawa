@@ -641,7 +641,11 @@ Acceptance:
 * [x] Every vocabulary term in the design set is defined once and used
   consistently. **The design index carries the fourteen terms, each defined
   once, and the pages use them without redefining them.**
-* [ ] Every testable documentation claim is linked to an executable acceptance.
+* [x] Every testable documentation claim is linked to an executable acceptance.
+  **`docs/reference/acceptances.md` names the test behind each claim, and
+  `pnpm check:claims` refuses the build when a name stops matching anything real.
+  A list of claims nobody is proving reads more trustworthy than saying nothing,
+  so the links are checked rather than written down and forgotten.**
 
 ## Cross-cutting: continuous integration
 

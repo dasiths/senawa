@@ -85,6 +85,10 @@ reference](docs/reference/cli.md), the [local supervisor HTTP
 reference](docs/reference/local-supervisor-http.md), and the [remote
 control-plane reference](docs/reference/remote-control-plane.md).
 
+[What proves each claim](docs/reference/acceptances.md) names the test behind
+each documented behaviour, and a check refuses the build when a name stops
+matching anything real.
+
 The [design set](docs/design/README.md) explains why the system behaves this way,
 with the [v1 brief](docs/design/WIP/redesign-2/brief.md) carrying the canonical
 behaviours, the [plan](docs/design/WIP/redesign-2/plan.md) as the active source,

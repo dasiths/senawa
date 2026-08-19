@@ -51,6 +51,9 @@ jobs:
       - name: Documentation links
         run: pnpm docs:links
 
+      - name: Documented claims
+        run: pnpm check:claims
+
       - name: Whitespace
         run: git diff --check
 
