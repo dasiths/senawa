@@ -98,11 +98,11 @@ try {
     JSON.stringify(initializedTree) === JSON.stringify(packagedTree),
     "installed init bytes differ from packaged template",
   );
-  const original = readFileSync(join(repository, ".senawa", "workflow.json"), "utf8");
+  const original = readFileSync(join(repository, ".senawa", "workflow.yaml"), "utf8");
   const overwrite = runResult(bin, ["init"], repository, environment);
   assert(overwrite.status === 1 && overwrite.stdout.includes("already exists"), "init overwrote");
   assert(
-    readFileSync(join(repository, ".senawa", "workflow.json"), "utf8") === original,
+    readFileSync(join(repository, ".senawa", "workflow.yaml"), "utf8") === original,
     "init changed existing file",
   );
   mkdirSync(join(repository, "explicit"));

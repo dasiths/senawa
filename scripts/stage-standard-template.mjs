@@ -9,10 +9,12 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createStandardTemplateFiles } from "../packages/configuration/dist/index.js";
+import { createAuthoredTemplateFiles } from "../packages/configuration/dist/index.js";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const files = createStandardTemplateFiles();
+// The packaged tree has to be what `init` writes, or the two drift
+// silently and a consumer's first project differs from the one shipped.
+const files = createAuthoredTemplateFiles();
 
 stagePackagedTemplate();
 

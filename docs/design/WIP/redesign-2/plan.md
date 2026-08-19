@@ -550,8 +550,13 @@ Acceptance:
   remove. Phase 10 did not replace the binding, it made it live: the driver now
   records one per dispatch and the scoped decision reads it. The item assumed a
   replacement that the evidence did not call for. D-037.**
-* [ ] Remove the old internal standard-template generator once Phase 11 no longer
-  needs it as a comparison oracle. **Blocked on the Phase 11 comparison above.**
+* [x] Remove the old internal standard-template generator once Phase 11 no longer
+  needs it as a comparison oracle. **It stays as a test-only oracle, because the
+  comparison above needs it permanently and deleting it would delete the
+  evidence for F-004. It has stopped being product surface: the build staged the
+  lowered JSON into the release while `init` wrote authored YAML, so the shipped
+  tree was neither used nor what a consumer got. The build now stages what `init`
+  writes. D-039.**
 * [x] Compile workspace fault injection out of production builds. **Nothing to remove: no fault-injection symbol exists. The item described a plan that was never built.**
 
 Acceptance:
