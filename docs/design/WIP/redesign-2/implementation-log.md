@@ -3442,3 +3442,50 @@ Still open: the live planner's completion is refused as `completion-refused`
 with no detail, which means the error reaching that handler is not an `Error`
 with a message. That is the next thing to chase, and the run cannot finish until
 it is understood.
+
+## F-046: a submission the broker rejects is reported to the agent as a success
+
+The live planner did exactly what it was told and still could not hand in:
+
+> I submitted senawa_complete with the exact five keys specified... The system
+> still refuses but doesn't provide a detail field. What specifically is
+> preventing the plan completion from being accepted?
+
+There was no detail field because the tool did not fail. `admitCompletion` ends:
+
+```ts
+return success({ status: result.status, replayed: result.replayed });
+```
+
+`SubmissionAdmissionResult["status"]` is `"accepted" | "stale" | "duplicate"`, so
+a rejected submission is returned as a *successful* tool call carrying the word
+`stale`. The agent has to notice that a success means refusal, and there is
+nothing anywhere saying what "stale" means or what to do about it. Two of the
+refusal-detail fixes in this branch could not help, because this path never
+raises a failure at all.
+
+`stale` here means the dispatch's context revision is no longer current. That is
+the second half of the defect, and it is one this branch introduced.
+
+## F-047: the spent-attempt retry supersedes an agent that is still working
+
+F-036 made the driver start a new attempt when a dispatch's effect ended without
+a completion. The effect ends when the *worker process* ends, which is not the
+same as the agent being finished with the task: a new attempt takes over the
+task scope, and the previous agent's submissions are then rejected as `stale`
+forever.
+
+The live run showed the shape clearly: seven dispatches for a three-phase
+workflow, no completion, `missing-completion` on each, and a planner insisting —
+correctly — that it had submitted a valid plan several times.
+
+Two things have to be true together, and are not yet:
+
+* a spent attempt must be retried, or an empty turn stalls the run (F-036);
+* a retry must not start while the previous agent can still hand work in, or it
+  guarantees the refusal it is trying to recover from.
+
+Not fixed. The retry needs to be conditioned on the previous dispatch being
+genuinely finished with its task scope rather than on its effect having ended,
+and `admitCompletion` must report `stale` and `duplicate` as failures that say
+what they mean.
