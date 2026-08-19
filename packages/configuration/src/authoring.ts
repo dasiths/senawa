@@ -58,7 +58,17 @@ const MAX_OUTPUT_BYTES = 262_144;
 
 /** The single attempt counter that replaces the six declared budget units (D-005). */
 const PHASE_ATTEMPT_LIMIT = 3;
-const AGENT_BUDGETS = Object.freeze([{ unit: "review-iteration", limit: PHASE_ATTEMPT_LIMIT }]);
+
+/**
+ * The one budget an agent executor spends, sized to the phase's own ceiling.
+ *
+ * A fixed limit here meant an authored `attempts:` raised the iteration policy
+ * and nothing else, so a phase authored to try eight times escalated for budget
+ * on its fourth.
+ */
+function agentBudgets(attempts: number = PHASE_ATTEMPT_LIMIT) {
+  return Object.freeze([{ unit: "review-iteration", limit: attempts }]);
+}
 
 /**
  * What every agent needs to talk back to senawa.
@@ -257,7 +267,7 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
         key: `${phase.name}-work`,
         generation: 1,
         role: phase.agent,
-        budgets: AGENT_BUDGETS,
+        budgets: agentBudgets(phase.iteration.maximumAttempts),
         inputSchema: schemaKey(phase.input ?? ""),
         inputMappings: [
           { key: "item", source: { kind: "current-item", pointer: "" }, destinationPointer: "" },
@@ -1546,7 +1556,7 @@ function lowerPhase(
                 key: item.key,
                 generation: 1,
                 role: phase.agent,
-                budgets: AGENT_BUDGETS,
+                budgets: agentBudgets(phase.iteration.maximumAttempts),
                 dependsOn: [],
                 inputSchema: schemaKey(phase.input ?? workflowInput),
                 input: item.input,
@@ -1567,7 +1577,7 @@ function lowerPhase(
           : {
               kind: "agent",
               role: phase.agent,
-              budgets: AGENT_BUDGETS,
+              budgets: agentBudgets(phase.iteration.maximumAttempts),
               resumeAcrossAttempts: phase.session !== "element",
               completionPolicy: {
                 criteria: [

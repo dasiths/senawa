@@ -86,14 +86,16 @@ const WORK_CREATING_COMMANDS = new Set([
   "steer",
 ]);
 
-/** Best effort: no supervisor running is the normal case, not a failure. */
+/** Whether a supervisor was there to wake. Not running is normal, not a failure. */
 async function wakeRunningSupervisor(
   paths: ReturnType<typeof resolveSenawaServicePaths>,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await clientFor(paths).wake();
+    return true;
   } catch {
     // Nothing is listening, or it is shutting down. The work stays durable.
+    return false;
   }
 }
 
@@ -149,8 +151,16 @@ async function dispatchOperationalCli(
     );
   }
   if (group === "advance" && action !== undefined && rest.length === 1) {
+    const runId = rest[0] ?? "";
+    // A running supervisor drives under a run lease. Driving alongside it from
+    // here would have two processes moving one run with nothing between them,
+    // so this asks it to drive and only drives in-process when nothing is
+    // listening.
+    if (await wakeRunningSupervisor(paths)) {
+      return { output: `asked the running supervisor to drive ${runId}`, exitCode: 0 };
+    }
     return runAdvanceCommand(
-      { projectRoot: process.cwd(), repositoryId: action, runId: rest[0] ?? "" },
+      { projectRoot: process.cwd(), repositoryId: action, runId },
       { databasePath: paths.databasePath, assetDirectory: paths.assetDirectory },
       dependencies,
       startPrincipal,

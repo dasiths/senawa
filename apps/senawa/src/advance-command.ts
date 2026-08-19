@@ -77,8 +77,8 @@ export async function runAdvanceCommand(
  * and a second dispatch of the same attempt collides with the first because
  * the two disagree about what the run is for.
  */
-function boundWorkflowInput(
-  options: AdvanceCommandOptions,
+export function boundWorkflowInput(
+  options: { readonly repositoryId: string; readonly runId: string },
   paths: AdvanceCommandPaths,
   dependencies: RuntimeDependencies,
 ): { readonly bindingDigest: ReturnType<typeof sha256Digest>; readonly value: CanonicalValue } {

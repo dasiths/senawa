@@ -47,6 +47,7 @@ export interface SupervisorServiceOptions {
   readonly runnerBatchSize?: number;
   readonly failurePolicyForRun?: SupervisorRunControllerOptions["failurePolicyForRun"];
   readonly scheduleBeforeEffects?: SupervisorRunControllerOptions["scheduleBeforeEffects"];
+  readonly driveRunOnce?: SupervisorRunControllerOptions["driveRunOnce"];
   readonly listSchedulableRuns?: () => readonly {
     readonly repositoryId: string;
     readonly runId: string;
@@ -164,6 +165,7 @@ export class SupervisorService {
       ...(options.scheduleBeforeEffects === undefined
         ? {}
         : { scheduleBeforeEffects: options.scheduleBeforeEffects }),
+      ...(options.driveRunOnce === undefined ? {} : { driveRunOnce: options.driveRunOnce }),
     });
     this.#startedAt = this.#now();
   }

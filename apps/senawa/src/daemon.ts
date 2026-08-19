@@ -21,7 +21,7 @@ import {
   RootScopedWorkspaceFiles,
   verifyGitRepository,
 } from "@senawa/execution-host";
-import type { IntegrationBarrier } from "@senawa/kernel";
+import { type IntegrationBarrier, sha256Digest } from "@senawa/kernel";
 import {
   type CommandSubmission,
   canonicalBytes,
@@ -63,6 +63,8 @@ import {
   startUnixSupervisorServer,
   WorkerCredentialStore,
 } from "@senawa/supervisor";
+import { boundWorkflowInput } from "./advance-command.js";
+import { advanceRun, classifyOutcome } from "./advance-run.js";
 import {
   configurationOutputSchemaFor,
   configurationPhaseOutputSchemas,
@@ -117,6 +119,7 @@ export interface SenawaServiceCompositionOptions {
   readonly scheduleBeforeEffects?: ConstructorParameters<
     typeof SupervisorService
   >[0]["scheduleBeforeEffects"];
+  readonly driveRunOnce?: ConstructorParameters<typeof SupervisorService>[0]["driveRunOnce"];
   readonly createCopilotSdk?: (
     options: ProductionCopilotSdkPortOptions,
   ) => Promise<OwnedCopilotSdkPort>;
@@ -291,6 +294,10 @@ export async function startSenawaService(
       currentTime: () => new Date().toISOString(),
     });
     const repositoryDirectory = environment.SENAWA_REPOSITORY_DIR;
+    // Where `.senawa` lives. The supervisor drives runs itself, which means
+    // compiling the workflow and running its sensors, and neither is possible
+    // from the agents' workspace.
+    const projectDirectory = environment.SENAWA_PROJECT_DIR ?? process.cwd();
     const supervisorWriterLimit = positiveEnvironmentInteger(
       environment.SENAWA_SUPERVISOR_WRITER_LIMIT,
       "SENAWA_SUPERVISOR_WRITER_LIMIT",
@@ -519,6 +526,7 @@ export async function startSenawaService(
           return productionScheduler.schedule({ repositoryId, runId, lease, currentTime });
         }),
       listSchedulableRuns: () => productionScheduler.listRuns(),
+      driveRunOnce: composition.driveRunOnce ?? driveRun(projectDirectory, paths, dependencies),
       deliverCompletionOutboxOnce: () => contextBroker.deliverCompletionOutboxOnce(),
       deliverAmendmentProposalOutboxOnce: () => amendmentBridge.deliverOnce(),
       ...(remoteConnector === undefined ? {} : { remoteConnectorStatuses: [remoteConnector] }),
@@ -664,6 +672,48 @@ const localPrincipal = decodeAuthenticatedPrincipal({
   assurance: "single-factor",
   roles: ["operator", "release-manager"],
 });
+
+/**
+ * Moves a run's workflow forward from inside the supervisor.
+ *
+ * Without this a run only ever executes work some other process dispatched, so
+ * answering a question in the portal recorded a decision that nothing acted on
+ * and the run sat looking idle. Refusals are swallowed: a workflow that no
+ * longer compiles, or a run this service was not started alongside, must not
+ * take the supervisor down with it.
+ */
+function driveRun(
+  projectRoot: string,
+  paths: ReturnType<typeof resolveSenawaServicePaths>,
+  dependencies: RuntimeDependencies,
+): (input: {
+  readonly repositoryId: string;
+  readonly runId: string;
+  readonly currentTime: string;
+}) => Promise<boolean> {
+  return async ({ repositoryId, runId, currentTime }) => {
+    try {
+      const outcome = await advanceRun({
+        projectRoot,
+        databasePath: paths.databasePath,
+        assetDirectory: paths.assetDirectory,
+        repositoryId,
+        runId,
+        principal: localPrincipal,
+        dependencies,
+        currentTime,
+        workflowInput: boundWorkflowInput({ repositoryId, runId }, paths, dependencies),
+        repositoryBase: {
+          commitDigest: sha256Digest("0".repeat(64)),
+          treeDigest: sha256Digest("0".repeat(64)),
+        },
+      });
+      return classifyOutcome(outcome) === "progress" && outcome.kind !== "finished";
+    } catch {
+      return false;
+    }
+  };
+}
 
 function deterministicAllocations(
   submission: CommandSubmission,

@@ -40,6 +40,16 @@ async function senawa(
   }
 }
 
+/** Polls until the supervisor has done the work, because driving is now its job. */
+async function waitFor<T>(read: () => Promise<T | undefined>, attempts = 60): Promise<T> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const value = await read();
+    if (value !== undefined) return value;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error("The supervisor did not reach the expected state");
+}
+
 describe("the command surface end to end", () => {
   it("scaffolds, validates, starts, and drives a run", async () => {
     const project = await mkdtemp(join(tmpdir(), "senawa-cli-"));
@@ -181,14 +191,19 @@ describe("the command surface end to end", () => {
       );
       expect(refused.stdout).toContain("does not satisfy plan");
 
-      // The whole point of the redesign: an authored workflow, driven from the
-      // command line, reaching its next phase on the strength of an agent's
-      // work. This read "every phase is done" while the driver took the phase
-      // order from a key-sorted registry: the template's second phase sorts
-      // ahead of its first, so one closed phase looked like a finished run.
+      // The whole point of the redesign: an authored workflow reaching its next
+      // phase on the strength of an agent's work, without a person driving it.
+      // The supervisor drives, so `advance` hands the job to it rather than
+      // moving the same run from a second process.
       const repository = /^repository: (.+)$/m.exec(started.stdout)?.[1] ?? "";
       const advanced = await senawa(project, stateRoot, "advance", repository, "run_agent");
-      expect(advanced.stdout).toContain("closed plan");
+      expect(advanced.stdout).toContain("asked the running supervisor to drive");
+
+      const closed = await waitFor(async () => {
+        const status = await senawa(project, stateRoot, "status", repository, "run_agent");
+        return status.stdout.includes("agents dispatched: 2") ? status.stdout : undefined;
+      });
+      expect(closed).toContain("agents dispatched: 2");
 
       // A finished run has to show what it produced.
       const artifacts = await senawa(

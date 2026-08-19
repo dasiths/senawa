@@ -3003,3 +3003,51 @@ than mapped from a source. Lowering leaves such a property unbound rather than
 refusing it, so that phase is still undispatchable. The mapping model has no way
 to express "this member comes from the evidence view", and inventing one from
 here would be guessing. It is the next thing to fix in this area.
+
+## D-046: the supervisor drives runs, so the portal is a complete surface
+
+Driving the example from the browser found that the portal could answer a
+question and nothing would act on the answer. Verified on a clean run: the badge
+showed `Needs 1`, the dialog submitted, the status line read `answer-question
+completed`, needs went to 0 — and forty-five seconds later there were still two
+dispatches, one unsatisfied fresh-dispatch requirement, and both surfaces
+reporting `waiting on you: 0`. The run looked healthy and idle. It was stuck.
+
+Delivering an answer lived in `advanceRun`, which was only ever called by
+`senawa advance`. The supervisor executed work that some other process had
+dispatched and never moved a workflow forward itself. So the portal was a
+complete surface for answering and no surface at all for progressing, which
+makes answering from it pointless.
+
+* Date: 2026-08-19
+* Status: Accepted
+* Decision: the supervisor drives. `SupervisorRunController` takes a
+  `driveRunOnce` hook, called at the end of a cycle when no effect was in
+  flight, and the daemon supplies it with `advanceRun`.
+* Why there and not elsewhere: the controller already holds the run lease. A
+  second process driving the same run concurrently is exactly what the lease
+  exists to prevent, so driving belongs inside it.
+* What the service needed: `SENAWA_PROJECT_DIR`, defaulting to its working
+  directory. Driving compiles the workflow and runs its gate sensors, and
+  neither is possible from `SENAWA_REPOSITORY_DIR`, which is the agents' write
+  area and deliberately not the project.
+* Consequence for the CLI: `senawa advance` now asks a running supervisor to
+  drive rather than driving alongside it, and only drives in-process when
+  nothing is listening. One process moves a run at a time, always.
+* Consequence for a person: they answer, and the run continues. Confirmed live
+  from the browser with no command line at all — answer, fifteen seconds, the
+  agent had read it, worked, and asked the next question.
+
+## F-027: an authored attempt ceiling was three whatever the author wrote
+
+The first self-driving run escalated for budget on its fourth attempt of a phase
+authored `attempts: 8`.
+
+`attempts:` set the phase's `maximumAttempts` and nothing else. The agent
+executor's budget came from `AGENT_BUDGETS`, a module constant fixed at three,
+so the iteration policy and the budget that actually stops the work disagreed
+whenever an author raised the ceiling. Raising `attempts` bought nothing beyond
+three.
+
+The budget is now sized from the phase's own ceiling. They are two counters for
+one thing and there is no reading under which they should differ.

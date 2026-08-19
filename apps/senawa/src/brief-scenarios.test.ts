@@ -353,6 +353,24 @@ describe("what an author can state", () => {
     expect(found).not.toContain("gpt-5-mini");
   });
 
+  it("spends the attempts the author wrote, not a fixed three", async () => {
+    const snapshot = (await compileSnapshot({ attempts: 5 })) as {
+      readonly phaseDataflow: readonly { readonly key: string; readonly value: unknown }[];
+    };
+    const define = snapshot.phaseDataflow.find((entry) => entry.key === "define")?.value as {
+      readonly iteration: { readonly maximumAttempts: number };
+      readonly executor: {
+        readonly budgets: readonly { readonly unit: string; readonly limit: number }[];
+      };
+    };
+
+    // The ceiling and the budget are two counters for one thing. A fixed budget
+    // meant an authored `attempts: 5` raised the policy and nothing else, and
+    // the phase escalated for budget on its fourth attempt.
+    expect(define.iteration.maximumAttempts).toBe(5);
+    expect(define.executor.budgets).toEqual([{ unit: "review-iteration", limit: 5 }]);
+  });
+
   it("binds a declared phase input to the sources its property names", async () => {
     const loaded = await loadAuthoredWorkflow(process.cwd(), dependencies.sha256);
     const snapshot = loaded.snapshot;

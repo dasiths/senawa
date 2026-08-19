@@ -18,6 +18,9 @@ PROJECT := $(CURDIR)
 WORKSPACE := $(PROJECT)/workspace
 
 export SENAWA_REPOSITORY_DIR := $(WORKSPACE)
+# Where .senawa lives. The supervisor drives runs itself, which means compiling
+# the workflow and running its sensors, and neither happens in the workspace.
+export SENAWA_PROJECT_DIR := $(PROJECT)
 # Keep this run's authority out of your user state, so `make clean` is honest.
 export XDG_STATE_HOME := $(PROJECT)/.senawa-state
 export XDG_RUNTIME_DIR := $(PROJECT)/.senawa-state/run

@@ -36,6 +36,16 @@ export interface SupervisorRunControllerOptions {
     readonly lease: import("@senawa/runtime").RunnerLeaseFact;
     readonly currentTime: string;
   }) => { readonly worked: boolean; readonly batchSize?: number };
+  /**
+   * Moves a run's workflow forward: delivers answers, closes phases, dispatches
+   * the next one. Runs under this controller's lease, so nothing else drives
+   * the same run at the same time.
+   */
+  readonly driveRunOnce?: (input: {
+    readonly repositoryId: string;
+    readonly runId: string;
+    readonly currentTime: string;
+  }) => Promise<boolean>;
 }
 
 interface FailurePolicyRunnerAuthority extends RunnerAuthorityPort {
@@ -82,6 +92,7 @@ export class SupervisorRunController {
     | ((repositoryId: string, runId: string) => "continue" | "fail-fast" | undefined)
     | undefined;
   readonly #scheduleBeforeEffects: SupervisorRunControllerOptions["scheduleBeforeEffects"];
+  readonly #driveRunOnce: SupervisorRunControllerOptions["driveRunOnce"];
 
   constructor(options: SupervisorRunControllerOptions) {
     this.authority = options.authority;
@@ -108,6 +119,7 @@ export class SupervisorRunController {
     this.#runnerAuthority = options.runnerAuthority;
     this.#failurePolicyForRun = options.failurePolicyForRun;
     this.#scheduleBeforeEffects = options.scheduleBeforeEffects;
+    this.#driveRunOnce = options.driveRunOnce;
     if (!Number.isSafeInteger(this.#runnerBatchSize) || this.#runnerBatchSize < 1) {
       throw new TypeError("Runner batch size must be a positive safe integer");
     }
@@ -319,12 +331,24 @@ export class SupervisorRunController {
           input.currentTime(),
         );
       }
+      // Driving is what turns a recorded human decision into work. It runs last
+      // because an effect still in flight is the run's current business, and it
+      // runs here rather than in another process so this lease covers it.
+      const driven =
+        runnerWorked(runner) || receipt !== undefined
+          ? false
+          : ((await this.#driveRunOnce?.({
+              repositoryId: input.repositoryId,
+              runId: input.runId,
+              currentTime: input.currentTime(),
+            })) ?? false);
       const worked =
         receipt !== undefined ||
         completionDelivered ||
         amendmentProposalDelivered ||
         amendmentApplyQueued ||
         scheduled?.worked === true ||
+        driven ||
         runnerWorked(runner);
       completed = true;
       return {
