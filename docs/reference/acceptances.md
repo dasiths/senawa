@@ -58,6 +58,7 @@ claims are made; it does not certify the ones that are absent.
 | A live instruction reaches the agent mid-turn | docs/reference/cli.md | `copilot-worker.test.ts > delivers a person's instruction to the agent working right now` |
 | A fan-out member can be redirected while it works | docs/reference/cli.md | `brief-scenarios.test.ts > records a fan-out steering against the member's own dispatch` |
 | Every member of a fan-out runs, not only the first | docs/reference/authoring.md | `brief-scenarios.test.ts > dispatches the second member after the first one finishes` |
+| A fan-out closes once every member has finished | docs/reference/authoring.md | `brief-scenarios.test.ts > closes the phase once every member has finished` |
 
 ## The command line
 

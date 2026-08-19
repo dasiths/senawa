@@ -442,7 +442,11 @@ async function step(
 
   // The authority derives the phase's accepted tasks from delivered completion
   // facts, so anything still sitting in the outbox has to be handed over first.
-  deliverFacts(input, supervisor, broker, state, dispatchId);
+  // Every member's completion has to reach the authority, not only the one
+  // this dispatch carried. The authority derives the phase's accepted tasks from
+  // delivered facts, so a member left in the outbox is a member the phase does
+  // not know finished, and the candidate is refused for not covering it.
+  deliverFacts(input, supervisor, broker, state, phaseDispatchIds);
 
   const gate = gateFor(snapshot, phase, input.dependencies.sha256);
   const measured = gate === undefined ? [] : await readGate(input, snapshot, gate);
@@ -705,10 +709,10 @@ function deliverFacts(
   supervisor: SqliteSupervisorAuthority,
   broker: SqliteContextBroker,
   state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
-  dispatchId: string,
+  dispatchIds: ReadonlySet<string>,
 ): void {
   for (const entry of state.completionOutbox) {
-    if (entry.delivered || entry.fact.dispatchId !== dispatchId) continue;
+    if (entry.delivered || !dispatchIds.has(String(entry.fact.dispatchId))) continue;
     const stored = broker.loadWorkerDispatch(entry.fact.dispatchId);
     if (stored === undefined) continue;
     submit(

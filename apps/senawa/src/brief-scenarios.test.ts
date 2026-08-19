@@ -131,6 +131,26 @@ describe("running every member of a fan-out", () => {
     if (next.kind !== "dispatched") throw new Error("expected the second member");
     expect(next.dispatchId).not.toBe(first.dispatchId);
   });
+
+  it("closes the phase once every member has finished", async () => {
+    const scenario = await startScenario("fanout-close", { fanOut: "complete" });
+    await agentTurn(
+      scenario,
+      scenario.dispatchId,
+      canonicalValue({ tasks: [{ id: "one" }, { id: "two" }, { id: "three" }] }),
+    );
+    await advance(scenario);
+    await advance(scenario);
+    for (let member = 0; member < 3; member += 1) {
+      const dispatched = await advance(scenario);
+      if (dispatched.kind !== "dispatched") throw new Error(`member ${member}: ${dispatched.kind}`);
+      await agentTurn(scenario, dispatched.dispatchId, canonicalValue({ verified: true }));
+    }
+
+    // A fan-out that runs every member and then cannot close never finishes,
+    // which is the same outcome for a person as never having started.
+    expect(await advance(scenario)).toEqual({ kind: "finished" });
+  });
 });
 
 describe("what an author can state", () => {

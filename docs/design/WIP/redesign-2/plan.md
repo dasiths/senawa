@@ -401,15 +401,12 @@ Acceptance:
   materialise as tasks under the fan-out phase and run one at a time. D-025's
   deviation stands: per-member gates and approval still need the phase model.**
 * [ ] Give each member its own operating contract, output, evidence policy,
-  gates, approval, attempt policy, escalation, and history. **F-017 marks where
-  this stops being optional. Every member now runs (D-040), but a fan-out with
-  more than one member cannot close: a phase attempt binds one input, so each
-  member takes its own attempt ordinal, and the phase candidate then covers
-  tasks whose references belong to different attempts. Closing gathers
-  assessments from every member rather than one dispatch, which was needed and
-  is not sufficient. The remaining refusal is the candidate task-set coverage
-  check, and it is the phase model itself: a phase is one unit of work with one
-  attempt and one input, and a member needs all three of its own.**
+  gates, approval, attempt policy, escalation, and history. **Members now run and
+  the phase closes over all of them (D-040). What is still missing is per-member
+  gates, approval, and attempt policy, which is the D-025 deviation and nothing
+  more. F-017 was withdrawn: it claimed the phase model blocked closing a
+  multi-member fan-out, and the real cause was the driver handing the authority
+  one member's completion fact.**
 * [x] Honour per-phase failure policy: wait, proceed with passed members, or fail
   outright. **Partial: the authored policy now reaches the run. The authority
   holds one policy per run, so a run any phase wants stopped is stopped. F-013.**
@@ -433,7 +430,8 @@ Acceptance:
   to close a phase most of whose members had never been dispatched. Each member
   now binds its own phase attempt. D-040.**
 * [ ] Three failing members do not block the remaining seven under a continue
-  policy.
+  policy. **Members now run to completion and the phase closes over all of them,
+  so what remains is the failing half.**
 * [x] A nested member at the configured depth runs its own complete loop, and one
   beyond the bound is refused at authoring time. **Partial: the bound is one
   level in v1 and nesting past it is refused when written. A member running its
