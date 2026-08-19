@@ -860,6 +860,16 @@ describe("where agents work and how many write at once", () => {
     expect(diagnostics.map(({ message }) => message).join(" ")).toContain("integrationRef");
   });
 
+  it("refuses a branch name the runtime would reject when the run started", async () => {
+    const diagnostics = await compileScenario({
+      execution: "execution:\n  workspace: worktree\n  integrationRef: main",
+    });
+
+    // The runtime takes a full local ref. Compiling `main` and failing at start
+    // is the worst place for an author to find out.
+    expect(diagnostics.map(({ message }) => message).join(" ")).toContain("refs/heads/main");
+  });
+
   it("refuses an execution field the reader does not know", async () => {
     const diagnostics = await compileScenario({ execution: "execution:\n  workspce: worktree" });
     expect(diagnostics.map(({ message }) => message).join(" ")).toContain("workspce");

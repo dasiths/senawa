@@ -854,16 +854,18 @@ function readExecution(
   }
 
   const integrationRef =
-    typeof raw.integrationRef === "string" && raw.integrationRef.length > 0
+    typeof raw.integrationRef === "string" && raw.integrationRef.startsWith("refs/heads/")
       ? raw.integrationRef
       : undefined;
   if (raw.integrationRef !== undefined && integrationRef === undefined) {
+    // The runtime takes a full local ref. Accepting `main` here would compile
+    // and then fail when the run started, which is the worst place to find out.
     add(
       collector,
       "invalid-field",
       path,
       "/execution/integrationRef",
-      "Integration ref must be a non-empty branch name",
+      "Integration ref must be a full local branch ref, such as refs/heads/main",
     );
   }
 

@@ -47,7 +47,7 @@ execution:
 |---|---|---|---|
 | `workspace` | No | `repository` or `worktree` | `repository` |
 | `maxWriters` | No | Positive whole number | `1` |
-| `integrationRef` | With `worktree` | Branch work is integrated onto | None |
+| `integrationRef` | With `worktree` | Full local ref, such as `refs/heads/main` | None |
 
 By default one agent writes at a time, directly in the repository, which is the
 shape a person can reason about without knowing anything about worktrees.

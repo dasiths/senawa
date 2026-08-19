@@ -29,6 +29,7 @@ claims are made; it does not certify the ones that are absent.
 | One writer works in the repository by default | docs/reference/authoring.md | `brief-scenarios.test.ts > defaults to one writer in the repository, which needs no worktree` |
 | Worktree mode isolates writers and names where work integrates | docs/guide/worktree-mode.md | `brief-scenarios.test.ts > lets an author isolate writers in worktrees and say where work integrates` |
 | Parallel writers sharing one directory are refused | docs/reference/authoring.md | `brief-scenarios.test.ts > refuses parallel writers that would share one directory` |
+| An integration ref the runtime would reject is refused at authoring | docs/reference/authoring.md | `brief-scenarios.test.ts > refuses a branch name the runtime would reject when the run started` |
 
 ## Sessions
 
