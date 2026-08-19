@@ -252,6 +252,9 @@ function operatingInstructions(
       // recorded.
       "Ask by calling senawa. A question written only in your reply reaches nobody.",
       "Asking stops the run until a person answers, and their answer comes back to you on a later turn rather than in this one.",
+      // Asking a person how to use senawa spends an attempt on something senawa
+      // will answer for free.
+      "Ask about the work, not about senawa. Anything senawa can tell you, ask senawa.",
     );
   }
   if (context.answeredQuestions.length > 0) {

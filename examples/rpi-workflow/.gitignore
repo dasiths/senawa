@@ -1,0 +1,4 @@
+# The run's state, and everything the agents write. `make clean` removes both.
+.senawa-state/
+workspace/
+request.json

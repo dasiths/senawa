@@ -41,7 +41,7 @@ help:
 	@echo "make portal     print a one-time URL for the browser console"
 	@echo "make run        write the request, start the run, and put the service on it"
 	@echo "make advance    take one more step when the run is waiting"
-	@echo "make status     what the service thinks is happening"
+	@echo "make status     what a run is doing, or the service when no run is named"
 	@echo "make agents     who is working, on what, and on which model"
 	@echo "make answer     answer the question an agent is waiting on"
 	@echo "make approve    accept a phase that is waiting for a person"
@@ -50,7 +50,7 @@ help:
 	@echo "make game       show what the agents built"
 	@echo "make clean      remove the run's state and everything the agents wrote"
 	@echo ""
-	@echo "Spends AI credits from 'copilot auth login'. See README.md."
+	@echo "Spends AI credits from 'copilot login'. See README.md."
 
 .PHONY: check
 check:
@@ -102,7 +102,11 @@ advance:
 
 .PHONY: status
 status:
-	@$(SENAWA) service status
+	@if [ -n "$(REPO)" ] && [ -n "$(RUN)" ]; then \
+		$(SENAWA) status $(REPO) $(RUN); \
+	else \
+		$(SENAWA) service status; \
+	fi
 
 .PHONY: agents
 agents:

@@ -8,7 +8,10 @@ name: rpi
 input: schemas/request.schema.json
 
 defaults:
-  attempts: 3
+  # An answer arrives on a new attempt rather than beside the question, so every
+  # question an agent asks spends one. Three is the senawa default and too few
+  # for a workflow whose whole point is that its agents ask.
+  attempts: 8
   onGateRejected: iterate
   onApprovalRejected: iterate
   onUpstreamChanged: iterate
