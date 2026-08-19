@@ -70,6 +70,7 @@ claims are made; it does not certify the ones that are absent.
 |---|---|---|
 | An authored project drives a real Copilot agent to a finished run | docs/guide/getting-started.md | `live-run.test.ts > runs a project from clean directory to finished run` |
 | A real agent finds the handshake from the generated contract alone | docs/reference/cli.md | `live-loop.test.ts > completes a phase it was never told how to complete` |
+| Artifacts and the transcript survive a restart | docs/guide/operations.md | `live-run.test.ts > runs a project from clean directory to finished run` |
 
 ## The command line
 

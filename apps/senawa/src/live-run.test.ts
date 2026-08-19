@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { CopilotSerialWorkerAdapter, ProductionCopilotSdkPort } from "@senawa/execution-host";
 import { canonicalValue, sha256Digest } from "@senawa/kernel";
 import { SqliteAuthority, SqliteContextBroker } from "@senawa/storage-sqlite";
@@ -10,6 +11,7 @@ import { type AdvanceOutcome, advanceRun } from "./advance-run.js";
 import { BASE, dependencies, NOW } from "./brief-scenarios.js";
 import { configurationPhaseOutputSchemas } from "./dataflow-composition.js";
 import { answerQuestion } from "./decide.js";
+import { listArtifacts } from "./inspect.js";
 import { startAuthoredRun } from "./start-run.js";
 
 // Opt in, because this spends model credits. Everything about the loop is proven
@@ -161,6 +163,7 @@ describe.skipIf(!live)("a real agent driven by an authored workflow", () => {
             context: stored.context,
             dispatch: stored.dispatch,
             phaseOutputSchemas: schemas,
+            transcript: broker.transcript,
             grantTokens: new Map(),
             routeSelection: started.routeSelection,
             workingDirectory,
@@ -202,6 +205,23 @@ describe.skipIf(!live)("a real agent driven by an authored workflow", () => {
 
         expect(statuses).toContain("completed");
         expect(outcome).toEqual({ kind: "finished" });
+
+        // Nothing from the run is still in memory here. Every handle used above
+        // is gone, and these read the same paths from disk, which is all a
+        // restarted process would have.
+        const listed = listArtifacts({ ...paths, ...identity, dependencies, currentTime: NOW });
+        expect(listed.exitCode).toBe(0);
+        expect(listed.output).not.toBe("no artifacts yet");
+
+        const database = new DatabaseSync(paths.databasePath, { readOnly: true });
+        try {
+          const row = database
+            .prepare("SELECT COUNT(*) AS total FROM agent_transcript_lines")
+            .get() as { readonly total: number };
+          expect(row.total).toBeGreaterThan(0);
+        } finally {
+          database.close();
+        }
       } finally {
         if (port.clientOwnership === "port-created") await port.stopOwnedClient();
       }

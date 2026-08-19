@@ -156,9 +156,11 @@ Acceptance:
   discarded, the driver could not read output bytes a worker staged, a staged
   output was never installed where its publication references it, and the live
   tests themselves had never been executed. D-042.**
-* [ ] The artifacts and transcript survive a process restart. **Not done: the
-  durable stores are exercised by the existing restart tests, but no test yet
-  restarts the autonomous loop mid-dispatch. Moved to Phase 8.**
+* [x] The artifacts and transcript survive a process restart. **The live run
+  drives every step through handles it opens and closes, so each advance already
+  starts from disk alone, and it then reads the artifact list and the transcript
+  back with nothing from the run left in memory. Proven by removing transcript
+  capture and watching the assertion fail.**
 * [x] A scripted agent with no model completes the same loop, keeping the path
   testable without credits. **Moved to Phase 8. Phase 5 first defines the
   adapter-neutral contract the script follows.**
