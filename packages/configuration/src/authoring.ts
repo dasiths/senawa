@@ -292,6 +292,7 @@ interface AuthoredRoute {
   readonly maxTurns: number;
   readonly maxSubmissions: number;
   readonly maxMillidollars: number;
+  readonly maxAiCredits: number;
 }
 
 interface AuthoredPhase {
@@ -395,7 +396,7 @@ function readAgents(
     agents.set(key, {
       key,
       prompt,
-      provider: typeof raw.provider === "string" ? raw.provider : "openai",
+      provider: typeof raw.provider === "string" ? raw.provider : "github-copilot",
       routes,
       session,
       ...(typeof raw.sessionTurns === "number" &&
@@ -632,13 +633,17 @@ function readRoutes(
   pointer: string,
   raw: Readonly<Record<string, unknown>>,
 ): readonly AuthoredRoute[] {
-  const provider = typeof raw.provider === "string" ? raw.provider : "openai";
+  const provider = typeof raw.provider === "string" ? raw.provider : "github-copilot";
+  // Hosts refuse a session below their own credit floor, so the default has to
+  // be a number that can actually start one rather than the smallest legal one.
+  const credits = typeof raw.credits === "number" && raw.credits > 0 ? raw.credits : 30;
   const build = (value: Readonly<Record<string, unknown>>, model: string): AuthoredRoute => ({
     provider: typeof value.provider === "string" ? value.provider : provider,
     model,
     maxTurns: typeof value.turns === "number" ? value.turns : 12,
     maxSubmissions: typeof value.submissions === "number" ? value.submissions : 4,
     maxMillidollars: typeof value.spend === "number" ? value.spend : 5_000,
+    maxAiCredits: typeof value.credits === "number" && value.credits > 0 ? value.credits : credits,
   });
 
   if (typeof raw.model === "string") {

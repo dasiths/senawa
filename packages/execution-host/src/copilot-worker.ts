@@ -225,7 +225,8 @@ export class CopilotSerialWorkerAdapter {
       } else if (state.completionDisposition !== undefined) {
         status = state.completionDisposition === "blocked" ? "blocked" : "completed";
       }
-    } catch {
+    } catch (error) {
+      console.error("LIVE-CRASH", error);
       status = "crashed";
     } finally {
       scope.active = false;

@@ -421,7 +421,8 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
       maxTurns: route.maxTurns,
       maxSubmissions: route.maxSubmissions,
       maxMillidollars: route.maxMillidollars,
-      maxAiCredits: input.maxAiCredits ?? 1,
+      // The authored route is the answer unless a caller overrides it.
+      maxAiCredits: input.maxAiCredits ?? route.maxAiCredits ?? 1,
     },
     context,
     dispatch,

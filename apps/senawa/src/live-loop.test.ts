@@ -3,11 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CopilotSerialWorkerAdapter, ProductionCopilotSdkPort } from "@senawa/execution-host";
 import { canonicalValue, sha256Digest } from "@senawa/kernel";
-import { SqliteContextBroker } from "@senawa/storage-sqlite";
+import { SqliteAuthority, SqliteContextBroker } from "@senawa/storage-sqlite";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { type AdvanceOutcome, advanceRun } from "./advance-run.js";
 import { BASE, dependencies, disposeScenarios, NOW, startScenario } from "./brief-scenarios.js";
+import { configurationPhaseOutputSchemas } from "./dataflow-composition.js";
 
 // Opt in, because this spends model credits. Everything about the loop is also
 // proven without a model by the scripted scenarios. What this adds is that a
@@ -28,7 +29,9 @@ describe.skipIf(!live)("a real agent drives an authored phase", () => {
       const isolated = await mkdtemp(join(tmpdir(), "senawa-live-loop-"));
       const workingDirectory = await mkdtemp(join(isolated, "work-"));
       const baseDirectory = await mkdtemp(join(isolated, "home-"));
-      const scenario = await startScenario("live");
+      const scenario = await startScenario("live", {
+        model: process.env.SENAWA_COPILOT_MODEL ?? "claude-haiku-4.5",
+      });
       const broker = new SqliteContextBroker({
         databasePath: scenario.paths.databasePath,
         dependencies: {
@@ -37,6 +40,7 @@ describe.skipIf(!live)("a real agent drives an authored phase", () => {
           issueGrantToken: () => new Uint8Array(32),
         },
       });
+      const authority = new SqliteAuthority({ ...scenario.paths, dependencies });
       let port: ProductionCopilotSdkPort | undefined;
       try {
         const stored = broker
@@ -48,11 +52,20 @@ describe.skipIf(!live)("a real agent drives an authored phase", () => {
           repositoryDirectory: workingDirectory,
           workingDirectory,
           baseDirectory,
+          // The agent works in the throwaway checkout it was given, which is
+          // both its repository and its working directory here.
+          allowRepositoryWorkingDirectory: true,
         });
         const result = await new CopilotSerialWorkerAdapter(port, dependencies.sha256).run({
           broker,
           context: stored.context,
           dispatch: stored.dispatch,
+          // Without these the agent is never offered the output the phase
+          // declares, so it completes and the phase can never close.
+          phaseOutputSchemas: configurationPhaseOutputSchemas(
+            (digest) => authority.getConfigurationSnapshot(digest),
+            dependencies.sha256,
+          ).resolve(stored),
           grantTokens: new Map(),
           routeSelection: scenario.routeSelection,
           workingDirectory,
@@ -68,6 +81,7 @@ describe.skipIf(!live)("a real agent drives an authored phase", () => {
           } catch {}
         }
         broker.close();
+        authority.close();
       }
 
       let outcome: AdvanceOutcome = { kind: "awaiting-agent", phaseKey: scenario.phaseKey };

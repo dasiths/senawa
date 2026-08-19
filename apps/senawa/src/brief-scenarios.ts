@@ -88,6 +88,8 @@ export interface ScenarioOptions {
   readonly sessionTurns?: number;
   /** Authors where agents work and how many of them write at once. */
   readonly execution?: string;
+  /** The model every agent runs on. Only a live run needs one that exists. */
+  readonly model?: string;
 }
 
 export interface Scenario {
@@ -438,16 +440,20 @@ async function authoredProject(options: ScenarioOptions): Promise<string> {
   await mkdir(join(configuration, "schemas"), { recursive: true });
   await writeFile(
     join(configuration, "agents.yaml"),
-    options.routeLimits === true
-      ? AGENTS_ROUTED
-      : options.session === undefined
-        ? AGENTS
-        : AGENTS.replace(
-            "definer:\n",
-            `definer:\n  session: ${options.session}\n${
-              options.sessionTurns === undefined ? "" : `  sessionTurns: ${options.sessionTurns}\n`
-            }`,
-          ),
+    options.model !== undefined
+      ? AGENTS.replaceAll("model: gpt-5", `model: ${options.model}`)
+      : options.routeLimits === true
+        ? AGENTS_ROUTED
+        : options.session === undefined
+          ? AGENTS
+          : AGENTS.replace(
+              "definer:\n",
+              `definer:\n  session: ${options.session}\n${
+                options.sessionTurns === undefined
+                  ? ""
+                  : `  sessionTurns: ${options.sessionTurns}\n`
+              }`,
+            ),
   );
   await writeFile(join(configuration, "workflow.yaml"), workflow(options));
   await writeFile(join(configuration, "sensors.yaml"), sensors(options));

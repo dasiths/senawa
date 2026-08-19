@@ -24,6 +24,7 @@ import {
   decodeCommandEnvelope,
   PROTOCOL_VERSION,
 } from "@senawa/protocol";
+import type { CanonicalJsonAssetPort } from "@senawa/runtime";
 import { RuntimeDataflowAuthority, type RuntimeDependencies } from "@senawa/runtime";
 import {
   SqliteAuthority,
@@ -34,6 +35,7 @@ import {
 import { SqliteSupervisorAuthority } from "@senawa/supervisor";
 import {
   configurationRuntimeSchemaValidator,
+  phaseOutputAssetPort,
   runtimeSchemaContract,
 } from "./dataflow-composition.js";
 import { dispatchPhase } from "./dispatch-driver.js";
@@ -294,7 +296,7 @@ async function step(
       dataflow: new RuntimeDataflowAuthority(
         input.dependencies.sha256,
         configurationRuntimeSchemaValidator(),
-        new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
+        assets(supervisor, broker),
         supervisor.commandAuthority,
       ),
       contextBroker: broker,
@@ -308,12 +310,7 @@ async function step(
       // content and the dataflow refuses to reuse an ordinal for a new one.
       attempt: pendingMember + 1,
       workflowInput: input.workflowInput,
-      upstream: upstreamOutputs(
-        snapshot,
-        phase,
-        state,
-        new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
-      ),
+      upstream: upstreamOutputs(snapshot, phase, state, assets(supervisor, broker)),
       repositoryBase: input.repositoryBase,
       currentTime: input.currentTime,
     });
@@ -334,7 +331,7 @@ async function step(
   const dataflow = new RuntimeDataflowAuthority(
     input.dependencies.sha256,
     configurationRuntimeSchemaValidator(),
-    new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
+    assets(supervisor, broker),
     supervisor.commandAuthority,
   );
 
@@ -350,7 +347,7 @@ async function step(
         phaseKey,
         phase,
         state,
-        new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
+        assets(supervisor, broker),
       );
     }
     const dispatched = dispatchPhase({
@@ -363,12 +360,7 @@ async function step(
       runId: input.runId,
       phaseKey,
       workflowInput: input.workflowInput,
-      upstream: upstreamOutputs(
-        snapshot,
-        phase,
-        state,
-        new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
-      ),
+      upstream: upstreamOutputs(snapshot, phase, state, assets(supervisor, broker)),
       repositoryBase: input.repositoryBase,
       currentTime: input.currentTime,
     });
@@ -400,12 +392,7 @@ async function step(
         runId: input.runId,
         phaseKey,
         workflowInput: input.workflowInput,
-        upstream: upstreamOutputs(
-          snapshot,
-          phase,
-          state,
-          new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
-        ),
+        upstream: upstreamOutputs(snapshot, phase, state, assets(supervisor, broker)),
         repositoryBase: input.repositoryBase,
         currentTime: input.currentTime,
         attempt: attempt + 1,
@@ -568,12 +555,7 @@ async function step(
         runId: input.runId,
         phaseKey,
         workflowInput: input.workflowInput,
-        upstream: upstreamOutputs(
-          snapshot,
-          phase,
-          state,
-          new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
-        ),
+        upstream: upstreamOutputs(snapshot, phase, state, assets(supervisor, broker)),
         repositoryBase: input.repositoryBase,
         currentTime: input.currentTime,
         attempt: attempt + 1,
@@ -626,12 +608,7 @@ async function step(
         runId: input.runId,
         phaseKey,
         workflowInput: input.workflowInput,
-        upstream: upstreamOutputs(
-          snapshot,
-          phase,
-          state,
-          new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
-        ),
+        upstream: upstreamOutputs(snapshot, phase, state, assets(supervisor, broker)),
         repositoryBase: input.repositoryBase,
         currentTime: input.currentTime,
         attempt: attempt + 1,
@@ -778,7 +755,7 @@ function materialiseMembers(
   phaseKey: string,
   phase: SnapshotPhase,
   state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
-  assets: SqliteCanonicalJsonAssetStore,
+  assets: CanonicalJsonAssetPort,
 ): AdvanceOutcome {
   const upstream = upstreamOutputs(snapshot, phase, state, assets)[0];
   if (upstream === undefined) return { kind: "awaiting-agent", phaseKey };
@@ -1025,7 +1002,7 @@ function upstreamOutputs(
   snapshot: ConfigurationSnapshot,
   phase: SnapshotPhase,
   state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
-  assets: SqliteCanonicalJsonAssetStore,
+  assets: CanonicalJsonAssetPort,
 ): readonly {
   readonly phase: string;
   readonly output: string;
@@ -1110,4 +1087,30 @@ function executionFailurePolicy(snapshot: ConfigurationSnapshot): string {
   const execution = (snapshot as unknown as { readonly execution?: Record<string, unknown> })
     .execution;
   return String(execution?.failurePolicy ?? "continue");
+}
+
+/**
+ * Reads a phase output whether the run installed it or a worker staged it.
+ *
+ * A worker that runs in its own process hands its output bytes to the broker
+ * rather than to the run's asset store. Reading only the store means every
+ * output a real agent published looks like a missing asset.
+ */
+function assets(supervisor: SqliteSupervisorAuthority, broker: SqliteContextBroker) {
+  const store = new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority);
+  return Object.freeze({
+    install: (value: CanonicalValue) => store.install(value),
+    load(contentDigest: Sha256Digest): CanonicalValue | undefined {
+      const installed = store.load(contentDigest);
+      if (installed !== undefined) return installed;
+      const bytes = broker.loadCanonicalOutputBytes(String(contentDigest));
+      if (bytes === undefined) return undefined;
+      // Reading a staged output installs it. A publication references the run's
+      // own asset, so leaving it staged would satisfy the read and then fail the
+      // reference it was read for.
+      const value = canonicalValue(JSON.parse(new TextDecoder().decode(bytes)) as unknown);
+      store.install(value);
+      return value;
+    },
+  });
 }

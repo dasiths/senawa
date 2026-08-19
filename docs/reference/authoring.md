@@ -170,7 +170,7 @@ Each top-level key names an agent.
 | `prompt` | Yes | Path to a prompt template | None |
 | `model` | One of two | Model identifier | None |
 | `models` | One of two | Ordered route list | None |
-| `provider` | No | Provider name | `openai` |
+| `provider` | No | Provider name | `github-copilot` |
 | `session` | No | `run`, `phase`, or `element` | `run` |
 | `credits` | No | Positive number | 1 |
 

@@ -146,10 +146,16 @@ because building the agent contract twice would be waste.
 
 Acceptance:
 
-* [ ] From a clean repository, an authored workflow drives a real Copilot agent
-  through one phase to a granted completion. **Moved to Phase 8 after Phase 5
-  defines how an agent knows to call complete with its output asset. The live case remains
-  opt-in because it spends model credits.**
+* [x] From a clean repository, an authored workflow drives a real Copilot agent
+  through one phase to a granted completion. **Done and run against a live
+  account. `live-run.test.ts` authors a project in an empty directory, starts a
+  run, gives each dispatch to a real Copilot worker, answers a question if the
+  agent asks one, and finishes. Still opt-in, because it spends credits. Running
+  it for the first time found five defects nothing else could: the provider
+  default was a name the only worker refuses, authored `credits` were parsed and
+  discarded, the driver could not read output bytes a worker staged, a staged
+  output was never installed where its publication references it, and the live
+  tests themselves had never been executed. D-042.**
 * [ ] The artifacts and transcript survive a process restart. **Not done: the
   durable stores are exercised by the existing restart tests, but no test yet
   restarts the autonomous loop mid-dispatch. Moved to Phase 8.**

@@ -64,6 +64,13 @@ claims are made; it does not certify the ones that are absent.
 | A person can accept work the run would not, and the run continues | docs/reference/cli.md | `brief-scenarios.test.ts > carries on after a person accepts the work the run would not` |
 | An override is refused when nothing failed | docs/reference/cli.md | `brief-scenarios.test.ts > refuses an override when nothing reported that it could not finish` |
 
+## A real agent
+
+| Claim | Where it is stated | Proven by |
+|---|---|---|
+| An authored project drives a real Copilot agent to a finished run | docs/guide/getting-started.md | `live-run.test.ts > runs a project from clean directory to finished run` |
+| A real agent finds the handshake from the generated contract alone | docs/reference/cli.md | `live-loop.test.ts > completes a phase it was never told how to complete` |
+
 ## The command line
 
 | Claim | Where it is stated | Proven by |
