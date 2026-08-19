@@ -1,5 +1,6 @@
 import { validateSchemaInstance } from "@senawa/configuration";
 import {
+  type AgentSessionScope,
   type CanonicalValue,
   type CompletionSubmission,
   canonicalBytes,
@@ -79,6 +80,8 @@ export interface CopilotWorkerRunInput {
   readonly transcript?: AgentTranscriptPort;
   readonly sessionBaseDirectory?: string;
   readonly sessionResume?: Readonly<{
+    /** How much may change and still be the same conversation. */
+    readonly scope?: AgentSessionScope;
     readonly requestedBinding: unknown;
     readonly authorizedBinding?: unknown;
   }>;
@@ -152,6 +155,7 @@ export class CopilotSerialWorkerAdapter {
               input.sessionResume.requestedBinding,
               input.sessionResume.authorizedBinding,
               this.sha256,
+              input.sessionResume.scope,
             );
       const resumableSessionId =
         resumeDecision?.action === "resume"

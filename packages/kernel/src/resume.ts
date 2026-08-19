@@ -101,34 +101,6 @@ export function validateAgentSessionResumeBinding(
   return expected;
 }
 
-export function decideAgentSessionResume(
-  requestedValue: unknown,
-  predecessorValue: unknown | undefined,
-  sha256: Sha256,
-): AgentSessionResumeDecision {
-  const requested = validateAgentSessionResumeBinding(requestedValue, sha256);
-  const predecessor =
-    predecessorValue === undefined
-      ? undefined
-      : validateAgentSessionResumeBinding(predecessorValue, sha256);
-  const mismatchFields =
-    predecessor === undefined
-      ? []
-      : RESUME_FIELDS.filter((field) => requested[field] !== predecessor[field]);
-  const action =
-    predecessor !== undefined && mismatchFields.length === 0 ? "resume" : "new-session";
-  const content = {
-    action,
-    requestedBindingDigest: requested.bindingDigest,
-    ...(predecessor === undefined ? {} : { predecessorBindingDigest: predecessor.bindingDigest }),
-    mismatchFields,
-  };
-  return canonicalValue({
-    ...content,
-    decisionDigest: canonicalDigest(canonicalValue(content), sha256),
-  }) as unknown as AgentSessionResumeDecision;
-}
-
 const RESUME_FIELDS = Object.freeze([
   "predecessorDispatchId",
   "predecessorSessionId",
@@ -146,6 +118,64 @@ const RESUME_FIELDS = Object.freeze([
   "repositoryCommitDigest",
   "repositoryTreeDigest",
 ] as const satisfies readonly (keyof AgentSessionResumeBindingInput)[]);
+
+/**
+ * How much may change and still be the same conversation.
+ *
+ * `attempt` is a replay guard: nothing may differ, so an identical dispatch
+ * reuses its session and anything else starts fresh. The other two are persona
+ * rules, and they are the point of a durable session: an agent asked to try
+ * again should remember why it was refused, and an agent working several phases
+ * should remember the earlier ones. What differs between them is exactly what
+ * the session exists to carry.
+ */
+export type AgentSessionScope = "attempt" | "phase" | "run";
+
+const SCOPE_FIELDS: Readonly<
+  Record<AgentSessionScope, readonly (keyof AgentSessionResumeBindingInput)[]>
+> = Object.freeze({
+  attempt: RESUME_FIELDS,
+  // A retry keeps the task and the graph; the prompt, input, and context move.
+  phase: Object.freeze([
+    "taskId",
+    "taskGeneration",
+    "graphRevisionDigest",
+    "configurationSnapshotDigest",
+  ] as const),
+  // A persona keeps its session across the phases it works, so only the
+  // workflow it is working stays fixed.
+  run: Object.freeze(["configurationSnapshotDigest"] as const),
+});
+
+export function decideAgentSessionResume(
+  requestedValue: unknown,
+  predecessorValue: unknown | undefined,
+  sha256: Sha256,
+  scope: AgentSessionScope = "attempt",
+): AgentSessionResumeDecision {
+  const requested = validateAgentSessionResumeBinding(requestedValue, sha256);
+  const predecessor =
+    predecessorValue === undefined
+      ? undefined
+      : validateAgentSessionResumeBinding(predecessorValue, sha256);
+  const compared = SCOPE_FIELDS[scope];
+  const mismatchFields =
+    predecessor === undefined
+      ? []
+      : compared.filter((field) => requested[field] !== predecessor[field]);
+  const action =
+    predecessor !== undefined && mismatchFields.length === 0 ? "resume" : "new-session";
+  const content = {
+    action,
+    requestedBindingDigest: requested.bindingDigest,
+    ...(predecessor === undefined ? {} : { predecessorBindingDigest: predecessor.bindingDigest }),
+    mismatchFields,
+  };
+  return canonicalValue({
+    ...content,
+    decisionDigest: canonicalDigest(canonicalValue(content), sha256),
+  }) as unknown as AgentSessionResumeDecision;
+}
 
 function validateInput(input: AgentSessionResumeBindingInput): void {
   if (

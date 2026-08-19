@@ -47,6 +47,47 @@ describe("agent session resume binding", () => {
     expect(Object.keys(binding)).not.toContain("memory");
     expect(decideAgentSessionResume(binding, undefined, sha256).action).toBe("new-session");
   });
+
+  it("keeps a phase-scoped session across a retry", () => {
+    const predecessor = createAgentSessionResumeBinding(input(), sha256);
+    // A retry necessarily changes the prompt pack, the mapped input, and the
+    // context, because it carries the reasons the last attempt was refused.
+    const retry = createAgentSessionResumeBinding(
+      {
+        ...input(),
+        promptPackDigest: OTHER_DIGEST,
+        mappedInputDigest: OTHER_DIGEST,
+        contextDigest: OTHER_DIGEST,
+      },
+      sha256,
+    );
+
+    expect(decideAgentSessionResume(retry, predecessor, sha256, "phase").action).toBe("resume");
+    // The same pair under the replay guard is a different conversation.
+    expect(decideAgentSessionResume(retry, predecessor, sha256, "attempt").action).toBe(
+      "new-session",
+    );
+  });
+
+  it("keeps a run-scoped session across phases but not across workflows", () => {
+    const predecessor = createAgentSessionResumeBinding(input(), sha256);
+    const nextPhase = createAgentSessionResumeBinding(
+      { ...input(), taskId: taskId("task_second"), promptPackDigest: OTHER_DIGEST },
+      sha256,
+    );
+    const otherWorkflow = createAgentSessionResumeBinding(
+      { ...input(), configurationSnapshotDigest: OTHER_DIGEST },
+      sha256,
+    );
+
+    expect(decideAgentSessionResume(nextPhase, predecessor, sha256, "run").action).toBe("resume");
+    expect(decideAgentSessionResume(nextPhase, predecessor, sha256, "phase").action).toBe(
+      "new-session",
+    );
+    expect(decideAgentSessionResume(otherWorkflow, predecessor, sha256, "run").action).toBe(
+      "new-session",
+    );
+  });
 });
 
 function input() {

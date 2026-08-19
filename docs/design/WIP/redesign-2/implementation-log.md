@@ -2744,6 +2744,34 @@ threads through candidate validation, closure validation, projection, and
 rehydration, and is set only when the recorded revision differs from the current
 one.
 
+## D-033: session scope is what may change and still be the same conversation
+
+`decideAgentSessionResume` compared fifteen fields and resumed only on exact
+equality. Research called it a replay guard rather than a persona rule, and that
+is right, but the consequence was stronger than recorded: cross-phase resume was
+not merely unreachable, it was unreachable *by construction*, because a second
+phase differs in the prompt, the input, the context, and the task. So did a
+retry, which differs in all the same ways precisely because it carries the
+reasons the last attempt was refused.
+
+* Date: 2026-08-19
+* Status: Accepted
+* Decision: the decision takes a scope. `attempt` keeps the fifteen-field guard.
+  `phase` compares the task and the graph, so a retry resumes. `run` compares the
+  workflow alone, so a persona keeps its session across the phases it works.
+* Why the field sets are what they are: what a scope ignores is exactly what the
+  session exists to carry. A retry that started fresh would forget why it was
+  refused, which is the whole value of the durable session in the rejection loop.
+* Consequence: `attempt` remains the default, so nothing resumes differently
+  until a caller asks for a wider scope, and the replay guard is unchanged for
+  every existing caller.
+
+The adapter now takes the scope, so the authored `session: run | phase | element`
+has somewhere to arrive. What remains is the driver recording a binding per
+dispatch and looking up its predecessor, which is what turns the scope from
+expressible into effective.
+
+
 
 
 ## Terms used everywhere and defined nowhere

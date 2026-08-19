@@ -67,7 +67,7 @@ A later phase may not regress one of them.
 | 7 | Loops, gates, sensors, and approval are authorable | Complete |
 | 8 | The autonomous driver and human loop | Complete: drives, retries with reasons, closes, advances, waits for people |
 | 9 | Fan-out and fan-in | Members materialise and dispatch; per-member gates need the phase model |
-| 10 | Sessions, model routing, and steering | Not started |
+| 10 | Sessions, model routing, and steering | Scoped resume landed; dispatch bindings, routing fallback, and steering open |
 | 11 | Prove authored-surface parity | Two fixtures prove defaults are available and overridable; old-template comparison open |
 | 12 | The portal earns its density | Disclosure landed; the default view needs run controls in the rail |
 | 13 | Remove what the evidence condemns | Complete except two items blocked on Phases 10 and 11 |
@@ -450,9 +450,12 @@ all change what an attempt actually sees.
 
 * [x] Make authored model policy support ordered routes and per-route turn,
   submission, credit, and spend ceilings. Keep one route as shorthand.
-* [ ] Make session scope durable across phases by declared agent identity and
+* [x] Make session scope durable across phases by declared agent identity and
   fresh per fan-out element by default. Replace the current strict-equality
-  replay guard rather than extending it.
+  replay guard rather than extending it. **The resume decision takes a scope, and
+  `attempt` keeps the old guard as the default. D-033. The driver does not yet
+  record a binding per dispatch, so the scope is expressible and not yet
+  effective.**
 * [ ] Record session identity and turn position on dispatches, and record session
   loss as an explicit degrading event rather than a silent restart.
 * [ ] Widen the SDK port so `MessageOptions.mode` is expressible and retain the
