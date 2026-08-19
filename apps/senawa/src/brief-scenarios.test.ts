@@ -1056,6 +1056,36 @@ describe("an agent that stops to ask", () => {
     }
   });
 
+  it("refuses an answer longer than the agent can be told", async () => {
+    const scenario = await startScenario("answer-bound", {});
+    await askThroughSink(scenario, scenario.dispatchId, "which endpoint is authoritative?");
+
+    // The portal had no length bound, so a long answer was accepted, recorded
+    // immutably, and then could never be delivered: the worker context refuses
+    // to carry it. That stranded the run with a decision nobody could act on and
+    // no way to replace it, because an answer cannot be changed once sent.
+    const refused = answerQuestion({
+      ...scenario.paths,
+      answer: "x".repeat(9_000),
+      currentTime: NOW,
+      dependencies,
+      principal: runtimePrincipal,
+      repositoryId: scenario.repositoryId,
+      runId: scenario.runId,
+    });
+    expect(refused.exitCode).not.toBe(0);
+
+    const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+    try {
+      const row = database
+        .prepare("SELECT COUNT(*) AS total FROM context_question_answers")
+        .get() as { readonly total: number };
+      expect(row.total).toBe(0);
+    } finally {
+      database.close();
+    }
+  });
+
   it("carries the answer to the agent that asked, on a dispatch of its own", async () => {
     const scenario = await startScenario("answer-delivery", {});
     await askThroughSink(scenario, scenario.dispatchId, "which endpoint is authoritative?");

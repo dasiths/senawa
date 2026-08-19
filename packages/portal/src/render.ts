@@ -1,6 +1,7 @@
 import {
   decodeCanonicalJsonValue,
   type JsonValue,
+  MAX_ANSWER_LENGTH,
   type PortalAgentSummary,
   type PortalArtifactMetadata,
   type PortalDeliveryRecord,
@@ -58,6 +59,7 @@ import {
   transcriptPaneView,
 } from "./transcript-pane.js";
 import type { TranscriptScope } from "./transcript-view-model.js";
+import { transcriptNames } from "./transcript-view-model.js";
 
 const GRAPH_MODES: readonly GraphMode[] = Object.freeze(["diagram", "table", "tree"]);
 
@@ -686,6 +688,7 @@ function renderGraph(state: PortalState, actions: PortalRenderActions): HTMLElem
     transcriptPaneView({
       view: state.ui.transcript,
       scope: state.ui.transcriptScope,
+      names: transcriptNames(state.caches.agents[runKey(ids.repositoryId, ids.runId)]?.agents),
       actions: {
         setTranscriptPinned: (pinned) => actions.setTranscriptPinned(pinned),
         setTranscriptScope: (scope) => actions.setTranscriptScope(scope),
@@ -1358,10 +1361,27 @@ function appendDialogFields(
     const field = textAreaField("answer", "Answer", true, loading);
     const input = field.querySelector("textarea");
     if (input !== null) {
+      // The authority refuses a longer answer, and an answer cannot be replaced
+      // once sent, so the limit belongs where it is typed rather than after.
+      input.maxLength = MAX_ANSWER_LENGTH;
+      const remaining = textElement("span", "field-hint", "");
+      // Described, not labelled: inside the label the count becomes part of the
+      // field's name, so a screen reader reads the number instead of "Answer".
+      remaining.id = "answer-length";
+      input.setAttribute("aria-describedby", remaining.id);
+      const count = (): void => {
+        remaining.textContent = `${input.value.length} of ${MAX_ANSWER_LENGTH} characters`;
+      };
       if (dialogState.answerDraft !== undefined) input.value = dialogState.answerDraft;
-      input.addEventListener("input", () => actions.saveAnswerDraft(input.value));
+      count();
+      input.addEventListener("input", () => {
+        actions.saveAnswerDraft(input.value);
+        count();
+      });
+      form.append(field, remaining);
+    } else {
+      form.append(field);
     }
-    form.append(field);
   }
   if (kind === "steer") {
     const field = element("label", "form-field");

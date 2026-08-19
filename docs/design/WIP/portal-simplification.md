@@ -522,6 +522,9 @@ Grouped so that each step is shippable and the risky one comes last.
 * "The agent reads this as written, and nobody can change it once sent." in
   place of "requires a fresh dispatch boundary".
 * The `Needs` badge navigates instead of re-opening an open rail.
+* The answer field is bounded at 4,096 characters with a live counter, matching
+  the limit the authority now enforces. See F-032: without it a long answer was
+  recorded, reported as accepted, and then stranded the run permanently.
 
 **Content, no layout change.** Each independently shippable:
 
@@ -532,28 +535,27 @@ Grouped so that each step is shippable and the risky one comes last.
 3. **Collapse Activity** to one line per event, expandable. Removes 23,000
    characters and 168 digests from the default view.
 4. **Fold attempts into the agent** that made them. Six rows become two.
-5. **Bound the answer field** with a counter matching the authority's limit.
 
 **Structure.** Needs the browser tests rewritten:
 
-6. **Rename Graph to Workflow** and nest the tree: phases, their work, their
+5. **Rename Graph to Workflow** and nest the tree: phases, their work, their
    criteria as exit conditions rather than sibling rows.
-7. **Fold Agents, Delivery, and Workspaces into the selection** that Workflow
+6. **Fold Agents, Delivery, and Workspaces into the selection** that Workflow
    already has, and put `Steer` and `Override` in its existing toolbar.
-8. **Fold every need onto the node it blocks**, with its action inline. This is
+7. **Fold every need onto the node it blocks**, with its action inline. This is
    one generic surface driven by `kind` and `allowedCommands`, not eight
    special cases, and it retires the Amendments tab and the conflict half of
    Workspaces along with Human needs.
-9. **Merge Overview and Activity into Record.**
+8. **Merge Overview and Activity into Record.**
 
 **Polish.** Once rows are short enough for a mark to matter:
 
-10. Icons for the kinds, state as colour and motion.
-11. One rail control with a name, one status line, `Overdue` given a real
+9. Icons for the kinds, state as colour and motion.
+10. One rail control with a name, one status line, `Overdue` given a real
     threshold or removed.
-12. Reserve the rail width in the alert so the primary button cannot be covered.
+11. Reserve the rail width in the alert so the primary button cannot be covered.
 
-Steps 1 through 5 are content-only. Step 6 is where the thirty-four browser tests
+Steps 1 through 4 are content-only. Step 5 is where the thirty-four browser tests
 become the safety net rather than the obstacle: rewrite them against the nested
 structure first, then move the views under them.
 

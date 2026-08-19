@@ -597,6 +597,80 @@ describe("production worker composition", () => {
     broker.close();
   });
 
+  it("reports a turn that submitted nothing as spent rather than failed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "senawa-worker-silent-"));
+    roots.add(root);
+    const databasePath = join(root, "authority.db");
+    const broker = new SqliteContextBroker({
+      databasePath,
+      dependencies: {
+        sha256: deterministicSha256,
+        currentTime: () => runtimeFixture.currentTime,
+        issueGrantToken: () => new Uint8Array(32).fill(7),
+      },
+    });
+    const worker = createWorkerExecutionFixture();
+    broker.registerDispatch({
+      context: worker.context,
+      dispatch: worker.dispatch,
+      completionRequirements: worker.completionRequirements,
+      taskScope: workerTaskScope(worker),
+    });
+    const input = decodeCanonicalJsonValue({
+      dispatchId: worker.dispatch.dispatchId,
+      routeSelection: worker.routeSelection,
+      timeoutMs: 1_000,
+      grantPolicy: {
+        expiresAfterMs: 2_000,
+        maxOperations: 4,
+        maxBytes: 4_096,
+        maxChunkBytes: 1_024,
+      },
+    });
+    const observation = await new CopilotWorkerEffectHost({
+      broker,
+      sdk: new SilentSdkPort(),
+      workingDirectory: "/tmp/senawa-production-work",
+      transcript: broker.transcript,
+    }).dispatch(
+      {
+        command: {
+          sequence: 1,
+          commandId: "command_silent-worker",
+          repositoryId: worker.dispatch.repositoryId,
+          runId: worker.dispatch.runId,
+          operationId: "operation_silent-worker",
+          kind: "worker",
+          taskScope: workerTaskScope(worker),
+          contextDigest: worker.context.contextDigest,
+          inputDigest: deterministicSha256.digest(canonicalBytes(input)),
+          input,
+          budgetReservation: { unit: "model-millidollars", amount: 1 },
+          queuedAt: runtimeFixture.currentTime,
+          maxReconciliationAttempts: 2,
+        },
+        owner: "owner_silent",
+        fence: 1,
+        attemptId: "attempt_silent",
+        status: "intent",
+        persistedAt: runtimeFixture.currentTime,
+      },
+      {
+        lease: { owner: "owner_silent", fence: 1, expiresAt: "2026-08-12T12:00:30.000Z" },
+        signal: new AbortController().signal,
+      },
+    );
+
+    // A failed worker effect fences its own task permanently, so an agent that
+    // simply produced nothing ended the whole run while its phase still had
+    // attempts left. The attempt ceiling, not a fence, decides when to stop.
+    expect(observation).toMatchObject({
+      status: "cancelled",
+      details: { workerStatus: "missing-completion", completionStatus: "missing" },
+    });
+    broker.close();
+  });
+
   it("rejects cross-authority worker intents before broker or SDK mutation", async () => {
     const root = mkdtempSync(join(tmpdir(), "senawa-worker-binding-"));
     roots.add(root);
@@ -895,6 +969,24 @@ class AskingSdkPort extends CompletingSdkPort {
     if (config.sessionId === undefined) throw new Error("Expected dispatch session identity");
     return new AskingSession(config.sessionId, config);
   }
+}
+
+/** An agent that took its turn and submitted nothing at all. */
+class SilentSdkPort extends CompletingSdkPort {
+  override async createSession(config: CopilotSdkSessionConfig): Promise<CopilotSdkSessionPort> {
+    if (config.sessionId === undefined) throw new Error("Expected dispatch session identity");
+    return new SilentSession(config.sessionId);
+  }
+}
+
+class SilentSession implements CopilotSdkSessionPort {
+  constructor(readonly sessionId: string) {}
+
+  async sendAndWait(): Promise<void> {}
+
+  async abort(): Promise<void> {}
+
+  async disconnect(): Promise<void> {}
 }
 
 class AskingSession implements CopilotSdkSessionPort {

@@ -2,6 +2,7 @@ import {
   type AuthenticatedPrincipal,
   canonicalBytes,
   decodeCommandEnvelope,
+  MAX_ANSWER_LENGTH,
   type PortalQuestionSource,
   PROTOCOL_VERSION,
 } from "@senawa/protocol";
@@ -138,6 +139,13 @@ export function answerQuestion(input: AnswerInput): CliResult {
     return {
       exitCode: 2,
       output: "An answer must carry text. The agent that asked reads it as written.",
+    };
+  // The worker context bounds what it carries back, so a longer answer would be
+  // recorded and then be undeliverable, with no way to replace it.
+  if (input.answer.length > MAX_ANSWER_LENGTH)
+    return {
+      exitCode: 2,
+      output: `An answer must be ${MAX_ANSWER_LENGTH} characters or fewer. This one is ${input.answer.length}.`,
     };
   let pending: {
     readonly source: PortalQuestionSource;

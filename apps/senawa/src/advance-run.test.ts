@@ -130,6 +130,16 @@ describe("advancing a run", () => {
         .map((receipt) => String(receipt.commandId));
       expect(completed.some((id) => id.startsWith("command_gate-"))).toBe(true);
       expect(completed.some((id) => id.startsWith("command_close-"))).toBe(true);
+
+      // The gate identity carries the candidate it decided on. Keyed on the
+      // phase and attempt alone, a candidate the authority refused leaves the
+      // identity bound to the refused envelope, and the corrected candidate for
+      // that same attempt can never be submitted: the phase wedges for good.
+      const gateIds = completed.filter((id) => id.startsWith("command_gate-"));
+      expect(gateIds.length).toBeGreaterThan(0);
+      expect(
+        gateIds.every((id) => /^command_gate-[a-z]+-\d+-[0-9a-f]{16}-[0-9a-f]+$/.test(id)),
+      ).toBe(true);
     } finally {
       authority.close();
     }

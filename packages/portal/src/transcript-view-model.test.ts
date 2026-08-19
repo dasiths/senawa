@@ -17,6 +17,7 @@ import {
   setTranscriptPinned,
   type TranscriptView,
   transcriptDownloadName,
+  transcriptNames,
   transcriptOwnerForNode,
   transcriptOwnerLabel,
   transcriptPlainText,
@@ -285,6 +286,36 @@ describe("transcript projections", () => {
     );
     // A node scope names one owner already, so its rows stay unqualified.
     expect(transcriptShowsOwner(selected())).toBe(false);
+  });
+
+  it("names the agent that wrote a line rather than the dispatch that carried it", () => {
+    const names = transcriptNames([
+      { dispatchId: DISPATCH_OWNER.id, persona: "researcher" },
+      { dispatchId: "dispatch_other", persona: "planner" },
+    ]);
+    const runOwner: PortalTranscriptOwner = Object.freeze({ kind: "run", id: RUN });
+    const view = mergeTranscriptPage(
+      selected(runOwner),
+      page(
+        [
+          record(1, "dispatch line", "system", DISPATCH_OWNER),
+          record(2, "task line", "stdout", TASK_OWNER),
+        ],
+        { owner: runOwner },
+      ),
+    );
+
+    expect(transcriptOwnerLabel(DISPATCH_OWNER, names)).toBe("researcher");
+    // No agent row claims this owner, so the identity is all there is to show.
+    expect(transcriptOwnerLabel(TASK_OWNER, names)).toBe(`${TASK_OWNER.kind} ${TASK_OWNER.id}`);
+    expect(transcriptPlainText(view, FIXED_CLOCK, names)).toBe(
+      [
+        `04:05:01\tresearcher\tsystem\tdispatch line`,
+        `04:05:02\t${TASK_OWNER.kind} ${TASK_OWNER.id}\tstdout\ttask line`,
+      ].join("\n"),
+    );
+    expect(transcriptNames([])).toEqual({});
+    expect(transcriptNames(undefined)).toEqual({});
   });
 
   it("never lets one record forge an extra plain-text row", () => {

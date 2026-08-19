@@ -202,7 +202,9 @@ describe("daemon worker composition", () => {
     const composition = {
       runtimeDependencies: dependencies,
       createCopilotSdk: async (options: { workingDirectory: string; baseDirectory: string }) => {
-        const sdk = new FakeOwnedSdk(options.workingDirectory, options.baseDirectory);
+        // The session throws, so this is a genuine failure. A worker that merely
+        // submitted nothing is spent, not failed, and keeps its task claimable.
+        const sdk = new FakeOwnedSdk(options.workingDirectory, options.baseDirectory, [], true);
         sdks.push(sdk);
         return sdk;
       },
@@ -546,6 +548,7 @@ class FakeOwnedSdk implements OwnedCopilotSdkPort {
     readonly workingDirectory: string,
     readonly baseDirectory: string,
     readonly stopErrors: readonly Error[] = [],
+    readonly sessionFails = false,
   ) {}
 
   createCalls = 0;
@@ -558,7 +561,7 @@ class FakeOwnedSdk implements OwnedCopilotSdkPort {
   async createSession(config: CopilotSdkSessionConfig): Promise<CopilotSdkSessionPort> {
     this.createCalls += 1;
     if (config.sessionId === undefined) throw new Error("Expected dispatch session identity");
-    return new FakeSession(config.sessionId);
+    return new FakeSession(config.sessionId, this.sessionFails);
   }
 
   async sessionMetadataExists(): Promise<boolean> {
@@ -572,9 +575,14 @@ class FakeOwnedSdk implements OwnedCopilotSdkPort {
 }
 
 class FakeSession implements CopilotSdkSessionPort {
-  constructor(readonly sessionId: string) {}
+  constructor(
+    readonly sessionId: string,
+    readonly fails = false,
+  ) {}
 
-  async sendAndWait(): Promise<void> {}
+  async sendAndWait(): Promise<void> {
+    if (this.fails) throw new Error("Fake Copilot session failed");
+  }
 
   async abort(): Promise<void> {}
 

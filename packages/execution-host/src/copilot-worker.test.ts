@@ -378,7 +378,7 @@ describe("CopilotSerialWorkerAdapter", () => {
       "tool propose_asset failure",
       "tool record_discovery refused",
       "tool senawa_complete success",
-      "session ended completed",
+      "session ended: the agent finished and submitted its work",
     ]);
     for (const line of transcript.lines) {
       expect(line).toMatchObject({
@@ -489,7 +489,7 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect((await aborted.adapter.run(aborted.input)).status).toBe("aborted");
     expect(transcript.lines.map(({ text }) => text)).toEqual([
       "session started",
-      "session ended aborted",
+      "session ended: the agent was cancelled",
     ]);
   });
 

@@ -249,7 +249,7 @@ export class CopilotSerialWorkerAdapter {
       await Promise.allSettled([...scope.pending]);
       this.#activeDispatchId = undefined;
       this.#activeSession = undefined;
-      scope.note(`session ended ${status}`);
+      scope.note(sessionEndedNote(status));
     }
     const base = {
       status,
@@ -352,6 +352,24 @@ interface RunScope {
  * so no read failure can strand the capture on identities the store already
  * holds. The per-run ordinal keeps two identical lines of one run distinct.
  */
+/**
+ * A person reads this line to learn whether the agent is coming back. The raw
+ * status does not say: "awaiting-answer" is a normal pause that reads like a
+ * crash, and "missing-completion" reads like a bug in senawa rather than an
+ * agent that submitted nothing.
+ */
+function sessionEndedNote(status: CopilotWorkerRunResult["status"] | "crashed"): string {
+  const endings: Readonly<Record<string, string>> = {
+    completed: "session ended: the agent finished and submitted its work",
+    blocked: "session ended: the agent reported it cannot continue",
+    "missing-completion": "session ended: the agent stopped without submitting anything",
+    "awaiting-answer": "session paused: the agent asked a question and is waiting for an answer",
+    aborted: "session ended: the agent was cancelled",
+    crashed: "session ended: the agent failed with an error",
+  };
+  return endings[status] ?? `session ended ${status}`;
+}
+
 function transcriptNoteSink(
   input: CopilotWorkerRunInput,
   dispatch: WorkerDispatch,

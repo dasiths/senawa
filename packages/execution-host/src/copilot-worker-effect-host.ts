@@ -193,9 +193,14 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
           // fences the task, and a fenced task cannot accept the answer.
           result.status === "awaiting-answer"
           ? "cancelled"
-          : (result.status === "completed" || result.status === "blocked") && acceptedCompletion
-            ? "completed"
-            : "failed";
+          : // An agent that submitted nothing wasted a turn. Fencing is permanent
+            // and ends the run, which contradicts the attempt ceiling that exists
+            // to decide how many such turns are tolerated.
+            result.status === "missing-completion"
+            ? "cancelled"
+            : (result.status === "completed" || result.status === "blocked") && acceptedCompletion
+              ? "completed"
+              : "failed";
     const details: JsonValue = {
       dispatchId: result.dispatchId,
       workerStatus: result.status,

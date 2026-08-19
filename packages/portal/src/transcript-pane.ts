@@ -1,4 +1,5 @@
 import {
+  type TranscriptNames,
   type TranscriptRow,
   type TranscriptScope,
   type TranscriptView,
@@ -18,6 +19,7 @@ export interface TranscriptPaneInput {
   readonly view: TranscriptView;
   readonly scope: TranscriptScope;
   readonly actions: TranscriptPaneActions;
+  readonly names?: TranscriptNames;
 }
 
 export interface TranscriptPaneSnapshot {
@@ -42,11 +44,12 @@ const TAIL_SLACK = 12;
 
 export function transcriptPaneView(input: TranscriptPaneInput): HTMLElement {
   const { view, scope, actions } = input;
+  const names = input.names ?? {};
   const pane = element("section", "agent-terminal");
   const rows = transcriptRows(view);
-  const plainText = transcriptPlainText(view);
-  pane.append(bar(view, scope, rows.length, plainText, actions));
-  pane.append(log(view, rows, actions));
+  const plainText = transcriptPlainText(view, undefined, names);
+  pane.append(bar(view, scope, rows.length, plainText, actions, names));
+  pane.append(log(view, rows, actions, names));
   window.__senawaTranscriptPane = Object.freeze({
     ownerKind: view.owner?.kind,
     ownerId: view.owner?.id,
@@ -65,6 +68,7 @@ function bar(
   lineCount: number,
   plainText: string,
   actions: TranscriptPaneActions,
+  names: TranscriptNames,
 ): HTMLElement {
   const header = element("div", "agent-terminal-bar");
   header.append(textElement("h2", "compact-heading", "Agent output"));
@@ -72,7 +76,7 @@ function bar(
     textElement(
       "span",
       "agent-terminal-scope mono",
-      view.owner === undefined ? "No node selected" : transcriptOwnerLabel(view.owner),
+      view.owner === undefined ? "No node selected" : transcriptOwnerLabel(view.owner, names),
     ),
   );
   const controls = element("div", "agent-terminal-controls");
@@ -109,11 +113,12 @@ function log(
   view: TranscriptView,
   rows: readonly TranscriptRow[],
   actions: TranscriptPaneActions,
+  names: TranscriptNames,
 ): HTMLElement {
   const label =
     view.owner === undefined
       ? "Agent output"
-      : `Agent output for ${transcriptOwnerLabel(view.owner)}`;
+      : `Agent output for ${transcriptOwnerLabel(view.owner, names)}`;
   const pane = element("div", "agent-terminal-log");
   pane.setAttribute("role", "log");
   pane.setAttribute("aria-label", label);
@@ -137,8 +142,9 @@ function log(
     line.dataset.sequence = String(row.sequence);
     line.append(textElement("span", "agent-terminal-time", row.time));
     if (transcriptShowsOwner(view)) {
-      line.dataset.owner = transcriptOwnerLabel(row.owner);
-      line.append(textElement("span", "agent-terminal-owner", transcriptOwnerLabel(row.owner)));
+      const label = transcriptOwnerLabel(row.owner, names);
+      line.dataset.owner = label;
+      line.append(textElement("span", "agent-terminal-owner", label));
     }
     line.append(
       textElement("span", "agent-terminal-stream", row.stream),

@@ -566,9 +566,10 @@ async function step(
     supervisor,
     input,
     // A retry is a different decision, so it needs a different command identity.
-    // Receipts are idempotent by identity, so reusing one replays the refusal
-    // this attempt exists to move past.
-    `gate-${phaseKey}-${attempt}`,
+    // The attempt alone is not that decision: a candidate the authority refused
+    // leaves the identity bound to the envelope it refused, and a corrected
+    // candidate for the same attempt could then never be submitted at all.
+    `gate-${phaseKey}-${attempt}-${String(candidate.candidateDigest).slice(0, 16)}`,
     "evaluate-gate",
     snapshot.graph.revisionDigest,
     candidate.candidateDigest,

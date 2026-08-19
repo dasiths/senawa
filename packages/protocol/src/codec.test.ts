@@ -54,6 +54,7 @@ import {
   encodeTaskFrontierStatus,
   encodeTransportAttribution,
   encodeWithdrawAmendmentProposalPayload,
+  MAX_ANSWER_LENGTH,
   PROTOCOL_LIMITS,
   PROTOCOL_VERSION,
   ProtocolValidationError,
@@ -356,6 +357,21 @@ describe("v1 human authority and run-control payloads", () => {
     expect(decodeAnswerQuestionPayload(encodeAnswerQuestionPayload(payload))).toEqual(payload);
     expectProtocolError("unknown-field", "$.dispatchId", () =>
       decodeAnswerQuestionPayload({ ...payload, dispatchId: "dispatch_override" }),
+    );
+  });
+
+  it("refuses a text answer longer than a worker context can carry back", () => {
+    const payload = {
+      submissionId: "submission_question",
+      questionDigest: "b".repeat(64),
+      contextDigest: "c".repeat(64),
+      taskId: "task_alpha",
+      definitionGeneration: 3,
+      answer: "a".repeat(MAX_ANSWER_LENGTH),
+    };
+    expect(decodeAnswerQuestionPayload(encodeAnswerQuestionPayload(payload))).toEqual(payload);
+    expectProtocolError("oversized", "$.answer", () =>
+      decodeAnswerQuestionPayload({ ...payload, answer: "a".repeat(MAX_ANSWER_LENGTH + 1) }),
     );
   });
 

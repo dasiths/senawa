@@ -1,4 +1,5 @@
 import {
+  type PortalAgentSummary,
   type PortalGraphNode,
   type PortalTranscriptOwner,
   type PortalTranscriptPage,
@@ -29,6 +30,21 @@ export type TranscriptClock = (occurredAt: string) => string;
 
 /** `node` follows the selected graph node; `run` merges every owner of the run. */
 export type TranscriptScope = "node" | "run";
+
+/** Owner identity to the name a person recognises, keyed by `owner.id`. */
+export type TranscriptNames = Readonly<Record<string, string>>;
+
+const NO_NAMES: TranscriptNames = Object.freeze({});
+
+/** Builds the owner naming from whatever agent rows the run has loaded. */
+export function transcriptNames(
+  agents: readonly Pick<PortalAgentSummary, "dispatchId" | "persona">[] | undefined,
+): TranscriptNames {
+  if (agents === undefined || agents.length === 0) return NO_NAMES;
+  const names: Record<string, string> = {};
+  for (const agent of agents) names[agent.dispatchId] = agent.persona;
+  return Object.freeze(names);
+}
 
 const EMPTY_VIEW: TranscriptView = Object.freeze({
   owner: undefined,
@@ -129,19 +145,27 @@ export function transcriptShowsOwner(view: TranscriptView): boolean {
 export function transcriptPlainText(
   view: TranscriptView,
   clock: TranscriptClock = localTranscriptTime,
+  names: TranscriptNames = NO_NAMES,
 ): string {
   const withOwner = transcriptShowsOwner(view);
   return transcriptRows(view, clock)
     .map((row) =>
       withOwner
-        ? `${row.time}\t${transcriptOwnerLabel(row.owner)}\t${row.stream}\t${row.text}`
+        ? `${row.time}\t${transcriptOwnerLabel(row.owner, names)}\t${row.stream}\t${row.text}`
         : `${row.time}\t${row.stream}\t${row.text}`,
     )
     .join("\n");
 }
 
-export function transcriptOwnerLabel(owner: PortalTranscriptOwner): string {
-  return `${owner.kind} ${owner.id}`;
+/**
+ * Names the agent when the run has told us one, because `dispatch dispatch_d01b…`
+ * identifies the line without saying who wrote it.
+ */
+export function transcriptOwnerLabel(
+  owner: PortalTranscriptOwner,
+  names: TranscriptNames = NO_NAMES,
+): string {
+  return names[owner.id] ?? `${owner.kind} ${owner.id}`;
 }
 
 /**

@@ -85,7 +85,7 @@ const COMMAND_ID_PATTERN =
   /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|command_[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$/;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 /** What a worker context can carry back to the agent, so nothing longer is accepted. */
-const MAX_ANSWER_LENGTH = 4_096;
+export const MAX_ANSWER_LENGTH = 4_096;
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const ROLE_PATTERN = /^[a-z0-9](?:[a-z0-9:-]{0,62}[a-z0-9])?$/;
 const TOKEN_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;

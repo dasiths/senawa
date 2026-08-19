@@ -3146,3 +3146,119 @@ tolerable, and fencing on the first one takes that decision away from the author
 Not fixed here. It needs a distinction the failure policy does not currently
 draw, between an effect that failed and an effect that finished without doing
 anything, and that is a policy question rather than a bug to patch.
+
+## F-032: an unbounded answer is recorded, then can never be delivered
+
+Found by typing into the portal, not by reading code. The answer textarea had
+`maxLength: null`. A 9,000-character answer was accepted, the authority recorded
+it, the receipt came back clean, and the portal cleared the need — every signal a
+person gets said the question was answered.
+
+The supervisor then failed to deliver it, twice:
+
+```
+drive-run-failed repository_rpi-workflow run_21f617aafb2470bb1431b90ba8c6bf68:
+ContextError: An answered question must carry bounded non-empty text
+```
+
+`packages/kernel/src/context.ts` refuses answer text longer than 4,096
+characters when it assembles the worker context. That check is correct and it is
+in the wrong place to help: by the time it runs, the answer is an immutable
+authority record. An answer cannot be replaced, so the agent waits for something
+that will never arrive and the run is stranded with no operator action that can
+recover it.
+
+The bound now lives at the three places a person can reach:
+
+* `MAX_ANSWER_LENGTH` in `packages/protocol/src/codec.ts`, enforced by
+  `decodeAnswerQuestionPayload`, so no route into the authority can record an
+  answer the kernel will later refuse. This is the load-bearing one.
+* `senawa answer` exits 2 with the length it got and the length allowed, so the
+  CLI reports a mistake instead of a stack trace.
+* The portal caps the field at 4,096 and counts characters as they are typed, so
+  the limit is visible before the decision is made rather than after it is
+  irreversible.
+
+Both tests were proven by deletion: removing the codec check fails the protocol
+test, removing both checks fails the CLI scenario test.
+
+The general shape, third time this session: a constraint enforced where the data
+is *used* rather than where it is *accepted* turns a typo into an unrecoverable
+run. Validation belongs at the boundary a person can still be told about.
+
+Verified live afterwards: focus lands in the answer box, the counter reads
+`0 of 4096 characters` and stops at 4096 when 5,000 are pasted, the field's
+accessible name stays "Answer" with the counter as its description, the `Needs`
+badge navigates to the needs view, and answering entirely from the browser
+advanced the run's cursor from 3 to 6 with `answer-question completed`.
+
+## F-033: a worker that submitted nothing is spent, not failed
+
+F-031 recorded this as a policy question. Driving the example end to end settled
+it: the question was blocking every run.
+
+The live run's research phase asked two questions, was answered twice, and on the
+next turn produced nothing. `missing-completion` became a `failed` effect, which
+fenced the task permanently (`claims_accepted 0`), and the run ended there with
+six of its eight authored attempts unused.
+
+`resultObservation` now reports `missing-completion` as `cancelled`, beside
+`awaiting-answer`, which was fixed for the same reason. A crash is still
+`failed`: a worker whose session threw did something the run cannot reason
+about, and fencing is the right answer for that.
+
+`daemon-composition.test.ts` asserted the old behaviour under the name "fences a
+failed repository writer", but its fake session returned normally and submitted
+nothing, so it was a *silent* worker, not a failed one. Its subject — that a
+fence survives a service restart — is worth keeping, so its SDK now throws. The
+test proves what its name always claimed.
+
+## F-034: a refused gate wedges its phase forever
+
+With the fence fixed, the run reached the next wall. The driver evaluated the
+research gate, the authority refused it once with `task-set-mismatch`, and every
+later attempt was refused with:
+
+```
+evaluate-gate was refused: command-id-conflict:
+Command identity is already bound to a different canonical envelope
+```
+
+The gate command was keyed `gate-<phase>-<attempt>`. A refused submission leaves
+that identity bound to the envelope that was refused, so the corrected candidate
+for the same attempt can never be submitted. The refusal is transient; being
+unable to resubmit is permanent.
+
+The identity now carries the candidate digest, so a different decision gets a
+different identity. This is the same defect as the one fixed in "Key a driver
+command on what it decided, not only on which step decided it" — a second place
+where a command was keyed on the step rather than on what it decided.
+
+The original `task-set-mismatch` was transient: re-running the same computation
+produced the correct set (`graphTasks` and `candidateTasks` both held exactly
+the research task). The wedge, not the mismatch, is what ended the run.
+
+## F-035: a kernel refusal message is durable, and one bad run stops the service
+
+While diagnosing F-034 I added the two task sets to the `task-set-mismatch`
+message. Every existing database then refused to open:
+
+```
+TypeError: Stored command receipt or authorization decision does not match replay
+```
+
+A refusal message is part of the receipt the authority replays, so changing the
+text of any kernel refusal invalidates every database that recorded it. That is
+correct for an exact authority and it is not written down anywhere. It belongs
+in the durability documentation before someone reworders a message in a release.
+
+The second half is worse. The unopenable run took down the **whole supervisor**:
+`SqliteSupervisorAuthority` constructs `SqliteAuthority`, `verifyDatabase`
+throws, and the service process exits. One corrupt run therefore stops every
+other run on that machine, and the failure appears as a service that will not
+stay up rather than as a run that cannot be opened. A run that fails to verify
+should be quarantined and reported, not fatal to its host.
+
+Not fixed. Recorded with the reproduction: change any string passed to `fail` in
+`packages/kernel/src/candidates.ts`, run a workflow far enough to record that
+refusal, then restore the string.
