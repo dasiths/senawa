@@ -127,6 +127,8 @@ export interface PhaseClosureInput {
   readonly candidate: PhaseCandidate;
   readonly gateEvidence: GateEvidence;
   readonly approval: ClosureApprovalInput;
+  /** Set for an archived phase, whose candidate names an earlier graph revision. */
+  readonly historical?: boolean;
 }
 
 export interface NoApprovalReference {
@@ -272,10 +274,17 @@ export function validatePhaseCandidate(
   value: unknown,
   graph: WorkflowGraph,
   sha256: Sha256,
+  options: { readonly historical?: boolean } = {},
 ): PhaseCandidate {
   const validatedGraph = candidateGraph(graph, sha256);
   const snapshot = snapshotCanonical(value, "invalid-candidate", "Phase candidates");
-  const content = phaseCandidateContent(snapshot, validatedGraph, sha256, true);
+  const content = phaseCandidateContent(
+    snapshot,
+    validatedGraph,
+    sha256,
+    true,
+    options.historical === true,
+  );
   if (!isRecord(snapshot) || !isSha256Digest(snapshot.candidateDigest)) {
     fail("invalid-candidate", "candidateDigest must be a SHA-256 digest");
   }
@@ -311,16 +320,18 @@ export function validateAuthorityDecision(value: unknown, sha256: Sha256): Autho
 
 export function closePhase(input: PhaseClosureInput, sha256: Sha256): PhaseClosure {
   const snapshot = snapshotCanonical(input, "invalid-candidate", "Phase closure inputs");
-  assertExactKeys(
+  assertAllowedKeys(
     snapshot,
     "phase closure input",
     ["graph", "candidate", "gateEvidence", "approval"],
+    ["historical"],
     "invalid-candidate",
   );
   const candidate = validatePhaseCandidate(
     snapshot.candidate,
     snapshot.graph as unknown as WorkflowGraph,
     sha256,
+    { historical: snapshot.historical === true },
   );
   let gateEvidence: GateEvidence;
   try {
@@ -380,6 +391,7 @@ function phaseCandidateContent(
   graph: WorkflowGraph,
   sha256: Sha256,
   includesDigest: boolean,
+  historical = false,
 ): PhaseCandidateContent {
   assertAllowedKeys(
     value,
@@ -413,7 +425,10 @@ function phaseCandidateContent(
     "gatePolicyDigest",
     ...(includesDigest ? ["completionEvidencePolicyDigest"] : []),
   ]);
-  if (value.graphRevisionDigest !== graph.revisionDigest) {
+  // A historical candidate names the revision it was formed under. An amendment
+  // moves the graph on, and re-deriving archived history against the newer graph
+  // asks a question the record never answered. Its digest still verifies.
+  if (!historical && value.graphRevisionDigest !== graph.revisionDigest) {
     fail("graph-mismatch", "graphRevisionDigest does not match the supplied workflow graph");
   }
   if (

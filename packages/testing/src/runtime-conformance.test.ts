@@ -60,7 +60,15 @@ function createDependencies(): RuntimeDependencies {
   return {
     sha256: deterministicSha256,
     authorization: createRoleAuthorizationPolicy([
-      ...ALLOWED_INTENTS.map((intent) => ({ intent, roles: ["release-manager"] })),
+      ...ALLOWED_INTENTS.map((intent) => ({
+        intent,
+        // The engine may reach the decision intent; whether it may decide a
+        // given proposal is the authority's question, not the policy's.
+        roles:
+          intent === "record-amendment-decision"
+            ? ["engine", "release-manager"]
+            : ["release-manager"],
+      })),
       { intent: "apply-approved-amendment", roles: ["trusted-supervisor"] },
       {
         intent: "record-integration-barrier",
@@ -1089,6 +1097,26 @@ describe("transport-independent runtime command conformance", () => {
 
     const duplicate = submitProposal(service, admission, proposal, "command_amendment-duplicate");
     expect(duplicate.error?.code).toBe("amendment-proposal-exists");
+
+    // The engine may decide a plan import, because a fan-out is the shape the
+    // author declared. Anything else changes a graph nobody agreed to change.
+    const engineDecision = service.submit(
+      runtimeCommand({
+        commandId: "command_amendment-engine-approve",
+        intent: "record-amendment-decision",
+        roles: ["engine"],
+        payload: {
+          amendmentId: proposal.amendmentId,
+          proposalDigest: proposal.proposalDigest,
+          decision: "approve",
+          reviewedResultGraphRevisionDigest: proposal.reviewedResultGraph.revisionDigest,
+        },
+        expectedGraphRevision: proposal.baseGraph.revisionDigest,
+        exactObjectDigest: proposal.proposalDigest,
+      }),
+      admission.at("2026-08-13T12:00:30.000Z"),
+    );
+    expect(engineDecision.error?.code).toBe("release-manager-required");
 
     const decision = service.submit(
       runtimeCommand({

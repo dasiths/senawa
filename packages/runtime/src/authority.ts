@@ -1415,6 +1415,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     const [index, lifecycle] = requiredAmendmentRecord(aggregate, payload.amendmentId);
     const proposal = lifecycle.proposal;
     assertProposalBinding(payload.proposalDigest, proposal);
+    assertDecidableWithoutReview(command, proposal);
     if (payload.reviewedResultGraphRevisionDigest !== proposal.reviewedResultGraph.revisionDigest) {
       throw new RuntimeRefusal(
         "stale-result-graph",
@@ -1927,12 +1928,19 @@ function projectPhaseRecords(
   sha256: RuntimeDependencies["sha256"],
 ): PhaseLifecycleProjection {
   assertPhaseInGraph(records.phase, graph);
+  // A phase that closed under an earlier graph revision is history. An
+  // amendment moves the revision on, and its record still verifies by its own
+  // digest, so it is projected as recorded rather than re-derived.
+  const candidate = records.candidate as { readonly graphRevisionDigest?: string } | undefined;
+  const historical =
+    candidate !== undefined && candidate.graphRevisionDigest !== graph.revisionDigest;
   return projectPhaseLifecycle(
     {
       graph,
       phase: records.phase,
       approvalPolicy: records.approvalPolicy,
       escalationPolicyDigest: records.escalationPolicyDigest,
+      ...(historical ? { historical: true } : {}),
       ...(records.candidate === undefined ? {} : { candidate: records.candidate }),
       ...(records.gateEvidence === undefined ? {} : { gateEvidence: records.gateEvidence }),
       ...(records.authorityDecision === undefined
@@ -2042,6 +2050,34 @@ function assertProposalBinding(proposalDigest: string, proposal: AmendmentPropos
       "Command proposal digest does not match the amendment identity",
     );
   }
+}
+
+/**
+ * Who may decide this proposal.
+ *
+ * A plan import fills in a fan-out the author already declared, and its review
+ * question was settled before the proposal existed: the diff classifier refuses
+ * to enqueue anything that changed or removed a member without a decision. So
+ * the engine may decide one, and asking a person would be asking them to approve
+ * the workflow they wrote.
+ *
+ * Every other proposal changes a graph nobody agreed to change, so it needs a
+ * person.
+ */
+function assertDecidableWithoutReview(command: CommandEnvelope, proposal: AmendmentProposal): void {
+  if (command.principal.roles.includes("release-manager")) return;
+  const source = proposal.source as unknown;
+  if (
+    typeof source === "object" &&
+    source !== null &&
+    (source as { readonly kind?: unknown }).kind === "import-plan"
+  ) {
+    return;
+  }
+  throw new RuntimeRefusal(
+    "release-manager-required",
+    "Only a plan import may be decided without the release-manager role",
+  );
 }
 
 function replaceAmendmentRecord(
@@ -2876,10 +2912,17 @@ function parsePhaseLifecycleRecord(
     ...(submitted.candidate === undefined
       ? {}
       : {
+          // An archived phase closed under an earlier graph revision, so its
+          // candidate is verified by its own digest rather than re-derived.
           candidate: validatePhaseCandidate(
             submitted.candidate as PhaseCandidate,
             graph,
             dependencies.sha256,
+            {
+              historical:
+                (submitted.candidate as { readonly graphRevisionDigest?: string })
+                  .graphRevisionDigest !== graph.revisionDigest,
+            },
           ),
         }),
     ...(submitted.gateEvidence === undefined

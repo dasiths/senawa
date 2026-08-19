@@ -77,6 +77,8 @@ function describe(outcome: AdvanceOutcome): string {
       return `dispatched ${outcome.phaseKey} as ${outcome.dispatchId}`;
     case "retrying":
       return `retrying ${outcome.phaseKey}, attempt ${outcome.attempt}: ${outcome.reasons.join(", ")}`;
+    case "fanned-out":
+      return `fanned ${outcome.phaseKey} out over ${outcome.members} items`;
     case "awaiting-agent":
       return `waiting for the agent working on ${outcome.phaseKey}`;
     case "awaiting-approval":

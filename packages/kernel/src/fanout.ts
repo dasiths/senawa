@@ -438,7 +438,15 @@ function stableIdentity(value: unknown): string {
 }
 
 function dependencyIdentitiesAt(item: CanonicalValue, pointer: string): string[] {
-  const value = valueAtJsonPointer(item, pointer);
+  // An item that says nothing depends on nothing. Requiring every item to carry
+  // an empty list would make the common fan-out, over items with no ordering,
+  // the one that needs extra authoring.
+  let value: unknown;
+  try {
+    value = valueAtJsonPointer(item, pointer);
+  } catch {
+    return [];
+  }
   if (!Array.isArray(value)) fail("invalid-fan-out", "Item dependencies must be an array");
   const identities = value.map(stableIdentity).sort(compareUtf8);
   if (new Set(identities).size !== identities.length) {

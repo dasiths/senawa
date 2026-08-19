@@ -84,7 +84,7 @@ describe("fan-out in sequence", () => {
     expect(scenario.phaseKey).toBe("define");
   });
 
-  it("says what it cannot do when a fan-out phase is reached", async () => {
+  it("fans out over the collection the earlier phase produced", async () => {
     const scenario = await startScenario("fanout-run", { fanOut: "complete" });
     await agentTurn(
       scenario,
@@ -92,11 +92,19 @@ describe("fan-out in sequence", () => {
       canonicalValue({ tasks: [{ id: "one" }, { id: "two" }] }),
     );
 
-    // v1 compiles a fan-out and cannot yet run one. The refusal has to name
-    // that, because a driver that threw a generic error would read as a bug.
-    const outcome = await advance(scenario);
-    expect(outcome).toMatchObject({ kind: "closed", phaseKey: "define" });
-    await expect(advance(scenario)).rejects.toThrow(/fan-out/iu);
+    expect(await advance(scenario)).toMatchObject({ kind: "closed", phaseKey: "define" });
+
+    // One member per element, materialised from the collection rather than from
+    // anything the compiled graph already held.
+    expect(await advance(scenario)).toEqual({
+      kind: "fanned-out",
+      phaseKey: "implement",
+      members: 2,
+    });
+
+    // Materialising is worth nothing if no member can then be given to an agent.
+    const dispatched = await advance(scenario);
+    expect(dispatched).toMatchObject({ kind: "dispatched", phaseKey: "implement" });
   });
 });
 

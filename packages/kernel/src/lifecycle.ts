@@ -59,6 +59,8 @@ export interface PhaseLifecycleInput {
   readonly authorityDecision?: AuthorityDecision;
   readonly closure?: PhaseClosure;
   readonly escalations?: readonly Escalation[];
+  /** Set for an archived phase, whose candidate names an earlier graph revision. */
+  readonly historical?: boolean;
 }
 
 export type PhaseLifecycleStatus =
@@ -178,7 +180,9 @@ export function projectPhaseLifecycle(
   }
 
   const candidate = Object.hasOwn(snapshot, "candidate")
-    ? validatePhaseCandidate(snapshot.candidate, graph, sha256)
+    ? validatePhaseCandidate(snapshot.candidate, graph, sha256, {
+        historical: snapshot.historical === true,
+      })
     : undefined;
   const gateEvidence = Object.hasOwn(snapshot, "gateEvidence")
     ? candidate === undefined
@@ -205,6 +209,7 @@ export function projectPhaseLifecycle(
         approvalPolicy,
         authorityDecision,
         sha256,
+        snapshot.historical === true,
       )
     : undefined;
   if (closure !== undefined && escalations.length > 0) {
@@ -245,7 +250,7 @@ function snapshotInput(input: PhaseLifecycleInput): Record<string, unknown> {
   assertAllowedKeys(
     snapshot,
     ["graph", "phase", "approvalPolicy", "escalationPolicyDigest"],
-    ["candidate", "gateEvidence", "authorityDecision", "closure", "escalations"],
+    ["candidate", "gateEvidence", "authorityDecision", "closure", "escalations", "historical"],
   );
   return snapshot;
 }
@@ -408,6 +413,7 @@ function validateClosure(
   approvalPolicy: PhaseApprovalPolicy,
   authorityDecision: AuthorityDecision | undefined,
   sha256: Sha256,
+  historical: boolean,
 ): PhaseClosure {
   if (candidate === undefined || gateEvidence === undefined) {
     return fail(
@@ -421,7 +427,17 @@ function validateClosure(
       : authorityDecision === undefined
         ? fail("closure-source-missing", "Required-approval closure needs its authority decision")
         : { ...approvalPolicy, decision: authorityDecision };
-  return validatePhaseClosure(value, { graph, candidate, gateEvidence, approval }, sha256);
+  return validatePhaseClosure(
+    value,
+    {
+      graph,
+      candidate,
+      gateEvidence,
+      approval,
+      ...(historical ? { historical: true } : {}),
+    },
+    sha256,
+  );
 }
 
 function deriveStatus(

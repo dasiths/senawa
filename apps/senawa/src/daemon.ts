@@ -640,7 +640,7 @@ export const runtimeDependencies: RuntimeDependencies = Object.freeze({
     { intent: "record-fan-out-diff-decision", roles: ["engine", "release-manager"] },
     { intent: "submit-amendment-proposal", roles: ["engine", "release-manager"] },
     { intent: "withdraw-amendment-proposal", roles: ["release-manager"] },
-    { intent: "record-amendment-decision", roles: ["release-manager"] },
+    { intent: "record-amendment-decision", roles: ["engine", "release-manager"] },
     { intent: "apply-approved-amendment", roles: ["trusted-supervisor"] },
     { intent: "record-integration-barrier", roles: ["trusted-supervisor"] },
     { intent: "create-escalation", roles: ["engine", "release-manager"] },

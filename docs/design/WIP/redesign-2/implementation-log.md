@@ -2663,6 +2663,88 @@ overview throughout rather than only its controller.
 Moving the controls into the persistent rail so no navigation is needed at all
 remains worth doing, and is now a layout improvement rather than a blocker.
 
+## D-032: a plan import is decided by the engine, and F-015 was too pessimistic
+
+F-015 said fan-out execution was blocked on an authority decision nobody had
+made. Reading the code rather than reasoning from the role list showed the
+decision was smaller than that, and mostly already made.
+
+Two facts settle it. `record-amendment-decision` is not a trusted-human-authority
+intent: it is an ordinary intent gated by the role policy, unlike `end-run`,
+`pause-run`, and the rest. And the plan-import bridge already submits its
+proposal under an **engine** principal, so the engine has always been trusted to
+propose one.
+
+More to the point, the review question is answered *before* the proposal exists.
+`PlanImportCoordinator` refuses to enqueue anything whose diff changed or removed
+a member without an explicit decision. A proposal that reaches the authority has
+therefore already passed the only review that was ever required.
+
+* Date: 2026-08-19
+* Status: Accepted
+* Decision: a proposal whose source kind is `import-plan` may be decided by a
+  principal without the release-manager role. Every other proposal needs one.
+* Where it is enforced: the authority, not the role policy. The policy answers
+  who may call the intent; the authority answers whether this principal may
+  decide this proposal. A deployment that grants `engine` the intent still cannot
+  use it to approve a worker's amendment.
+* Consequence: asking a person to approve the members of a fan-out they wrote is
+  asking them to approve their own workflow, and that is no longer asked.
+
+## Fan-out runs
+
+`planFanOut` evaluates the frontier over the accepted upstream collection, builds
+the member tasks, and proposes them; `advanceRun` decides and applies the
+proposal, then dispatches members one at a time. A two-element collection now
+produces two member tasks and a dispatched first member.
+
+Seven defects stood between the first attempt and that sentence, and each was
+found by running the path.
+
+* **The driver never read its upstream outputs.** `upstreamOutputs` returned
+  `canonicalValue({})` as every value. The two-phase acceptance passed because
+  its second phase accepts an empty object. Fan-out cannot, because the
+  collection is the whole point. It loads the stored asset now, which also means
+  every second phase finally reads what the phase before it produced.
+* **An item without `dependsOn` was an error.** The authored lowering always sets
+  the dependency pointer, so every element had to carry an ordering field. An
+  item that says nothing depends on nothing.
+* **The template's criteria are authored keys; a graph task references criterion
+  node identities.** The nodes are built first and the policy references them.
+* **The result snapshot and the proposal each need the other**, because a
+  proposal binds its result snapshot to its result graph and the result graph
+  only exists once the proposal compiles. The first proposal exists to produce
+  the graph, exactly like the prompt pack's discarded first dispatch.
+* **Allocated approval identities were malformed.** `advance-run` built
+  `approval-<digest>-1`; approvals require `approval_` and lowercase. This is the
+  second time this exact trap has been hit, and it was invisible the first time
+  because the driver reported only the refusal code. It now reports the message
+  too, which is what named the problem in one run.
+* **The driver recompiled from the authored project every call**, so it never saw
+  the amended graph and fanned out forever. It reads the run's current graph now.
+* **A fan-out phase carries no role.** Its members run the agent the task
+  template names, and read their own element rather than the upstream collection.
+
+### An amendment had never met a closed phase
+
+The last one is the most interesting, and it is a real gap rather than a wiring
+mistake. Applying an amendment changes the graph revision. Every archived phase
+lifecycle holds a candidate that names the revision it closed under, and the
+projection re-derived all of them against the new graph, so the apply failed with
+`graph-mismatch` on history that was already settled.
+
+Archived lifecycles arrived with D-011, after the amendment machinery, and the
+two had never been exercised together. Every existing amendment test amends a run
+whose phases have not closed.
+
+A candidate that names an earlier revision is history: re-deriving it against a
+later graph asks a question the record never answered, and its own digest still
+verifies, which is the integrity the record actually carries. `historical` now
+threads through candidate validation, closure validation, projection, and
+rehydration, and is set only when the recorded revision differs from the current
+one.
+
+
 
 ## Terms used everywhere and defined nowhere
 

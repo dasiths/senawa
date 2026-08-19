@@ -20,6 +20,7 @@ import {
   type AuthenticatedPrincipal,
   canonicalBytes,
   type DurableReceipt,
+  decodeAuthenticatedPrincipal,
   decodeCommandEnvelope,
   PROTOCOL_VERSION,
 } from "@senawa/protocol";
@@ -36,6 +37,16 @@ import {
   runtimeSchemaContract,
 } from "./dataflow-composition.js";
 import { dispatchPhase } from "./dispatch-driver.js";
+import { planFanOut, snapshotWithGraph } from "./fan-out-driver.js";
+
+/** Applying an approved amendment is a supervisor action, not a human decision. */
+const TRUSTED_SUPERVISOR = decodeAuthenticatedPrincipal({
+  issuer: "senawa.local",
+  subject: "advance-run",
+  tenant: "local",
+  assurance: "hardware-backed",
+  roles: ["trusted-supervisor"],
+});
 
 /** What the driver did, and what it is now waiting for. */
 export type AdvanceOutcome =
@@ -64,6 +75,7 @@ export type AdvanceOutcome =
       readonly phaseKey: string;
       readonly reasons: readonly string[];
     }
+  | { readonly kind: "fanned-out"; readonly phaseKey: string; readonly members: number }
   | { readonly kind: "closed"; readonly phaseKey: string }
   | { readonly kind: "finished" };
 
@@ -81,6 +93,7 @@ export function classifyOutcome(outcome: AdvanceOutcome): AdvanceDisposition {
   switch (outcome.kind) {
     case "dispatched":
     case "retrying":
+    case "fanned-out":
     case "closed":
     case "finished":
       return "progress";
@@ -124,6 +137,7 @@ export interface AdvanceRunInput {
 interface SnapshotPhase {
   readonly key: string;
   readonly dependsOn?: readonly string[];
+  readonly executor?: { readonly kind?: string };
   readonly outputs: readonly { readonly key: string }[];
   readonly iteration?: {
     readonly maximumAttempts?: number;
@@ -178,11 +192,31 @@ export async function advanceRun(input: AdvanceRunInput): Promise<AdvanceOutcome
     },
   });
   try {
-    return await step(input, loaded.snapshot, supervisor, broker);
+    // An applied amendment leaves the run on a graph the authored project no
+    // longer describes, so the run's own snapshot wins where one exists.
+    const active = activeSnapshot(supervisor, input, loaded.snapshot);
+    return await step(input, active, supervisor, broker);
   } finally {
     broker.close();
     supervisor.close();
   }
+}
+
+/** The snapshot this run is executing against, which an amendment may have changed. */
+function activeSnapshot(
+  supervisor: SqliteSupervisorAuthority,
+  input: AdvanceRunInput,
+  authored: ConfigurationSnapshot,
+): ConfigurationSnapshot {
+  const scheduling = supervisor.commandAuthority.queryRunScheduling(
+    input.repositoryId,
+    input.runId,
+  );
+  const graph = scheduling?.graph;
+  if (graph === undefined || graph.revisionDigest === authored.graph.revisionDigest) {
+    return authored;
+  }
+  return snapshotWithGraph(authored, graph as never, input.dependencies.sha256);
 }
 
 async function step(
@@ -221,6 +255,20 @@ async function step(
   );
 
   if (dispatch === undefined) {
+    // A fan-out phase has no task until the collection an earlier phase produced
+    // is turned into members, so that has to happen before anything is
+    // dispatched.
+    if (phase.executor?.kind === "task-frontier" && phaseTasks(snapshot, phaseKey).length === 0) {
+      return materialiseMembers(
+        input,
+        snapshot,
+        supervisor,
+        phaseKey,
+        phase,
+        state,
+        new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
+      );
+    }
     const dispatched = dispatchPhase({
       snapshot,
       dataflow,
@@ -230,7 +278,12 @@ async function step(
       runId: input.runId,
       phaseKey,
       workflowInput: input.workflowInput,
-      upstream: upstreamOutputs(snapshot, phase, state),
+      upstream: upstreamOutputs(
+        snapshot,
+        phase,
+        state,
+        new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
+      ),
       repositoryBase: input.repositoryBase,
       currentTime: input.currentTime,
     });
@@ -368,7 +421,12 @@ async function step(
         runId: input.runId,
         phaseKey,
         workflowInput: input.workflowInput,
-        upstream: upstreamOutputs(snapshot, phase, state),
+        upstream: upstreamOutputs(
+          snapshot,
+          phase,
+          state,
+          new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
+        ),
         repositoryBase: input.repositoryBase,
         currentTime: input.currentTime,
         attempt: attempt + 1,
@@ -420,7 +478,12 @@ async function step(
         runId: input.runId,
         phaseKey,
         workflowInput: input.workflowInput,
-        upstream: upstreamOutputs(snapshot, phase, state),
+        upstream: upstreamOutputs(
+          snapshot,
+          phase,
+          state,
+          new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
+        ),
         repositoryBase: input.repositoryBase,
         currentTime: input.currentTime,
         attempt: attempt + 1,
@@ -552,6 +615,90 @@ function deliverFacts(
   }
 }
 
+/**
+ * Turns a computed collection into the member tasks a fan-out phase runs.
+ *
+ * Members are not in the compiled graph, because the collection is not known
+ * until the phase before produces it. The engine may decide the resulting
+ * proposal because its source is a plan import, which the author declared by
+ * writing `forEach`.
+ */
+function materialiseMembers(
+  input: AdvanceRunInput,
+  snapshot: ConfigurationSnapshot,
+  supervisor: SqliteSupervisorAuthority,
+  phaseKey: string,
+  phase: SnapshotPhase,
+  state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
+  assets: SqliteCanonicalJsonAssetStore,
+): AdvanceOutcome {
+  const upstream = upstreamOutputs(snapshot, phase, state, assets)[0];
+  if (upstream === undefined) return { kind: "awaiting-agent", phaseKey };
+
+  const { evaluation, proposal, resultSnapshot } = planFanOut({
+    snapshot,
+    dependencies: input.dependencies,
+    repositoryId: input.repositoryId,
+    runId: input.runId,
+    phaseKey,
+    source: { value: upstream.value, acceptanceDigest: upstream.acceptanceDigest },
+    attemptDigest: upstream.bindingDigest,
+  });
+  if (evaluation.members.length === 0) return { kind: "closed", phaseKey };
+
+  // Applying the amendment reads the result snapshot back, so it has to be
+  // stored before the proposal names its digest.
+  supervisor.commandAuthority.putConfigurationSnapshot(resultSnapshot);
+  const suffix = String(proposal.proposalDigest).slice(0, 20);
+  submit(
+    supervisor,
+    input,
+    `fanout-propose-${suffix}`,
+    "submit-amendment-proposal",
+    snapshot.graph.revisionDigest,
+    proposal.proposalDigest,
+    { proposal },
+  );
+  submit(
+    supervisor,
+    input,
+    `fanout-decide-${suffix}`,
+    "record-amendment-decision",
+    snapshot.graph.revisionDigest,
+    proposal.proposalDigest,
+    {
+      amendmentId: proposal.amendmentId,
+      proposalDigest: proposal.proposalDigest,
+      decision: "approve",
+      reviewedResultGraphRevisionDigest: proposal.reviewedResultGraph.revisionDigest,
+    },
+  );
+  const recovery = supervisor
+    .listApprovedAmendmentRecoveries()
+    .find((entry) => entry.amendmentId === proposal.amendmentId);
+  if (recovery === undefined || !recovery.observedQuiescent) {
+    return { kind: "awaiting-agent", phaseKey };
+  }
+  // Applying is mechanical once a decision exists and the affected scopes are
+  // quiescent, which is what the trusted-supervisor role means. The driver is
+  // the supervisor here, because no daemon need be running to advance a run.
+  submit(
+    supervisor,
+    { ...input, principal: TRUSTED_SUPERVISOR },
+    `fanout-apply-${suffix}`,
+    "apply-approved-amendment",
+    recovery.baseGraphRevisionDigest,
+    recovery.decisionDigest,
+    {
+      amendmentId: recovery.amendmentId,
+      proposalDigest: recovery.proposalDigest,
+      decisionDigest: recovery.decisionDigest,
+      reviewedResultGraphRevisionDigest: recovery.reviewedResultGraphRevisionDigest,
+    },
+  );
+  return { kind: "fanned-out", phaseKey, members: evaluation.members.length };
+}
+
 /** True when a person still owes this run a decision. */
 function approvalPending(input: AdvanceRunInput): boolean {
   const portal = new SqlitePortalQueryAuthority({
@@ -649,16 +796,22 @@ function submit(
       currentTime: input.currentTime,
       facts: { source: "advance-run" },
       // Identities must be globally unique, so they carry the command they serve.
+      // The separator is an underscore because that is the prefix form every
+      // allocated identity is validated against.
       allocateId: (kind: string) => {
         allocation += 1;
-        return `${kind}-${commandId.slice(8)}-${allocation}`;
+        return `${kind}_${commandId.slice(8).toLowerCase()}${allocation}`;
       },
     },
   );
   // A driver that reports progress the authority refused is worse than one that stops.
   if (receipt.status !== "completed") {
+    // The code alone names a category. The message names what was wrong, which
+    // is what a person reading a stopped run needs.
     throw new Error(
-      `${intent} was ${receipt.status}${receipt.error === undefined ? "" : `: ${receipt.error.code}`}`,
+      `${intent} was ${receipt.status}${
+        receipt.error === undefined ? "" : `: ${receipt.error.code}: ${receipt.error.message ?? ""}`
+      }`,
     );
   }
   return receipt;
@@ -692,6 +845,18 @@ function phaseValue(snapshot: ConfigurationSnapshot, key: string): SnapshotPhase
   return entry.value as unknown as SnapshotPhase;
 }
 
+/** The tasks the compiled graph declares under a phase. */
+function phaseTasks(snapshot: ConfigurationSnapshot, phaseKey: string): readonly unknown[] {
+  const node = snapshot.graph.nodes.find(
+    (candidate) => candidate.kind === "phase" && String(candidate.definition.key) === phaseKey,
+  );
+  if (node === undefined || node.kind !== "phase") return [];
+  return snapshot.graph.nodes.filter(
+    (candidate) =>
+      candidate.kind === "task" && candidate.definition.parentId === node.definition.id,
+  );
+}
+
 function phaseKeyById(snapshot: ConfigurationSnapshot, phaseId: string): string | undefined {
   const node = snapshot.graph.nodes.find(
     (candidate) => candidate.kind === "phase" && candidate.definition.id === phaseId,
@@ -712,6 +877,7 @@ function upstreamOutputs(
   snapshot: ConfigurationSnapshot,
   phase: SnapshotPhase,
   state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
+  assets: SqliteCanonicalJsonAssetStore,
 ): readonly {
   readonly phase: string;
   readonly output: string;
@@ -731,12 +897,17 @@ function upstreamOutputs(
   for (const entry of state.phaseOutputOutbox) {
     const producing = phaseKeyById(snapshot, entry.fact.output.phase.phaseId);
     if (producing === undefined || !wanted.has(producing)) continue;
+    const contentDigest = sha256Digest(String(entry.fact.output.contentDigest));
+    // The stored bytes, not a placeholder. A phase that reads an upstream output
+    // has to read what the agent actually produced.
+    const value = assets.load(contentDigest);
+    if (value === undefined) continue;
     found.push({
       phase: producing,
       output: String(entry.fact.output.outputName),
-      bindingDigest: sha256Digest(String(entry.fact.output.contentDigest)),
+      bindingDigest: contentDigest,
       acceptanceDigest: sha256Digest(String(entry.fact.output.validationReceiptDigest)),
-      value: canonicalValue({}),
+      value,
     });
   }
   return found;

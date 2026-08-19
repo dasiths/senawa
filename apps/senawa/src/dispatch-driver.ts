@@ -36,6 +36,7 @@ interface SnapshotPhase {
   };
   readonly executor: CanonicalValue & {
     readonly kind?: string;
+    readonly template?: string;
     readonly role: string;
     readonly budgets: readonly ContextBudget[];
   };
@@ -94,6 +95,8 @@ export interface DispatchPhaseInput {
   }[];
   /** Which attempt this is. A retry after a red gate dispatches attempt two. */
   readonly attempt?: number;
+  /** Which member of a fan-out phase to dispatch. Members run one at a time. */
+  readonly memberIndex?: number;
   /** Why the previous attempt was refused, so the next one is told what to change. */
   readonly priorRefusals?: readonly string[];
   readonly repositoryBase: {
@@ -112,6 +115,15 @@ export interface DispatchPhaseResult {
   /** The route this dispatch runs under, which a worker adapter needs to run it. */
   readonly routeSelection: WorkerModelRouteSelection;
 }
+
+/** A member's input is its element, which the template maps whole. */
+const MEMBER_ITEM_MAPPINGS = Object.freeze([
+  Object.freeze({
+    key: consumerKey("item"),
+    source: Object.freeze({ kind: "current-item" as const, pointer: "" }),
+    destinationPointer: "",
+  }),
+]) as never;
 
 const PROMPT_PACK_MAX_BYTES = 65_536;
 const PROVISIONAL_PROMPT_PACK_DIGEST = sha256Digest("0".repeat(64));
@@ -132,46 +144,75 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
     registryEntry(snapshot.phaseDataflow, input.phaseKey),
   );
   const phaseNode = requiredNode(snapshot, "phase", input.phaseKey);
-  const taskNode = snapshot.graph.nodes.find(
+  const phaseTasks = snapshot.graph.nodes.filter(
     (node) => node.kind === "task" && node.definition.parentId === phaseNode.definition.id,
   );
+  // A fan-out phase owns one task per member and runs them one at a time, so a
+  // caller names which. Every other phase owns exactly one.
+  const taskNode = phaseTasks[input.memberIndex ?? 0];
   if (taskNode === undefined || taskNode.kind !== "task") {
-    // A fan-out phase has no task until its members are materialised from the
-    // collection an earlier phase produced. Saying so beats reporting the
-    // workflow as broken, which is what "declares no executable work" reads as.
     if (declaration.executor.kind === "task-frontier") {
       throw new Error(
-        `Phase ${input.phaseKey} is a fan-out, and v1 compiles one without running it yet`,
+        `Phase ${input.phaseKey} is a fan-out whose members have not been materialised`,
       );
     }
     throw new Error(`Phase ${input.phaseKey} declares no executable work`);
   }
 
-  const roleEntry = registryEntry(snapshot.roles, declaration.executor.role);
+  // A fan-out phase carries no role of its own: its members run the agent the
+  // task template names.
+  const template =
+    declaration.executor.kind === "task-frontier"
+      ? registryValue<{ readonly role: string; readonly budgets: readonly ContextBudget[] }>(
+          registryEntry(snapshot.taskTemplates, String(declaration.executor.template)),
+        )
+      : undefined;
+  const executorRole = template?.role ?? declaration.executor.role;
+  const executorBudgets = template?.budgets ?? declaration.executor.budgets;
+  const roleEntry = registryEntry(snapshot.roles, executorRole);
   const role = registryValue<SnapshotAgentRole>(roleEntry);
   const modelPolicyEntry = registryEntry(snapshot.modelPolicies, role.modelPolicy);
   const modelPolicy = registryValue<SnapshotModelPolicy>(modelPolicyEntry);
   const promptEntry = requiredPrompt(snapshot, role.prompt);
   const prompt = promptEntry;
 
-  const upstream = input.upstream ?? [];
-  const sourceBindings: readonly MappingSourceBinding[] = [
-    {
-      source: { kind: "workflow-input" as const },
-      sourceBindingDigest: input.workflowInput.bindingDigest,
-      value: input.workflowInput.value,
-    },
-    ...upstream.map((entry) => ({
-      source: {
-        kind: "phase-output" as const,
-        phase: consumerKey(entry.phase),
-        output: consumerKey(entry.output),
-      },
-      sourceBindingDigest: entry.bindingDigest,
-      acceptanceDigest: entry.acceptanceDigest,
-      value: entry.value,
-    })),
-  ];
+  // A fan-out member reads its own element, computed when the members were
+  // materialised and stored on the task. Everything else reads the workflow
+  // input and its upstream phases.
+  const member =
+    template === undefined
+      ? undefined
+      : (taskNode.definition.input as unknown as {
+          readonly value: CanonicalValue;
+          readonly digest: Sha256Digest;
+        });
+  const upstream = member === undefined ? (input.upstream ?? []) : [];
+  const sourceBindings: readonly MappingSourceBinding[] =
+    member === undefined
+      ? [
+          {
+            source: { kind: "workflow-input" as const },
+            sourceBindingDigest: input.workflowInput.bindingDigest,
+            value: input.workflowInput.value,
+          },
+          ...upstream.map((entry) => ({
+            source: {
+              kind: "phase-output" as const,
+              phase: consumerKey(entry.phase),
+              output: consumerKey(entry.output),
+            },
+            sourceBindingDigest: entry.bindingDigest,
+            acceptanceDigest: entry.acceptanceDigest,
+            value: entry.value,
+          })),
+        ]
+      : [
+          {
+            source: { kind: "current-item" as const },
+            sourceBindingDigest: member.digest,
+            value: member.value,
+          },
+        ];
   // The upstream set is what makes a retry after an amended dependency a
   // different attempt, so it is derived from the bindings rather than fixed.
   const upstreamSetDigest = canonicalDigest(
@@ -193,7 +234,7 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
     upstreamClosureSetDigest: upstreamSetDigest,
     upstreamOutputSetDigest: upstreamSetDigest,
     schema: runtimeSchemaContract(snapshot, declaration.input.schema, sha256),
-    mappings: declaration.input.mappings,
+    mappings: member === undefined ? declaration.input.mappings : MEMBER_ITEM_MAPPINGS,
     sourceBindings,
     mappingPolicy: {
       dependencyPhases: (declaration.dependsOn ?? []).map(consumerKey),
@@ -205,7 +246,7 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
         }));
       }),
       completionEvidenceViews: [],
-      allowCurrentItem: false,
+      allowCurrentItem: member !== undefined,
     },
   });
 
@@ -266,7 +307,7 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
       completionPolicy: taskNode.definition.completionPolicy,
       priorRefusals: input.priorRefusals ?? [],
       capabilities,
-      budgets: declaration.executor.budgets,
+      budgets: executorBudgets,
     },
     sha256,
   );

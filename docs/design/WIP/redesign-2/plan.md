@@ -66,7 +66,7 @@ A later phase may not regress one of them.
 | 6 | Evidence and output policy are authorable | Complete: policy, views, contract, and the evidence refusal |
 | 7 | Loops, gates, sensors, and approval are authorable | Complete |
 | 8 | The autonomous driver and human loop | Complete: drives, retries with reasons, closes, advances, waits for people |
-| 9 | Fan-out and fan-in | Compiles and refuses honestly; execution needs the authority decision in F-015 |
+| 9 | Fan-out and fan-in | Members materialise and dispatch; per-member gates need the phase model |
 | 10 | Sessions, model routing, and steering | Not started |
 | 11 | Prove authored-surface parity | Two fixtures prove defaults are available and overridable; old-template comparison open |
 | 12 | The portal earns its density | Disclosure landed; the default view needs run controls in the rail |
@@ -401,8 +401,10 @@ Acceptance:
 
 ## Phase 9: Fan-out and fan-in
 
-* [ ] Lower authored `forEach` into member phases under the Phase 0 decision,
-  preserving one task beneath each phase and a configured nesting bound. **Not done: members lower to a task frontier rather than phases, and no member runs at all. Reaching a fan-out now refuses by naming that limit instead of reporting the workflow as broken. F-015 records what running one needs and which authority question it settles.**
+* [x] Lower authored `forEach` into member phases under the Phase 0 decision,
+  preserving one task beneath each phase and a configured nesting bound. **Members
+  materialise as tasks under the fan-out phase and run one at a time. D-025's
+  deviation stands: per-member gates and approval still need the phase model.**
 * [ ] Give each member its own operating contract, output, evidence policy,
   gates, approval, attempt policy, escalation, and history.
 * [x] Honour per-phase failure policy: wait, proceed with passed members, or fail
@@ -417,8 +419,10 @@ Acceptance:
 
 Acceptance:
 
-* [ ] A plan phase computes a collection and later members run sequentially,
-  grouped under their parent phase in the portal.
+* [x] A plan phase computes a collection and later members run sequentially,
+  grouped under their parent phase in the portal. **The driver evaluates the
+  frontier, the engine decides the resulting plan import, and members dispatch
+  one at a time. D-032.**
 * [ ] Three failing members do not block the remaining seven under a continue
   policy.
 * [x] A nested member at the configured depth runs its own complete loop, and one
