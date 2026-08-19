@@ -3262,3 +3262,62 @@ should be quarantined and reported, not fatal to its host.
 Not fixed. Recorded with the reproduction: change any string passed to `fail` in
 `packages/kernel/src/candidates.ts`, run a workflow far enough to record that
 refusal, then restore the string.
+
+## F-036: the driver waited forever for a turn that was already over
+
+With the fence removed, a spent turn stopped killing the run and started
+stalling it instead. The plan phase's agent produced nothing, the effect was
+cancelled, and `step` reported `awaiting-agent` on every later cycle:
+
+```ts
+if (!completed || published.length === 0) return { kind: "awaiting-agent", phaseKey };
+```
+
+That reads "the agent has not finished" from the absence of a completion, which
+is also what "the agent finished and handed in nothing" looks like. Only the
+runner records the difference, because an empty turn writes nothing to the
+context broker.
+
+The driver now reads the effect outcome for the dispatch. A dispatch whose
+effect reached a terminal outcome that is not `completed` is a spent attempt: it
+starts the next one while attempts remain, and rejects the phase when they run
+out. That is what the authored `attempts:` count is for.
+
+## F-037: an agent retried a rejected completion twenty-six times
+
+The live planner asked this, which is the clearest defect report in the log:
+
+> I have attempted to submit a valid plan completion 26 times, and every attempt
+> is rejected with error code "completion-arguments-invalid". I have tried many
+> different JSON structures for the outputs parameter, all of which appear to
+> match the schema returned by senawa_output_schema. What specific aspect of my
+> plan submission is causing the error? Is there an undocumented constraint or
+> format requirement I'm missing?
+
+There was no undocumented constraint. `exactObject` threw a bare
+`Invalid tool arguments`, the handler caught it and discarded it, and the agent
+was told only `completion-arguments-invalid`. It could not learn which key was
+unexpected or missing, so it guessed, and every guess cost a model call.
+
+`exactObject` now names the unexpected and missing keys, and the refusal carries
+that detail to the agent. Every other refusal in this system names its path and
+reason; the one an agent hits most often did not.
+
+## F-038: restarting the service ended the run
+
+The plan task retried correctly four times and then fenced. The effect was
+`crashed`, and a crash is the one worker outcome that still fences.
+
+Nothing crashed. `copilot-worker.ts` ran the turn, then:
+
+```ts
+try { await session.disconnect(); } catch { status = "crashed"; }
+```
+
+Stopping the supervisor closes the SDK client under the running turn, so the
+hang-up fails, so a finished turn is recorded as a crash, so the task is fenced
+for good. Every service restart during a dispatch therefore ended the run — which
+is what happened repeatedly while these fixes were being developed.
+
+Hanging up is not part of the turn. A disconnect failure is now noted in the
+transcript and leaves the outcome alone.

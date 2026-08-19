@@ -240,10 +240,13 @@ export class CopilotSerialWorkerAdapter {
     } finally {
       scope.active = false;
       if (session !== undefined) {
+        // Hanging up is not part of the turn. A disconnect that fails while the
+        // supervisor is stopping used to rewrite the outcome as a crash, and a
+        // crash fences the task, so restarting the service killed the run.
         try {
           await session.disconnect();
         } catch {
-          status = "crashed";
+          scope.note("session disconnect failed after the turn ended");
         }
       }
       await Promise.allSettled([...scope.pending]);
@@ -876,8 +879,13 @@ function completeTool(
           };
           outputs = slots.length === 0 ? {} : exactObject(wrapper.outputs, names, []);
           notes = wrapper.changeNotes;
-        } catch {
-          return failure("completion-arguments-invalid");
+        } catch (error) {
+          // Without the reason an agent can only guess, and it guesses many
+          // times: one live planner retried twenty-six times before giving up.
+          return failure(
+            "completion-arguments-invalid",
+            error instanceof Error ? error.message : undefined,
+          );
         }
         for (const slot of slots) {
           const name = String(slot.declaration.outputName);
@@ -1452,11 +1460,17 @@ function exactObject(
   optional: readonly string[] = [],
 ): Readonly<Record<string, unknown>> {
   if (value === null || typeof value !== "object" || Array.isArray(value))
-    return invalidArguments();
+    return invalidArguments("expected an object");
   const object = value as Readonly<Record<string, unknown>>;
   const allowed = new Set([...required, ...optional]);
-  if (Object.keys(object).some((key) => !allowed.has(key))) return invalidArguments();
-  if (required.some((key) => !Object.hasOwn(object, key))) return invalidArguments();
+  const unexpected = Object.keys(object).filter((key) => !allowed.has(key));
+  if (unexpected.length > 0) {
+    return invalidArguments(
+      `unexpected ${unexpected.join(", ")}; allowed are ${[...allowed].join(", ")}`,
+    );
+  }
+  const missing = required.filter((key) => !Object.hasOwn(object, key));
+  if (missing.length > 0) return invalidArguments(`missing ${missing.join(", ")}`);
   return object;
 }
 
@@ -1482,18 +1496,22 @@ function nonNegativeInteger(value: unknown): number {
   return value as number;
 }
 
-function invalidArguments(): never {
-  throw new TypeError("Invalid tool arguments");
+function invalidArguments(detail = "arguments do not match the tool schema"): never {
+  throw new TypeError(`Invalid tool arguments: ${detail}`);
 }
 
 function success(value: unknown): CopilotSdkToolResult {
   return Object.freeze({ resultType: "success", textResultForLlm: JSON.stringify(value) });
 }
 
-function failure(code: string): CopilotSdkToolResult {
+function failure(code: string, detail?: string): CopilotSdkToolResult {
   return Object.freeze({
     resultType: "failure",
-    textResultForLlm: JSON.stringify({ status: "failed", code }),
+    textResultForLlm: JSON.stringify({
+      status: "failed",
+      code,
+      ...(detail === undefined ? {} : { detail }),
+    }),
   });
 }
 

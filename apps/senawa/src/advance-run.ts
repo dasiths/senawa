@@ -31,6 +31,7 @@ import {
   SqliteCanonicalJsonAssetStore,
   SqliteContextBroker,
   SqlitePortalQueryAuthority,
+  SqliteRunnerAuthority,
 } from "@senawa/storage-sqlite";
 import { SqliteSupervisorAuthority } from "@senawa/supervisor";
 import {
@@ -456,7 +457,45 @@ async function step(
     };
   }
 
-  if (!completed || published.length === 0) return { kind: "awaiting-agent", phaseKey };
+  if (!completed || published.length === 0) {
+    // A dispatch that ended without handing anything in is a spent attempt, not
+    // work still in progress. Reporting it as awaiting the agent waits for a
+    // turn that is already over, which stalls the run until a person notices.
+    if (spentDispatch(input, dispatchId)) {
+      const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
+      if (attempt < maximumAttempts) {
+        const retried = dispatchPhase({
+          snapshot,
+          dataflow,
+          contextBroker: broker,
+          sessionLedger: supervisor.commandAuthority,
+          dependencies: input.dependencies,
+          repositoryId: input.repositoryId,
+          runId: input.runId,
+          phaseKey,
+          workflowInput: input.workflowInput,
+          upstream: upstreamOutputs(snapshot, phase, state, assets(supervisor, broker)),
+          repositoryBase: input.repositoryBase,
+          currentTime: input.currentTime,
+          attempt: attempt + 1,
+          priorRefusals: ["the previous turn ended without handing any work in"],
+        });
+        return {
+          kind: "retrying",
+          phaseKey,
+          attempt: attempt + 1,
+          dispatchId: retried.dispatch.dispatchId,
+          reasons: ["the previous turn ended without handing any work in"],
+        };
+      }
+      return {
+        kind: "rejected",
+        phaseKey,
+        reasons: [`no attempt handed any work in after ${maximumAttempts} tries`],
+      };
+    }
+    return { kind: "awaiting-agent", phaseKey };
+  }
 
   // Publication is where the declared schema is enforced. A refusal here means
   // the agent's output never becomes readable, so the phase is left unchanged.
@@ -797,6 +836,39 @@ function gateFor(
  * means. Until a fact crosses that line the authority has no accepted task for
  * the phase, and evaluating a gate refuses with a task set mismatch.
  */
+/**
+ * Whether the dispatch's turn is over with nothing handed in.
+ *
+ * The runner records the outcome of the effect that ran the agent. Only that
+ * record distinguishes a turn still running from one that ended empty, and the
+ * context broker never learns the difference because an empty turn writes
+ * nothing to it.
+ */
+function spentDispatch(input: AdvanceRunInput, dispatchId: string): boolean {
+  const runner = new SqliteRunnerAuthority({
+    databasePath: input.databasePath,
+    dependencies: input.dependencies,
+  });
+  try {
+    return runner
+      .load({ repositoryId: input.repositoryId, runId: input.runId })
+      .effects.some((effect) => {
+        const outcome = effect.outcome;
+        if (outcome === undefined || outcome.status === "active" || outcome.status === "unknown") {
+          return false;
+        }
+        const details = outcome.details as { readonly dispatchId?: unknown } | undefined;
+        return String(details?.dispatchId) === dispatchId && outcome.status !== "completed";
+      });
+  } catch {
+    // A run whose work never went through the runner has no effect to read, so
+    // there is nothing saying this turn is over.
+    return false;
+  } finally {
+    runner.close();
+  }
+}
+
 function deliverFacts(
   input: AdvanceRunInput,
   supervisor: SqliteSupervisorAuthority,
@@ -805,19 +877,27 @@ function deliverFacts(
   dispatchIds: ReadonlySet<string>,
 ): void {
   for (const entry of state.completionOutbox) {
-    if (entry.delivered || !dispatchIds.has(String(entry.fact.dispatchId))) continue;
+    if (!dispatchIds.has(String(entry.fact.dispatchId))) continue;
     const stored = broker.loadWorkerDispatch(entry.fact.dispatchId);
     if (stored === undefined) continue;
-    submit(
-      supervisor,
-      input,
-      `completion-${entry.submissionId.replace("submission_", "").slice(0, 20)}`,
-      "submit-completion",
-      String(stored.context.graphRevisionDigest),
-      undefined,
-      { submission: entry.fact.assessment.submission },
-      String(entry.fact.assessment.submission.task.contextRevisionDigest),
-    );
+    try {
+      submit(
+        supervisor,
+        input,
+        `completion-${entry.submissionId.replace("submission_", "").slice(0, 20)}`,
+        "submit-completion",
+        String(stored.context.graphRevisionDigest),
+        undefined,
+        { submission: entry.fact.assessment.submission },
+        String(entry.fact.assessment.submission.task.contextRevisionDigest),
+      );
+    } catch (error) {
+      // The completion bridge queues its own submit-completion the moment a
+      // worker hands in, so the authority may already hold this one. Anything
+      // else is a refusal the phase has to stop on.
+      const message = error instanceof Error ? error.message : "";
+      if (!message.includes("completion-exists")) throw error;
+    }
     broker.deliverCompletionFact(entry.submissionId);
   }
 }

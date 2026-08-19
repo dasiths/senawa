@@ -470,6 +470,22 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect(failing.lines).toHaveLength(0);
   });
 
+  it("keeps the turn's outcome when hanging up fails", async () => {
+    const transcript = new RecordingTranscript();
+    const sdk = new FakeSdkPort();
+    sdk.onSend = complete("completed");
+    sdk.disconnectFails = true;
+    const run = harness(sdk, { transcript });
+
+    // A crashed turn fences its task for good. Rewriting a finished turn as a
+    // crash because the socket would not close meant that restarting the
+    // supervisor while an agent worked ended the run.
+    expect((await run.adapter.run(run.input)).status).toBe("completed");
+    expect(transcript.lines.map(({ text }) => text)).toContain(
+      "session ended: the agent finished and submitted its work",
+    );
+  });
+
   it("reports the exact ending status and survives a failing transcript sink", async () => {
     const failing = new RecordingTranscript(true);
     const blockingSdk = new FakeSdkPort();
@@ -1115,6 +1131,7 @@ class FakeSdkPort implements CopilotSdkPort {
   readonly sessions = new Map<string, FakeSession>();
   readonly resumeCalls: { sessionId: string; config: CopilotSdkResumeSessionConfig }[] = [];
   readonly createCalls: CopilotSdkSessionConfig[] = [];
+  disconnectFails = false;
   onSend?: (
     config: CopilotSdkSessionConfig,
     session: FakeSession,
@@ -1180,6 +1197,7 @@ class FakeSession implements CopilotSdkSessionPort {
 
   async disconnect(): Promise<void> {
     this.disconnectCalls += 1;
+    if (this.sdk.disconnectFails) throw new Error("Fake disconnect failed");
   }
 }
 
