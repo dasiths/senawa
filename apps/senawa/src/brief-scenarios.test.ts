@@ -20,7 +20,7 @@ import {
   type Scenario,
   startScenario,
 } from "./brief-scenarios.js";
-import { decidePhase, overrideMember, type SteerInput, steerAgent } from "./decide.js";
+import { answerQuestion, decidePhase, overrideMember, type SteerInput, steerAgent } from "./decide.js";
 import { listArtifacts } from "./inspect.js";
 import { runGates } from "./run-gates.js";
 
@@ -893,6 +893,36 @@ describe("an agent that stops to ask", () => {
         .prepare("SELECT canonical_question AS json FROM context_questions")
         .get() as { readonly json: string } | undefined;
       expect(row?.json).toContain("which endpoint is authoritative?");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("takes the answer from the command line and binds it to the question asked", async () => {
+    const scenario = await startScenario("answer", {});
+    await askThroughSink(scenario, scenario.dispatchId, "which endpoint is authoritative?");
+
+    // The command sent the submission id and nothing else, so the authority
+    // refused every answer for wanting the digests that bind one to the exact
+    // question. Only the live test exercised this path, and it is skipped
+    // without credentials, so `senawa answer` had never once worked.
+    const answered = answerQuestion({
+      ...scenario.paths,
+      answer: "the one already deployed",
+      currentTime: NOW,
+      dependencies,
+      principal: runtimePrincipal,
+      repositoryId: scenario.repositoryId,
+      runId: scenario.runId,
+    });
+    expect(answered).toMatchObject({ exitCode: 0 });
+
+    const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+    try {
+      const row = database
+        .prepare("SELECT canonical_answer AS json FROM context_question_answers")
+        .get() as { readonly json: string } | undefined;
+      expect(row?.json).toContain("the one already deployed");
     } finally {
       database.close();
     }

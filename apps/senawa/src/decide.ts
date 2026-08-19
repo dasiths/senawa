@@ -2,6 +2,7 @@ import {
   type AuthenticatedPrincipal,
   canonicalBytes,
   decodeCommandEnvelope,
+  type PortalQuestionSource,
   PROTOCOL_VERSION,
 } from "@senawa/protocol";
 import type { RuntimeDependencies } from "@senawa/runtime";
@@ -138,7 +139,11 @@ export function answerQuestion(input: AnswerInput): CliResult {
       exitCode: 2,
       output: "An answer must carry text. The agent that asked reads it as written.",
     };
-  let pending: { readonly sourceId: string; readonly title: string };
+  let pending: {
+    readonly source: PortalQuestionSource;
+    readonly title: string;
+    readonly graphRevision?: string;
+  };
   let portal: SqlitePortalQueryAuthority;
   try {
     portal = new SqlitePortalQueryAuthority({
@@ -159,7 +164,20 @@ export function answerQuestion(input: AnswerInput): CliResult {
         output:
           "Nothing is waiting for an answer. Run senawa status to see what it is waiting for.",
       };
-    pending = { sourceId: asked.sourceId, title: asked.title };
+    // The authority binds an answer to the exact question it answers, so the
+    // whole source record is carried rather than the submission id alone.
+    const record = portal
+      .listQuestions(input.repositoryId, input.runId)
+      .questions.find((question) => question.source.submissionId === asked.sourceId);
+    if (record === undefined)
+      return { exitCode: 1, output: "The question this run is waiting on could not be read." };
+    pending = {
+      source: record.source,
+      title: asked.title,
+      ...(asked.expectedGraphRevision === undefined
+        ? {}
+        : { graphRevision: asked.expectedGraphRevision }),
+    };
   } finally {
     portal.close();
   }
@@ -170,7 +188,14 @@ export function answerQuestion(input: AnswerInput): CliResult {
     dependencies: input.dependencies,
   });
   try {
-    const payload = { answer: input.answer, submissionId: pending.sourceId };
+    const payload = {
+      answer: input.answer,
+      contextDigest: pending.source.contextDigest,
+      definitionGeneration: pending.source.definitionGeneration,
+      questionDigest: pending.source.questionDigest,
+      submissionId: pending.source.submissionId,
+      taskId: pending.source.taskId,
+    };
     const commandId = `command_answer-${input.dependencies.sha256
       .digest(canonicalBytes(payload))
       .slice(0, 32)}`;
@@ -179,6 +204,11 @@ export function answerQuestion(input: AnswerInput): CliResult {
       decodeCommandEnvelope({
         apiVersion: PROTOCOL_VERSION,
         commandId,
+        exactObjectDigest: pending.source.questionDigest,
+        expectedDefinitionRevision: pending.source.contextRevisionDigest,
+        ...(pending.graphRevision === undefined
+          ? {}
+          : { expectedGraphRevision: pending.graphRevision }),
         intent: { type: "answer-question" },
         payload,
         payloadDigest: input.dependencies.sha256.digest(canonicalBytes(payload)),
