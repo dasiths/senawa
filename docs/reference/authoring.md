@@ -33,6 +33,29 @@ field absent from this page is a field senawa refuses.
 
 `defaults` accepts the same five iteration keys a phase accepts: `attempts`,
 `onGateRejected`, `onApprovalRejected`, `onUpstreamChanged`, and `onExhausted`.
+
+### execution
+
+```yaml
+execution:
+  workspace: worktree
+  maxWriters: 3
+  integrationRef: refs/heads/main
+```
+
+| Key | Required | Shape | Default |
+|---|---|---|---|
+| `workspace` | No | `repository` or `worktree` | `repository` |
+| `maxWriters` | No | Positive whole number | `1` |
+| `integrationRef` | With `worktree` | Branch work is integrated onto | None |
+
+By default one agent writes at a time, directly in the repository, which is the
+shape a person can reason about without knowing anything about worktrees.
+
+`worktree` gives each writer its own checkout, which is the only way more than
+one can safely run at once; see [worktree mode](../guide/worktree-mode.md).
+More than one writer in a shared `repository` is refused rather than allowed to
+produce edits nobody can attribute.
 A phase that states one overrides the default for itself alone.
 
 ### A phase

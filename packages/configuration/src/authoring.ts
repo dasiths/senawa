@@ -124,6 +124,11 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
   );
   const name = requiredString(collector, input.workflow.path, "/name", workflow, "name");
   const workflowInput = requiredString(collector, input.workflow.path, "/input", workflow, "input");
+  const execution = readExecution(
+    collector,
+    input.workflow.path,
+    workflow as Readonly<Record<string, unknown>>,
+  );
   if (name === undefined || workflowInput === undefined || phases === undefined) {
     return { diagnostics: sortDiagnostics(collector.diagnostics) };
   }
@@ -139,8 +144,8 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
     apiVersion: WORKFLOW_API_VERSION,
     kind: "Workflow",
     execution: {
-      workspaceMode: "repository",
-      maxWriterConcurrency: 1,
+      workspaceMode: execution.workspace,
+      maxWriterConcurrency: execution.maxWriters,
       // The authority holds one failure policy per run while an author states
       // it per phase, so a run that any phase wants stopped is stopped. Being
       // over-strict here fails earlier rather than continuing past a phase the
@@ -148,6 +153,9 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
       failurePolicy: phases.some((phase) => phase.onFailure === "fail-fast")
         ? "fail-fast"
         : "continue",
+      ...(execution.integrationRef === undefined
+        ? {}
+        : { integrationRef: execution.integrationRef }),
     },
     workflow: {
       key: name,
@@ -778,6 +786,116 @@ function readSensors(
     });
   }
   return sensors;
+}
+
+interface AuthoredExecution {
+  readonly workspace: "repository" | "worktree";
+  readonly maxWriters: number;
+  readonly integrationRef?: string;
+}
+
+/**
+ * Reads where the run's agents work and how many of them write at once.
+ *
+ * Defaults to one writer in the repository itself, which is the shape a person
+ * can reason about without knowing anything about worktrees. Worktree mode is
+ * the opt-in: it isolates writers from each other, so it is the only way more
+ * than one of them can safely run at a time, and it needs a branch to integrate
+ * their work back onto.
+ */
+function readExecution(
+  collector: Collector,
+  path: string,
+  workflow: Readonly<Record<string, unknown>>,
+): AuthoredExecution {
+  const raw = workflow.execution;
+  if (raw === undefined) return { workspace: "repository", maxWriters: 1 };
+  if (!isRecord(raw)) {
+    add(collector, "invalid-field", path, "/execution", "Execution must be a mapping");
+    return { workspace: "repository", maxWriters: 1 };
+  }
+  for (const key of Object.keys(raw).sort()) {
+    if (key === "workspace" || key === "maxWriters" || key === "integrationRef") continue;
+    add(collector, "unknown-field", path, `/execution/${key}`, `${key} is not an execution field`);
+  }
+
+  const workspace =
+    raw.workspace === undefined || raw.workspace === "repository"
+      ? "repository"
+      : raw.workspace === "worktree"
+        ? "worktree"
+        : undefined;
+  if (workspace === undefined) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      "/execution/workspace",
+      "Workspace must be repository or worktree",
+    );
+  }
+
+  const maxWriters =
+    raw.maxWriters === undefined
+      ? 1
+      : typeof raw.maxWriters === "number" &&
+          Number.isSafeInteger(raw.maxWriters) &&
+          raw.maxWriters > 0
+        ? raw.maxWriters
+        : undefined;
+  if (maxWriters === undefined) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      "/execution/maxWriters",
+      "Writers must be a positive whole number",
+    );
+  }
+
+  const integrationRef =
+    typeof raw.integrationRef === "string" && raw.integrationRef.length > 0
+      ? raw.integrationRef
+      : undefined;
+  if (raw.integrationRef !== undefined && integrationRef === undefined) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      "/execution/integrationRef",
+      "Integration ref must be a non-empty branch name",
+    );
+  }
+
+  const resolvedWorkspace = workspace ?? "repository";
+  const resolvedWriters = maxWriters ?? 1;
+  // Two writers in one directory overwrite each other's work, and the run has no
+  // way to tell which edit belongs to whom. Refusing here is better than
+  // producing a result nobody can attribute.
+  if (resolvedWorkspace === "repository" && resolvedWriters > 1) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      "/execution/maxWriters",
+      "More than one writer needs workspace: worktree, or they share one directory",
+    );
+  }
+  if (resolvedWorkspace === "worktree" && integrationRef === undefined) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      "/execution/integrationRef",
+      "Worktree mode needs an integrationRef naming where work is integrated",
+    );
+  }
+
+  return {
+    workspace: resolvedWorkspace,
+    maxWriters: resolvedWriters,
+    ...(integrationRef === undefined ? {} : { integrationRef }),
+  };
 }
 
 function readPhases(

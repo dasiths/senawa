@@ -818,3 +818,50 @@ describe("steering an agent that is already working", () => {
     }
   });
 });
+
+describe("where agents work and how many write at once", () => {
+  it("defaults to one writer in the repository, which needs no worktree", async () => {
+    const snapshot = (await compileSnapshot({})) as {
+      readonly execution: Record<string, unknown>;
+    };
+    expect(snapshot.execution).toMatchObject({
+      workspaceMode: "repository",
+      maxWriterConcurrency: 1,
+    });
+  });
+
+  it("lets an author isolate writers in worktrees and say where work integrates", async () => {
+    const snapshot = (await compileSnapshot({
+      execution:
+        "execution:\n  workspace: worktree\n  maxWriters: 3\n  integrationRef: refs/heads/main",
+    })) as { readonly execution: Record<string, unknown> };
+
+    // Worktree mode was documented and unreachable from YAML until 2026-08-19:
+    // the lowering hardcoded one writer in the repository.
+    expect(snapshot.execution).toMatchObject({
+      workspaceMode: "worktree",
+      maxWriterConcurrency: 3,
+      integrationRef: "refs/heads/main",
+    });
+  });
+
+  it("refuses parallel writers that would share one directory", async () => {
+    const diagnostics = await compileScenario({ execution: "execution:\n  maxWriters: 2" });
+
+    // Two writers in one directory overwrite each other, and nothing can say
+    // afterwards which edit belonged to whom.
+    expect(diagnostics.map(({ message }) => message).join(" ")).toContain("worktree");
+  });
+
+  it("refuses worktree mode that does not say where work integrates", async () => {
+    const diagnostics = await compileScenario({
+      execution: "execution:\n  workspace: worktree",
+    });
+    expect(diagnostics.map(({ message }) => message).join(" ")).toContain("integrationRef");
+  });
+
+  it("refuses an execution field the reader does not know", async () => {
+    const diagnostics = await compileScenario({ execution: "execution:\n  workspce: worktree" });
+    expect(diagnostics.map(({ message }) => message).join(" ")).toContain("workspce");
+  });
+});

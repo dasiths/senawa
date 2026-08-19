@@ -85,6 +85,8 @@ export interface ScenarioOptions {
   readonly session?: "run" | "phase" | "element";
   /** Bounds how many turns one conversation carries before it is renewed. */
   readonly sessionTurns?: number;
+  /** Authors where agents work and how many of them write at once. */
+  readonly execution?: string;
 }
 
 export interface Scenario {
@@ -549,7 +551,7 @@ function workflow(options: ScenarioOptions): string {
         : "";
   return `
 name: delivery
-input: schemas/request.schema.json
+input: schemas/request.schema.json${options.execution === undefined ? "" : `\n${options.execution}`}
 phases:
   - name: define
     agent: definer
