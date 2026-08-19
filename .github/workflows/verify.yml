@@ -54,6 +54,9 @@ jobs:
       - name: Documented claims
         run: pnpm check:claims
 
+      - name: Writing register
+        run: pnpm check:register
+
       - name: Whitespace
         run: git diff --check
 

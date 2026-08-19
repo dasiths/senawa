@@ -287,7 +287,8 @@ The receipt reaches a terminal status and carries the exact refusal:
 A refusal is a first-class durable outcome, not an error to retry blindly. The
 run had no control state, so the kernel refused and said exactly why.
 
-Every transition is also an immutable event on the run's monotonic cursor:
+Every transition is also an event on the run's cursor, which only ever counts
+up and never changes what it has already recorded:
 
 ```bash
 senawa event list repository_example run_example

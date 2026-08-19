@@ -598,9 +598,12 @@ unknown and fail closed". Both are exact; only one can be read once.
   because they are the prose a consumer reads most and the only prose they read
   while something is going wrong. **Six messages named a problem and no next
   step; each now says what to do.**
-* [ ] Replace jargon that survives with the word the canonical behaviours use,
+* [x] Replace jargon that survives with the word the canonical behaviours use,
   and define any term that genuinely cannot be replaced where a reader first
-  meets it.
+  meets it. **Only `monotonic` survived the earlier sweep, in three places, now
+  written as a cursor that counts up and never goes back. `pnpm check:register`
+  keeps the rest out of consumer-facing pages, and says what to write instead
+  rather than only naming the offending word.**
 * [x] Record which contracts were accepted, changed, disproved, or deferred.
 
 Acceptance:
@@ -611,8 +614,10 @@ Acceptance:
   run-gates, agent list, artifact list, approve.**
 * [x] No v1 guide instructs an author to put senawa protocol text in an agent
   prompt.
-* [ ] No document explains a behaviour in words the canonical behaviours table
-  says more simply.
+* [x] No document explains a behaviour in words the canonical behaviours table
+  says more simply. **Enforced for guides, references, and the README by
+  `pnpm check:register`. Design documents are exempt: a reader there has already
+  chosen to look inside.**
 * [x] Every refusal a consumer can trigger names what failed, where, and what to
   do next, in one sentence.
 

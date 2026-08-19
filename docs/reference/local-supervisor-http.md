@@ -130,8 +130,8 @@ enrollment path, public or private key material, or report content. See the
 [remote control-plane reference](remote-control-plane.md) for configuration and
 trust limits.
 
-Supervisor logs are persisted with monotonically increasing cursors and bounded
-pages. ANSI escapes, control characters, bearer values, and sensitive
+Supervisor logs are read in bounded pages, against cursors that only ever count
+up. ANSI escapes, control characters, bearer values, and sensitive
 structured fields are removed or redacted before commit. The log table retains
 the latest 10,000 entries. Receipts, events, assets, configuration snapshots,
 contexts, SDK session references, remote inbox and outbox records, reports, and

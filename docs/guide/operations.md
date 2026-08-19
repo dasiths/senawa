@@ -154,7 +154,7 @@ senawa service logs
 senawa service logs 42
 ```
 
-Logs are persisted with monotonically increasing cursors. The CLI returns at most
+Logs are stored against cursors that only ever count up. The CLI returns at most
 100 entries per call; pass the last cursor to continue. ANSI escapes, control
 characters, bearer values, and sensitive structured fields are removed or
 redacted before commit. The log table retains the latest 10,000 entries.
