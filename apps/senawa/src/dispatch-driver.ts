@@ -120,6 +120,8 @@ export interface DispatchPhaseInput {
   readonly memberIndex?: number;
   /** Why the previous attempt was refused, so the next one is told what to change. */
   readonly priorRefusals?: readonly string[];
+  /** What this task asked and a person answered, so the agent is told rather than left guessing. */
+  readonly answeredQuestions?: readonly { readonly question: string; readonly answer: string }[];
   readonly repositoryBase: {
     readonly commitDigest: Sha256Digest;
     readonly treeDigest: Sha256Digest;
@@ -376,6 +378,7 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
         ...(input.priorRefusals ?? []),
         ...(routeChange === undefined ? [] : [routeChange]),
       ],
+      answeredQuestions: input.answeredQuestions ?? [],
       capabilities,
       budgets: executorBudgets,
     },

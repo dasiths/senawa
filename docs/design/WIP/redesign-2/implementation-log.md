@@ -2838,3 +2838,66 @@ the test: a `Record<CommandIntent["type"], readonly string[]>` naming a role for
 every intent, asserted against the shipped policy. It fails to compile when the
 protocol gains an intent, which forces the decision about who may send it to be
 made when the intent is introduced rather than the first time a user reaches it.
+
+## F-021: a run that asked a question was stopped for good
+
+Instructing the example's research agent to ask a person is what found this.
+The agent asked, and nothing happened, ever.
+
+Three separate things were missing and each hid the next.
+
+The model asked in prose. The operating contract said "Ask a question rather
+than guessing when the assignment is ambiguous" and never said how, so a chat
+model did what a chat model does and wrote the question in its reply. The
+session then ended with `missing-completion` and no question was ever recorded.
+The contract's first line already says a phase "is finished by calling senawa,
+never by printing a result in your reply"; asking needed the same sentence and
+did not have it.
+
+An unanswered question writes a row in `context_fresh_dispatch_requirements`,
+and `ProductionScheduler.schedule` refuses to work while one is unsatisfied.
+Nothing in the repository ever set `satisfied_by_dispatch_id`. The column is
+written once, as `NULL`, and the baseline migration carries a trigger for an
+`UPDATE` that no code performs. So the requirement was permanent and the
+scheduler stopped forever.
+
+The answer was never delivered. `senawa answer` wrote it to
+`context_question_answers`, the portal could read it, and the agent could not:
+no prompt, context, or session carried it. Answering was a durable record of a
+decision nobody acted on.
+
+The fix is a loop rather than three patches. `answeredQuestions` is now part of
+the worker context, so it is covered by the context digest like everything else
+the agent is told. The driver sees an answered-but-undelivered requirement,
+dispatches the phase again carrying the question and the answer in the person's
+words, and marks the requirement satisfied by that dispatch. The contract tells
+the agent to ask by calling senawa, that asking stops the run, and that the
+answer arrives on a later turn.
+
+Two consequences worth stating rather than burying.
+
+The answer arrives on the **next attempt**, not the same one. A task scope is
+taken over only by a strictly greater attempt, which is the invariant that makes
+the turn that asked unable to hand work in afterwards. Keeping the same attempt
+would need that invariant relaxed, which is a worse trade than spending an
+attempt. So a question costs an attempt against the authored ceiling, and a
+phase whose agent asks three questions needs `attempts` above three. For a model
+policy with more than one route it also advances the route, which is wrong in
+principle for a question turn and is not corrected here.
+
+## F-022: `senawa advance` invented the input the run was started with
+
+Found while making the answer loop dispatch twice against one attempt. The
+second dispatch was refused for disagreeing with the first about the phase
+attempt's content, and the disagreement was the workflow input.
+
+`runAdvanceCommand` passed `bindingDigest: "0".repeat(64)` and `canonicalValue({})`.
+`senawa advance` runs in its own process and has no memory of `senawa start`, and
+nothing read the run's binding back, so every phase the command dispatched read
+an empty object as the workflow input. The template's later phase reads only its
+upstream, which is why nothing had noticed.
+
+`queryWorkflowInput` reads the binding, the asset store supplies the value, and
+the command dispatches on what the run was actually given. The scenario harness
+did the same thing with a fixed fake digest, and now reads it back the same way,
+so the tests exercise the path the command uses.

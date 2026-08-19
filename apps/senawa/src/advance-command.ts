@@ -1,7 +1,8 @@
 import { resolve } from "node:path";
-import { canonicalValue, sha256Digest } from "@senawa/kernel";
+import { type CanonicalValue, canonicalValue, sha256Digest } from "@senawa/kernel";
 import type { AuthenticatedPrincipal } from "@senawa/protocol";
 import type { RuntimeDependencies } from "@senawa/runtime";
+import { SqliteAuthority, SqliteCanonicalJsonAssetStore } from "@senawa/storage-sqlite";
 import { type AdvanceOutcome, advanceRun, classifyOutcome } from "./advance-run.js";
 import type { CliResult } from "./cli.js";
 
@@ -34,6 +35,7 @@ export async function runAdvanceCommand(
   currentTime: string,
 ): Promise<CliResult> {
   const lines: string[] = [];
+  const workflowInput = boundWorkflowInput(options, paths, dependencies);
   try {
     for (let step = 0; step < (options.steps ?? DEFAULT_STEPS); step += 1) {
       const outcome = await advanceRun({
@@ -45,10 +47,7 @@ export async function runAdvanceCommand(
         principal,
         dependencies,
         currentTime,
-        workflowInput: {
-          bindingDigest: sha256Digest("0".repeat(64)),
-          value: canonicalValue({}),
-        },
+        workflowInput,
         repositoryBase: {
           commitDigest: sha256Digest("0".repeat(64)),
           treeDigest: sha256Digest("0".repeat(64)),
@@ -68,6 +67,34 @@ export async function runAdvanceCommand(
     lines.push(error instanceof Error ? error.message : "Run could not be advanced");
     if (process.env.SENAWA_DEBUG === "1" && error instanceof Error) lines.push(String(error.stack));
     return { output: lines.join("\n"), exitCode: 1 };
+  }
+}
+
+/**
+ * The input the run was actually started with.
+ *
+ * A phase dispatched on a fabricated input reads something nobody asked for,
+ * and a second dispatch of the same attempt collides with the first because
+ * the two disagree about what the run is for.
+ */
+function boundWorkflowInput(
+  options: AdvanceCommandOptions,
+  paths: AdvanceCommandPaths,
+  dependencies: RuntimeDependencies,
+): { readonly bindingDigest: ReturnType<typeof sha256Digest>; readonly value: CanonicalValue } {
+  const authority = new SqliteAuthority({ ...paths, dependencies });
+  try {
+    const bound = authority.queryWorkflowInput(options.repositoryId, options.runId);
+    const value =
+      bound === undefined
+        ? undefined
+        : new SqliteCanonicalJsonAssetStore(authority).load(sha256Digest(bound.contentDigest));
+    if (bound === undefined || value === undefined) {
+      return { bindingDigest: sha256Digest("0".repeat(64)), value: canonicalValue({}) };
+    }
+    return { bindingDigest: sha256Digest(bound.bindingDigest), value };
+  } finally {
+    authority.close();
   }
 }
 

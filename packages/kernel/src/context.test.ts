@@ -549,6 +549,7 @@ function contextInput(kind: "software" | "non-software") {
       completionEvidencePolicy: { mode: "none" as const, requirements: [] },
     },
     priorRefusals: [],
+    answeredQuestions: [],
     capabilities: ["asset.read", "completion.submit"],
     budgets: [{ unit: "work-attempt" as const, limit: 3 }],
   };

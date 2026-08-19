@@ -816,6 +816,7 @@ function closeAgentPhase(input: {
       ),
       completionPolicy: task.definition.completionPolicy,
       priorRefusals: [],
+      answeredQuestions: [],
       capabilities: roleValue.capabilities,
       budgets: declaration.executor.budgets,
     },
@@ -1312,6 +1313,7 @@ async function runGeneratedImplementation(input: {
         phaseOutputDeclarations: [],
         completionPolicy: task.definition.completionPolicy,
         priorRefusals: [],
+        answeredQuestions: [],
         capabilities: GENERATED_WORKER_CAPABILITIES,
         budgets: registryValue<SnapshotTaskTemplate>(
           registryEntry(input.snapshot.taskTemplates, "implementation"),

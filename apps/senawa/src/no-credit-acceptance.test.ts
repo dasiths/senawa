@@ -1073,6 +1073,7 @@ function createAcceptanceSeeds(
         phaseOutputDeclarations: [],
         completionPolicy: node.definition.completionPolicy,
         priorRefusals: [],
+        answeredQuestions: [],
         capabilities: ["worker.submit.asset", "worker.submit.completion"],
         budgets: [{ unit: "dispatch-failure", limit: 1 }],
       },

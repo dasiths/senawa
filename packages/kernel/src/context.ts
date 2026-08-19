@@ -46,6 +46,7 @@ export const WORKER_MODEL_ROUTE_SELECTION_API_VERSION =
   "senawa.dev/worker-model-route-selection/v1";
 
 const MAX_PRIOR_REFUSALS = 32;
+const MAX_ANSWERED_QUESTIONS = 32;
 
 export const CONTEXT_CONTRACT_KINDS = [
   "completion-policy",
@@ -163,6 +164,12 @@ export interface ContextBudget {
   readonly limit: number;
 }
 
+/** A question this task already asked, and what a person answered. */
+export interface AnsweredQuestion {
+  readonly question: string;
+  readonly answer: string;
+}
+
 export interface WorkerContextBaseInput {
   readonly task: ContextTaskInput;
   readonly graphRevisionDigest: Sha256Digest;
@@ -180,6 +187,7 @@ export interface WorkerContextBaseInput {
   readonly phaseOutputDeclarations: readonly PhaseOutputDeclarationInput[];
   readonly completionPolicy: CompletionPolicy;
   readonly priorRefusals: readonly string[];
+  readonly answeredQuestions: readonly AnsweredQuestion[];
   readonly capabilities: readonly string[];
   readonly budgets: readonly ContextBudget[];
 }
@@ -203,6 +211,7 @@ export interface WorkerContextBase {
   readonly phaseOutputDeclarationsDigest: Sha256Digest;
   readonly completionPolicy: CompletionPolicy;
   readonly priorRefusals: readonly string[];
+  readonly answeredQuestions: readonly AnsweredQuestion[];
   readonly capabilities: readonly string[];
   readonly budgets: readonly ContextBudget[];
   readonly contextDigest: Sha256Digest;
@@ -368,6 +377,7 @@ export function validateWorkerContextBase(value: unknown, sha256: Sha256): Worke
     "phaseOutputDeclarationsDigest",
     "completionPolicy",
     "priorRefusals",
+    "answeredQuestions",
     "capabilities",
     "budgets",
     "contextDigest",
@@ -432,6 +442,7 @@ export function validateWorkerContextBase(value: unknown, sha256: Sha256): Worke
     }),
     completionPolicy: snapshot.completionPolicy,
     priorRefusals: snapshot.priorRefusals,
+    answeredQuestions: snapshot.answeredQuestions,
     capabilities: snapshot.capabilities,
     budgets: snapshot.budgets,
   };
@@ -646,6 +657,7 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
     "phaseOutputDeclarations",
     "completionPolicy",
     "priorRefusals",
+    "answeredQuestions",
     "capabilities",
     "budgets",
   ]);
@@ -686,6 +698,7 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
   );
   const completionPolicy = contextCompletionPolicy(value.completionPolicy);
   const priorRefusals = contextPriorRefusals(value.priorRefusals);
+  const answeredQuestions = contextAnsweredQuestions(value.answeredQuestions);
   const capabilities = capabilitySet(value.capabilities, "invalid-context");
   const budgets = contextBudgets(value.budgets);
   const content = {
@@ -707,6 +720,7 @@ function compileWorkerContextBase(value: unknown, sha256: Sha256): WorkerContext
     phaseOutputDeclarationsDigest,
     completionPolicy,
     priorRefusals,
+    answeredQuestions,
     capabilities,
     budgets,
   };
@@ -747,6 +761,30 @@ function contextPriorRefusals(value: unknown): readonly string[] {
         fail("invalid-context", "Each prior refusal must be a bounded non-empty string");
       }
       return reason;
+    }),
+  );
+}
+
+/** What a person answered, so a re-dispatched agent is told rather than asked to guess again. */
+function contextAnsweredQuestions(value: unknown): readonly AnsweredQuestion[] {
+  if (!Array.isArray(value))
+    fail("invalid-context", "Worker context answeredQuestions must be an array");
+  if (value.length > MAX_ANSWERED_QUESTIONS) {
+    fail(
+      "invalid-context",
+      `Worker context carries more than ${MAX_ANSWERED_QUESTIONS} answered questions`,
+    );
+  }
+  return Object.freeze(
+    value.map((entry) => {
+      assertExactKeys(entry, "worker context answered question", ["question", "answer"]);
+      const { question, answer } = entry as { question: unknown; answer: unknown };
+      for (const text of [question, answer]) {
+        if (typeof text !== "string" || text.length === 0 || text.length > 4_096) {
+          fail("invalid-context", "An answered question must carry bounded non-empty text");
+        }
+      }
+      return Object.freeze({ question, answer }) as AnsweredQuestion;
     }),
   );
 }

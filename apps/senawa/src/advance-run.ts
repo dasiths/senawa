@@ -408,6 +408,54 @@ async function step(
     }
   }
 
+  // An answered question is only half an answer. The agent that asked cannot
+  // read the database, so the answer reaches it by being carried into a fresh
+  // dispatch, and the requirement that stopped the run is satisfied by that
+  // dispatch rather than by the answer being written down.
+  const answered = supervisor.commandAuthority
+    .listAnsweredQuestions(input.repositoryId, input.runId)
+    .filter((entry) => entry.taskId === String(dispatch.task.taskId));
+  if (answered.length > 0) {
+    // A member owns its own task, so the fresh dispatch has to name the same
+    // member rather than the phase's first.
+    const member = members.findIndex(
+      (task) =>
+        String((task as { readonly definition: { readonly id: unknown } }).definition.id) ===
+        String(dispatch.task.taskId),
+    );
+    const resumed = dispatchPhase({
+      snapshot,
+      dataflow,
+      contextBroker: broker,
+      sessionLedger: supervisor.commandAuthority,
+      dependencies: input.dependencies,
+      repositoryId: input.repositoryId,
+      runId: input.runId,
+      phaseKey,
+      workflowInput: input.workflowInput,
+      upstream: upstreamOutputs(snapshot, phase, state, assets(supervisor, broker)),
+      repositoryBase: input.repositoryBase,
+      currentTime: input.currentTime,
+      // A task scope is only taken over by a later attempt, which is what makes
+      // the turn that asked unable to hand work in afterwards. So the answer
+      // arrives on the next attempt rather than beside the question.
+      attempt: attempt + 1,
+      memberIndex: member < 0 ? 0 : member,
+      answeredQuestions: answered.map(({ question, answer }) => ({ question, answer })),
+    });
+    for (const entry of answered) {
+      supervisor.commandAuthority.satisfyFreshDispatchRequirement(
+        entry.submissionId,
+        resumed.dispatch.dispatchId,
+      );
+    }
+    return {
+      kind: "dispatched",
+      phaseKey,
+      dispatchId: resumed.dispatch.dispatchId,
+    };
+  }
+
   if (!completed || published.length === 0) return { kind: "awaiting-agent", phaseKey };
 
   // Publication is where the declared schema is enforced. A refusal here means

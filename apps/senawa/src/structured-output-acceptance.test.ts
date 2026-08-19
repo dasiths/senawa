@@ -843,6 +843,7 @@ function buildFixture(): Fixture {
         completionEvidencePolicy: { mode: "none", requirements: [] },
       },
       priorRefusals: [],
+      answeredQuestions: [],
       capabilities: CAPABILITIES,
       budgets: [{ unit: "work-attempt", limit: 4 }],
     },

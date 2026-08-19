@@ -850,6 +850,7 @@ function workerForRun(
         completionEvidencePolicy: { mode: "none" as const, requirements: [] },
       },
       priorRefusals: [],
+      answeredQuestions: [],
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 2_000 }],
     },

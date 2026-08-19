@@ -196,6 +196,10 @@ function operatingContract(
     },
     mayAskQuestion: capabilities.has(QUESTION_CAPABILITY),
     mayReadAssets: capabilities.has(ASSET_READ_CAPABILITY),
+    answeredQuestions: context.answeredQuestions.map((entry) => ({
+      question: String(entry.question),
+      answer: String(entry.answer),
+    })),
   });
 }
 
@@ -241,7 +245,22 @@ function operatingInstructions(
     );
   }
   if (capabilities.has(QUESTION_CAPABILITY)) {
-    lines.push("Ask a question rather than guessing when the assignment is ambiguous.");
+    lines.push(
+      "Ask a question rather than guessing when the assignment is ambiguous.",
+      // A chat model's habit is to ask by speaking, and a question spoken into
+      // the reply is read by nobody: the run stops and no question was ever
+      // recorded.
+      "Ask by calling senawa. A question written only in your reply reaches nobody.",
+      "Asking stops the run until a person answers, and their answer comes back to you on a later turn rather than in this one.",
+    );
+  }
+  if (context.answeredQuestions.length > 0) {
+    lines.push(
+      "You asked these already, and a person answered. Use the answers rather than asking again:",
+      ...context.answeredQuestions.map(
+        (entry) => `- ${String(entry.question)} -> ${String(entry.answer)}`,
+      ),
+    );
   }
   lines.push(
     "Escalate when you cannot satisfy the conditions. Stalling is worse than saying so.",

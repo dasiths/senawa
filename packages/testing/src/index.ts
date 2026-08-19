@@ -213,6 +213,7 @@ export function createWorkerExecutionFixture(
         completionEvidencePolicy: { mode: "none", requirements: [] },
       },
       priorRefusals: [],
+      answeredQuestions: [],
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 2_000 }],
     },

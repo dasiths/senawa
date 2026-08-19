@@ -1156,6 +1156,87 @@ export class SqliteAuthority
         });
   }
 
+  /**
+   * Questions this run asked that a person has answered, oldest first.
+   *
+   * The requirement stays unsatisfied until a fresh dispatch carries the answer,
+   * which is why answering alone does not release the run.
+   */
+  listAnsweredQuestions(
+    repositoryId: string,
+    runId: string,
+  ): readonly {
+    readonly submissionId: string;
+    readonly taskId: string;
+    readonly definitionGeneration: number;
+    readonly question: string;
+    readonly answer: string;
+  }[] {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    return Object.freeze(
+      this.#database
+        .prepare<
+          [string],
+          {
+            submission_id: string;
+            task_id: string;
+            definition_generation: number;
+            canonical_question: string;
+            canonical_answer: string;
+          }
+        >(
+          `SELECT f.submission_id, f.task_id, f.definition_generation,
+                  q.canonical_question, a.canonical_answer
+           FROM context_fresh_dispatch_requirements f
+           JOIN context_question_answers a ON a.submission_id = f.submission_id
+           JOIN context_questions q ON q.submission_id = f.submission_id
+           WHERE f.run_key = ? AND f.satisfied_by_dispatch_id IS NULL
+           ORDER BY f.created_at, f.submission_id`,
+        )
+        .all(canonicalStringify([repositoryId, runId]))
+        .flatMap((row) => {
+          const question = decodeCanonicalJsonValue(row.canonical_question);
+          const answer = decodeCanonicalJsonValue(row.canonical_answer);
+          const prompt =
+            isPlainRecord(question) && isPlainRecord(question.question)
+              ? question.question.prompt
+              : undefined;
+          const text = isPlainRecord(answer) ? answer.answer : answer;
+          if (typeof prompt !== "string" || typeof text !== "string") return [];
+          return [
+            Object.freeze({
+              submissionId: row.submission_id,
+              taskId: row.task_id,
+              definitionGeneration: row.definition_generation,
+              question: prompt,
+              answer: text,
+            }),
+          ];
+        }),
+    );
+  }
+
+  /**
+   * Records which dispatch carried an answer back to the agent that asked.
+   *
+   * A question blocks the scheduler until this is written, because an answer
+   * nobody delivered leaves the agent exactly as stuck as it was.
+   */
+  satisfyFreshDispatchRequirement(submissionId: string, dispatchId: string): void {
+    validateOpaqueIdentity(submissionId);
+    validateOpaqueIdentity(dispatchId);
+    const updated = this.#database
+      .prepare(
+        `UPDATE context_fresh_dispatch_requirements SET satisfied_by_dispatch_id = ?
+         WHERE submission_id = ? AND satisfied_by_dispatch_id IS NULL`,
+      )
+      .run(dispatchId, submissionId);
+    if (updated.changes !== 1) {
+      throw new Error("No unsatisfied fresh dispatch requirement for that submission");
+    }
+  }
+
   listFreshDispatchRequirements(
     repositoryId: string,
     runId: string,
@@ -1493,6 +1574,30 @@ export class SqliteAuthority
     const descriptor = toAssetDescriptor(row);
     const path = resolveAssetPath(this.assetDirectory, descriptor.relativePath);
     return Uint8Array.from(verifyAssetBytes(path, descriptor, this.dependencies));
+  }
+
+  /**
+   * The input this run was started with, so a later process can dispatch on it.
+   *
+   * `senawa advance` runs in its own process and has no memory of `senawa
+   * start`. Without this it invented an input, which made every phase it
+   * dispatched read something the run was never given.
+   */
+  queryWorkflowInput(
+    repositoryId: string,
+    runId: string,
+  ): { readonly bindingDigest: string; readonly contentDigest: string } | undefined {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    const row = this.#database
+      .prepare<[string, string], { binding_digest: string; content_digest: string }>(
+        `SELECT binding_digest, content_digest FROM workflow_input_bindings
+         WHERE repository_id = ? AND run_id = ?`,
+      )
+      .get(repositoryId, runId);
+    return row === undefined
+      ? undefined
+      : Object.freeze({ bindingDigest: row.binding_digest, contentDigest: row.content_digest });
   }
 
   bindWorkflowInput(value: WorkflowInputBinding): "created" | "replayed" {

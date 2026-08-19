@@ -1289,6 +1289,7 @@ function registerBoundDispatch(
         completionEvidencePolicy: { mode: "none", requirements: [] },
       },
       priorRefusals: [],
+      answeredQuestions: [],
       capabilities,
       budgets: [{ unit: "work-attempt", limit: 4 }],
     },

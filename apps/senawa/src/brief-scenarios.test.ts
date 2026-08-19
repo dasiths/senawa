@@ -1,8 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { loadAuthoredWorkflow } from "@senawa/execution-host";
-import { canonicalBytes, canonicalValue, sha256Digest } from "@senawa/kernel";
+import { type CanonicalValue, canonicalBytes, canonicalValue, sha256Digest } from "@senawa/kernel";
 import { decodeCommandEnvelope, PROTOCOL_VERSION } from "@senawa/protocol";
-import { SqliteAuthority } from "@senawa/storage-sqlite";
+import { SqliteAuthority, SqliteCanonicalJsonAssetStore } from "@senawa/storage-sqlite";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { type AdvanceOutcome, advanceRun, classifyOutcome } from "./advance-run.js";
@@ -20,13 +20,43 @@ import {
   type Scenario,
   startScenario,
 } from "./brief-scenarios.js";
-import { answerQuestion, decidePhase, overrideMember, type SteerInput, steerAgent } from "./decide.js";
+import {
+  answerQuestion,
+  decidePhase,
+  overrideMember,
+  type SteerInput,
+  steerAgent,
+} from "./decide.js";
 import { listArtifacts } from "./inspect.js";
 import { runGates } from "./run-gates.js";
 
 afterEach(disposeScenarios);
 
 function advance(scenario: Scenario) {
+  // The run's own input, read back the way the command does. A fabricated one
+  // makes a second dispatch of the same attempt disagree with the first about
+  // what the run is for.
+  const authority = new SqliteAuthority({ ...scenario.paths, dependencies });
+  let workflowInput: {
+    readonly bindingDigest: ReturnType<typeof sha256Digest>;
+    readonly value: CanonicalValue;
+  };
+  try {
+    const bound = authority.queryWorkflowInput(scenario.repositoryId, scenario.runId);
+    const value =
+      bound === undefined
+        ? undefined
+        : new SqliteCanonicalJsonAssetStore(authority).load(sha256Digest(bound.contentDigest));
+    workflowInput =
+      bound === undefined || value === undefined
+        ? {
+            bindingDigest: sha256Digest("3".repeat(64)),
+            value: canonicalValue({ request: "Add a health endpoint" }),
+          }
+        : { bindingDigest: sha256Digest(bound.bindingDigest), value };
+  } finally {
+    authority.close();
+  }
   return advanceRun({
     projectRoot: scenario.project,
     ...scenario.paths,
@@ -35,10 +65,7 @@ function advance(scenario: Scenario) {
     principal: runtimePrincipal,
     dependencies,
     currentTime: NOW,
-    workflowInput: {
-      bindingDigest: sha256Digest("3".repeat(64)),
-      value: canonicalValue({ request: "Add a health endpoint" }),
-    },
+    workflowInput,
     repositoryBase: BASE,
   });
 }
@@ -923,6 +950,47 @@ describe("an agent that stops to ask", () => {
         .prepare("SELECT canonical_answer AS json FROM context_question_answers")
         .get() as { readonly json: string } | undefined;
       expect(row?.json).toContain("the one already deployed");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("carries the answer to the agent that asked, on a dispatch of its own", async () => {
+    const scenario = await startScenario("answer-delivery", {});
+    await askThroughSink(scenario, scenario.dispatchId, "which endpoint is authoritative?");
+
+    // Answering wrote the answer down and nothing else. The agent cannot read
+    // the database, the question left a fresh-dispatch requirement that stops
+    // the scheduler, and no code satisfied it, so a run that asked anything was
+    // stopped for good however many times a person answered.
+    expect(
+      answerQuestion({
+        ...scenario.paths,
+        answer: "the one already deployed",
+        currentTime: NOW,
+        dependencies,
+        principal: runtimePrincipal,
+        repositoryId: scenario.repositoryId,
+        runId: scenario.runId,
+      }),
+    ).toMatchObject({ exitCode: 0 });
+
+    const outcome = await advance(scenario);
+    expect(outcome).toMatchObject({ kind: "dispatched", phaseKey: "define" });
+    if (outcome.kind !== "dispatched") throw new Error("expected a fresh dispatch");
+    expect(outcome.dispatchId).not.toBe(scenario.dispatchId);
+
+    // The answer has to be in what the agent reads, in the words it was given.
+    expect(await promptPackText(scenario, outcome.dispatchId)).toContain(
+      "the one already deployed",
+    );
+
+    const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+    try {
+      const row = database
+        .prepare("SELECT satisfied_by_dispatch_id AS id FROM context_fresh_dispatch_requirements")
+        .get() as { readonly id: string | null } | undefined;
+      expect(row?.id).toBe(outcome.dispatchId);
     } finally {
       database.close();
     }
