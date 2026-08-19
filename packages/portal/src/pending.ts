@@ -171,10 +171,6 @@ export function clearPortalSession(storage: SessionStorageLike): void {
   storage.removeItem(SESSION_KEY);
 }
 
-function pendingStorageKey(): string {
-  return PENDING_KEY;
-}
-
 export function isTerminalReceipt(receipt: DurableReceipt): boolean {
   return TERMINAL_RECEIPTS.has(receipt.status);
 }

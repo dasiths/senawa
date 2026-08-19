@@ -19,7 +19,7 @@ import {
   type Scenario,
   startScenario,
 } from "./brief-scenarios.js";
-import { decidePhase } from "./decide.js";
+import { decidePhase, type SteerInput, steerAgent } from "./decide.js";
 import { listArtifacts } from "./inspect.js";
 import { runGates } from "./run-gates.js";
 
@@ -706,5 +706,82 @@ describe("falling back to another model", () => {
     expect(outcome).toMatchObject({ kind: "retrying", attempt: 2 });
     if (outcome.kind !== "retrying") throw new Error("expected a retry");
     expect(await promptPackText(scenario, outcome.dispatchId)).not.toContain("you are");
+  });
+});
+
+describe("steering an agent that is already working", () => {
+  function steer(scenario: Scenario, instruction: string, delivery: SteerInput["delivery"]) {
+    return steerAgent({
+      assetDirectory: scenario.paths.assetDirectory,
+      currentTime: NOW,
+      databasePath: scenario.paths.databasePath,
+      delivery,
+      dependencies,
+      instruction,
+      principal: runtimePrincipal,
+      repositoryId: scenario.repositoryId,
+      runId: scenario.runId,
+    });
+  }
+
+  it("records who redirected the run and what they said before delivering it", async () => {
+    const scenario = await startScenario("steer-record", {});
+    const result = steer(scenario, "use the existing health check", "queued");
+    expect(result.exitCode).toBe(0);
+
+    // The instruction is durable before anything tries to deliver it, so a run
+    // that changes course can say who changed it even if delivery fails.
+    const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+    try {
+      const row = database
+        .prepare("SELECT instruction, delivery, canonical_principal FROM context_agent_steerings")
+        .get() as {
+        readonly instruction: string;
+        readonly delivery: string;
+        readonly canonical_principal: string;
+      };
+      expect(row.instruction).toBe("use the existing health check");
+      expect(row.delivery).toBe("queued");
+      expect(row.canonical_principal).toContain(runtimePrincipal.subject);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("starts the attempt again carrying the instruction when asked to abort", async () => {
+    const scenario = await startScenario("steer-abort", { attempts: 3 });
+    expect(steer(scenario, "start over and read the schema first", "abort-retry").exitCode).toBe(0);
+
+    // The agent never reported anything, and it does not have to: a person who
+    // asked for the attempt to start again is not waiting for it to finish.
+    const outcome = await advance(scenario);
+    expect(outcome).toMatchObject({ kind: "retrying", phaseKey: "define", attempt: 2 });
+    if (outcome.kind !== "retrying") throw new Error("expected a retry");
+    expect(await promptPackText(scenario, outcome.dispatchId)).toContain(
+      "start over and read the schema first",
+    );
+  });
+
+  it("refuses to redirect an agent that has already finished", async () => {
+    const scenario = await startScenario("steer-finished", {});
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+
+    // An instruction nobody will ever read is worse than a refusal, because the
+    // person who gave it would have no way to tell it went nowhere.
+    const result = steer(scenario, "too late", "queued");
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain("No agent is working");
+
+    // Nothing was recorded, so the history does not imply a course change that
+    // never happened.
+    const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+    try {
+      const row = database
+        .prepare("SELECT COUNT(*) AS total FROM context_agent_steerings")
+        .get() as { readonly total: number };
+      expect(row.total).toBe(0);
+    } finally {
+      database.close();
+    }
   });
 });

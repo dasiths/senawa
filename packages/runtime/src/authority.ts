@@ -713,6 +713,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       case "record-integration-barrier":
         return this.recordIntegrationBarrier(command, run);
       case "answer-question":
+      case "steer-agent":
       case "grant-allowance":
       case "pause-run":
       case "resume-run":

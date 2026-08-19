@@ -645,6 +645,7 @@ export const runtimeDependencies: RuntimeDependencies = Object.freeze({
     { intent: "record-integration-barrier", roles: ["trusted-supervisor"] },
     { intent: "create-escalation", roles: ["engine", "release-manager"] },
     { intent: "answer-question", roles: ["operator", "release-manager"] },
+    { intent: "steer-agent", roles: ["operator", "release-manager"] },
     { intent: "grant-allowance", roles: ["release-manager"] },
     { intent: "pause-run", roles: ["operator", "release-manager"] },
     { intent: "resume-run", roles: ["operator", "release-manager"] },

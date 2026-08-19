@@ -27,6 +27,7 @@ import {
   type RunControlPayload,
   type RunIdentity,
   type StartPhaseAttemptPayload,
+  type SteerAgentPayload,
   type SubmitAmendmentProposalPayload,
   type SupervisorAdmissionFacts,
   type SupervisorAllocationFact,
@@ -111,6 +112,7 @@ const INTENT_TYPES = new Set<CommandIntent["type"]>([
   "record-integration-barrier",
   "create-escalation",
   "answer-question",
+  "steer-agent",
   "grant-allowance",
   "pause-run",
   "resume-run",
@@ -254,6 +256,53 @@ export function decodeAnswerQuestionPayload(input: string | unknown): AnswerQues
 
 export function encodeAnswerQuestionPayload(input: unknown): string {
   return canonicalStringify(decodeAnswerQuestionPayload(input));
+}
+
+export function decodeSteerAgentPayload(input: string | unknown): SteerAgentPayload {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "dispatchId",
+    "contextDigest",
+    "taskId",
+    "definitionGeneration",
+    "delivery",
+    "instruction",
+  ]);
+  identity(object.dispatchId, "$.dispatchId");
+  digest(object.contextDigest, "$.contextDigest");
+  identity(object.taskId, "$.taskId");
+  positiveSequence(object.definitionGeneration, "$.definitionGeneration");
+  if (
+    object.delivery !== "live" &&
+    object.delivery !== "queued" &&
+    object.delivery !== "abort-retry"
+  ) {
+    throw new ProtocolValidationError(
+      "invalid-value",
+      "$.delivery",
+      "Steering delivery must be live, queued, or abort-retry",
+    );
+  }
+  // An empty instruction would redirect an agent to nothing while still
+  // recording that somebody redirected it, which is worse than refusing.
+  if (typeof object.instruction !== "string" || object.instruction.length === 0) {
+    throw new ProtocolValidationError(
+      "invalid-value",
+      "$.instruction",
+      "Steering instruction must carry text",
+    );
+  }
+  return Object.freeze({
+    dispatchId: object.dispatchId as string,
+    contextDigest: object.contextDigest as string,
+    taskId: object.taskId as string,
+    definitionGeneration: object.definitionGeneration as number,
+    delivery: object.delivery,
+    instruction: object.instruction,
+  });
+}
+
+export function encodeSteerAgentPayload(input: unknown): string {
+  return canonicalStringify(decodeSteerAgentPayload(input));
 }
 
 export function decodeGrantAllowancePayload(input: string | unknown): GrantAllowancePayload {

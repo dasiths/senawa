@@ -294,6 +294,49 @@ async function step(
   const dispatchId = dispatch.dispatchId;
   const completed = state.terminalCompletions.some((entry) => entry.dispatchId === dispatchId);
   const published = state.phaseOutputOutbox.filter((entry) => entry.fact.dispatchId === dispatchId);
+
+  // A person who asked for the attempt to start again is not waiting for the
+  // agent to finish first: that is the whole point of asking. The instruction is
+  // already recorded, so the retry can carry it even though the abandoned turn
+  // never reported anything.
+  const attempt = dispatch.ordinal;
+  const steerings = supervisor.commandAuthority.listAgentSteerings(dispatchId);
+  const abort = steerings.filter((entry) => entry.delivery === "abort-retry");
+  if (!completed && abort.length > 0) {
+    const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
+    if (attempt < maximumAttempts) {
+      const instructions = abort.map((entry) => entry.instruction);
+      const retried = dispatchPhase({
+        snapshot,
+        dataflow,
+        contextBroker: broker,
+        sessionLedger: supervisor.commandAuthority,
+        dependencies: input.dependencies,
+        repositoryId: input.repositoryId,
+        runId: input.runId,
+        phaseKey,
+        workflowInput: input.workflowInput,
+        upstream: upstreamOutputs(
+          snapshot,
+          phase,
+          state,
+          new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
+        ),
+        repositoryBase: input.repositoryBase,
+        currentTime: input.currentTime,
+        attempt: attempt + 1,
+        priorRefusals: instructions,
+      });
+      return {
+        kind: "retrying",
+        phaseKey,
+        attempt: attempt + 1,
+        dispatchId: retried.dispatch.dispatchId,
+        reasons: instructions,
+      };
+    }
+  }
+
   if (!completed || published.length === 0) return { kind: "awaiting-agent", phaseKey };
 
   // Publication is where the declared schema is enforced. A refusal here means
@@ -342,7 +385,7 @@ async function step(
   // The candidate must cover every active task the phase owns, not only the one
   // this dispatch carried.
   const tasks = dispatchedPhaseTasks(snapshot, state, input.runId, phaseKey);
-  const attempt = dispatch.ordinal;
+
   const candidate = createPhaseCandidate(
     {
       phase: scheduling.phase,

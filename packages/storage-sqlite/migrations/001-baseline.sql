@@ -326,6 +326,25 @@ CREATE TABLE context_projection (
   canonical_projection TEXT NOT NULL
 ) STRICT;
 
+-- A person's redirection of an agent that is already working. Recorded before it
+-- is delivered, so a run that changes course can always say who changed it and
+-- what they said, even if delivery itself fails.
+CREATE TABLE context_agent_steerings (
+  steering_id TEXT PRIMARY KEY,
+  run_key TEXT NOT NULL,
+  command_id TEXT NOT NULL UNIQUE REFERENCES commands(command_id),
+  dispatch_id TEXT NOT NULL REFERENCES context_dispatches(dispatch_id),
+  context_digest TEXT NOT NULL CHECK (length(context_digest) = 64),
+  task_id TEXT NOT NULL,
+  definition_generation INTEGER NOT NULL CHECK (definition_generation > 0),
+  delivery TEXT NOT NULL CHECK (delivery IN ('live', 'queued', 'abort-retry')),
+  instruction TEXT NOT NULL,
+  instruction_digest TEXT NOT NULL CHECK (length(instruction_digest) = 64),
+  principal_digest TEXT NOT NULL CHECK (length(principal_digest) = 64),
+  canonical_principal TEXT NOT NULL,
+  steered_at TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE context_question_answers (
   submission_id TEXT PRIMARY KEY,
   run_key TEXT NOT NULL,

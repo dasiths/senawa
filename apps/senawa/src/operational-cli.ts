@@ -38,7 +38,7 @@ import { restoreSupervisorStateRoot, verifySupervisorStateBackup } from "./state
 const MAX_OPERATIONAL_ARGUMENT_LENGTH = 4_096;
 
 import { runAdvanceCommand } from "./advance-command.js";
-import { answerQuestion, decidePhase } from "./decide.js";
+import { answerQuestion, decidePhase, steerAgent } from "./decide.js";
 import {
   type InspectOptions,
   inspectPhase,
@@ -155,6 +155,25 @@ export async function runOperationalCli(
       currentTime: new Date().toISOString(),
       databasePath: paths.databasePath,
       dependencies,
+      principal: startPrincipal,
+      repositoryId: action,
+      runId: rest[0] ?? "",
+    });
+  }
+  if (group === "steer" && action !== undefined && rest.length >= 2) {
+    // The delivery is optional and last, because the common case is a person
+    // typing what they want changed and not caring when it lands.
+    const last = rest[rest.length - 1];
+    const delivery =
+      last === "live" || last === "queued" || last === "abort-retry" ? last : "queued";
+    const words = delivery === last ? rest.slice(1, -1) : rest.slice(1);
+    return steerAgent({
+      assetDirectory: paths.assetDirectory,
+      currentTime: new Date().toISOString(),
+      databasePath: paths.databasePath,
+      delivery,
+      dependencies,
+      instruction: words.join(" "),
       principal: startPrincipal,
       repositoryId: action,
       runId: rest[0] ?? "",

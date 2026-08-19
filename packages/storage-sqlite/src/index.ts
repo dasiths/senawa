@@ -101,6 +101,7 @@ import {
   decodeRemoteRepositoryBinding,
   decodeRemoteSynchronizationVector,
   decodeRunControlPayload,
+  decodeSteerAgentPayload,
   decodeSupervisorAdmissionFacts,
   decodeSupervisorReceipt,
   decodeSupervisorServiceRecord,
@@ -1775,6 +1776,42 @@ export class SqliteAuthority
   }
 
   /** How many dispatches have already spoken on one conversation line. */
+  /**
+   * The steerings recorded against a dispatch, oldest first.
+   *
+   * A person may redirect an agent more than once, and later words do not cancel
+   * earlier ones, so all of them are returned in the order they were given.
+   */
+  listAgentSteerings(dispatchId: string): readonly {
+    readonly steeringId: string;
+    readonly delivery: "live" | "queued" | "abort-retry";
+    readonly instruction: string;
+    readonly steeredAt: string;
+  }[] {
+    return this.#database
+      .prepare<
+        [string],
+        {
+          steering_id: string;
+          delivery: "live" | "queued" | "abort-retry";
+          instruction: string;
+          steered_at: string;
+        }
+      >(
+        `SELECT steering_id, delivery, instruction, steered_at
+         FROM context_agent_steerings WHERE dispatch_id = ? ORDER BY rowid`,
+      )
+      .all(dispatchId)
+      .map((row) =>
+        Object.freeze({
+          steeringId: row.steering_id,
+          delivery: row.delivery,
+          instruction: row.instruction,
+          steeredAt: row.steered_at,
+        }),
+      );
+  }
+
   countAgentSessionResumeBindings(sessionLineKey: string, sessionId?: string): number {
     // Counting the line would keep growing past a renewal, so a conversation is
     // counted by the session it belongs to. The turn is a position within one
@@ -5616,9 +5653,14 @@ function verifyPortalRevisionTables(database: Database.Database): void {
 }
 
 function isHumanAuthorityIntent(intent: CommandEnvelope["intent"]["type"]): boolean {
-  return ["answer-question", "grant-allowance", "pause-run", "resume-run", "end-run"].includes(
-    intent,
-  );
+  return [
+    "answer-question",
+    "steer-agent",
+    "grant-allowance",
+    "pause-run",
+    "resume-run",
+    "end-run",
+  ].includes(intent);
 }
 
 function trustedRefusal(code: string, message: string): TrustedHumanAuthorityDecision {
@@ -5637,7 +5679,9 @@ function buildTrustedHumanAuthorityDecision(
     return trustedRefusal("run-control-unavailable", "Run control is not initialized");
   }
   if (
-    (command.intent.type === "answer-question" || command.intent.type === "grant-allowance") &&
+    (command.intent.type === "answer-question" ||
+      command.intent.type === "steer-agent" ||
+      command.intent.type === "grant-allowance") &&
     (control.mode === "ending" || control.mode === "ended")
   ) {
     return trustedRefusal("run-ending", "Run no longer accepts human authority commands");
@@ -5645,6 +5689,8 @@ function buildTrustedHumanAuthorityDecision(
   switch (command.intent.type) {
     case "answer-question":
       return buildTrustedQuestionAnswer(database, command, currentTime, dependencies);
+    case "steer-agent":
+      return buildTrustedAgentSteering(database, command, currentTime, dependencies);
     case "grant-allowance":
       return buildTrustedAllowanceGrant(
         database,
@@ -5769,6 +5815,65 @@ function buildTrustedQuestionAnswer(
       taskId,
       definitionGeneration,
       answeredAt: currentTime,
+    }),
+  });
+}
+
+/**
+ * Validates a person's redirection of an agent that is already working.
+ *
+ * The dispatch has to exist and still be the current one for its task. Steering
+ * a dispatch that has already been superseded would record an instruction
+ * nobody will ever read, and the person who gave it would have no way to tell.
+ */
+function buildTrustedAgentSteering(
+  database: Database.Database,
+  command: CommandEnvelope,
+  currentTime: string,
+  dependencies: RuntimeDependencies,
+): TrustedHumanAuthorityDecision {
+  const payload = decodeSteerAgentPayload(command.payload);
+  const row = database
+    .prepare<[string], { context_digest: string; repository_id: string; run_id: string }>(
+      `SELECT b.context_digest, d.repository_id, d.run_id
+       FROM context_dispatches d
+       JOIN context_bases b ON b.context_id = d.context_id
+       WHERE d.dispatch_id = ?`,
+    )
+    .get(payload.dispatchId);
+  if (
+    row === undefined ||
+    row.repository_id !== command.repositoryId ||
+    row.run_id !== command.runId
+  ) {
+    return trustedRefusal("unknown-dispatch", "Dispatch does not exist in this run");
+  }
+  if (row.context_digest !== payload.contextDigest) {
+    return trustedRefusal(
+      "stale-steering",
+      "Dispatch has moved on from the context this steering was written against",
+    );
+  }
+  const terminal = database
+    .prepare<[string], { present: number }>(
+      "SELECT 1 AS present FROM context_terminal_completions WHERE dispatch_id = ?",
+    )
+    .get(payload.dispatchId);
+  if (terminal !== undefined) {
+    return trustedRefusal("agent-finished", "Agent has already finished this dispatch");
+  }
+  const instructionDigest = dependencies.sha256.digest(canonicalBytes(payload.instruction));
+  return Object.freeze({
+    result: Object.freeze({
+      steeringId: `steering_${instructionDigest.slice(0, 32)}`,
+      dispatchId: payload.dispatchId,
+      contextDigest: payload.contextDigest,
+      taskId: payload.taskId,
+      definitionGeneration: payload.definitionGeneration,
+      delivery: payload.delivery,
+      instruction: payload.instruction,
+      instructionDigest,
+      steeredAt: currentTime,
     }),
   });
 }
@@ -5911,6 +6016,35 @@ function persistTrustedHumanAuthorityDecision(
   const runKey = canonicalStringify([command.repositoryId, command.runId]);
   const principal = canonicalStringify(command.principal);
   const principalDigest = dependencies.sha256.digest(canonicalBytes(command.principal));
+  if (command.intent.type === "steer-agent") {
+    const payload = decodeSteerAgentPayload(command.payload);
+    // Recorded before anything tries to deliver it, so a run that changes course
+    // can always say who changed it and what they said.
+    database
+      .prepare(
+        `INSERT INTO context_agent_steerings(
+           steering_id, run_key, command_id, dispatch_id, context_digest,
+           task_id, definition_generation, delivery, instruction,
+           instruction_digest, principal_digest, canonical_principal, steered_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        result.steeringId,
+        runKey,
+        command.commandId,
+        payload.dispatchId,
+        payload.contextDigest,
+        payload.taskId,
+        payload.definitionGeneration,
+        payload.delivery,
+        payload.instruction,
+        result.instructionDigest,
+        principalDigest,
+        principal,
+        currentTime,
+      );
+    return;
+  }
   if (command.intent.type === "answer-question") {
     const payload = decodeAnswerQuestionPayload(command.payload);
     database

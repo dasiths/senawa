@@ -457,8 +457,11 @@ all change what an attempt actually sees.
   restart nobody sees.**
 * [ ] Widen the SDK port so `MessageOptions.mode` is expressible and retain the
   live session handle where steering can reach it.
-* [ ] Deliver live, queued, and abort-and-retry steering from the command line and
+* [x] Deliver live, queued, and abort-and-retry steering from the command line and
   portal, scoped to one running agent and recorded durably before delivery.
+  **`senawa steer` records the instruction, actor, and delivery before anything
+  tries to deliver it. `abort-retry` retries the attempt carrying the text. The
+  portal surface is not built yet. D-036.**
 * [x] Bound context growth through authority-visible retention or compaction
   policy. **`sessionTurns` renews a conversation at its bound, and a renewal is
   reported separately from a conversation lost because the work moved. D-035.**
@@ -470,8 +473,8 @@ Acceptance:
   both tests were checked by breaking the code they cover.**
 * [x] Route exhaustion selects the next authored route and records why. **A retry
   falls to the next route and settles on the last one. Proven by breaking it.**
-* [ ] A human steers a running agent mid-turn and history explains the resulting
-  change of course.
+* [x] A human steers a running agent mid-turn and history explains the resulting
+  change of course. **Proven for `abort-retry` by breaking the driver path.**
 * [x] A long run does not grow context without bound. **Proven by breaking it.**
 
 ## Phase 11: Prove authored-surface parity

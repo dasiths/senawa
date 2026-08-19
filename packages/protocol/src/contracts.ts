@@ -56,6 +56,7 @@ export type CommandIntent =
   | { readonly type: "record-integration-barrier" }
   | { readonly type: "create-escalation" }
   | { readonly type: "answer-question" }
+  | { readonly type: "steer-agent" }
   | { readonly type: "grant-allowance" }
   | { readonly type: "pause-run" }
   | { readonly type: "resume-run" }
@@ -68,6 +69,24 @@ export interface AnswerQuestionPayload {
   readonly taskId: OpaqueIdentity;
   readonly definitionGeneration: number;
   readonly answer: JsonValue;
+}
+
+/**
+ * A person's redirection of an agent that is already working.
+ *
+ * `delivery` says when the agent is meant to see it. `live` reaches the agent
+ * during the turn it is taking, `queued` waits for the turn to end, and
+ * `abort-retry` stops the turn and starts the attempt again carrying the
+ * instruction. The distinction is recorded because the three produce different
+ * histories: only `abort-retry` discards work the agent had already done.
+ */
+export interface SteerAgentPayload {
+  readonly dispatchId: OpaqueIdentity;
+  readonly contextDigest: string;
+  readonly taskId: OpaqueIdentity;
+  readonly definitionGeneration: number;
+  readonly delivery: "live" | "queued" | "abort-retry";
+  readonly instruction: string;
 }
 
 export interface GrantAllowancePayload {

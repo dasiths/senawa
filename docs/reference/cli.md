@@ -41,6 +41,28 @@ senawa answer <repository> <run> <text>
 
 A rejection must carry a reason. The next attempt is a guess without one.
 
+### Steering
+
+```bash
+senawa steer <repository> <run> <text> [live|queued|abort-retry]
+```
+
+Redirects the agent that is currently working. Delivery defaults to `queued`.
+
+| Delivery | When the agent sees it |
+| --- | --- |
+| `live` | during the turn it is taking |
+| `queued` | when the turn it is taking ends |
+| `abort-retry` | the turn stops and the attempt starts again carrying the text |
+
+Only `abort-retry` discards work the agent had already done, so it spends an
+attempt and needs one left.
+
+The instruction is recorded before anything tries to deliver it. A run that
+changes course can always say who changed it and what they said, even when
+delivery fails. An agent that has already finished cannot be redirected, because
+an instruction nobody will read is worse than a refusal.
+
 ### Measuring
 
 ```bash

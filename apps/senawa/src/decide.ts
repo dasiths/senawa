@@ -5,7 +5,11 @@ import {
   PROTOCOL_VERSION,
 } from "@senawa/protocol";
 import type { RuntimeDependencies } from "@senawa/runtime";
-import { SqliteAuthority, SqlitePortalQueryAuthority } from "@senawa/storage-sqlite";
+import {
+  SqliteAuthority,
+  SqliteContextBroker,
+  SqlitePortalQueryAuthority,
+} from "@senawa/storage-sqlite";
 import type { CliResult } from "./cli.js";
 
 export interface DecideInput {
@@ -199,6 +203,112 @@ export function answerQuestion(input: AnswerInput): CliResult {
       };
     }
     return { exitCode: 0, output: `answered: ${pending.title}` };
+  } finally {
+    authority.close();
+  }
+}
+
+export interface SteerInput extends Omit<DecideInput, "decision" | "reason"> {
+  readonly instruction: string;
+  readonly delivery: "live" | "queued" | "abort-retry";
+}
+
+/**
+ * Redirects an agent that is already working.
+ *
+ * The instruction is recorded before anything tries to deliver it, so a run that
+ * changes course can always say who changed it and what they said, even when
+ * delivery itself fails.
+ */
+export function steerAgent(input: SteerInput): CliResult {
+  if (input.instruction.length === 0)
+    return {
+      exitCode: 2,
+      output: "A steering must carry text. The agent reads it as written.",
+    };
+
+  const broker = new SqliteContextBroker({
+    databasePath: input.databasePath,
+    dependencies: {
+      sha256: input.dependencies.sha256,
+      currentTime: () => input.currentTime,
+      issueGrantToken: () => new Uint8Array(32),
+    },
+  });
+  let live:
+    | ReturnType<SqliteContextBroker["authority"]["snapshot"]>["dispatches"][number]
+    | undefined;
+  try {
+    const state = broker.authority.snapshot();
+    const finished = new Set(state.terminalCompletions.map((entry) => entry.dispatchId));
+    // The newest unfinished dispatch is the agent a person means when they say
+    // "the agent": an earlier attempt is history, and a finished one cannot be
+    // redirected any more.
+    live = state.dispatches
+      .filter((candidate) => candidate.runId === input.runId && !finished.has(candidate.dispatchId))
+      .sort((left, right) => left.ordinal - right.ordinal)
+      .at(-1);
+  } finally {
+    broker.close();
+  }
+  if (live === undefined)
+    return {
+      exitCode: 1,
+      output: "No agent is working. Run senawa status to see what the run is waiting for.",
+    };
+
+  const authority = new SqliteAuthority({
+    assetDirectory: input.assetDirectory,
+    databasePath: input.databasePath,
+    dependencies: input.dependencies,
+  });
+  try {
+    const payload = {
+      contextDigest: live.contextDigest,
+      definitionGeneration: live.task.definitionGeneration,
+      delivery: input.delivery,
+      dispatchId: live.dispatchId,
+      instruction: input.instruction,
+      taskId: live.task.taskId,
+    };
+    const commandId = `command_steer-${input.dependencies.sha256
+      .digest(canonicalBytes(payload))
+      .slice(0, 32)}`;
+    let allocation = 0;
+    const receipt = authority.submit(
+      decodeCommandEnvelope({
+        apiVersion: PROTOCOL_VERSION,
+        commandId,
+        intent: { type: "steer-agent" },
+        payload,
+        payloadDigest: input.dependencies.sha256.digest(canonicalBytes(payload)),
+        principal: input.principal,
+        repositoryId: input.repositoryId,
+        runId: input.runId,
+        transport: { kind: "cli", requestId: `request_${commandId}` },
+      }),
+      {
+        allocateId: (kind) => {
+          allocation += 1;
+          return `${kind}_${commandId.slice(8)}${allocation}`;
+        },
+        currentTime: input.currentTime,
+        facts: { source: "cli-steer" },
+      },
+    );
+    if (receipt.status !== "completed") {
+      return {
+        exitCode: 1,
+        output: `refused: ${receipt.error?.code ?? "unknown"}: ${receipt.error?.message ?? ""}`,
+      };
+    }
+    return {
+      exitCode: 0,
+      output:
+        input.delivery === "abort-retry"
+          ? "steered: the attempt will start again carrying your instruction"
+          : `steered: ${input.delivery}`,
+    };
   } finally {
     authority.close();
   }
