@@ -3369,3 +3369,40 @@ minutes, spending an attempt on each.
 A turn that stopped to ask is waiting for a person, not spent. The retry now
 skips a dispatch that has an unanswered question against it; the existing
 answered-question path already handles the other half.
+
+## F-042: only an accepted completion finishes a turn
+
+Three findings in this log are the same finding. A turn that stopped to ask
+(F-021), a turn that submitted nothing (F-033), and a turn whose session died
+when the supervisor restarted (F-038) were each reported as a failed effect,
+each fenced its task permanently, and each ended a live run that had done
+nothing wrong. Each was fixed one at a time, and the next one appeared.
+
+`resultObservation` now has one rule: an accepted completion is `completed` and
+every other ending is `cancelled`. The authored `attempts:` count is what bounds
+how many endings a phase tolerates, and it is the only thing that should.
+
+Nothing is lost. A failed effect still fences, and the workspace effect host
+still produces one for a refused candidate, a failed gate, and a refused
+publication — failures about the work, not about one agent's turn.
+
+`daemon-composition` asserted the old rule. Its subject is that task-scope state
+survives a service restart, which is worth keeping, so it now asserts the
+corrected contract: a failed worker leaves its task claimable, and it is still
+claimable after a reopen.
+
+## F-043: the agent was stringifying the output it could not hand in
+
+With F-037's diagnostics in place the live planner reported the real cause
+itself:
+
+> The planner has prepared a 3-task plan for building tic-tac-toe but cannot
+> submit it due to "Invalid tool arguments: expected an object" errors on
+> senawa_complete. The outputs parameter contains a valid plan schema with
+> summary and tasks array.
+
+It was sending `outputs` as encoded JSON. The message did not say which object
+was wrong, and the tool would not decode it, so the agent could see nothing to
+correct. Two changes: the message names the parameter, and a string is decoded
+before validation. Handing a nested object back as JSON is a routine thing for a
+model to do and it is not worth an attempt.

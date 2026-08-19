@@ -191,7 +191,7 @@ describe("daemon worker composition", () => {
     ).toBe(true);
   });
 
-  it("fences a failed repository writer and preserves the fence after reopen", async () => {
+  it("keeps a failed worker's task claimable and preserves that after reopen", async () => {
     const { environment } = sandbox("senawa-daemon-worker-");
     const dependencies: RuntimeDependencies = {
       ...runtimeDependencies,
@@ -285,9 +285,12 @@ describe("daemon worker composition", () => {
       runId: runtimeFixture.runId,
     });
     const firstEffect = firstSnapshot.effects[0];
-    expect(firstEffect).toMatchObject({ outcome: { status: "failed", origin: "dispatch" } });
+    // A worker turn that failed is a spent attempt. Fencing here is permanent and
+    // ends the run, and the authored attempt ceiling is what decides when to stop
+    // trying. The task stays claimable, and stays claimable across a restart.
+    expect(firstEffect).toMatchObject({ outcome: { status: "cancelled", origin: "dispatch" } });
     expect(firstSnapshot.taskScopes).toEqual([
-      expect.objectContaining({ taskId: worker.dispatch.task.taskId, claimsAccepted: false }),
+      expect.objectContaining({ taskId: worker.dispatch.task.taskId, claimsAccepted: true }),
     ]);
     firstResult.close();
     expect(sdks[0]?.createCalls).toBe(1);

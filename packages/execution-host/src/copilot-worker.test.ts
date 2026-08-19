@@ -890,6 +890,30 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect(required(sdk.sessions.get(fixture.dispatch.dispatchId)).disconnectCalls).toBe(1);
   });
 
+  it("accepts an outputs object the model handed back as encoded JSON", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk, { phaseOutput: true });
+    const results: CopilotSdkToolResult[] = [];
+    sdk.onSend = async (config, session) => {
+      const tool = required(config.tools.find((candidate) => candidate.name === "senawa_complete"));
+      results.push(
+        await invoke(tool, session.sessionId, "call_stringified", {
+          disposition: "completed",
+          summary: "Completed",
+          criteria: [],
+          completionEvidence: [],
+          // A live planner sent this and was refused with a bare code. It spent
+          // an attempt discovering that its arguments were unacceptable and
+          // never learned which one.
+          outputs: JSON.stringify({ verification: { verified: true, summary: "ok" } }),
+        }),
+      );
+    };
+
+    await fixture.adapter.run(fixture.input);
+    expect(results[0]?.resultType).toBe("success");
+  });
+
   it("accepts a corrected phase output after bounded structured rejections", async () => {
     const sdk = new FakeSdkPort();
     const fixture = harness(sdk, { phaseOutput: true });

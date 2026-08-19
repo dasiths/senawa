@@ -877,7 +877,10 @@ function completeTool(
             criteria: wrapper.criteria,
             completionEvidence: wrapper.completionEvidence,
           };
-          outputs = slots.length === 0 ? {} : exactObject(wrapper.outputs, names, []);
+          outputs =
+            slots.length === 0
+              ? {}
+              : exactObject(decodedObject(wrapper.outputs), names, [], "outputs");
           notes = wrapper.changeNotes;
         } catch (error) {
           // Without the reason an agent can only guess, and it guesses many
@@ -1458,20 +1461,31 @@ function exactObject(
   value: unknown,
   required: readonly string[],
   optional: readonly string[] = [],
+  label = "arguments",
 ): Readonly<Record<string, unknown>> {
   if (value === null || typeof value !== "object" || Array.isArray(value))
-    return invalidArguments("expected an object");
+    return invalidArguments(`${label} must be an object`);
   const object = value as Readonly<Record<string, unknown>>;
   const allowed = new Set([...required, ...optional]);
   const unexpected = Object.keys(object).filter((key) => !allowed.has(key));
   if (unexpected.length > 0) {
     return invalidArguments(
-      `unexpected ${unexpected.join(", ")}; allowed are ${[...allowed].join(", ")}`,
+      `${label} has unexpected ${unexpected.join(", ")}; allowed are ${[...allowed].join(", ")}`,
     );
   }
   const missing = required.filter((key) => !Object.hasOwn(object, key));
-  if (missing.length > 0) return invalidArguments(`missing ${missing.join(", ")}`);
+  if (missing.length > 0) return invalidArguments(`${label} is missing ${missing.join(", ")}`);
   return object;
+}
+
+/** A model routinely hands a nested object back as encoded JSON, which is not a mistake worth a turn. */
+function decodedObject(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
 }
 
 function boundedString(value: unknown, maximum: number, empty = false): string {

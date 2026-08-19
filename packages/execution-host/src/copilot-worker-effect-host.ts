@@ -186,21 +186,15 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
   private resultObservation(result: CopilotWorkerRunResult): EffectObservation {
     const progress = this.broker.loadWorkerDispatchProgress(result.dispatchId);
     const acceptedCompletion = progress?.completionStatus === "accepted";
+    // Only an accepted completion finishes a turn. Every other ending is a spent
+    // attempt, which the authored attempt ceiling exists to bound. Reporting any
+    // of them as failed fences the task for good, and a fenced task ends the run:
+    // a turn that stopped to ask, a turn that submitted nothing, and a turn whose
+    // session died when the supervisor restarted each killed a live run that way.
     const status =
-      result.status === "aborted"
-        ? "cancelled"
-        : // A turn that ended on a question is suspended, not failed: a failure
-          // fences the task, and a fenced task cannot accept the answer.
-          result.status === "awaiting-answer"
-          ? "cancelled"
-          : // An agent that submitted nothing wasted a turn. Fencing is permanent
-            // and ends the run, which contradicts the attempt ceiling that exists
-            // to decide how many such turns are tolerated.
-            result.status === "missing-completion"
-            ? "cancelled"
-            : (result.status === "completed" || result.status === "blocked") && acceptedCompletion
-              ? "completed"
-              : "failed";
+      (result.status === "completed" || result.status === "blocked") && acceptedCompletion
+        ? "completed"
+        : "cancelled";
     const details: JsonValue = {
       dispatchId: result.dispatchId,
       workerStatus: result.status,
