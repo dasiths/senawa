@@ -424,6 +424,7 @@ export async function startSenawaService(
       status: () => required(service).status(),
       drain: () => required(service).drain(),
       stop: () => required(service).stop(),
+      wake: () => required(service).wake(),
       recover: (repositoryId: string, runId: string) =>
         required(service).recover(repositoryId, runId),
       backup: async (requestId: string, destinationDirectory: string) => {

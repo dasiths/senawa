@@ -118,6 +118,7 @@ export type SupervisorHttpRoute =
         | "supervisor-status"
         | "supervisor-drain"
         | "supervisor-stop"
+        | "supervisor-wake"
         | "supervisor-recovery"
         | "supervisor-backup";
     }
@@ -158,6 +159,7 @@ export function matchSupervisorHttpRoute(method: string, target: string): Superv
     route.kind === "portal-session-bootstrap" ||
     route.kind === "supervisor-drain" ||
     route.kind === "supervisor-stop" ||
+    route.kind === "supervisor-wake" ||
     route.kind === "supervisor-recovery" ||
     route.kind === "supervisor-backup"
       ? "POST"
@@ -225,6 +227,10 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
   if (samePath(segments, ["supervisor", "v1", "stop"])) {
     requireQuery(query, []);
     return { kind: "supervisor-stop" };
+  }
+  if (samePath(segments, ["supervisor", "v1", "wake"])) {
+    requireQuery(query, []);
+    return { kind: "supervisor-wake" };
   }
   if (samePath(segments, ["supervisor", "v1", "recoveries"])) {
     requireQuery(query, []);

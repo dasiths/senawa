@@ -37,6 +37,7 @@ describe("supervisor operational HTTP", () => {
     });
     const drain = vi.fn(async () => undefined);
     const stop = vi.fn(async () => undefined);
+    const wake = vi.fn(() => undefined);
     const recover = vi.fn(async () => ({ worked: true }));
     const backup = vi.fn(async (requestId: string) => ({ requestId, verified: true as const }));
     const operations: SupervisorOperations = {
@@ -66,6 +67,7 @@ describe("supervisor operational HTTP", () => {
       }),
       drain,
       stop,
+      wake,
       recover,
       backup,
       logs: async () => ({ afterCursor: 0, latestCursor: 0, hasMore: false, items: [] }),
@@ -107,6 +109,10 @@ describe("supervisor operational HTTP", () => {
     await expect(
       client.backupState({ requestId: "backup-request", destinationDirectory: "/backup" }),
     ).resolves.toEqual({ requestId: "backup-request", verified: true });
+    // A separate process that writes durable work has to be able to tell a
+    // running supervisor, which is otherwise woken only from inside itself.
+    await client.wake();
+    expect(wake).toHaveBeenCalledOnce();
     await client.stop();
     await new Promise((resolve) => setImmediate(resolve));
     expect(drain).toHaveBeenCalledOnce();
@@ -194,6 +200,7 @@ describe("supervisor operational HTTP", () => {
         status: () => service.status(),
         drain: () => service.drain(),
         stop: () => service.stop(),
+        wake: () => service.wake(),
         recover: (repositoryId, runId) => service.recover(repositoryId, runId),
         backup: async (requestId) => ({ requestId, verified: true }),
         logs: (afterCursor, limit) => service.logs(afterCursor, limit),

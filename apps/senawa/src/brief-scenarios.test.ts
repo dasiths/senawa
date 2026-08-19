@@ -578,6 +578,34 @@ describe("one phase in sequence", () => {
     expect(await advance(scenario)).toMatchObject({ kind: "gate-refused", phaseKey: "define" });
   });
 
+  it("closes a phase whose second attempt passes", async () => {
+    const scenario = await startScenario("retry-then-close", { attempts: 3, secondPhase: true });
+    expect(
+      steerAgent({
+        assetDirectory: scenario.paths.assetDirectory,
+        currentTime: NOW,
+        databasePath: scenario.paths.databasePath,
+        delivery: "abort-retry",
+        dependencies,
+        instruction: "start over",
+        principal: runtimePrincipal,
+        repositoryId: scenario.repositoryId,
+        runId: scenario.runId,
+      }).exitCode,
+    ).toBe(0);
+
+    const retried = await advance(scenario);
+    expect(retried).toMatchObject({ kind: "retrying", attempt: 2 });
+    if (retried.kind !== "retrying") throw new Error("expected a retry");
+    await agentTurn(scenario, retried.dispatchId, canonicalValue({ definition: "x" }));
+
+    // Every retry leaves a dispatch for the same task, and the candidate selects
+    // a set of tasks rather than a list of attempts at them. Counting the
+    // dispatches instead made a phase that retried refuse its own candidate for
+    // selecting one task twice, so no retried phase could ever close.
+    expect(await advance(scenario)).toEqual({ kind: "closed", phaseKey: "define" });
+  });
+
   it("refuses when a blocking rule is red, naming the sensor", async () => {
     const scenario = await startScenario("red", { sensorCommand: "false", attempts: 1 });
     await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));

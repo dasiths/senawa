@@ -490,14 +490,14 @@ async function step(
   // carried. Taking one dispatch's worth leaves the candidate covering tasks it
   // has no assessment for, which is refused at the last step of a run that has
   // already done all its work.
+  //
+  // A task attempted more than once has a dispatch per attempt, and only the
+  // latest one is the phase's current work: an earlier attempt's completion was
+  // assessed against an earlier context and is stale by construction.
   const phaseDispatchIds = new Set(
-    state.dispatches
-      .filter(
-        (candidate) =>
-          candidate.runId === input.runId &&
-          phaseKeyByTask(snapshot, candidate.task.taskId) === phaseKey,
-      )
-      .map((candidate) => String(candidate.dispatchId)),
+    currentPhaseDispatches(snapshot, state, input.runId, phaseKey).map((candidate) =>
+      String(candidate.dispatchId),
+    ),
   );
   const assessments = state.completionOutbox
     .filter((entry) => phaseDispatchIds.has(String(entry.fact.dispatchId)))
@@ -1036,13 +1036,38 @@ function dispatchedPhaseTasks(
   runId: string,
   phaseKey: string,
 ): readonly TaskGenerationReference[] {
-  return state.dispatches
-    .filter(
-      (candidate) =>
-        candidate.runId === runId && phaseKeyByTask(snapshot, candidate.task.taskId) === phaseKey,
-    )
+  return currentPhaseDispatches(snapshot, state, runId, phaseKey)
     .map((candidate) => candidate.task)
     .sort((left, right) => (left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0));
+}
+
+/**
+ * The latest dispatch of each task the phase owns.
+ *
+ * A task attempted more than once has a dispatch per attempt. The candidate
+ * selects a set of tasks and the evidence closing it must belong to the same
+ * generation, so every earlier attempt is history: counting them made a
+ * retried phase select one task twice, and then refuse its own candidate for
+ * carrying an assessment from a context it no longer names.
+ */
+function currentPhaseDispatches(
+  snapshot: ConfigurationSnapshot,
+  state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
+  runId: string,
+  phaseKey: string,
+): readonly ReturnType<SqliteContextBroker["authority"]["snapshot"]>["dispatches"][number][] {
+  const byTask = new Map<
+    string,
+    ReturnType<SqliteContextBroker["authority"]["snapshot"]>["dispatches"][number]
+  >();
+  for (const candidate of state.dispatches) {
+    if (candidate.runId !== runId) continue;
+    if (phaseKeyByTask(snapshot, candidate.task.taskId) !== phaseKey) continue;
+    const key = String(candidate.task.taskId);
+    const held = byTask.get(key);
+    if (held === undefined || candidate.ordinal >= held.ordinal) byTask.set(key, candidate);
+  }
+  return [...byTask.values()];
 }
 
 function phaseValue(snapshot: ConfigurationSnapshot, key: string): SnapshotPhase {

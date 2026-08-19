@@ -70,6 +70,8 @@ export interface SupervisorOperations {
   status(): Promise<SupervisorServiceStatus>;
   drain(): Promise<void>;
   stop(): Promise<void>;
+  /** Tells a running supervisor that another process wrote durable work. */
+  wake(): void;
   recover(repositoryId: string, runId: string): Promise<{ readonly worked: boolean }>;
   backup(
     requestId: string,
@@ -161,6 +163,11 @@ export class SupervisorHttpHandler {
                 .catch(() => undefined),
           );
           return;
+        case "supervisor-wake":
+          requireIpc(this.#transport);
+          requireNoBody(request);
+          this.#requiredOperations().wake();
+          return sendJson(response, 202, { accepted: true });
         case "supervisor-recovery": {
           requireIpc(this.#transport);
           const recovery = recoveryRequest(await readJsonBody(request, this.#requestTimeoutMs));

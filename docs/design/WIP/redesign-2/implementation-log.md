@@ -2938,3 +2938,36 @@ Both defects were reachable by any run that retried a phase after a real worker
 effect, which is to say by any real run, and neither had anything to do with
 questions. Asking three questions is simply what finally produced two of
 something the suite only ever produced one of.
+
+## F-025: no retried phase could ever close
+
+After the answer loop worked, the live run's research phase had three dispatches
+against one task and refused to close:
+`Task task_e30b… is selected more than once`, and once that was fixed,
+`acceptedAccountingAssessments[0] is stale for its selected task generation`.
+
+`dispatchedPhaseTasks` collected the task of every dispatch the phase owned. A
+task attempted more than once has a dispatch per attempt, so a retried phase
+selected the same task once per attempt. A candidate selects a *set* of tasks,
+so it refused itself. The same collection fed the assessments, so the second
+error was the same mistake seen from the other side: an earlier attempt's
+completion was assessed against an earlier context revision, which is stale by
+construction.
+
+Both now read the latest dispatch of each task. An earlier attempt is history:
+it is not the phase's current work, and its evidence is not what closes the
+phase.
+
+This has nothing to do with questions. Any phase that retried — after a red
+gate, after a rejection, after an abort-retry steer — could not close. The
+scenario suite covers the retry itself and stops at the retry: every test
+asserts that a second attempt was dispatched and none asserts that a phase
+survives one. The new test steers an abort-retry, hands the second attempt in,
+and closes; the old code refuses it by name.
+
+Also fixed here: `senawa advance`, `answer`, `approve`, `steer`, `override`, and
+`start` now wake a running supervisor over IPC. They write durable work and
+exit, and the supervisor is otherwise woken only from inside its own process, so
+it slept through everything another process asked of it until it next started.
+Confirmed live: answering a question and advancing now runs the agent without a
+service restart.

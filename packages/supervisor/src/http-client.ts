@@ -379,6 +379,10 @@ export class HttpSupervisorClient {
     await this.#json("POST", "/supervisor/v1/stop");
   }
 
+  async wake(): Promise<void> {
+    await this.#json("POST", "/supervisor/v1/wake");
+  }
+
   async recover(input: string | unknown): Promise<{ readonly worked: boolean }> {
     const request = exactClientObject(input, ["repositoryId", "runId"]);
     const value = localObject(

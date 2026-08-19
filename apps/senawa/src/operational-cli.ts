@@ -65,6 +65,43 @@ export async function runOperationalCli(
   environment: NodeJS.ProcessEnv = process.env,
   dependencies: RuntimeDependencies = runtimeDependencies,
 ): Promise<CliResult | undefined> {
+  const result = await dispatchOperationalCli(arguments_, environment, dependencies);
+  // These commands write durable work and then exit. A supervisor already
+  // running is woken from inside its own process, so without this it sleeps
+  // through everything another process asks for and only notices when it next
+  // starts.
+  if (result?.exitCode === 0 && WORK_CREATING_COMMANDS.has(arguments_[0] ?? "")) {
+    await wakeRunningSupervisor(resolveSenawaServicePaths(environment));
+  }
+  return result;
+}
+
+const WORK_CREATING_COMMANDS = new Set([
+  "start",
+  "advance",
+  "approve",
+  "reject",
+  "answer",
+  "override",
+  "steer",
+]);
+
+/** Best effort: no supervisor running is the normal case, not a failure. */
+async function wakeRunningSupervisor(
+  paths: ReturnType<typeof resolveSenawaServicePaths>,
+): Promise<void> {
+  try {
+    await clientFor(paths).wake();
+  } catch {
+    // Nothing is listening, or it is shutting down. The work stays durable.
+  }
+}
+
+async function dispatchOperationalCli(
+  arguments_: readonly string[],
+  environment: NodeJS.ProcessEnv,
+  dependencies: RuntimeDependencies,
+): Promise<CliResult | undefined> {
   const [group, action, ...rest] = arguments_;
   if (
     group === "doctor" ||
