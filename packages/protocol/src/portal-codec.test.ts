@@ -6,6 +6,7 @@ import {
   decodePortalDeliveryPage,
   decodePortalEventWindow,
   decodePortalGraphNodePage,
+  decodePortalQuestionRecord,
   decodePortalRepositoryPage,
   decodePortalRunOverview,
   decodePortalSessionDescriptor,
@@ -502,5 +503,45 @@ describe("portal codecs", () => {
         ),
       ),
     ).toThrow(/at most 200/);
+  });
+});
+
+describe("a question record built from values the store already decoded", () => {
+  function question(details: unknown) {
+    return {
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId: "repository_alpha",
+      runId: "run_alpha",
+      source: {
+        submissionId: "submission_alpha",
+        dispatchId: "dispatch_alpha",
+        taskId: "task_alpha",
+        definitionGeneration: 1,
+        contextId: "context_alpha",
+        contextDigest: digest,
+        contextRevisionDigest: digest,
+        questionDigest: digest,
+        submittedAt: timestamp,
+      },
+      prompt: "which endpoint is authoritative?",
+      details,
+      freshDispatch: { status: "not-required" },
+    };
+  }
+
+  // `decodeCanonicalJsonValue` reads a string as JSON text, so a detail an
+  // agent wrote as prose was parsed a second time and refused. One such
+  // question emptied the whole portal question list, which is exactly when a
+  // person most needs to read it.
+  it("keeps a detail an agent wrote as prose", () => {
+    expect(decodePortalQuestionRecord(question("the deployed one"))).toMatchObject({
+      details: "the deployed one",
+    });
+  });
+
+  it("keeps a detail an agent wrote as an object", () => {
+    expect(decodePortalQuestionRecord(question({ candidates: ["a", "b"] }))).toMatchObject({
+      details: { candidates: ["a", "b"] },
+    });
   });
 });

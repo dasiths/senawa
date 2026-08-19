@@ -1,6 +1,7 @@
 import {
   canonicalStringify,
   decodeCanonicalJsonValue,
+  decodeDecodedJsonValue,
   decodeDurableReceipt,
   decodeEventStreamFrame,
   PROTOCOL_LIMITS,
@@ -1387,7 +1388,9 @@ function wire(input: string | unknown): JsonValue {
   return decodeCanonicalJsonValue(input);
 }
 function json(input: unknown, _path: string): JsonValue {
-  return decodeCanonicalJsonValue(input);
+  // These records are built from values the store already decoded, so the value
+  // is validated rather than read again as JSON text.
+  return decodeDecodedJsonValue(input);
 }
 
 function exact(

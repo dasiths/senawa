@@ -1123,6 +1123,17 @@ export function encodeErrorEnvelope(input: unknown): string {
   return canonicalStringify(decodeErrorEnvelope(input));
 }
 
+/**
+ * Validates a value that has already been decoded from the wire.
+ *
+ * `decodeCanonicalJsonValue` reads a string as JSON text. A field that is
+ * already a JSON value must not go through it, or a value that happens to be a
+ * string is parsed a second time and refused for not being JSON.
+ */
+export function decodeDecodedJsonValue(input: unknown): JsonValue {
+  return snapshotJsonValue(input, "$", { depth: 0, nodes: 0 });
+}
+
 export function canonicalStringify(input: unknown): string {
   const value = snapshotJsonValue(input, "$", { depth: 0, nodes: 0 });
   const encoded = serialize(value);
