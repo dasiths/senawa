@@ -11,6 +11,7 @@
     "benchmark:sqlite-authority": "pnpm build && node scripts/benchmark-sqlite-authority.mjs",
     "build": "tsc -b && node scripts/stage-standard-template.mjs && pnpm --filter @senawa/portal build && node scripts/stage-portal-assets.mjs && pnpm --filter @senawa/execution-host build:native",
     "check:boundaries": "node scripts/check-boundaries.mjs",
+    "check:behaviours": "node scripts/check-behaviour-citations.mjs",
     "check:claims": "node scripts/check-documented-claims.mjs",
     "check:register": "node scripts/check-writing-register.mjs",
     "check:exports": "node scripts/check-exports.mjs",

@@ -51,6 +51,9 @@ jobs:
       - name: Documentation links
         run: pnpm docs:links
 
+      - name: Canonical behaviours
+        run: pnpm check:behaviours
+
       - name: Documented claims
         run: pnpm check:claims
 

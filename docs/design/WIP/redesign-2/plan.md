@@ -524,8 +524,12 @@ F-004 is closed by evidence, not by counting lines.
 
 Acceptance:
 
-* [ ] Every capability promised by the brief is reachable from authored YAML and
-  the command line.
+* [x] Every capability promised by the brief is reachable from authored YAML and
+  the command line. **The worktree and parallel-writer gap is closed, and
+  `pnpm check:behaviours` keeps every canonical behaviour accounted for: an id
+  the brief promises and nothing cites fails the build. It proves each behaviour
+  is tracked rather than implemented, which is what a citation can honestly
+  carry, and the brief already asks for citation rather than restatement.**
 * [x] The concise fixture stays small because defaults are available; the explicit
   fixture loses no policy because defaults are overridable. **Each override is
   asserted against the compiled document, so a value that is parsed and
