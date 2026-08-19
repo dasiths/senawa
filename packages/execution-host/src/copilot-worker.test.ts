@@ -375,7 +375,7 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect(result.status).toBe("completed");
     expect(transcript.lines.map(({ text }) => text)).toEqual([
       "session started",
-      "tool propose_asset failure",
+      "tool propose_asset failure: submission-refused",
       "tool record_discovery refused",
       "tool senawa_complete success",
       "session ended: the agent finished and submitted its work",

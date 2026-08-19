@@ -927,9 +927,11 @@ function completeTool(
           completion,
           slots.length === 0 ? invocation : scopedInvocation(invocation, "completion"),
         );
-      } catch {
-        // A throwing handler would send raw exception text to the model.
-        return failure("completion-refused");
+      } catch (error) {
+        // An agent that cannot see why it was refused retries blind and spends
+        // its attempts doing it: one live planner sent the same plan six times.
+        // The messages here are validation text naming a field or a criterion.
+        return failure("completion-refused", refusalDetail(error));
       }
     },
   );
@@ -1431,7 +1433,9 @@ function tool(
       const execution = handler(args, invocation);
       const pending = execution.then(
         (result) => {
-          scope.note(`tool ${name} ${result.resultType}`);
+          // A bare "failure" leaves the operator unable to see why an agent is
+          // stuck retrying, which is the moment they most need to look.
+          scope.note(`tool ${name} ${result.resultType}${resultDetail(result)}`);
         },
         () => {
           scope.note(`tool ${name} failure`);
@@ -1527,6 +1531,29 @@ function failure(code: string, detail?: string): CopilotSdkToolResult {
       ...(detail === undefined ? {} : { detail }),
     }),
   });
+}
+
+/** Bounded validation text, so a refused agent can correct what it sent. */
+function refusalDetail(error: unknown): string | undefined {
+  if (!(error instanceof Error) || error.message.length === 0) return undefined;
+  return error.message.slice(0, 512);
+}
+
+/** The refusal a failed tool result carried, for the transcript a person reads. */
+function resultDetail(result: CopilotSdkToolResult): string {
+  if (result.resultType !== "failure") return "";
+  try {
+    const parsed = JSON.parse(result.textResultForLlm) as {
+      readonly code?: unknown;
+      readonly detail?: unknown;
+    };
+    const code = typeof parsed.code === "string" ? parsed.code : undefined;
+    const detail = typeof parsed.detail === "string" ? parsed.detail : undefined;
+    if (code === undefined) return "";
+    return detail === undefined ? `: ${code}` : `: ${code}: ${detail}`;
+  } catch {
+    return "";
+  }
 }
 
 const stringSchema = (maxLength: number, minLength = 1) =>

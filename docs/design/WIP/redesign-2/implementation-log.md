@@ -3406,3 +3406,39 @@ was wrong, and the tool would not decode it, so the agent could see nothing to
 correct. Two changes: the message names the parameter, and a string is decoded
 before validation. Handing a nested object back as JSON is a routine thing for a
 model to do and it is not worth an attempt.
+
+## F-044: the retry note read as a refusal of the work
+
+A retried attempt carries `priorRefusals` into the agent's prompt, and the spent
+attempt retry from F-036 put this in it:
+
+> the previous turn ended without handing any work in
+
+The agent read it as senawa's verdict on what it had submitted, and asked:
+
+> I've attempted to submit a plan four times, and the system refuses completion
+> saying "the previous turn ended without handing any work in." What does
+> "handing work in" mean in this context? Should I be dispatching tasks to
+> workers?
+
+The note is about the *previous* turn and is not a judgement of anything the
+agent sent, but nothing in the wording said so. It now says which turn it
+describes and that it is not a refusal.
+
+## F-045: the transcript recorded that a tool failed and not why
+
+Diagnosing F-043 from outside the agent was impossible because the operator's
+own record of the run held only:
+
+```
+tool senawa_complete failure
+```
+
+The refusal and its detail were already computed and sent to the model; the
+transcript line dropped both. It now carries the code and the detail, so the
+moment an agent starts retrying is the moment a person can see the reason.
+
+Still open: the live planner's completion is refused as `completion-refused`
+with no detail, which means the error reaching that handler is not an `Error`
+with a message. That is the next thing to chase, and the run cannot finish until
+it is understood.

@@ -482,14 +482,18 @@ async function step(
           repositoryBase: input.repositoryBase,
           currentTime: input.currentTime,
           attempt: attempt + 1,
-          priorRefusals: ["the previous turn ended without handing any work in"],
+          priorRefusals: [
+            "Your previous turn ended without submitting a completion, so this is a fresh attempt. This is not a refusal of anything you sent.",
+          ],
         });
         return {
           kind: "retrying",
           phaseKey,
           attempt: attempt + 1,
           dispatchId: retried.dispatch.dispatchId,
-          reasons: ["the previous turn ended without handing any work in"],
+          reasons: [
+            "Your previous turn ended without submitting a completion, so this is a fresh attempt. This is not a refusal of anything you sent.",
+          ],
         };
       }
       return {
