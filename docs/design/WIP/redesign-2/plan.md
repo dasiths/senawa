@@ -547,10 +547,15 @@ Acceptance:
   delivery revisions are behind `details`. The raw trees and dumps are already
   on their own routes rather than in the default view.**
 * [x] Stop fetching needs, events, and receipts on every route change.
-* [ ] Add an agent-pool view showing the active persona, session, phase or member,
-  attempt, route, and latest refusal reason.
-* [ ] Drive approval, reasoned rejection, question response, member override, and
-  steering by pointing and clicking.
+* [x] Add an agent-pool view showing the active persona, session, phase or member,
+  attempt, route, and latest refusal reason. **Read from each dispatch's own
+  context rather than from a report, because the context is what the agent was
+  actually given.**
+* [x] Drive approval, reasoned rejection, question response, member override, and
+  steering by pointing and clicking. **Approval, rejection, and answers were
+  already click-driven. Steering and override are now controls on the agent
+  pool: steering appears against agents that are working, and override only
+  against work that reported it could not finish.**
 * [x] Rename the portal asset source `evidence` to `completion-evidence` under
   D-023, and label completion evidence and gate evidence distinctly wherever both
   are shown, because a reader deciding an override needs to know which one they

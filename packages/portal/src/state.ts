@@ -1,6 +1,7 @@
 import type {
   DurableReceipt,
   EventStreamFrame,
+  PortalAgentPage,
   PortalArtifactContent,
   PortalArtifactPage,
   PortalDeliveryPage,
@@ -98,6 +99,7 @@ export interface PortalCaches {
   readonly delivery: Readonly<Record<string, PortalDeliveryPage>>;
   readonly artifactContent: Readonly<Record<string, PortalArtifactContent>>;
   readonly questions: Readonly<Record<string, PortalQuestionPage>>;
+  readonly agents: Readonly<Record<string, PortalAgentPage>>;
   readonly workspaces: Readonly<Record<string, PortalWorkspacePage>>;
   readonly integrations: Readonly<Record<string, PortalIntegrationPage>>;
   readonly records: Readonly<Record<string, unknown>>;
@@ -111,7 +113,9 @@ export type DialogKind =
   | "allowance"
   | "pause"
   | "resume"
-  | "end";
+  | "end"
+  | "steer"
+  | "override";
 
 export interface PortalDialogState {
   readonly kind: DialogKind;
@@ -223,6 +227,7 @@ export type PortalAction =
   | { readonly type: "asset-overlay-close" };
 
 const emptyCaches: PortalCaches = Object.freeze({
+  agents: Object.freeze({}),
   runsByRepository: Object.freeze({}),
   overviews: Object.freeze({}),
   graphSummaries: Object.freeze({}),

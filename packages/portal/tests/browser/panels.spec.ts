@@ -319,3 +319,20 @@ declare global {
     __senawaGraphDiagram?: { readonly selectedNodeId: string | undefined };
   }
 }
+
+test("shows who is working, on what, and on which model", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await navigate(page, "Agents");
+
+  // The graph says which phases are open. It cannot say which persona is on its
+  // third attempt or which model it is running on, and that is what this view
+  // exists to answer.
+  const table = page.getByRole("table", { name: "Every agent this run has dispatched" });
+  await expect(table).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Persona" })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Attempt" })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Model" })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Last refusal" })).toBeVisible();
+  await expect(table.locator("tbody tr")).not.toHaveCount(0);
+  expect(diagnostics.severe()).toEqual([]);
+});

@@ -10,6 +10,8 @@ import { type JsonValue, PROTOCOL_VERSION } from "./contracts.js";
 import {
   PORTAL_LIMITS,
   type PortalActivityDirection,
+  type PortalAgentPage,
+  type PortalAgentSummary,
   type PortalAllowanceReview,
   type PortalArtifactAvailability,
   type PortalArtifactContent,
@@ -662,6 +664,33 @@ export function encodePortalArtifactContent(input: unknown): string {
   return canonicalStringify(decodePortalArtifactContent(input));
 }
 
+export function decodePortalAgentPage(input: string | unknown): PortalAgentPage {
+  const object = exact(
+    wire(input),
+    "$",
+    ["apiVersion", "repositoryId", "runId", "hasMore", "agents"],
+    ["after"],
+  );
+  version(object.apiVersion, "$.apiVersion");
+  identity(object.repositoryId, "$.repositoryId");
+  identity(object.runId, "$.runId");
+  optional(object, "after", identity, "$");
+  bool(object.hasMore, "$.hasMore");
+  const agents = page(object.agents, "$.agents", PORTAL_LIMITS.maxAgentItems, agentSummary);
+  return Object.freeze({
+    apiVersion: object.apiVersion,
+    repositoryId: object.repositoryId,
+    runId: object.runId,
+    ...(object.after === undefined ? {} : { after: object.after }),
+    hasMore: object.hasMore,
+    agents,
+  }) as unknown as PortalAgentPage;
+}
+
+export function encodePortalAgentPage(input: unknown): string {
+  return canonicalStringify(decodePortalAgentPage(input));
+}
+
 export function decodePortalWorkspacePage(input: string | unknown): PortalWorkspacePage {
   return authorityPage(
     input,
@@ -1180,6 +1209,28 @@ function authorityPage(
   return Object.freeze({ ...object, [field]: items }) as unknown as
     | PortalWorkspacePage
     | PortalIntegrationPage;
+}
+
+function agentSummary(value: unknown, path: string): PortalAgentSummary {
+  const object = exact(
+    value,
+    path,
+    ["dispatchId", "persona", "phaseId", "taskId", "attempt", "model", "routeIndex", "state"],
+    ["sessionId", "latestRefusal"],
+  );
+  identity(object.dispatchId, `${path}.dispatchId`);
+  token(object.persona, `${path}.persona`);
+  identity(object.phaseId, `${path}.phaseId`);
+  identity(object.taskId, `${path}.taskId`);
+  integer(object.attempt, `${path}.attempt`, 1);
+  token(object.model, `${path}.model`);
+  integer(object.routeIndex, `${path}.routeIndex`, 0);
+  oneOf(object.state, `${path}.state`, new Set(["working", "finished"]));
+  optional(object, "sessionId", identity, path);
+  if (object.latestRefusal !== undefined) {
+    token(object.latestRefusal, `${path}.latestRefusal`);
+  }
+  return Object.freeze(object) as unknown as PortalAgentSummary;
 }
 
 function workspaceSummary(value: unknown, path: string): PortalWorkspaceSummary {

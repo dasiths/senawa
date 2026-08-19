@@ -521,6 +521,19 @@ export class SupervisorHttpHandler {
           response.end(download.bytes);
           return;
         }
+        case "portal-agent-list":
+          requireNoBody(request);
+          return sendJson(
+            response,
+            200,
+            this.#requiredPortal().query.listAgents(
+              route.repositoryId,
+              route.runId,
+              route.after,
+              route.limit,
+            ),
+          );
+
         case "portal-workspace-list":
           requireNoBody(request);
           return sendJson(

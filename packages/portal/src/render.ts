@@ -1,6 +1,7 @@
 import {
   decodeCanonicalJsonValue,
   type JsonValue,
+  type PortalAgentSummary,
   type PortalArtifactMetadata,
   type PortalDeliveryRecord,
   type PortalGraphEdge,
@@ -69,6 +70,11 @@ export interface PortalRenderActions {
   readonly focusRecord: (recordId: string) => void;
   readonly openNeed: (need: PortalHumanNeed, triggerId: string) => void;
   readonly openRunControl: (kind: "pause" | "resume" | "end", triggerId: string) => void;
+  readonly openAgentAction: (
+    kind: "steer" | "override",
+    agent: PortalAgentSummary,
+    triggerId: string,
+  ) => void;
   readonly closeDialog: () => void;
   readonly submitDialog: (kind: DialogKind, values: Readonly<Record<string, string>>) => void;
   readonly loadArtifact: (artifact: PortalArtifactMetadata) => void;
@@ -529,6 +535,9 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
       break;
     case "workspaces":
       main.append(renderWorkspaces(state));
+      break;
+    case "agents":
+      main.append(renderAgents(state, actions));
       break;
   }
   return main;
@@ -1112,6 +1121,75 @@ function renderAmendments(state: PortalState): HTMLElement {
   return section;
 }
 
+/**
+ * Who is working, on what, and on which model.
+ *
+ * The graph says which phases are open. It cannot say which persona is on its
+ * third attempt, which one was moved to a smaller model, or what the last thing
+ * refused was, and those are the questions somebody watching a run actually has.
+ */
+function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLElement {
+  const ids = selectedIds(state);
+  if (ids === undefined) return emptySection("Loading agents");
+  const agents = state.caches.agents[runKey(ids.repositoryId, ids.runId)]?.agents ?? [];
+  const section = element("section", "agent-view");
+  section.append(textElement("h2", "section-heading", "Agent pool"));
+  if (agents.length === 0) {
+    section.append(textElement("p", "empty-note", "No agent has been dispatched yet."));
+    return section;
+  }
+  section.append(
+    summaryTable(
+      ["Persona", "Working on", "Attempt", "Model", "State", "Session", "Last refusal"],
+      agents.map((agent) => [
+        agent.persona,
+        agent.taskId,
+        String(agent.attempt),
+        `${agent.model} (route ${String(agent.routeIndex)})`,
+        agent.state,
+        agent.sessionId ?? "fresh each time",
+        agent.latestRefusal ?? "nothing refused",
+      ]),
+      "Every agent this run has dispatched",
+    ),
+  );
+
+  const working = agents.filter((agent) => agent.state === "working");
+  if (working.length > 0 && hasCapability(state, "portal-write-steer-agent")) {
+    const list = element("div", "agent-actions");
+    for (const agent of working) {
+      const triggerId = `steer-${agent.dispatchId}`;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.id = triggerId;
+      button.textContent = `Steer ${agent.persona}`;
+      button.addEventListener("click", () => actions.openAgentAction("steer", agent, triggerId));
+      list.append(button);
+    }
+    section.append(list);
+  }
+
+  // Only work that reported it could not finish can be accepted over, so the
+  // control appears against that work rather than beside every agent.
+  const stuck = agents.filter(
+    (agent) => agent.state === "finished" && agent.latestRefusal !== undefined,
+  );
+  if (stuck.length > 0 && hasCapability(state, "portal-write-override-member")) {
+    const list = element("div", "agent-actions");
+    for (const agent of stuck) {
+      const triggerId = `override-${agent.dispatchId}`;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.id = triggerId;
+      button.textContent = `Accept ${agent.persona}'s work`;
+      button.addEventListener("click", () => actions.openAgentAction("override", agent, triggerId));
+      list.append(button);
+    }
+    section.append(list);
+  }
+  return section;
+}
+
 function renderWorkspaces(state: PortalState): HTMLElement {
   const ids = selectedIds(state);
   if (ids === undefined) return emptySection("Loading workspaces");
@@ -1276,6 +1354,45 @@ function appendDialogFields(
       if (dialogState.answerDraft !== undefined) input.value = dialogState.answerDraft;
       input.addEventListener("input", () => actions.saveAnswerDraft(input.value));
     }
+    form.append(field);
+  }
+  if (kind === "steer") {
+    const field = element("label", "form-field");
+    field.append(textElement("span", "field-label", "Instruction"));
+    const input = document.createElement("textarea");
+    input.name = "instruction";
+    input.required = true;
+    input.disabled = loading;
+    field.append(input);
+    form.append(field);
+
+    const delivery = element("label", "form-field");
+    delivery.append(textElement("span", "field-label", "When the agent sees it"));
+    const select = document.createElement("select");
+    select.name = "delivery";
+    select.required = true;
+    select.disabled = loading;
+    for (const [value, label] of [
+      ["queued", "When this turn ends"],
+      ["live", "During this turn"],
+      ["abort-retry", "Stop this turn and start again"],
+    ]) {
+      const option = document.createElement("option");
+      option.value = String(value);
+      option.textContent = String(label);
+      select.append(option);
+    }
+    delivery.append(select);
+    form.append(delivery);
+  }
+  if (kind === "override") {
+    const field = element("label", "form-field");
+    field.append(textElement("span", "field-label", "Why this work is accepted"));
+    const input = document.createElement("textarea");
+    input.name = "reason";
+    input.required = true;
+    input.disabled = loading;
+    field.append(input);
     form.append(field);
   }
   if (kind === "approval" || kind === "amendment") {
@@ -1573,6 +1690,7 @@ function routeLabel(route: PortalRouteName): string {
     artifacts: "Artifacts",
     needs: "Human needs",
     amendments: "Amendments",
+    agents: "Agents",
     workspaces: "Workspaces",
   };
   return labels[route];
@@ -1587,6 +1705,9 @@ function dialogConsequence(kind: DialogKind): string {
     pause: "Pause blocks new effect admission and does not cancel active effects.",
     resume: "Resume reopens admission at the displayed run mode revision.",
     end: "End fences current task scopes, requests cancellation, and is permanent after convergence.",
+    steer: "This is recorded with your name and the time before anything tries to deliver it.",
+    override:
+      "This accepts work the run judged unfinished. Your reason is the only thing that explains it later.",
   };
   return consequences[kind];
 }
@@ -1600,6 +1721,8 @@ function finalActionLabel(kind: DialogKind): string {
     pause: "Confirm pause",
     resume: "Confirm resume",
     end: "Confirm permanent end",
+    steer: "Send to the agent",
+    override: "Accept this work",
   };
   return labels[kind];
 }

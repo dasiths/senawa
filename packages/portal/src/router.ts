@@ -7,6 +7,7 @@ export const PORTAL_ROUTES = Object.freeze([
   "needs",
   "amendments",
   "workspaces",
+  "agents",
 ] as const);
 
 export type PortalRouteName = (typeof PORTAL_ROUTES)[number];

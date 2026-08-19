@@ -1,6 +1,7 @@
 import {
   decodeCanonicalJsonValue,
   type JsonValue,
+  type PortalAgentSummary,
   type PortalHumanNeed,
   type PortalQuestionRecord,
   type PortalRunOverview,
@@ -417,6 +418,12 @@ export class PortalApplication {
         });
         return true;
       }
+      case "agents": {
+        const agents = await this.#client.agents(repositoryId, runId);
+        if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
+        this.#dispatch({ type: "cache", cache: "agents", key, value: agents });
+        return true;
+      }
       case "workspaces": {
         const [workspaces, integrations] = await Promise.all([
           this.#client.workspaces(repositoryId, runId),
@@ -625,6 +632,28 @@ export class PortalApplication {
           runModeRevision: overview.runModeRevision,
           counts: overview.counts,
           graphRevision: overview.sync.graphRevision,
+        }),
+      },
+    });
+  }
+
+  #openAgentAction(kind: "steer" | "override", agent: PortalAgentSummary, triggerId: string): void {
+    this.#dialogNeed = undefined;
+    this.#dispatch({
+      type: "dialog-open",
+      dialog: {
+        kind,
+        title:
+          kind === "steer"
+            ? `Redirect ${agent.persona}`
+            : `Accept ${agent.persona}'s unfinished work`,
+        triggerId,
+        verified: true,
+        loading: false,
+        source: decodeCanonicalJsonValue({
+          dispatchId: agent.dispatchId,
+          taskId: agent.taskId,
+          persona: agent.persona,
         }),
       },
     });
@@ -858,6 +887,7 @@ export class PortalApplication {
       },
       openNeed: (need, triggerId) => void this.#openNeed(need, triggerId),
       openRunControl: (kind, triggerId) => this.#openRunControl(kind, triggerId),
+      openAgentAction: (kind, agent, triggerId) => this.#openAgentAction(kind, agent, triggerId),
       closeDialog: () => this.#closeDialog(),
       submitDialog: (kind, values) => void this.#submitDialog(kind, values),
       loadArtifact: (artifact) => void this.#loadArtifact(artifact.artifactId),
@@ -1058,6 +1088,37 @@ function commandDraft(
       intent: kind === "pause" ? "pause-run" : kind === "resume" ? "resume-run" : "end-run",
       payload: { expectedRunModeRevision: reviewedRunModeRevision },
       expectedGraphRevision: overview.sync.graphRevision,
+    };
+  }
+  if (kind === "steer" || kind === "override") {
+    const dispatchId = firstString(source, ["dispatchId"]);
+    const taskId = firstString(source, ["taskId"]);
+    if (dispatchId === undefined || taskId === undefined)
+      throw new Error("An exact dispatch is required");
+    if (kind === "steer") {
+      if (values.instruction === undefined || values.instruction.length === 0)
+        throw new Error("A steering must carry text");
+      return {
+        repositoryId,
+        runId,
+        intent: "steer-agent",
+        payload: {
+          dispatchId,
+          contextDigest: firstString(source, ["contextDigest"]) ?? "",
+          taskId,
+          definitionGeneration: 1,
+          delivery: values.delivery ?? "queued",
+          instruction: values.instruction,
+        },
+      };
+    }
+    if (values.reason === undefined || values.reason.length === 0)
+      throw new Error("An override must say why the work was accepted");
+    return {
+      repositoryId,
+      runId,
+      intent: "override-member",
+      payload: { dispatchId, taskId, definitionGeneration: 1, reason: values.reason },
     };
   }
   if (need === undefined || source === undefined)

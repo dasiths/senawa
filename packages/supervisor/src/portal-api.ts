@@ -1,4 +1,5 @@
 import type {
+  PortalAgentPage,
   PortalAllowanceReview,
   PortalArtifactContent,
   PortalArtifactMetadata,
@@ -105,6 +106,7 @@ export interface PortalQueryPort {
     runId: string,
     artifactId: string,
   ): PortalArtifactDownload | undefined;
+  listAgents(repositoryId: string, runId: string, after?: string, limit?: number): PortalAgentPage;
   listWorkspaces(
     repositoryId: string,
     runId: string,

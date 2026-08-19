@@ -74,6 +74,7 @@ import {
   decodeEventStreamFrame,
   decodeGrantAllowancePayload,
   decodeOverrideMemberPayload,
+  decodePortalAgentPage,
   decodePortalAllowanceReview,
   decodePortalArtifactContent,
   decodePortalArtifactPage,
@@ -111,6 +112,7 @@ import {
   type EventStreamFrame,
   type JsonValue,
   PORTAL_LIMITS,
+  type PortalAgentPage,
   type PortalAllowanceReview,
   type PortalArtifactContent,
   type PortalArtifactMetadata,
@@ -4308,6 +4310,85 @@ export class SqlitePortalQueryAuthority {
       bytes: this.#verifiedArtifactBytes(metadata),
       filename: `senawa-artifact-${metadata.contentDigest}.bin`,
       digest: metadata.contentDigest,
+    });
+  }
+
+  /**
+   * Every agent the run has dispatched, newest first.
+   *
+   * Read from the dispatch's own context rather than from a report, because the
+   * context is what the agent was actually given: the persona, the model route,
+   * the attempt, and the refusals it was told to act on.
+   */
+  listAgents(
+    repositoryId: string,
+    runId: string,
+    after?: string,
+    limit = PORTAL_LIMITS.maxAgentItems,
+  ): PortalAgentPage {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    if (after !== undefined) validateOpaqueIdentity(after);
+    validatePortalLimit(limit, PORTAL_LIMITS.maxAgentItems);
+    const rows = this.#database
+      .prepare<
+        [string, string, string, number],
+        {
+          dispatch_id: string;
+          persona: string | null;
+          phase_id: string | null;
+          task_id: string | null;
+          attempt: number | null;
+          model: string | null;
+          route_index: number | null;
+          refusals: string | null;
+          finished: number | null;
+          session_id: string | null;
+        }
+      >(
+        `SELECT d.dispatch_id,
+                json_extract(b.canonical_context, '$.role.key') AS persona,
+                json_extract(b.canonical_context, '$.phaseAttempt.phase.phaseId') AS phase_id,
+                json_extract(b.canonical_context, '$.task.taskId') AS task_id,
+                json_extract(b.canonical_context, '$.phaseAttempt.attempt') AS attempt,
+                json_extract(b.canonical_context, '$.modelPolicy.model') AS model,
+                json_extract(b.canonical_context, '$.modelPolicy.routeIndex') AS route_index,
+                json_extract(b.canonical_context, '$.priorRefusals') AS refusals,
+                (SELECT 1 FROM context_terminal_completions t
+                  WHERE t.dispatch_id = d.dispatch_id) AS finished,
+                (SELECT s.predecessor_session_id FROM agent_session_resume_bindings s
+                  WHERE s.predecessor_dispatch_id = d.dispatch_id LIMIT 1) AS session_id
+         FROM context_dispatches d
+         JOIN context_bases b ON b.context_id = d.context_id
+         WHERE d.repository_id = ? AND d.run_id = ? AND d.dispatch_id > ?
+         ORDER BY d.dispatch_id LIMIT ?`,
+      )
+      .all(repositoryId, runId, after ?? "", limit + 1);
+    return decodePortalAgentPage({
+      apiVersion: PROTOCOL_VERSION,
+      repositoryId,
+      runId,
+      ...(after === undefined ? {} : { after }),
+      hasMore: rows.length > limit,
+      agents: rows.slice(0, limit).map((row) => {
+        // The last refusal is the one the attempt was told to act on. Earlier
+        // ones were answered by the attempts between, so showing them all would
+        // read as a list of live problems.
+        const refusals = readRefusals(row.refusals);
+        const latest = refusals[refusals.length - 1];
+        return {
+          dispatchId: row.dispatch_id,
+          persona: row.persona ?? "unknown",
+          phaseId: row.phase_id ?? "unknown",
+          taskId: row.task_id ?? "unknown",
+          attempt: row.attempt ?? 1,
+          model: row.model ?? "unknown",
+          routeIndex: row.route_index ?? 0,
+          state: row.finished === 1 ? "finished" : "working",
+          ...(row.session_id === null ? {} : { sessionId: row.session_id }),
+          ...(latest === undefined ? {} : { latestRefusal: latest }),
+        };
+      }),
     });
   }
 
@@ -16449,4 +16530,15 @@ function phaseOutputAsAsset(
     sensitivity: output.sensitivity ?? "internal",
     summary: `phase output ${String(output.outputName)}`,
   };
+}
+
+/** Reads the refusal list a dispatch carried, tolerating an absent or odd one. */
+function readRefusals(value: string | null): readonly string[] {
+  if (value === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
 }

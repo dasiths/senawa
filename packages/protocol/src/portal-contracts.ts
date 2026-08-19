@@ -11,6 +11,7 @@ import type { AssetSensitivity } from "./worker-contracts.js";
 
 export const PORTAL_CAPABILITIES = Object.freeze([
   "portal-read-activity",
+  "portal-read-agents",
   "portal-read-artifacts",
   "portal-read-discovery",
   "portal-read-graph",
@@ -20,9 +21,11 @@ export const PORTAL_CAPABILITIES = Object.freeze([
   "portal-read-workspaces",
   "portal-write-answer-question",
   "portal-write-grant-allowance",
+  "portal-write-override-member",
   "portal-write-record-amendment-decision",
   "portal-write-record-authority-decision",
   "portal-write-run-control",
+  "portal-write-steer-agent",
 ] as const);
 
 export const PORTAL_LIMITS = Object.freeze({
@@ -30,6 +33,7 @@ export const PORTAL_LIMITS = Object.freeze({
   maxGraphItems: 200,
   maxActivityItems: 100,
   maxArtifactItems: 100,
+  maxAgentItems: 100,
   maxWorkspaceItems: 100,
   maxIntegrationItems: 100,
   maxHumanNeeds: 100,
@@ -418,6 +422,37 @@ export interface PortalWorkspacePage {
   readonly after?: OpaqueIdentity;
   readonly hasMore: boolean;
   readonly workspaces: readonly PortalWorkspaceSummary[];
+}
+
+/**
+ * One agent's place in the run: who it is, what it is working on, and on what.
+ *
+ * A run with several personas and a fan-out has many of these at once, and the
+ * graph alone cannot say which of them is stuck, which is on its third attempt,
+ * or which was moved to a smaller model. This is the view that can.
+ */
+export interface PortalAgentSummary {
+  readonly dispatchId: OpaqueIdentity;
+  readonly persona: string;
+  readonly phaseId: OpaqueIdentity;
+  readonly taskId: OpaqueIdentity;
+  readonly attempt: number;
+  readonly model: string;
+  readonly routeIndex: number;
+  readonly state: "working" | "finished";
+  /** The conversation this dispatch joined, when the persona keeps one. */
+  readonly sessionId?: OpaqueIdentity;
+  /** The most recent reason this agent's work was refused, as written. */
+  readonly latestRefusal?: string;
+}
+
+export interface PortalAgentPage {
+  readonly apiVersion: ProtocolVersion;
+  readonly repositoryId: RepositoryId;
+  readonly runId: RunId;
+  readonly hasMore: boolean;
+  readonly after?: OpaqueIdentity;
+  readonly agents: readonly PortalAgentSummary[];
 }
 
 export interface PortalIntegrationDiagnostic {

@@ -3,6 +3,7 @@ import {
   decodeCanonicalJsonValue,
   decodeDurableReceipt,
   decodeErrorEnvelope,
+  decodePortalAgentPage,
   decodePortalAllowanceReview,
   decodePortalArtifactContent,
   decodePortalArtifactPage,
@@ -25,6 +26,7 @@ import {
   decodePortalWorkspacePage,
   decodeSupervisorReceipt,
   type JsonValue,
+  type PortalAgentPage,
   type PortalAllowanceReview,
   type PortalArtifactContent,
   type PortalArtifactPage,
@@ -224,6 +226,10 @@ export class PortalHttpClient {
       `${runBase(repositoryId, runId)}/artifacts/${encodeURIComponent(artifactId)}/content?offset=${offset}&length=65536`,
       decodePortalArtifactContent,
     );
+  }
+
+  agents(repositoryId: string, runId: string): Promise<PortalAgentPage> {
+    return this.#get(`${runBase(repositoryId, runId)}/agents?limit=100`, decodePortalAgentPage);
   }
 
   workspaces(repositoryId: string, runId: string): Promise<PortalWorkspacePage> {

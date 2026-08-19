@@ -47,6 +47,7 @@ export type SupervisorHttpRoute =
         | "portal-graph-summary"
         | "portal-human-needs"
         | "portal-question-list"
+        | "portal-agent-list"
         | "portal-artifact-list"
         | "portal-workspace-list"
         | "portal-integration-list";
@@ -447,6 +448,14 @@ function matchPath(segments: readonly string[], query: URLSearchParams): Supervi
         repositoryId,
         runId,
         resourceId: validateIdentity(suffix[1]),
+      };
+    }
+    if (samePath(suffix, ["agents"])) {
+      return {
+        kind: "portal-agent-list",
+        repositoryId,
+        runId,
+        ...lexicalPage(query, PORTAL_LIMITS.maxAgentItems),
       };
     }
     if (samePath(suffix, ["workspaces"])) {
