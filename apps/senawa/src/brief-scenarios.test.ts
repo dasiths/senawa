@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { type AdvanceOutcome, advanceRun, classifyOutcome } from "./advance-run.js";
 import {
   agentTurn,
+  askThroughSink,
   BASE,
   compileScenario,
   compileSnapshot,
@@ -709,6 +710,27 @@ describe("falling back to another model", () => {
   });
 });
 
+describe("an agent that stops to ask", () => {
+  it("gets its question recorded through the channel it actually uses", async () => {
+    const scenario = await startScenario("ask", {});
+
+    // The channel builds the wire payload itself, and it built an invalid one
+    // until 2026-08-19, so asking never worked. Only a test that goes through
+    // the sink catches that; one that writes the payload by hand cannot.
+    await askThroughSink(scenario, scenario.dispatchId, "which endpoint is authoritative?");
+
+    const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+    try {
+      const row = database
+        .prepare("SELECT canonical_question AS json FROM context_questions")
+        .get() as { readonly json: string } | undefined;
+      expect(row?.json).toContain("which endpoint is authoritative?");
+    } finally {
+      database.close();
+    }
+  });
+});
+
 describe("steering an agent that is already working", () => {
   function steer(scenario: Scenario, instruction: string, delivery: SteerInput["delivery"]) {
     return steerAgent({
@@ -760,6 +782,17 @@ describe("steering an agent that is already working", () => {
     expect(await promptPackText(scenario, outcome.dispatchId)).toContain(
       "start over and read the schema first",
     );
+  });
+
+  it("hands a queued instruction to the agent when it next stops to ask", async () => {
+    const scenario = await startScenario("steer-deliver", {});
+    expect(steer(scenario, "prefer the existing health check", "queued").exitCode).toBe(0);
+
+    // An agent that stopped to ask is between turns, so the instruction is due.
+    // Answering without it would send the agent back to work on a course a
+    // person has already corrected.
+    const answered = await askThroughSink(scenario, scenario.dispatchId, "which endpoint?");
+    expect(JSON.stringify(answered)).toContain("prefer the existing health check");
   });
 
   it("refuses to redirect an agent that has already finished", async () => {

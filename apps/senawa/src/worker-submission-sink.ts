@@ -21,6 +21,17 @@ export interface BrokerWorkerSubmissionSinkOptions {
   readonly assets: SqliteCanonicalJsonAssetStore;
   readonly loadSnapshot: (snapshotDigest: string) => unknown | undefined;
   readonly sha256: Sha256;
+  /**
+   * Reads instructions a person recorded against a dispatch.
+   *
+   * Supplied separately from the broker because steering is human authority
+   * rather than worker traffic. Omitting it means nothing is delivered, which
+   * is the right default for a channel that has no person behind it.
+   */
+  readonly readSteerings?: (dispatchId: string) => readonly {
+    readonly delivery: "live" | "queued" | "abort-retry";
+    readonly instruction: string;
+  }[];
 }
 
 /**
@@ -67,11 +78,18 @@ export class BrokerWorkerSubmissionSink implements WorkerSubmissionSink {
     }
 
     if (submission.kind === "question" || submission.kind === "escalation") {
+      // The wire contract is a prompt with optional details. Urgency travels in
+      // the details rather than beside the prompt, because the prompt is what a
+      // person reads and everything else is context for it.
       const payload =
         submission.kind === "question"
-          ? { question: submission.question, urgency: "normal" as const }
-          : { question: submission.reason, urgency: "blocking" as const };
-      return this.#admit(stored, "question", submissionId, "question", payload);
+          ? { prompt: submission.question, details: { urgency: "normal" } }
+          : { prompt: submission.reason, details: { urgency: "blocking" } };
+      const admitted = this.#admit(stored, "question", submissionId, "question", payload);
+      // An agent that stopped to ask is between turns, so both a live and a
+      // queued instruction are due now. Answering without them would send it
+      // back to work on a course a person has already corrected.
+      return this.#withSteering(scope.dispatchId, admitted, ["live", "queued"]);
     }
 
     if (submission.kind !== "complete") {
@@ -216,6 +234,30 @@ export class BrokerWorkerSubmissionSink implements WorkerSubmissionSink {
         validationReceiptDigest,
       },
     );
+  }
+
+  /**
+   * Attaches instructions a person recorded, so the agent reads them as written.
+   *
+   * The words are passed through rather than summarised. A person who redirects
+   * an agent is trying to change what it does next, and a paraphrase is the one
+   * thing that reliably loses that.
+   */
+  #withSteering(
+    dispatchId: string,
+    result: JsonValue,
+    due: readonly ("live" | "queued")[],
+  ): JsonValue {
+    const read = this.#options.readSteerings;
+    if (read === undefined) return result;
+    const instructions = read(dispatchId)
+      .filter((entry) => due.some((kind) => kind === entry.delivery))
+      .map((entry) => entry.instruction);
+    if (instructions.length === 0) return result;
+    if (typeof result !== "object" || result === null || Array.isArray(result)) {
+      return { result, steering: instructions };
+    }
+    return { ...result, steering: instructions };
   }
 
   #admit(

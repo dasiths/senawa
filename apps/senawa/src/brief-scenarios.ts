@@ -333,6 +333,7 @@ export async function completeThroughSink(
       broker,
       assets: new SqliteCanonicalJsonAssetStore(authority),
       loadSnapshot: () => snapshot,
+      readSteerings: (dispatchId) => authority.listAgentSteerings(dispatchId),
       sha256: dependencies.sha256,
     });
     await sink.accept({
@@ -347,6 +348,47 @@ export async function completeThroughSink(
     return { status: "accepted" };
   } catch (error) {
     return { status: "refused", reason: error instanceof Error ? error.message : "refused" };
+  } finally {
+    broker.close();
+    authority.close();
+  }
+}
+
+/** Asks a question through the real agent channel, and returns what came back. */
+export async function askThroughSink(
+  scenario: Scenario,
+  dispatchId: string,
+  question: string,
+): Promise<unknown> {
+  const loaded = await loadAuthoredWorkflow(scenario.project, dependencies.sha256);
+  const snapshot = loaded.snapshot;
+  if (snapshot === undefined) throw new Error("Scenario workflow does not compile");
+  const authority = new SqliteAuthority({ ...scenario.paths, dependencies });
+  const broker = new SqliteContextBroker({
+    databasePath: scenario.paths.databasePath,
+    dependencies: {
+      sha256: dependencies.sha256,
+      currentTime: () => NOW,
+      issueGrantToken: () => new Uint8Array(32),
+    },
+  });
+  try {
+    const sink = new BrokerWorkerSubmissionSink({
+      broker,
+      assets: new SqliteCanonicalJsonAssetStore(authority),
+      loadSnapshot: () => snapshot,
+      readSteerings: (id) => authority.listAgentSteerings(id),
+      sha256: dependencies.sha256,
+    });
+    return await sink.accept({
+      submissionId: `submission_${dispatchId.replace("dispatch_", "").slice(0, 30)}q`,
+      scope: {
+        repositoryId: scenario.repositoryId,
+        runId: scenario.runId,
+        dispatchId,
+      } as never,
+      submission: { kind: "question", question } as never,
+    });
   } finally {
     broker.close();
     authority.close();

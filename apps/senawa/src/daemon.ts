@@ -273,6 +273,7 @@ export async function startSenawaService(
           }),
           loadSnapshot: (snapshotDigest) =>
             authority.commandAuthority.getConfigurationSnapshot(snapshotDigest),
+          readSteerings: (dispatchId) => authority.commandAuthority.listAgentSteerings(dispatchId),
           sha256: dependencies.sha256,
         }),
       }),
