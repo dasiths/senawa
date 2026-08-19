@@ -429,13 +429,12 @@ Acceptance:
   treated the member that had just finished as the phase's live work and tried
   to close a phase most of whose members had never been dispatched. Each member
   now binds its own phase attempt. D-040.**
-* [ ] Three failing members do not block the remaining seven under a continue
-  policy. **F-018: a member that hands in a blocked completion does not stop the
-  fan-out, and neither does it under `fail-fast`. The two policies are currently
-  indistinguishable for members, because nothing reads a member's disposition
-  when deciding whether to run the next one. The acceptance would pass today for
-  the wrong reason, so it stays open. A test proving it was written, checked
-  against `fail-fast`, found to pass there too, and removed.**
+* [x] Three failing members do not block the remaining seven under a continue
+  policy. **F-018 is closed. A blocked member used to stop nothing under either
+  policy, so the acceptance would have passed for the wrong reason. The driver
+  now reads a member's disposition before dispatching the next one, and the two
+  policies are proven to differ: `continue` reaches every member, `fail-fast`
+  stops at the first that could not finish.**
 * [x] A nested member at the configured depth runs its own complete loop, and one
   beyond the bound is refused at authoring time. **Partial: the bound is one
   level in v1 and nesting past it is refused when written. A member running its

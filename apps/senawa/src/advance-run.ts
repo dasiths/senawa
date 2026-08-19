@@ -255,6 +255,21 @@ async function step(
             ),
         );
   if (pendingMember !== undefined && pendingMember >= 0) {
+    // A member that reported it could not finish is one member's answer, not
+    // the phase's. Under `continue` the rest are still worth running, and under
+    // `fail-fast` they are not: spending attempts on work that will be thrown
+    // away is the cost the policy exists to avoid.
+    const blocked = state.completionOutbox
+      .filter(
+        (entry) =>
+          phaseDispatchIdsOf(snapshot, state, input.runId, phaseKey).has(
+            String(entry.fact.dispatchId),
+          ) && String(entry.fact.assessment.submission.disposition) === "blocked",
+      )
+      .map((entry) => String(entry.fact.assessment.submission.summary));
+    if (blocked.length > 0 && executionFailurePolicy(snapshot) === "fail-fast") {
+      return { kind: "rejected", phaseKey, reasons: blocked };
+    }
     const dispatched = dispatchPhase({
       snapshot,
       dataflow: new RuntimeDataflowAuthority(
@@ -1052,4 +1067,28 @@ function refuseUncanonicalPayload(intent: string, payload: unknown): void {
     return path;
   };
   throw new TypeError(`Cannot submit ${intent}: ${locate(payload, "payload")} is not canonical`);
+}
+
+/** The dispatch ids belonging to one phase, including every fan-out member. */
+function phaseDispatchIdsOf(
+  snapshot: ConfigurationSnapshot,
+  state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
+  runId: string,
+  phaseKey: string,
+): ReadonlySet<string> {
+  return new Set(
+    state.dispatches
+      .filter(
+        (candidate) =>
+          candidate.runId === runId && phaseKeyByTask(snapshot, candidate.task.taskId) === phaseKey,
+      )
+      .map((candidate) => String(candidate.dispatchId)),
+  );
+}
+
+/** What the run does when a piece of work reports it could not be finished. */
+function executionFailurePolicy(snapshot: ConfigurationSnapshot): string {
+  const execution = (snapshot as unknown as { readonly execution?: Record<string, unknown> })
+    .execution;
+  return String(execution?.failurePolicy ?? "continue");
 }

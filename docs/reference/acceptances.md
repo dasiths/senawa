@@ -59,6 +59,8 @@ claims are made; it does not certify the ones that are absent.
 | A fan-out member can be redirected while it works | docs/reference/cli.md | `brief-scenarios.test.ts > records a fan-out steering against the member's own dispatch` |
 | Every member of a fan-out runs, not only the first | docs/reference/authoring.md | `brief-scenarios.test.ts > dispatches the second member after the first one finishes` |
 | A fan-out closes once every member has finished | docs/reference/authoring.md | `brief-scenarios.test.ts > closes the phase once every member has finished` |
+| One member failing does not stop the rest under `continue` | docs/reference/authoring.md | `brief-scenarios.test.ts > runs the members that can finish when an earlier one cannot` |
+| `fail-fast` stops the fan-out at the first failing member | docs/reference/authoring.md | `brief-scenarios.test.ts > stops the fan-out on the first failing member under fail-fast` |
 
 ## The command line
 

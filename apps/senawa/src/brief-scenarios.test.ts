@@ -151,6 +151,44 @@ describe("running every member of a fan-out", () => {
     // which is the same outcome for a person as never having started.
     expect(await advance(scenario)).toEqual({ kind: "finished" });
   });
+
+  async function driveMembers(options: { readonly failFast: boolean }) {
+    const scenario = await startScenario(`fanout-policy-${String(options.failFast)}`, {
+      fanOut: "complete",
+      ...(options.failFast ? { failFast: true } : { continueOnFailure: true }),
+    });
+    await agentTurn(
+      scenario,
+      scenario.dispatchId,
+      canonicalValue({ tasks: [{ id: "one" }, { id: "two" }, { id: "three" }] }),
+    );
+    await advance(scenario);
+    await advance(scenario);
+
+    const reached: string[] = [];
+    for (let member = 0; member < 3; member += 1) {
+      const dispatched = await advance(scenario);
+      if (dispatched.kind !== "dispatched") break;
+      reached.push(dispatched.dispatchId);
+      // The first member hands in a completion saying it could not finish.
+      await agentTurn(scenario, dispatched.dispatchId, canonicalValue({ verified: true }), {
+        blocked: member === 0,
+      });
+    }
+    return reached;
+  }
+
+  it("runs the members that can finish when an earlier one cannot", async () => {
+    // One member failing is that member's answer, not the phase's. Work that can
+    // still be done is worth doing, and stopping would throw it away.
+    expect(await driveMembers({ failFast: false })).toHaveLength(3);
+  });
+
+  it("stops the fan-out on the first failing member under fail-fast", async () => {
+    // Spending the remaining attempts on work that will be thrown away is the
+    // cost that policy exists to avoid, so it has to actually stop.
+    expect(await driveMembers({ failFast: true })).toHaveLength(1);
+  });
 });
 
 describe("what an author can state", () => {
