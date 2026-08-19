@@ -7,6 +7,17 @@ console.
 
 Start with [Getting started](docs/guide/getting-started.md).
 
+## Why not just run an agent
+
+An agent decides when it is done. That is fine for work you are watching and a
+problem for work you are not: the thing being asked to judge whether the job is
+finished is the thing that did the job.
+
+Senawa takes that decision away from it. A real command measures the work, the
+result of that command decides whether the phase closes, and the run keeps a
+record no agent can write. What you get back is not a claim that the work is
+done, but a reading you can check and a trail you can read afterwards.
+
 ## The three loops
 
 Senawa runs three nested loops, and almost every design choice follows from
@@ -27,6 +38,86 @@ thing. It runs for as long as the project does.
 The property that makes this worth building is that **completion is granted, not
 claimed**. An agent asks to finish; the harness decides.
 
+## What happens when an agent asks to finish
+
+Nothing in a run happens on its own. `senawa advance` takes exactly one step and
+returns, and you or a scheduler call it again for the next one. Here is one
+phase, in the order those steps happen.
+
+1. **Dispatch.** The driver writes an assignment: the agent's prompt, the inputs
+   it may read, and the tools it may call. It gets nothing else. That record is
+   the dispatch, and it is what the agent runs against.
+2. **Work.** The agent works, then hands in its output and says it is done. That
+   is a request. Nothing is published yet.
+3. **Measure.** The next `advance` runs the phase's sensors. Each is a real
+   command, run by the driver in its own process, and each returns a reading:
+   an exit code, some output, whether it timed out. Every attempt re-runs them
+   against the work as it now stands; no reading is carried over from the last
+   one.
+4. **Judge.** The gate is a rule over those readings, written by the author. A
+   rule is *green* when the reading satisfies it and *red* when it does not.
+   Green on every blocking rule: the driver publishes the output, grants
+   completion, and the phase closes. One red blocking rule and none of that
+   happens. An advisory rule that is red is recorded and shown and stops
+   nothing, which is the whole difference between the two.
+5. **Retry.** The phase stays open with one attempt spent. The output stays
+   unpublished, so the next phase still cannot see it. The next `advance`
+   writes a **new dispatch** for the same phase, carrying the readings that
+   failed, in the words the sensors produced. That is how the agent learns what
+   was wrong: it is in the assignment it is handed, not a message it must go and
+   look for. An attempt not told what failed only spends an attempt.
+6. **Stop.** When the attempts the author allowed are used up, `advance` returns
+   that the phase was refused and stops. It does not lower the bar, and it does
+   not carry on to the next phase.
+
+The agent never runs step 3 and never decides step 4. It cannot edit the gate,
+the attempt limit, or the output shape, because those are in the workflow and it
+is only ever handed a dispatch. Asking again with better work is its only move.
+
+A phase can also ask for a person before it closes. That approval sits after the
+gate, not instead of it: green readings make a phase eligible to close, and an
+authored approval then holds it open until somebody accepts or rejects it. A
+rejection carries the person's reason into the next attempt exactly as a red
+reading does.
+
+## What you write
+
+Three files, and the prompts and schemas they name.
+
+```yaml
+# .senawa/workflow.yaml
+name: delivery
+input: schemas/request.schema.json
+phases:
+  - name: implement
+    agent: builder
+    output: schemas/change.schema.json
+    gates: [tests]
+    attempts: 3
+```
+
+```yaml
+# .senawa/sensors.yaml
+sensors:
+  tests:
+    run: [pnpm, test]
+gates:
+  tests:
+    blocking:
+      - sensor: tests
+        equals: { exitCode: 0 }
+```
+
+`senawa init` writes a working project, `senawa doctor` checks it, `senawa start`
+begins a run, and `senawa advance` takes the next step. The
+[getting started guide](docs/guide/getting-started.md) walks through one.
+
+A prompt says what the work is and never mentions senawa. The **operating
+contract** is the part senawa writes: a short set of instructions appended to
+every prompt at dispatch, telling the agent how to hand work in, what it may
+call, and what it may not. It is generated rather than authored so an author
+cannot drift from it or claim authority the dispatch does not carry.
+
 ## The vocabulary
 
 A **sensor** measures a property of the work by running a real command, and
@@ -44,10 +135,14 @@ when it runs.
 get to continue by insisting, and it cannot lower the bar it is measured
 against.
 
-A **frozen set** is the part of a workflow the run may not weaken while it is
-running. Attempt limits, blocking gates, and declared outputs are frozen: an
-agent that could relax them would optimise against the measurement rather than
-the work.
+A **frozen set** is what a run may not weaken while it is running: the attempt
+limits, the blocking gates, and the declared outputs. They are settled when the
+workflow is written and no run can move them, because an agent that could relax
+them would optimise against the measurement rather than the work.
+
+The **journal** is the run's record of what was asked, measured, and decided. It
+is written by the authority and no agent can write to it, which is what makes a
+finished run something you can read back rather than take on trust.
 
 Four things keep this honest: deterministic sensors that execute real code, a
 journal no agent can write, a frozen set the optimizer cannot weaken, and a

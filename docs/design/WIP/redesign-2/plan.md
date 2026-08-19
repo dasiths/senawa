@@ -683,8 +683,16 @@ way it is. They belong back once the system can demonstrate them.
 
 Acceptance:
 
-* [ ] A reader who has never seen the project understands the three loops and the
-  backpressure model from the README alone.
+* [x] A reader who has never seen the project understands the three loops and the
+  backpressure model from the README alone. **Measured rather than asserted: read
+  by three readers who saw only that file and were asked to explain both models
+  back. The first could explain the loops and not backpressure, because the
+  README described what a gate resists and never what happens at a red one. It
+  now walks one phase from dispatch to close or refusal, says who acts at each
+  step, and answers what the readers actually asked: that nothing advances on its
+  own, that failed readings arrive in the next dispatch rather than somewhere the
+  agent must go and find, that sensors re-run rather than being re-read, that an
+  advisory rule stops nothing, and where approval sits. D-043.**
 * [x] Every vocabulary term in the design set is defined once and used
   consistently. **The design index carries the fourteen terms, each defined
   once, and the pages use them without redefining them.**
