@@ -168,6 +168,11 @@ planner:
 
 Per route, `turns` defaults to 12, `submissions` to 4, and `spend` to 5000.
 
+Routes are tried in the order they are written. An attempt that has to be retried
+moves to the next route, because repeating a route that just failed spends an
+attempt to learn nothing, and the agent is told it changed model rather than
+being swapped silently. Once the list runs out, retries stay on the last route.
+
 An agent's prompt describes the work and never mentions senawa. The operating
 contract that tells an agent how to finish is generated at dispatch and appended
 after the prompt; see [the CLI reference](cli.md#the-agent-channel).
@@ -193,8 +198,8 @@ change does. When a conversation is dropped this way, the run says so instead of
 quietly starting over.
 
 > [!NOTE]
-> The order of `models` is compiled and validated, but no runtime reads it yet:
-> a route is not retried with the next one on exhaustion.
+> A conversation is bounded by the ceilings of the route it runs on, and not yet
+> by a retention or compaction policy of its own.
 
 ## sensors.yaml
 

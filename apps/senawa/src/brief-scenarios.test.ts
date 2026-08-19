@@ -643,3 +643,51 @@ describe("a persona that keeps its session", () => {
     expect(sessionBindings(scenario)).toHaveLength(0);
   });
 });
+
+describe("falling back to another model", () => {
+  it("moves a retry to the next authored route and tells the agent it moved", async () => {
+    const scenario = await startScenario("route-fallback", {
+      routeLimits: true,
+      sensorCommand: "false",
+      attempts: 3,
+    });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+
+    const outcome = await advance(scenario);
+    expect(outcome).toMatchObject({ kind: "retrying", attempt: 2 });
+    if (outcome.kind !== "retrying") throw new Error("expected a retry");
+
+    // Repeating a route that just failed spends an attempt to learn nothing, so
+    // the second attempt runs on the second authored route under its own
+    // ceilings, and the agent is told rather than silently swapped.
+    const dispatched = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+    let command: string;
+    try {
+      const rows = dispatched
+        .prepare("SELECT canonical_json AS json FROM context_authority_state")
+        .all() as unknown as readonly { readonly json: string }[];
+      command = rows.map((row) => row.json).join("\n");
+    } finally {
+      dispatched.close();
+    }
+    expect(command).toContain('"routeIndex":1');
+    expect(command).toContain('"model":"gpt-5-mini"');
+    expect(command).toContain('"maxTurns":2');
+    expect(await promptPackText(scenario, outcome.dispatchId)).toContain("you are gpt-5-mini");
+  });
+
+  it("settles on the last route once the policy runs out of alternatives", async () => {
+    const scenario = await startScenario("route-settle", {
+      sensorCommand: "false",
+      attempts: 3,
+    });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+    const outcome = await advance(scenario);
+
+    // A policy with one route has no alternative to fall to, so the retry stays
+    // where it was rather than falling off the end of the list.
+    expect(outcome).toMatchObject({ kind: "retrying", attempt: 2 });
+    if (outcome.kind !== "retrying") throw new Error("expected a retry");
+    expect(await promptPackText(scenario, outcome.dispatchId)).not.toContain("you are");
+  });
+});

@@ -448,11 +448,13 @@ all change what an attempt actually sees.
 * [x] Make session scope durable across phases by declared agent identity and
   fresh per fan-out element by default. Replace the current strict-equality
   replay guard rather than extending it. **The resume decision takes a scope, and
-  `attempt` keeps the old guard as the default. D-033. The driver does not yet
-  record a binding per dispatch, so the scope is expressible and not yet
-  effective.**
-* [ ] Record session identity and turn position on dispatches, and record session
-  loss as an explicit degrading event rather than a silent restart.
+  `attempt` keeps the old guard as the default. D-033. The driver records a
+  binding per dispatch, keyed by a line of conversation, so the scope is now
+  effective. D-034.**
+* [x] Record session identity and turn position on dispatches, and record session
+  loss as an explicit degrading event rather than a silent restart. **A dropped
+  conversation surfaces as the fields that no longer match, rather than a
+  restart nobody sees.**
 * [ ] Widen the SDK port so `MessageOptions.mode` is expressible and retain the
   live session handle where steering can reach it.
 * [ ] Deliver live, queued, and abort-and-retry steering from the command line and
@@ -462,9 +464,11 @@ all change what an attempt actually sees.
 
 Acceptance:
 
-* [ ] One persona carries rejection context across phases, while two fan-out
-  elements receive distinct sessions.
-* [ ] Route exhaustion selects the next authored route and records why.
+* [x] One persona carries rejection context across phases, while two fan-out
+  elements receive distinct sessions. **Proven in `brief-scenarios.test.ts`, and
+  both tests were checked by breaking the code they cover.**
+* [x] Route exhaustion selects the next authored route and records why. **A retry
+  falls to the next route and settles on the last one. Proven by breaking it.**
 * [ ] A human steers a running agent mid-turn and history explains the resulting
   change of course.
 * [ ] A long run does not grow context without bound.

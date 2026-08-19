@@ -214,6 +214,20 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
   const role = registryValue<SnapshotAgentRole>(roleEntry);
   const modelPolicyEntry = registryEntry(snapshot.modelPolicies, role.modelPolicy);
   const modelPolicy = registryValue<SnapshotModelPolicy>(modelPolicyEntry);
+  // An attempt that failed on its route gains nothing by repeating it, so each
+  // retry falls to the next authored route. The last route is where retries
+  // settle: a policy that runs out of alternatives still has to run somewhere.
+  const routeIndex = Math.min(Math.max((input.attempt ?? 1) - 1, 0), modelPolicy.routes.length - 1);
+  const route = modelPolicy.routes[routeIndex];
+  if (route === undefined) throw new Error(`Model policy ${role.modelPolicy} declares no route`);
+  const previousRoute = routeIndex === 0 ? undefined : modelPolicy.routes[routeIndex - 1];
+  // The agent is told it changed model, because the same instruction can need
+  // different handling on a different one, and a silent swap reads as the run
+  // inexplicably changing its mind.
+  const routeChange =
+    previousRoute === undefined
+      ? undefined
+      : `${previousRoute.model} did not finish this work; you are ${route.model}`;
   const promptEntry = requiredPrompt(snapshot, role.prompt);
   const prompt = promptEntry;
 
@@ -346,7 +360,10 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
       // The same policy the broker judges completion by, so the generated
       // contract cannot promise the agent different terms.
       completionPolicy: taskNode.definition.completionPolicy,
-      priorRefusals: input.priorRefusals ?? [],
+      priorRefusals: [
+        ...(input.priorRefusals ?? []),
+        ...(routeChange === undefined ? [] : [routeChange]),
+      ],
       capabilities,
       budgets: executorBudgets,
     },
@@ -384,11 +401,9 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
     sha256,
   );
 
-  const route = modelPolicy.routes[0];
-  if (route === undefined) throw new Error(`Model policy ${role.modelPolicy} declares no route`);
   const routeSelection = createWorkerModelRouteSelection(
     {
-      routeIndex: 0,
+      routeIndex,
       provider: route.provider,
       model: route.model,
       maxTurns: route.maxTurns,
