@@ -549,7 +549,13 @@ Acceptance:
   asserted against the compiled document, so a value that is parsed and
   discarded fails the test.**
 * [ ] No consumer acceptance test has to write `WorkflowConfigurationDocument`
-  directly.
+  directly. **The reason one had to is gone. `no-credit-acceptance.test.ts` built
+  its document by hand because the authored surface could express neither two
+  named pieces of work in one phase nor worktree execution, and both are now
+  authorable through `items` and `execution`. What is left is mechanical: port
+  that test onto authored files. It is a refactor of a long acceptance rather
+  than a missing capability, and it changes no product behaviour, so it is
+  recorded as outstanding rather than done. D-044.**
 
 ## Phase 12: The portal earns its density
 
