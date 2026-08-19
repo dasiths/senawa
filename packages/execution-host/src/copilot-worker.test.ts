@@ -43,6 +43,7 @@ import {
 } from "@senawa/runtime";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  CopilotSdkMessageOptions,
   CopilotSdkPort,
   CopilotSdkResumeSessionConfig,
   CopilotSdkSessionConfig,
@@ -97,6 +98,36 @@ const OUTPUT_DECLARATION = Object.freeze({
 });
 
 describe("CopilotSerialWorkerAdapter", () => {
+  it("delivers a person's instruction to the agent working right now", async () => {
+    const sdk = new FakeSdkPort();
+    const worker = harness(sdk);
+    let steered: boolean | undefined;
+    sdk.onSend = async (config, session) => {
+      // Mid-turn is the only moment a live steering means anything: before it
+      // there is nobody to reach, and after it the turn is already spent.
+      steered = await worker.adapter.steer(worker.dispatch.dispatchId, "stop and read the schema");
+      await complete("completed")(config, session);
+    };
+
+    const result = await worker.adapter.run(worker.input);
+
+    expect(result.status).toBe("completed");
+    expect(steered).toBe(true);
+    const session = sdk.sessions.get(worker.dispatch.dispatchId);
+    expect(session?.delivered).toEqual([{ prompt: "stop and read the schema", mode: "interrupt" }]);
+  });
+
+  it("says so rather than pretending when no agent is working", async () => {
+    const sdk = new FakeSdkPort();
+    const worker = harness(sdk);
+    sdk.onSend = complete("completed");
+    await worker.adapter.run(worker.input);
+
+    // The turn is over and the session is gone. Reporting a delivery here would
+    // let a person believe they had redirected a run that had already moved on.
+    await expect(worker.adapter.steer(worker.dispatch.dispatchId, "too late")).resolves.toBe(false);
+  });
+
   it("resumes by dispatch identity, creates only when absent, and configures exact limits", async () => {
     const sdk = new FakeSdkPort();
     const first = harness(sdk);
@@ -1101,6 +1132,7 @@ class FakeSdkPort implements CopilotSdkPort {
 class FakeSession implements CopilotSdkSessionPort {
   abortCalls = 0;
   disconnectCalls = 0;
+  readonly delivered: { prompt: string; mode: string }[] = [];
 
   constructor(
     readonly sessionId: string,
@@ -1110,6 +1142,10 @@ class FakeSession implements CopilotSdkSessionPort {
 
   async sendAndWait(prompt: string, _timeoutMs: number): Promise<void> {
     await this.sdk.onSend?.(this.config, this, prompt);
+  }
+
+  async send(prompt: string, options: CopilotSdkMessageOptions): Promise<void> {
+    this.delivered.push({ prompt, mode: options.mode });
   }
 
   async abort(): Promise<void> {

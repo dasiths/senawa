@@ -455,8 +455,10 @@ all change what an attempt actually sees.
   loss as an explicit degrading event rather than a silent restart. **A dropped
   conversation surfaces as the fields that no longer match, rather than a
   restart nobody sees.**
-* [ ] Widen the SDK port so `MessageOptions.mode` is expressible and retain the
-  live session handle where steering can reach it.
+* [x] Widen the SDK port so `MessageOptions.mode` is expressible and retain the
+  live session handle where steering can reach it. **`send(prompt, { mode })` is
+  optional on the port: a port that cannot interrupt falls back to delivering at
+  the end of the turn rather than pretending the agent was reached.**
 * [x] Deliver live, queued, and abort-and-retry steering from the command line and
   portal, scoped to one running agent and recorded durably before delivery.
   **`senawa steer` records the instruction, actor, and delivery before anything

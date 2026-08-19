@@ -76,9 +76,29 @@ export interface CopilotSdkResumeSessionConfig extends CopilotSdkSessionConfig {
   readonly continuePendingWork: false;
 }
 
+/**
+ * How a message joins a session that may already be working.
+ *
+ * `interrupt` reaches the agent during the turn it is taking. `enqueue` waits
+ * for the turn to end. The distinction is the port's, not senawa's: a person's
+ * steering says when they want to be heard, and this is how that request is
+ * expressed to the SDK.
+ */
+export interface CopilotSdkMessageOptions {
+  readonly mode: "interrupt" | "enqueue";
+}
+
 export interface CopilotSdkSessionPort {
   readonly sessionId: string;
   sendAndWait(prompt: string, timeoutMs: number): Promise<void>;
+  /**
+   * Delivers a message to a session that is already working.
+   *
+   * Optional because a port that cannot interrupt is still a usable port: a run
+   * falls back to delivering the instruction when the turn ends, rather than
+   * pretending the agent was reached.
+   */
+  send?(prompt: string, options: CopilotSdkMessageOptions): Promise<void>;
   abort(): Promise<void>;
   disconnect(): Promise<void>;
 }

@@ -109,6 +109,27 @@ export class CopilotSerialWorkerAdapter {
   readonly sdk: CopilotSdkPort;
   readonly sha256: Sha256;
   #activeDispatchId: string | undefined;
+  #activeSession: CopilotSdkSessionPort | undefined;
+
+  /**
+   * Delivers a person's instruction to the agent that is working right now.
+   *
+   * Returns false when nobody is working, when the dispatch asked for is not the
+   * one running, or when the port cannot interrupt. A caller that is told the
+   * message did not land can queue it for the end of the turn, which is why this
+   * reports rather than throws.
+   */
+  async steer(dispatchId: string, instruction: string): Promise<boolean> {
+    const session = this.#activeSession;
+    if (session === undefined || this.#activeDispatchId !== dispatchId) return false;
+    if (session.send === undefined) return false;
+    try {
+      await session.send(instruction, { mode: "interrupt" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   constructor(sdk: CopilotSdkPort, sha256: Sha256) {
     this.sdk = sdk;
@@ -188,6 +209,7 @@ export class CopilotSerialWorkerAdapter {
         throw new TypeError("Copilot SDK returned a session outside exact resume authority");
       }
       scope.sessionId = session.sessionId;
+      this.#activeSession = session;
       const outcome = await sendWithCancellation(
         session,
         validated.prompt,
@@ -216,6 +238,7 @@ export class CopilotSerialWorkerAdapter {
       }
       await Promise.allSettled([...scope.pending]);
       this.#activeDispatchId = undefined;
+      this.#activeSession = undefined;
       scope.note(`session ended ${status}`);
     }
     const base = {
