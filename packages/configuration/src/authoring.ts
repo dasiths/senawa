@@ -307,6 +307,8 @@ interface AuthoredPhase {
   readonly input?: string;
   readonly gates: readonly string[];
   readonly approve: boolean;
+  /** Named pieces of work this phase runs, each with its own input. */
+  readonly items?: readonly { readonly key: string; readonly input: unknown }[];
   readonly forEach?: {
     readonly phase: string;
     readonly field: string;
@@ -574,6 +576,45 @@ function readGates(
  * validates the selected array on its own, and no schema for it can be
  * conjured from the one that describes a single item.
  */
+/**
+ * Reads the named pieces of work a phase runs.
+ *
+ * `forEach` computes its members from an earlier phase's output. `items` names
+ * them in the workflow, for work an author already knows the shape of and wants
+ * to see written down.
+ */
+function readItems(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+): readonly { readonly key: string; readonly input: unknown }[] | undefined {
+  const declared = raw.items;
+  if (declared === undefined) return undefined;
+  if (!Array.isArray(declared) || declared.length === 0) {
+    add(collector, "invalid-field", path, `${pointer}/items`, "Items must be a non-empty list");
+    return undefined;
+  }
+  const items: { readonly key: string; readonly input: unknown }[] = [];
+  const seen = new Set<string>();
+  for (const [index, entry] of declared.entries()) {
+    const at = `${pointer}/items/${index}`;
+    if (!isRecord(entry)) {
+      add(collector, "invalid-field", path, at, "Item must be a mapping");
+      continue;
+    }
+    const key = requiredString(collector, path, at, entry, "key");
+    if (key === undefined) continue;
+    if (seen.has(key)) {
+      add(collector, "invalid-field", path, `${at}/key`, `Duplicate item ${key}`);
+      continue;
+    }
+    seen.add(key);
+    items.push({ key, input: entry.input ?? null });
+  }
+  return items.length === 0 ? undefined : items;
+}
+
 function readForEach(
   collector: Collector,
   path: string,
@@ -1012,6 +1053,16 @@ function readPhases(
       );
     }
     const forEach = readForEach(collector, path, pointer, raw, needs);
+    const items = readItems(collector, path, pointer, raw);
+    if (items !== undefined && forEach !== undefined) {
+      add(
+        collector,
+        "invalid-field",
+        path,
+        `${pointer}/items`,
+        "Declare either items or forEach, not both",
+      );
+    }
     // v1 runs members as tasks beneath one phase, so a member cannot itself fan
     // out. Saying so here beats a run that fails once it is already going.
     if (forEach !== undefined && fanOutPhases.has(forEach.phase)) {
@@ -1047,6 +1098,7 @@ function readPhases(
       gates,
       approve: raw.approve === true || isRecord(raw.approve),
       ...(forEach === undefined ? {} : { forEach }),
+      ...(items === undefined ? {} : { items }),
       onFailure,
       completionEvidence: readCompletionEvidence(collector, path, pointer, raw),
       completionEvidenceFrom: readCompletionEvidenceFrom(
@@ -1145,6 +1197,7 @@ const PHASE_FIELDS = new Set([
   "gates",
   "approve",
   "forEach",
+  "items",
   "collection",
   "onFailure",
   "completionEvidence",
@@ -1374,24 +1427,49 @@ function lowerPhase(
             forEach: `${phase.name}-items`,
             template: `${phase.name}-work`,
           }
-        : {
-            kind: "agent",
-            role: phase.agent,
-            budgets: AGENT_BUDGETS,
-            resumeAcrossAttempts: phase.session !== "element",
-            completionPolicy: {
-              criteria: [
-                { key: `${phase.name}-produced`, generation: 1, required: true, input: null },
-              ],
-              completionEvidencePolicy: {
-                mode: phase.completionEvidence.mode,
-                requirements: phase.completionEvidence.require.map((requirement) => ({
-                  kind: requirement.kind,
-                  minimumCount: requirement.min,
-                })),
+        : phase.items !== undefined
+          ? {
+              kind: "task-set",
+              work: phase.items.map((item) => ({
+                key: item.key,
+                generation: 1,
+                role: phase.agent,
+                budgets: AGENT_BUDGETS,
+                dependsOn: [],
+                inputSchema: schemaKey(phase.input ?? workflowInput),
+                input: item.input,
+                completionPolicy: {
+                  criteria: [
+                    { key: `${item.key}-produced`, generation: 1, required: true, input: null },
+                  ],
+                  completionEvidencePolicy: {
+                    mode: phase.completionEvidence.mode,
+                    requirements: phase.completionEvidence.require.map((requirement) => ({
+                      kind: requirement.kind,
+                      minimumCount: requirement.min,
+                    })),
+                  },
+                },
+              })),
+            }
+          : {
+              kind: "agent",
+              role: phase.agent,
+              budgets: AGENT_BUDGETS,
+              resumeAcrossAttempts: phase.session !== "element",
+              completionPolicy: {
+                criteria: [
+                  { key: `${phase.name}-produced`, generation: 1, required: true, input: null },
+                ],
+                completionEvidencePolicy: {
+                  mode: phase.completionEvidence.mode,
+                  requirements: phase.completionEvidence.require.map((requirement) => ({
+                    kind: requirement.kind,
+                    minimumCount: requirement.min,
+                  })),
+                },
               },
             },
-          },
     outputs: [
       {
         key: phase.name,

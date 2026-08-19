@@ -1058,3 +1058,28 @@ describe("where agents work and how many write at once", () => {
     expect(diagnostics.map(({ message }) => message).join(" ")).toContain("workspce");
   });
 });
+
+describe("naming the pieces of work a phase runs", () => {
+  it("lowers authored items to one task each", async () => {
+    const snapshot = (await compileSnapshot({ items: true })) as {
+      readonly phaseDataflow: readonly { readonly key: string; readonly value: unknown }[];
+    };
+    const phase = snapshot.phaseDataflow.find((entry) => entry.key === "define")?.value as {
+      readonly executor: {
+        readonly kind: string;
+        readonly work: readonly { readonly key: string }[];
+      };
+    };
+
+    // Two writers in one phase was expressible in the compiled document and not
+    // in the authored one, so every acceptance that needed it wrote the compiled
+    // document by hand.
+    expect(phase.executor.kind).toBe("task-set");
+    expect(phase.executor.work.map(({ key }) => key)).toEqual(["alpha", "beta"]);
+  });
+
+  it("refuses a phase that both names its work and computes it", async () => {
+    const diagnostics = await compileScenario({ itemsAndForEach: true, fanOut: "complete" });
+    expect(diagnostics.map(({ message }) => message).join(" ")).toContain("not both");
+  });
+});

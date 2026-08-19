@@ -77,6 +77,7 @@ A phase that states one overrides the default for itself alone.
 | `onFailure` | No | `continue` or `fail-fast` | `continue` |
 | `forEach` | No | `phase.field`, naming an upstream collection | No fan-out |
 | `collection` | With `forEach` | Schema the selected array satisfies | None |
+| `items` | No | Named pieces of work this phase runs | One agent turn |
 | `completionEvidence` | No | The expanded form below | Collects none |
 | `completionEvidenceFrom` | No | The expanded form below | Reads none |
 
@@ -199,6 +200,28 @@ being swapped silently. Once the list runs out, retries stay on the last route.
 An agent's prompt describes the work and never mentions senawa. The operating
 contract that tells an agent how to finish is generated at dispatch and appended
 after the prompt; see [the CLI reference](cli.md#the-agent-channel).
+
+### items
+
+```yaml
+  - name: implement
+    agent: builder
+    output: schemas/change.schema.json
+    items:
+      - key: api
+        input: { instruction: "Add the endpoint" }
+      - key: docs
+        input: { instruction: "Document the endpoint" }
+```
+
+`items` names the pieces of work a phase runs when you already know what they
+are. `forEach` computes them from an earlier phase's output instead. A phase
+declares one or the other, never both: work that is both named and computed has
+no answer for which list is right.
+
+Each item becomes its own task with its own input, so isolating them from each
+other needs `execution.workspace: worktree`; see
+[worktree mode](../guide/worktree-mode.md).
 
 ### session
 

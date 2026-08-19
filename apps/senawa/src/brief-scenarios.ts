@@ -90,6 +90,10 @@ export interface ScenarioOptions {
   readonly execution?: string;
   /** The model every agent runs on. Only a live run needs one that exists. */
   readonly model?: string;
+  /** Names the pieces of work the first phase runs, instead of one agent turn. */
+  readonly items?: boolean;
+  /** Names work and computes it on the same phase, which has to be refused. */
+  readonly itemsAndForEach?: boolean;
 }
 
 export interface Scenario {
@@ -512,11 +516,20 @@ async function authoredProject(options: ScenarioOptions): Promise<string> {
 }
 
 function fanOutPhase(options: ScenarioOptions): string {
-  if (options.fanOut === undefined && options.nestedFanOut !== true) return "";
+  if (
+    options.fanOut === undefined &&
+    options.nestedFanOut !== true &&
+    options.itemsAndForEach !== true
+  )
+    return "";
   const first = `
   - name: implement
     agent: verifier
-    needs: [define]
+    needs: [define]${
+      options.itemsAndForEach === true
+        ? "\n    items:\n      - key: alpha\n        input: { instruction: write alpha }"
+        : ""
+    }
     forEach: define.tasks
     collection: schemas/tasks.schema.json
     input: schemas/task.schema.json
@@ -567,7 +580,11 @@ name: delivery
 input: schemas/request.schema.json${options.execution === undefined ? "" : `\n${options.execution}`}
 phases:
   - name: define
-    agent: definer
+    agent: definer${
+      options.items === true
+        ? "\n    items:\n      - key: alpha\n        input: { instruction: write alpha }\n      - key: beta\n        input: { instruction: write beta }"
+        : ""
+    }
     output: ${
       options.confidentialOutput === true
         ? "\n      schema: schemas/definition.schema.json\n      sensitivity: confidential"
