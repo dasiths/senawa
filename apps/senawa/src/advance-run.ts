@@ -416,8 +416,22 @@ async function step(
       };
     }
   }
+  // A fan-out phase closes over every member, so the assessments have to come
+  // from every member's completion rather than only the one this dispatch
+  // carried. Taking one dispatch's worth leaves the candidate covering tasks it
+  // has no assessment for, which is refused at the last step of a run that has
+  // already done all its work.
+  const phaseDispatchIds = new Set(
+    state.dispatches
+      .filter(
+        (candidate) =>
+          candidate.runId === input.runId &&
+          phaseKeyByTask(snapshot, candidate.task.taskId) === phaseKey,
+      )
+      .map((candidate) => String(candidate.dispatchId)),
+  );
   const assessments = state.completionOutbox
-    .filter((entry) => entry.fact.dispatchId === dispatchId)
+    .filter((entry) => phaseDispatchIds.has(String(entry.fact.dispatchId)))
     .map((entry) => ({
       assessment: entry.fact.assessment,
       assessmentDigest: digestAccountingAssessment(

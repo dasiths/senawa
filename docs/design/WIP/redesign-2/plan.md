@@ -401,7 +401,15 @@ Acceptance:
   materialise as tasks under the fan-out phase and run one at a time. D-025's
   deviation stands: per-member gates and approval still need the phase model.**
 * [ ] Give each member its own operating contract, output, evidence policy,
-  gates, approval, attempt policy, escalation, and history.
+  gates, approval, attempt policy, escalation, and history. **F-017 marks where
+  this stops being optional. Every member now runs (D-040), but a fan-out with
+  more than one member cannot close: a phase attempt binds one input, so each
+  member takes its own attempt ordinal, and the phase candidate then covers
+  tasks whose references belong to different attempts. Closing gathers
+  assessments from every member rather than one dispatch, which was needed and
+  is not sufficient. The remaining refusal is the candidate task-set coverage
+  check, and it is the phase model itself: a phase is one unit of work with one
+  attempt and one input, and a member needs all three of its own.**
 * [x] Honour per-phase failure policy: wait, proceed with passed members, or fail
   outright. **Partial: the authored policy now reaches the run. The authority
   holds one policy per run, so a run any phase wants stopped is stopped. F-013.**
