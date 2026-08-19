@@ -70,7 +70,11 @@ const sha256: Sha256 = {
 const GRANT_TOKEN = "A".repeat(43);
 const ALL_CAPABILITIES = Object.freeze(Object.values(WORKER_CAPABILITIES));
 // Completion carries its outputs, so the base harness still offers every tool.
-const GRANTED_WORKER_TOOL_NAMES = COPILOT_WORKER_TOOL_NAMES;
+// The output-schema tool exists only when the phase declares an output for it
+// to describe, so it is absent from a dispatch that declares none.
+const GRANTED_WORKER_TOOL_NAMES = COPILOT_WORKER_TOOL_NAMES.filter(
+  (name) => name !== "senawa_output_schema",
+);
 const OUTPUT_SCHEMA = canonicalValue({
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: "https://senawa.test/worker/verification-output",
@@ -209,7 +213,7 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect(required(sdk.createCalls.at(-1)).sessionId).toBe(fixture.dispatch.dispatchId);
   });
 
-  it("exposes only six capability and grant filtered tools with closed schemas", async () => {
+  it("exposes only capability and grant filtered tools with closed schemas", async () => {
     const sdk = new FakeSdkPort();
     const all = harness(sdk);
     await all.adapter.run(all.input);
@@ -245,6 +249,25 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect(required(filteredSdk.createCalls[0]).tools.map(({ name }) => name)).toEqual([
       "senawa_complete",
     ]);
+  });
+
+  it("hands an agent the schema its output will be held to", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk, { phaseOutput: true });
+    let read: CopilotSdkToolResult | undefined;
+    sdk.onSend = async (config, session) => {
+      // The operating contract tells an agent to ask senawa for its output
+      // schema rather than guess. There was no tool for it, so an agent that
+      // followed the contract asked a person instead and stopped the run to
+      // wait for an answer senawa already had.
+      const schema = required(config.tools.find(({ name }) => name === "senawa_output_schema"));
+      read = await invoke(schema, session.sessionId, "schema", {});
+    };
+
+    await fixture.adapter.run(fixture.input);
+
+    expect(read?.resultType).toBe("success");
+    expect(JSON.stringify(read)).toContain("verification");
   });
 
   it("adds only four dispatch-bound workspace tools while retaining empty SDK mode", async () => {
@@ -554,7 +577,7 @@ describe("CopilotSerialWorkerAdapter", () => {
           "submission",
           fixture.dispatch.dispatchId,
           `call-${index + 2}`,
-          COPILOT_WORKER_TOOL_NAMES[index + 1] as string,
+          GRANTED_WORKER_TOOL_NAMES[index + 1] as string,
         ),
         repositoryId: fixture.dispatch.repositoryId,
         runId: fixture.dispatch.runId,

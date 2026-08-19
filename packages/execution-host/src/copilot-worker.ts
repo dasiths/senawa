@@ -52,6 +52,7 @@ export const COPILOT_WORKER_TOOL_NAMES = Object.freeze([
   "propose_asset",
   "record_discovery",
   "propose_amendment",
+  "senawa_output_schema",
   "senawa_complete",
 ] as const);
 export const COPILOT_WORKSPACE_TOOL_NAMES = Object.freeze([
@@ -530,11 +531,52 @@ function createTools(
         if (contract !== undefined) slots.push({ declaration, contract });
       }
     }
+    if (slots.length > 0) tools.push(outputSchemaTool(scope, Object.freeze(slots)));
     tools.push(
       completeTool(input, context, dispatch, selection, sha256, state, scope, Object.freeze(slots)),
     );
   }
   return Object.freeze(tools);
+}
+
+/**
+ * The shape senawa will hold this phase's output to.
+ *
+ * The operating contract tells an agent to ask senawa for its output schema
+ * rather than guessing. Without this there was nothing to ask, so an agent that
+ * followed the contract put the question to a person and stopped the run to
+ * wait for an answer senawa already had.
+ */
+function outputSchemaTool(scope: RunScope, slots: readonly PhaseOutputSlot[]): CopilotSdkTool {
+  return tool(
+    "senawa_output_schema",
+    `Read the JSON Schema senawa will validate a declared output against: ${slots
+      .map((slot) => String(slot.declaration.outputName))
+      .join(", ")}.`,
+    OUTPUT_SCHEMA_SCHEMA,
+    scope,
+    async (args) => {
+      const value = exactObject(args, [], ["output"]);
+      const wanted = value.output === undefined ? undefined : String(value.output);
+      const matching =
+        wanted === undefined
+          ? slots
+          : slots.filter((slot) => String(slot.declaration.outputName) === wanted);
+      if (matching.length === 0) return failure("unknown-output");
+      return success({
+        outputs: matching.map((slot) => ({
+          name: String(slot.declaration.outputName),
+          schemaKey: String(slot.declaration.schemaKey),
+          maxBytes: slot.declaration.maxBytes,
+          schema: slot.contract.schema,
+          referencedSchemas: slot.contract.externalSchemas.map((external) => ({
+            id: external.id,
+            schema: external.schema,
+          })),
+        })),
+      });
+    },
+  );
 }
 
 function workspaceFileTools(files: WorkspaceFilePort, scope: RunScope): readonly CopilotSdkTool[] {
@@ -1487,6 +1529,7 @@ const READ_SCHEMA = Object.freeze({
 });
 const WORKSPACE_PATH_SCHEMA = stringSchema(PROTOCOL_LIMITS.maxStringLength);
 const WORKSPACE_CONTENT_SCHEMA = stringSchema(WORKSPACE_FILE_LIMITS.maxFileBytes, 0);
+const OUTPUT_SCHEMA_SCHEMA = closedObject({ output: { type: "string", maxLength: 128 } }, []);
 const WORKSPACE_LIST_SCHEMA = closedObject(
   {
     path: WORKSPACE_PATH_SCHEMA,

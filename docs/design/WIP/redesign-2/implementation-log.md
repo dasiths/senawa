@@ -3105,3 +3105,28 @@ identity, and this — are all the same shape: the phase model was built and
 tested one attempt at a time, and every mechanism that records a phase's
 decision assumes it happens once. Retrying is authored, documented, and covered
 by tests that stop at the retry.
+
+## F-030: the contract told an agent to ask senawa something it could not ask
+
+The example's planner stopped the run to ask a person: "What is the schema for
+the `plan` output, specifically the structure and required fields for each task
+in the tasks array?"
+
+The operating contract has said "Ask senawa for an output schema rather than
+guessing its shape" from the beginning. The SDK worker's tools were
+`senawa_read_asset`, `submit_question`, `propose_asset`, `record_discovery`,
+`propose_amendment`, `senawa_complete`, and four workspace tools. None of them
+answers that. `senawa worker output-schema` exists, but that is the CLI channel,
+and an agent running under the SDK has no way to reach it.
+
+So the contract named a capability the agent did not have, and an agent that
+followed the contract did the only other thing available: it asked a person, and
+the run stopped waiting for an answer senawa was holding the whole time.
+
+`senawa_output_schema` returns each declared output's schema and the schemas it
+references, and is offered only when the phase declares an output for it to
+describe. The contract's sentence is now true.
+
+Worth noting how this was found: not by a test, but by reading what a real agent
+asked a real person. The instruction and the tool list were each correct in
+isolation and nothing compared them.
