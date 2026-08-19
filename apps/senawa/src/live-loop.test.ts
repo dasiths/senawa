@@ -21,7 +21,7 @@ afterEach(disposeScenarios);
 
 describe.skipIf(!live)("a real agent drives an authored phase", () => {
   it(
-    "completes a phase it was never told how to complete",
+    "uses a protocol it was never told, from the contract alone",
     async () => {
       if (process.env.SENAWA_COPILOT_ACKNOWLEDGE_COST_AND_DATA !== "1") {
         throw new Error("Live Copilot probe requires explicit cost and data acknowledgement");
@@ -73,7 +73,19 @@ describe.skipIf(!live)("a real agent drives an authored phase", () => {
           timeoutMs,
         });
 
-        expect(result.status).toBe("completed");
+        // The claim is that a real agent finds the protocol from the generated
+        // contract alone, with no senawa text in the authored prompt. Everything
+        // it sent has to be well formed and accepted.
+        expect(result.submissions).not.toEqual([]);
+        expect(result.submissions.map(({ status }) => status)).toEqual(
+          result.submissions.map(() => "accepted"),
+        );
+
+        // Whether it finishes or stops to ask is the model's call on an
+        // assignment that is deliberately thin. Asserting it never asks would
+        // make this test a coin toss; `live-run.test.ts` proves the finish on an
+        // assignment that can actually be finished.
+        expect(["completed", "missing-completion"]).toContain(result.status);
       } finally {
         if (port?.clientOwnership === "port-created") {
           try {
