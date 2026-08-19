@@ -6,6 +6,7 @@ import {
   type ConfigurationSnapshot,
   doctorWorkflowConfiguration,
   listAuthoredPromptPaths,
+  listAuthoredSchemaPaths,
   lowerAuthoredWorkflow,
 } from "@senawa/configuration";
 import type { Sha256 } from "@senawa/kernel";
@@ -69,11 +70,31 @@ export async function loadAuthoredWorkflow(
     }
   }
 
+  const workflowText = documents.get("workflow.yaml") ?? "";
+  const schemas = new Map<string, string>();
+  for (const path of listAuthoredSchemaPaths({ path: "workflow.yaml", text: workflowText })) {
+    try {
+      schemas.set(path, decoder.decode(await resources.read({ kind: "schema", path, maxBytes })));
+    } catch (error) {
+      return {
+        diagnostics: [
+          {
+            code: "resource-read-failed",
+            locator: "workflow.yaml",
+            pointer: "",
+            message: `Could not read schema ${path}: ${error instanceof Error ? error.message : "unknown"}`,
+          },
+        ],
+      };
+    }
+  }
+
   const input: AuthoredWorkflowInput = {
     agents: { path: "agents.yaml", text: agentsText },
-    workflow: { path: "workflow.yaml", text: documents.get("workflow.yaml") ?? "" },
+    workflow: { path: "workflow.yaml", text: workflowText },
     sensors: { path: "sensors.yaml", text: documents.get("sensors.yaml") ?? "" },
     prompts,
+    schemas,
   };
   const lowered = lowerAuthoredWorkflow(input);
   if (lowered.document === undefined || lowered.diagnostics.length > 0) {

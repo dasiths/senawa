@@ -30,6 +30,16 @@ import {
 import { listArtifacts } from "./inspect.js";
 import { runGates } from "./run-gates.js";
 
+interface SnapshotPhaseInput {
+  readonly key: string;
+  readonly input: {
+    readonly mappings: readonly {
+      readonly key: string;
+      readonly destinationPointer: string;
+    }[];
+  };
+}
+
 afterEach(disposeScenarios);
 
 function advance(scenario: Scenario) {
@@ -341,6 +351,27 @@ describe("what an author can state", () => {
     expect(found).toContain('"maxMillidollars":250');
     expect(found).toContain('"model":"gpt-5"');
     expect(found).not.toContain("gpt-5-mini");
+  });
+
+  it("binds a declared phase input to the sources its property names", async () => {
+    const loaded = await loadAuthoredWorkflow(process.cwd(), dependencies.sha256);
+    const snapshot = loaded.snapshot;
+    if (snapshot === undefined) throw new Error("the repository tree does not compile");
+
+    const plan = snapshot.phaseDataflow
+      .map((entry) => entry.value as unknown as SnapshotPhaseInput)
+      .find((phase) => phase.key === "plan");
+    if (plan === undefined) throw new Error("the repository declares no plan phase");
+
+    // The repository's plan phase reads two upstreams and names them by their
+    // output schemas. Lowering used to key the merge on the phase names, which
+    // produced a value the declared schema refuses, and it refused it at
+    // dispatch rather than at compile time.
+    expect(plan.input.mappings.map(({ key }) => key).sort()).toEqual(["definition", "research"]);
+    expect(plan.input.mappings.map(({ destinationPointer }) => destinationPointer).sort()).toEqual([
+      "/definition",
+      "/research",
+    ]);
   });
 
   it("lowers ordered model routes with their per-route limits", async () => {

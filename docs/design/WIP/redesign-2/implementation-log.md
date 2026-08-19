@@ -2971,3 +2971,35 @@ exit, and the supervisor is otherwise woken only from inside its own process, so
 it slept through everything another process asked of it until it next started.
 Confirmed live: answering a question and advancing now runs the agent without a
 service restart.
+
+## F-026: a declared phase input could not name what it read
+
+The example's plan phase declares `plan-input`, which is `{request, research}`,
+and the run refused to dispatch it: `mapped phase input does not satisfy schema
+plan-input`.
+
+Lowering derived a phase's mappings from `needs` alone. One upstream landed at
+the root whatever the phase declared, more than one landed under a member named
+for the *phase*, and the workflow input was unreachable to any phase with an
+upstream. So a declared input schema could name only the phase names of its
+upstreams, could never read the request the run was started with, and was
+checked against none of that until the moment the phase was dispatched.
+
+The repository's own workflow shows the same thing: `plan-input` names
+`definition` and `research`, where `definition` is the *output schema* of the
+phase called `define`. Lowering produced `{define, research}`, which that schema
+refuses. Nothing drives the repository's workflow end to end, so it compiled
+clean and would have failed on its second phase.
+
+Lowering now reads the declared input schema's property names, which is what the
+author is saying they want, and binds each one: a property named for an upstream
+phase or for that phase's output is that output; a property the workflow input
+declares is that property of the workflow input. A fan-out phase is excluded,
+because there `input:` is the shape of one element rather than a merge.
+
+What this does not do: `verify-input` in the repository's workflow names
+`completionEvidence`, which is assembled from a declared evidence view rather
+than mapped from a source. Lowering leaves such a property unbound rather than
+refusing it, so that phase is still undispatchable. The mapping model has no way
+to express "this member comes from the evidence view", and inventing one from
+here would be guessing. It is the next thing to fix in this area.

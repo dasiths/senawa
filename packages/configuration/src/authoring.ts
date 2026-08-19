@@ -16,6 +16,13 @@ export interface AuthoredWorkflowInput {
   readonly sensors: AuthoredSource;
   /** Prompt template text by the path an agent declares, used to derive input paths. */
   readonly prompts: ReadonlyMap<string, string>;
+  /**
+   * Schema text by the path a phase declares.
+   *
+   * A phase that declares its own input names what it reads by property, and
+   * the binding cannot be derived without knowing those names.
+   */
+  readonly schemas?: ReadonlyMap<string, string>;
 }
 
 export interface AuthoredLoweringResult {
@@ -269,7 +276,7 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
         },
       }))
       .sort((left, right) => compare(left.key, right.key)),
-    phases: phases.map((phase) => lowerPhase(phase, phases, workflowInput)),
+    phases: phases.map((phase) => lowerPhase(collector, input, phase, phases, workflowInput)),
   });
 
   return { diagnostics: sortDiagnostics(collector.diagnostics), document };
@@ -1385,7 +1392,108 @@ function readCompletionEvidence(
   return { mode, require };
 }
 
+/**
+ * What a phase reads, derived from the property names its input schema declares.
+ *
+ * A phase that declares its own input is saying what it merges and under which
+ * names. A property named for a phase it needs is that phase's output;
+ * anything else is the same-named property of the workflow input. Nothing is
+ * guessed: a property that matches neither is refused here rather than at the
+ * moment the phase is dispatched, which is where it used to surface.
+ */
+/**
+ * Lists the schema documents lowering needs to read to bind a phase's input.
+ *
+ * A phase that declares its own input names what it merges by property, so the
+ * property names have to be read before the mapping can be derived.
+ */
+export function listAuthoredSchemaPaths(source: AuthoredSource): readonly string[] {
+  const collector: Collector = { diagnostics: [] };
+  const workflow = parseYaml(collector, source);
+  if (!isRecord(workflow)) return Object.freeze([]);
+  const paths = new Set<string>();
+  if (typeof workflow.input === "string") paths.add(workflow.input);
+  const phases = Array.isArray(workflow.phases) ? workflow.phases : [];
+  for (const phase of phases) {
+    if (isRecord(phase) && typeof phase.input === "string") paths.add(phase.input);
+  }
+  return Object.freeze([...paths].sort(compare));
+}
+
+function declaredInputMappings(
+  collector: Collector,
+  source: AuthoredWorkflowInput,
+  phase: AuthoredPhase,
+  upstream: readonly AuthoredPhase[],
+  workflowInput: string,
+): readonly unknown[] {
+  const properties = schemaProperties(source, phase.input ?? "");
+  if (properties === undefined) {
+    // Without the schema text the old behaviour is the only safe one, and a
+    // phase that reads more than one source already had to declare a schema.
+    return upstream.map((need) => ({
+      key: need.name,
+      source: { kind: "phase-output", phase: need.name, output: need.name, pointer: "" },
+      destinationPointer: upstream.length === 1 ? "" : `/${need.name}`,
+    }));
+  }
+  const workflowProperties = schemaProperties(source, workflowInput) ?? [];
+  const mappings: unknown[] = [];
+  for (const property of properties) {
+    const need = upstream.find(
+      ({ name, output }) => name === property || schemaKey(output) === property,
+    );
+    if (need !== undefined) {
+      mappings.push({
+        key: property,
+        source: { kind: "phase-output", phase: need.name, output: need.name, pointer: "" },
+        destinationPointer: `/${property}`,
+      });
+      continue;
+    }
+    if (workflowProperties.includes(property)) {
+      mappings.push({
+        key: property,
+        source: { kind: "workflow-input", pointer: `/${property}` },
+        destinationPointer: `/${property}`,
+      });
+    }
+    // A property nothing here provides is left unbound rather than refused: a
+    // declared input also carries an assembled completion-evidence view, which
+    // is not a mapping.
+  }
+  if (mappings.length === 0) {
+    add(
+      collector,
+      "invalid-field",
+      source.workflow.path,
+      `/phases/${phase.name}/input`,
+      `Input schema ${phase.input} names no property any source provides`,
+    );
+  }
+  return mappings;
+}
+
+/** The property names a declared object schema names, or undefined if it cannot be read. */
+function schemaProperties(
+  source: AuthoredWorkflowInput,
+  path: string,
+): readonly string[] | undefined {
+  const text = source.schemas?.get(path);
+  if (text === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.properties)) return undefined;
+  return Object.keys(parsed.properties).sort(compare);
+}
+
 function lowerPhase(
+  collector: Collector,
+  source: AuthoredWorkflowInput,
   phase: AuthoredPhase,
   phases: readonly AuthoredPhase[],
   workflowInput: string,
@@ -1399,22 +1507,26 @@ function lowerPhase(
       : upstream.length === 1 && upstream[0] !== undefined
         ? schemaKey(upstream[0].output)
         : schemaKey(workflowInput);
-  // Mappings are the pointer pairs an author writes today. Each upstream output
-  // lands under a member named for its phase; a root phase reads the workflow
-  // input whole.
   const mappings =
-    upstream.length === 0
-      ? [{ key: "input", source: { kind: "workflow-input", pointer: "" }, destinationPointer: "" }]
-      : upstream.map((need) => ({
-          key: need.name,
-          source: {
-            kind: "phase-output",
-            phase: need.name,
-            output: need.name,
-            pointer: "",
-          },
-          destinationPointer: upstream.length === 1 ? "" : `/${need.name}`,
-        }));
+    // A fan-out phase's `input:` is the shape of one element, and a member
+    // reads its element rather than a merge, so it is not a binding contract.
+    phase.input === undefined || phase.forEach !== undefined
+      ? // With no declared input a phase reads one thing whole: the workflow
+        // input if it is a root, otherwise the single output it needs.
+        upstream.length === 0
+        ? [
+            {
+              key: "input",
+              source: { kind: "workflow-input", pointer: "" },
+              destinationPointer: "",
+            },
+          ]
+        : upstream.map((need) => ({
+            key: need.name,
+            source: { kind: "phase-output", phase: need.name, output: need.name, pointer: "" },
+            destinationPointer: upstream.length === 1 ? "" : `/${need.name}`,
+          }))
+      : declaredInputMappings(collector, source, phase, upstream, workflowInput);
   return {
     key: phase.name,
     generation: 1,
