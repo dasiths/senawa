@@ -839,7 +839,16 @@ class WorkspaceSdkPool {
     for (const sessionId of expectedSessionIds) {
       let present = false;
       for (const sdk of sdks) {
-        if (await sdk.sessionMetadataExists(sessionId)) {
+        // A client that is not connected cannot answer, and asking it must not
+        // end the supervisor cycle. An unanswerable root reports the session as
+        // missing, which is what a degraded reading is for.
+        let exists = false;
+        try {
+          exists = (await sdk.sessionMetadataExists(sessionId)) === true;
+        } catch {
+          exists = false;
+        }
+        if (exists) {
           present = true;
           break;
         }
