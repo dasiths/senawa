@@ -430,8 +430,12 @@ Acceptance:
   to close a phase most of whose members had never been dispatched. Each member
   now binds its own phase attempt. D-040.**
 * [ ] Three failing members do not block the remaining seven under a continue
-  policy. **Members now run to completion and the phase closes over all of them,
-  so what remains is the failing half.**
+  policy. **F-018: a member that hands in a blocked completion does not stop the
+  fan-out, and neither does it under `fail-fast`. The two policies are currently
+  indistinguishable for members, because nothing reads a member's disposition
+  when deciding whether to run the next one. The acceptance would pass today for
+  the wrong reason, so it stays open. A test proving it was written, checked
+  against `fail-fast`, found to pass there too, and removed.**
 * [x] A nested member at the configured depth runs its own complete loop, and one
   beyond the bound is refused at authoring time. **Partial: the bound is one
   level in v1 and nesting past it is refused when written. A member running its

@@ -175,7 +175,12 @@ export async function agentTurn(
   scenario: Scenario,
   dispatchId: string,
   output: CanonicalValue,
-  options: { readonly omitOutput?: boolean; readonly omitCompletion?: boolean } = {},
+  options: {
+    readonly omitOutput?: boolean;
+    readonly omitCompletion?: boolean;
+    /** Hands in a completion the agent itself says it could not finish. */
+    readonly blocked?: boolean;
+  } = {},
 ): Promise<SubmissionResult> {
   const loaded = await loadAuthoredWorkflow(scenario.project, dependencies.sha256);
   const snapshot = loaded.snapshot;
@@ -249,11 +254,12 @@ export async function agentTurn(
           if (options.omitCompletion !== true) {
             session.complete(`submission_${suffix}c`, {
               task: stored.dispatch.task,
-              disposition: "completed",
-              summary: "Scripted work",
+              disposition: options.blocked === true ? "blocked" : "completed",
+              summary: options.blocked === true ? "Could not finish" : "Scripted work",
               criteria: stored.completionRequirements.criteria.map(({ criterionId }) => ({
                 criterionId,
-                disposition: "satisfied" as const,
+                disposition:
+                  options.blocked === true ? ("unsatisfied" as const) : ("satisfied" as const),
               })),
               completionEvidence: [],
             });
