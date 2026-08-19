@@ -486,8 +486,13 @@ F-004 is closed by evidence, not by counting lines.
 * [x] Recreate the old five-phase standard workflow entirely in the three
   authored YAML documents, including evidence, task-frontier fan-out, gates,
   approval, model policy, sensitivity, and iteration policy.
-* [ ] Compare the compiled graph and policy semantics with the old internal
+* [x] Compare the compiled graph and policy semantics with the old internal
   template. Byte identity is not required; externally meaningful behaviour is.
+  **`template-parity.test.ts` derives the mechanism vocabulary from both compiled
+  documents and requires the authored one to be a superset. Comparing them phase
+  by phase was tried first and answers the wrong question: they are different
+  workflows. The comparison found one real gap, `onApprovalRejected`, which was
+  reachable but unused. D-038.**
 * [x] Audit every constant in `lowerAuthoredWorkflow`. Classify it as a derived
   mechanism, an overridable default, a host-enforced safety bound, or a deliberate
   removed capability with a recorded reason.
@@ -541,7 +546,10 @@ Acceptance:
 
 * [x] Delete or implement every declared but unimplemented intent.
 * [x] Remove unenforced budget units and planning code that pretends to use them.
-* [ ] Remove the dead resume binding after Phase 10 replaces it. **Blocked on Phase 10.**
+* [x] Remove the dead resume binding after Phase 10 replaces it. **Nothing to
+  remove. Phase 10 did not replace the binding, it made it live: the driver now
+  records one per dispatch and the scoped decision reads it. The item assumed a
+  replacement that the evidence did not call for. D-037.**
 * [ ] Remove the old internal standard-template generator once Phase 11 no longer
   needs it as a comparison oracle. **Blocked on the Phase 11 comparison above.**
 * [x] Compile workspace fault injection out of production builds. **Nothing to remove: no fault-injection symbol exists. The item described a plan that was never built.**

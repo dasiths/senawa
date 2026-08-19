@@ -89,5 +89,9 @@ phases:
     gates: [build, tests, coverage]
     # Verification failing is a real failure; retrying it would only hide it.
     onGateRejected: fail
+    # A person rejecting the verification is the same kind of answer as a gate
+    # refusing it. Retrying either one automatically only spends an attempt to
+    # arrive back where it started.
+    onApprovalRejected: fail
     approve:
       role: release-manager
