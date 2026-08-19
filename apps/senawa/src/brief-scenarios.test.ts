@@ -795,6 +795,35 @@ describe("steering an agent that is already working", () => {
     expect(JSON.stringify(answered)).toContain("prefer the existing health check");
   });
 
+  it("records a fan-out steering against the member's own dispatch", async () => {
+    const scenario = await startScenario("steer-member", { fanOut: "complete" });
+    await agentTurn(
+      scenario,
+      scenario.dispatchId,
+      canonicalValue({ tasks: [{ id: "one" }, { id: "two" }] }),
+    );
+    await advance(scenario);
+    await advance(scenario);
+    const dispatched = await advance(scenario);
+    expect(dispatched).toMatchObject({ kind: "dispatched", phaseKey: "implement" });
+    if (dispatched.kind !== "dispatched") throw new Error("expected a member dispatch");
+
+    expect(steer(scenario, "skip the second item", "queued").exitCode).toBe(0);
+
+    // A member is what is actually working, so it is what a person means by
+    // "the agent", and the instruction has to be recorded against the member's
+    // own dispatch or the member that reads it will never see it.
+    const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+    try {
+      const row = database.prepare("SELECT dispatch_id FROM context_agent_steerings").get() as {
+        readonly dispatch_id: string;
+      };
+      expect(row.dispatch_id).toBe(dispatched.dispatchId);
+    } finally {
+      database.close();
+    }
+  });
+
   it("refuses to redirect an agent that has already finished", async () => {
     const scenario = await startScenario("steer-finished", {});
     await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));

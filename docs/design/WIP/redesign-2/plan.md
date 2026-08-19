@@ -409,8 +409,11 @@ Acceptance:
   amendment can apply.
 * [ ] Let a human mark a member done over red gates as an explicit authority
   decision carrying principal, timestamp, and reason.
-* [ ] Let a human supply queued or retry steering to a stuck member before live
-  steering lands in Phase 10.
+* [x] Let a human supply queued or retry steering to a stuck member before live
+  steering lands in Phase 10. **`senawa steer` targets the agent that is
+  working, and for a fan-out that is the member. All three deliveries reach it.
+  Live steering landed in Phase 10 first, so the interim the item anticipated
+  never had to exist.**
 
 Acceptance:
 

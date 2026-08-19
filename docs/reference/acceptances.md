@@ -56,6 +56,7 @@ claims are made; it does not certify the ones that are absent.
 | A queued instruction reaches the agent when it next stops | docs/reference/cli.md | `brief-scenarios.test.ts > hands a queued instruction to the agent when it next stops to ask` |
 | An agent that has finished cannot be redirected | docs/reference/cli.md | `brief-scenarios.test.ts > refuses to redirect an agent that has already finished` |
 | A live instruction reaches the agent mid-turn | docs/reference/cli.md | `copilot-worker.test.ts > delivers a person's instruction to the agent working right now` |
+| A fan-out member can be redirected while it works | docs/reference/cli.md | `brief-scenarios.test.ts > records a fan-out steering against the member's own dispatch` |
 
 ## The command line
 
