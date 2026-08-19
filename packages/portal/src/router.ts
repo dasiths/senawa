@@ -30,7 +30,9 @@ export function parsePortalHash(hash: string): PortalRoute {
       return Object.freeze({ name, repositoryId, runId });
     }
   }
-  return Object.freeze({ name: "overview" });
+  // The workflow and the working agent are what a reader opens the portal for.
+  // Counters and digests are one action away rather than the first thing shown.
+  return Object.freeze({ name: "graph" });
 }
 
 export function portalHash(repositoryId: string, runId: string, name: PortalRouteName): string {

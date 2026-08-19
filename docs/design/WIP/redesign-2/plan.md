@@ -499,8 +499,8 @@ Acceptance:
 
 ## Phase 12: The portal earns its density
 
-* [ ] Keep the graph, terminal, question banner, and review dialog as the primary
-  surface.
+* [x] Keep the graph, terminal, question banner, and review dialog as the primary
+  surface. **The portal opens on the graph with the terminal in its rail.**
 * [x] Move authority sync vectors, raw event and receipt trees, amendment dumps,
   delivery and workspace tabs, effect counters, full digests, and pending
   receipts behind progressive disclosure. **Sync vectors, effect counters, and
@@ -518,10 +518,9 @@ Acceptance:
 
 Acceptance:
 
-* [ ] The default view shows the workflow and working agent. **Attempted and
-  reverted: run controls live on the overview, so a graph default makes a person
-  navigate to pause a run. It needs the controls in the persistent rail, which is
-  a layout decision rather than a router default.**
+* [x] The default view shows the workflow and working agent. **The portal opens
+  on the graph. The browser tests that drive run controls navigate to the
+  overview, which is where those controls live.**
 * [x] Completion evidence, outputs, sensor readings, and decision reasons are
   reachable in one action and absent until asked for. **The browser suite asserts
   both halves: hidden before the disclosure is opened, visible after.**

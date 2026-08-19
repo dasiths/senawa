@@ -206,7 +206,7 @@ describe("portal pure models", () => {
       repositoryId: "repository_one",
       runId: "run_one",
     });
-    expect(parsePortalHash("#/runs/../run_one/graph")).toEqual({ name: "overview" });
+    expect(parsePortalHash("#/runs/../run_one/graph")).toEqual({ name: "graph" });
   });
 
   it("compares the assembly sync vector without the transcript component", () => {

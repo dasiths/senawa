@@ -23,6 +23,8 @@ test("narrates one submitted command from submission through its receipt", async
     await new Promise((resolve) => setTimeout(resolve, 1_200));
     return route.continue();
   });
+  // The portal opens on the graph. Run controls live on the overview.
+  await navigate(page, "Overview");
   await page.getByRole("button", { name: "Pause" }).click();
   await page.getByRole("button", { name: "Confirm pause" }).click();
   await expect(narrator).toHaveText("pause-run is submitting");

@@ -18,6 +18,8 @@ test("reconnects from the last cursor, deduplicates replay, and resynchronizes a
 }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   const before = await visibleCursor(page);
+  // The portal opens on the graph. Run controls live on the overview.
+  await navigate(page, "Overview");
   await page.getByRole("button", { name: "Pause" }).click();
   await page.getByRole("button", { name: "Confirm pause" }).click();
   await expect.poll(() => visibleCursor(page)).toBeGreaterThan(before);
@@ -88,6 +90,8 @@ test("reconnects from the last cursor, deduplicates replay, and resynchronizes a
 test("reloads authority after an event races the final overview read", async ({ browser }) => {
   const main = await simulatedEventPortal(browser, runs.workspace);
   const { page, diagnostics } = main;
+  // This test is about the overview read, so the main page has to be on it.
+  await navigate(page, "Overview");
   let overviewRequests = 0;
   let staleOverviewReady = false;
   let releaseStaleOverview: (() => void) | undefined;
@@ -119,6 +123,7 @@ test("reloads authority after an event races the final overview read", async ({ 
   await expect.poll(() => staleOverviewReady).toBe(true);
 
   const controller = await simulatedEventPortal(browser, runs.workspace);
+  await navigate(controller.page, "Overview");
   await controller.page.getByRole("button", { name: "Pause" }).click();
   await controller.page.getByRole("button", { name: "Confirm pause" }).click();
   await expect(controller.page.getByText("Run paused", { exact: true })).toBeVisible();
@@ -370,12 +375,14 @@ test("reviews pause, resume, and permanent end, then exposes ending and ended mo
 }) => {
   const main = await simulatedEventPortal(browser, runs.workspace);
   const { page, diagnostics } = main;
+  await navigate(page, "Overview");
   await expect(page.getByText("Run running", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Pause" }).click();
   const stalePause = page.getByRole("dialog");
   await expect(stalePause).toContainText("does not cancel active effects");
   const controller = await simulatedEventPortal(browser, runs.workspace);
+  await navigate(controller.page, "Overview");
   await controller.page.getByRole("button", { name: "Pause" }).click();
   await controller.page.getByRole("button", { name: "Confirm pause" }).click();
   await expect(controller.page.getByText("Run paused", { exact: true })).toBeVisible();

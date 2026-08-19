@@ -5,7 +5,9 @@ test("boots the built portal through a one-time authenticated URL", async ({ pag
   const diagnostics = await bootstrapPortal(page);
 
   await expect(page).toHaveURL(/\/portal\/#\/runs\//u);
-  await expect(page.getByRole("heading", { name: "Overview", level: 1 })).toBeVisible();
+  // The workflow is what a reader opens the portal for, so it is where booting
+  // lands. Counters and digests are reachable, not first.
+  await expect(page.getByRole("heading", { name: "Graph", level: 1 })).toBeVisible();
   await expect(page.getByText("read-write", { exact: true })).toBeVisible();
   await expect(page.getByText("Connection live", { exact: true })).toBeVisible();
   expect(diagnostics.severe()).toEqual([]);
