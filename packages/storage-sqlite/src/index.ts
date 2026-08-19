@@ -1775,12 +1775,23 @@ export class SqliteAuthority
   }
 
   /** How many dispatches have already spoken on one conversation line. */
-  countAgentSessionResumeBindings(sessionLineKey: string): number {
-    const row = this.#database
-      .prepare<[string], { total: number }>(
-        "SELECT COUNT(*) AS total FROM agent_session_resume_bindings WHERE session_line_key = ?",
-      )
-      .get(sessionLineKey);
+  countAgentSessionResumeBindings(sessionLineKey: string, sessionId?: string): number {
+    // Counting the line would keep growing past a renewal, so a conversation is
+    // counted by the session it belongs to. The turn is a position within one
+    // conversation, not a tally of everything the line has ever said.
+    const row =
+      sessionId === undefined
+        ? this.#database
+            .prepare<[string], { total: number }>(
+              "SELECT COUNT(*) AS total FROM agent_session_resume_bindings WHERE session_line_key = ?",
+            )
+            .get(sessionLineKey)
+        : this.#database
+            .prepare<[string, string], { total: number }>(
+              "SELECT COUNT(*) AS total FROM agent_session_resume_bindings" +
+                " WHERE session_line_key = ? AND predecessor_session_id = ?",
+            )
+            .get(sessionLineKey, sessionId);
     return row?.total ?? 0;
   }
 

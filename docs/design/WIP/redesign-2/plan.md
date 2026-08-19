@@ -459,8 +459,9 @@ all change what an attempt actually sees.
   live session handle where steering can reach it.
 * [ ] Deliver live, queued, and abort-and-retry steering from the command line and
   portal, scoped to one running agent and recorded durably before delivery.
-* [ ] Bound context growth through authority-visible retention or compaction
-  policy.
+* [x] Bound context growth through authority-visible retention or compaction
+  policy. **`sessionTurns` renews a conversation at its bound, and a renewal is
+  reported separately from a conversation lost because the work moved. D-035.**
 
 Acceptance:
 
@@ -471,7 +472,7 @@ Acceptance:
   falls to the next route and settles on the last one. Proven by breaking it.**
 * [ ] A human steers a running agent mid-turn and history explains the resulting
   change of course.
-* [ ] A long run does not grow context without bound.
+* [x] A long run does not grow context without bound. **Proven by breaking it.**
 
 ## Phase 11: Prove authored-surface parity
 

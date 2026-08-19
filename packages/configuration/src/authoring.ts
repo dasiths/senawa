@@ -175,6 +175,7 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
         // which at role level is the same rule as attempt scope. Fan-out members
         // get their own line whatever the role says.
         sessionScope: agent.session === "element" ? "attempt" : agent.session,
+        ...(agent.sessionTurns === undefined ? {} : { sessionMaxTurns: agent.sessionTurns }),
       }))
       .sort((left, right) => compare(left.key, right.key)),
     modelPolicies: [...agentsByKey.values()]
@@ -272,6 +273,7 @@ interface AuthoredAgent {
   readonly provider: string;
   readonly routes: readonly AuthoredRoute[];
   readonly session: string;
+  readonly sessionTurns?: number;
   readonly credits: number;
   readonly inputPaths: readonly string[];
 }
@@ -288,6 +290,7 @@ interface AuthoredPhase {
   readonly name: string;
   readonly agent: string;
   readonly session: string;
+  readonly sessionTurns?: number;
   readonly needs: readonly string[];
   readonly output: string;
   readonly outputSensitivity: string;
@@ -387,6 +390,11 @@ function readAgents(
       provider: typeof raw.provider === "string" ? raw.provider : "openai",
       routes,
       session,
+      ...(typeof raw.sessionTurns === "number" &&
+      Number.isSafeInteger(raw.sessionTurns) &&
+      raw.sessionTurns > 0
+        ? { sessionTurns: raw.sessionTurns }
+        : {}),
       credits: typeof raw.credits === "number" && raw.credits > 0 ? raw.credits : 1,
       inputPaths,
     });

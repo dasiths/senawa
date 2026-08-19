@@ -644,6 +644,23 @@ describe("a persona that keeps its session", () => {
   });
 });
 
+describe("bounding how far a conversation grows", () => {
+  it("renews a conversation that has reached the turns it was allowed", async () => {
+    const scenario = await startScenario("session-bound", { session: "run", sessionTurns: 1 });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+    await advance(scenario);
+    expect(await advance(scenario)).toMatchObject({ kind: "dispatched", phaseKey: "verify" });
+
+    // The line continues, but the conversation on it does not: a persona allowed
+    // one turn starts a second conversation rather than carrying the first
+    // forward, which is what stops a long run growing without bound.
+    const bindings = sessionBindings(scenario);
+    expect(bindings).toHaveLength(2);
+    expect(bindings[1]?.session_line_key).toBe(bindings[0]?.session_line_key);
+    expect(bindings[1]?.predecessor_session_id).not.toBe(bindings[0]?.predecessor_session_id);
+  });
+});
+
 describe("falling back to another model", () => {
   it("moves a retry to the next authored route and tells the agent it moved", async () => {
     const scenario = await startScenario("route-fallback", {

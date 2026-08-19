@@ -136,6 +136,7 @@ interface ParsedRole {
   readonly prompt?: string;
   readonly modelPolicy?: string;
   readonly sessionScope?: "attempt" | "phase" | "run";
+  readonly sessionMaxTurns?: number;
 }
 
 interface ParsedModelPolicy {
@@ -1351,7 +1352,7 @@ function parseRoles(
       item,
       pointer,
       ["key", "kind", "capabilities"],
-      ["prompt", "modelPolicy", "sessionScope"],
+      ["prompt", "modelPolicy", "sessionScope", "sessionMaxTurns"],
       collector,
     );
     if (object === undefined) return undefined;
@@ -1400,6 +1401,23 @@ function parseRoles(
         );
       }
     }
+    let sessionMaxTurns: number | undefined;
+    if (Object.hasOwn(object, "sessionMaxTurns")) {
+      if (
+        typeof object.sessionMaxTurns === "number" &&
+        Number.isSafeInteger(object.sessionMaxTurns) &&
+        object.sessionMaxTurns > 0
+      ) {
+        sessionMaxTurns = object.sessionMaxTurns;
+      } else {
+        addDiagnostic(
+          collector,
+          "invalid-role",
+          `${pointer}/sessionMaxTurns`,
+          "Role sessionMaxTurns must be a positive whole number of turns",
+        );
+      }
+    }
     if (key === undefined || kind === undefined || capabilities === undefined) return undefined;
     return {
       pointer,
@@ -1409,6 +1427,7 @@ function parseRoles(
       ...(prompt === undefined ? {} : { prompt }),
       ...(modelPolicy === undefined ? {} : { modelPolicy }),
       ...(sessionScope === undefined ? {} : { sessionScope }),
+      ...(sessionMaxTurns === undefined ? {} : { sessionMaxTurns }),
     };
   });
 }

@@ -82,6 +82,8 @@ export interface ScenarioOptions {
   readonly confidentialOutput?: boolean;
   /** Gives `definer` a session of this scope, and a second phase to work on. */
   readonly session?: "run" | "phase" | "element";
+  /** Bounds how many turns one conversation carries before it is renewed. */
+  readonly sessionTurns?: number;
 }
 
 export interface Scenario {
@@ -388,7 +390,12 @@ async function authoredProject(options: ScenarioOptions): Promise<string> {
       ? AGENTS_ROUTED
       : options.session === undefined
         ? AGENTS
-        : AGENTS.replace("definer:\n", `definer:\n  session: ${options.session}\n`),
+        : AGENTS.replace(
+            "definer:\n",
+            `definer:\n  session: ${options.session}\n${
+              options.sessionTurns === undefined ? "" : `  sessionTurns: ${options.sessionTurns}\n`
+            }`,
+          ),
   );
   await writeFile(join(configuration, "workflow.yaml"), workflow(options));
   await writeFile(join(configuration, "sensors.yaml"), sensors(options));

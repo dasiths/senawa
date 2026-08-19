@@ -58,6 +58,7 @@ interface SnapshotAgentRole {
   readonly prompt: string;
   readonly modelPolicy: string;
   readonly sessionScope?: AgentSessionScope;
+  readonly sessionMaxTurns?: number;
 }
 
 /**
@@ -71,7 +72,7 @@ export interface AgentSessionLedgerPort {
   queryLatestAgentSessionResumeBinding(
     sessionLineKey: string,
   ): AgentSessionResumeBinding | undefined;
-  countAgentSessionResumeBindings(sessionLineKey: string): number;
+  countAgentSessionResumeBindings(sessionLineKey: string, sessionId?: string): number;
   putAgentSessionResumeBinding(binding: AgentSessionResumeBinding, sessionLineKey: string): unknown;
 }
 
@@ -152,6 +153,14 @@ export interface DispatchPhaseResult {
     readonly resumed?: AgentSessionResumeBinding;
     /** Which fields stopped a recorded predecessor from being resumed. */
     readonly lost?: readonly string[];
+    /**
+     * The bound a conversation reached, when this dispatch renewed it.
+     *
+     * Distinct from `lost`: a renewal is the policy working as authored, while
+     * a loss means the ground moved under a conversation that should have
+     * continued.
+     */
+    readonly renewedAfterTurns?: number;
     /** This dispatch's own binding, recorded so its successor can find it. */
     readonly binding: AgentSessionResumeBinding;
   }>;
@@ -168,6 +177,9 @@ const MEMBER_ITEM_MAPPINGS = Object.freeze([
 
 const PROMPT_PACK_MAX_BYTES = 65_536;
 const PROVISIONAL_PROMPT_PACK_DIGEST = sha256Digest("0".repeat(64));
+/** Turns one conversation may carry before it is renewed, when none is authored. */
+const DEFAULT_SESSION_MAX_TURNS = 24;
+
 const DEFAULT_TIMEOUT_MS = 300_000;
 
 /**
@@ -420,6 +432,7 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
   const { record: recordSession, session } = resolveSession({
     ledger: input.sessionLedger,
     scope: role.sessionScope ?? "attempt",
+    maxTurns: role.sessionMaxTurns ?? DEFAULT_SESSION_MAX_TURNS,
     runId: input.runId,
     roleKey: role.key,
     isMember: declaration.executor.kind === "task-frontier",
@@ -519,6 +532,7 @@ function compare(left: string, right: string): number {
 function resolveSession(input: {
   readonly ledger: AgentSessionLedgerPort | undefined;
   readonly scope: AgentSessionScope;
+  readonly maxTurns: number;
   readonly runId: string;
   readonly roleKey: string;
   readonly isMember: boolean;
@@ -553,9 +567,9 @@ function resolveSession(input: {
       ? undefined
       : ledger.queryLatestAgentSessionResumeBinding(lineKey);
   const turn =
-    ledger === undefined || scope === "attempt"
+    ledger === undefined || scope === "attempt" || predecessor === undefined
       ? 1
-      : ledger.countAgentSessionResumeBindings(lineKey) + 1;
+      : ledger.countAgentSessionResumeBindings(lineKey, predecessor.predecessorSessionId) + 1;
 
   const own = (sessionId: string): AgentSessionResumeBinding =>
     createAgentSessionResumeBinding(
@@ -583,8 +597,14 @@ function resolveSession(input: {
   // session must be visible to the run as a degraded outcome. An adapter that
   // quietly starts over turns forgotten context into an unexplained regression.
   const candidate = own(predecessor?.predecessorSessionId ?? input.dispatch.dispatchId);
+  // A conversation that never ends grows until it costs more than it is worth,
+  // so one that has reached its bound is renewed rather than carried further.
+  // This is a deliberate renewal, not the loss of a conversation whose ground
+  // moved, and the two are reported differently because they mean different
+  // things to somebody reading the run.
+  const renewed = predecessor !== undefined && turn > input.maxTurns;
   const decision =
-    predecessor === undefined
+    predecessor === undefined || renewed
       ? undefined
       : decideAgentSessionResume(candidate, predecessor, sha256, scope);
   const resumed = decision?.action === "resume" ? predecessor : undefined;
@@ -606,6 +626,7 @@ function resolveSession(input: {
       turn,
       binding,
       ...(resumed === undefined ? {} : { resumed }),
+      ...(renewed ? { renewedAfterTurns: input.maxTurns } : {}),
       ...(decision?.action === "new-session" ? { lost: decision.mismatchFields } : {}),
     }),
   };

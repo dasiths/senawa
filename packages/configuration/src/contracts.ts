@@ -288,6 +288,15 @@ export type RoleDeclaration =
        * Defaults to `attempt`.
        */
       readonly sessionScope?: "attempt" | "phase" | "run";
+      /**
+       * How many turns one conversation may carry before it is renewed.
+       *
+       * A conversation that never ends grows until it costs more than it is
+       * worth, so a long-lived scope needs a bound. Reaching it starts a fresh
+       * conversation deliberately, which is a different event from losing one
+       * because the work moved underneath it. Defaults to 24.
+       */
+      readonly sessionMaxTurns?: number;
     }
   | {
       readonly key: string;

@@ -197,9 +197,25 @@ conversation rather than a misleading one; under `run`, only a configuration
 change does. When a conversation is dropped this way, the run says so instead of
 quietly starting over.
 
+### sessionTurns
+
+`sessionTurns` bounds how many turns one conversation carries before it is
+renewed, and defaults to 24. A conversation that never ends grows until it costs
+more than it is worth, so a long-lived `session` needs a bound.
+
+```yaml
+reviewer:
+  model: gpt-5
+  prompt: prompts/reviewer.md
+  session: run
+  sessionTurns: 12
+```
+
+Reaching the bound is a renewal, which is the policy working as authored. It is
+reported separately from a conversation lost because the work moved under it.
+
 > [!NOTE]
-> A conversation is bounded by the ceilings of the route it runs on, and not yet
-> by a retention or compaction policy of its own.
+> A conversation is renewed whole rather than summarised into its successor.
 
 ## sensors.yaml
 
