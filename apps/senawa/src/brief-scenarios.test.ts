@@ -109,6 +109,30 @@ describe("fan-out in sequence", () => {
   });
 });
 
+describe("running every member of a fan-out", () => {
+  it("dispatches the second member after the first one finishes", async () => {
+    const scenario = await startScenario("fanout-all", { fanOut: "complete" });
+    await agentTurn(
+      scenario,
+      scenario.dispatchId,
+      canonicalValue({ tasks: [{ id: "one" }, { id: "two" }] }),
+    );
+    await advance(scenario);
+    await advance(scenario);
+    const first = await advance(scenario);
+    if (first.kind !== "dispatched") throw new Error("expected the first member");
+
+    await agentTurn(scenario, first.dispatchId, canonicalValue({ verified: true }));
+    const next = await advance(scenario);
+
+    // Materialising two members and running one is not a fan-out, it is a fan-out
+    // that stops. The second member has to be given to an agent in its turn.
+    expect(next).toMatchObject({ kind: "dispatched", phaseKey: "implement" });
+    if (next.kind !== "dispatched") throw new Error("expected the second member");
+    expect(next.dispatchId).not.toBe(first.dispatchId);
+  });
+});
+
 describe("what an author can state", () => {
   it("refuses a blocking gate with no deterministic reading behind it", async () => {
     const diagnostics = await compileScenario({ unanchored: true });

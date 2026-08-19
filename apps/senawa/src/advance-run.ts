@@ -236,6 +236,56 @@ async function step(
   const phase = phaseValue(snapshot, phaseKey);
 
   const state = broker.authority.snapshot();
+
+  // A fan-out phase owns one task per member, and they run one at a time. The
+  // next member is the first that nothing has been dispatched for yet. Without
+  // this the driver treats the member that just finished as the phase's live
+  // work and tries to close a phase most of whose members never ran.
+  const members = phase.executor?.kind === "task-frontier" ? phaseTasks(snapshot, phaseKey) : [];
+  const pendingMember =
+    members.length === 0
+      ? undefined
+      : members.findIndex(
+          (task) =>
+            !state.dispatches.some(
+              (candidate) =>
+                candidate.runId === input.runId &&
+                candidate.task.taskId ===
+                  String((task as { readonly definition: { readonly id: unknown } }).definition.id),
+            ),
+        );
+  if (pendingMember !== undefined && pendingMember >= 0) {
+    const dispatched = dispatchPhase({
+      snapshot,
+      dataflow: new RuntimeDataflowAuthority(
+        input.dependencies.sha256,
+        configurationRuntimeSchemaValidator(),
+        new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
+        supervisor.commandAuthority,
+      ),
+      contextBroker: broker,
+      sessionLedger: supervisor.commandAuthority,
+      dependencies: input.dependencies,
+      repositoryId: input.repositoryId,
+      runId: input.runId,
+      phaseKey,
+      memberIndex: pendingMember,
+      // Each member binds its own phase attempt, because each carries different
+      // content and the dataflow refuses to reuse an ordinal for a new one.
+      attempt: pendingMember + 1,
+      workflowInput: input.workflowInput,
+      upstream: upstreamOutputs(
+        snapshot,
+        phase,
+        state,
+        new SqliteCanonicalJsonAssetStore(supervisor.commandAuthority),
+      ),
+      repositoryBase: input.repositoryBase,
+      currentTime: input.currentTime,
+    });
+    return { kind: "dispatched", phaseKey, dispatchId: dispatched.dispatch.dispatchId };
+  }
+
   // The latest attempt is the live one. An earlier attempt's dispatch is still
   // stored, and treating it as current would gate work the retry replaced.
   const dispatch = state.dispatches

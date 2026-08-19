@@ -420,7 +420,10 @@ Acceptance:
 * [x] A plan phase computes a collection and later members run sequentially,
   grouped under their parent phase in the portal. **The driver evaluates the
   frontier, the engine decides the resulting plan import, and members dispatch
-  one at a time. D-032.**
+  one at a time. D-032. Corrected: only the first member ever ran. The driver
+  treated the member that had just finished as the phase's live work and tried
+  to close a phase most of whose members had never been dispatched. Each member
+  now binds its own phase attempt. D-040.**
 * [ ] Three failing members do not block the remaining seven under a continue
   policy.
 * [x] A nested member at the configured depth runs its own complete loop, and one
