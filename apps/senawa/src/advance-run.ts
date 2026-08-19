@@ -978,10 +978,16 @@ function submit(
   payload: unknown,
   expectedDefinitionRevision?: string,
 ): DurableReceipt {
-  const commandId = `command_${suffix}-${input.dependencies.sha256
-    .digest(canonicalBytes(canonicalValue({ runId: input.runId, suffix })))
-    .slice(0, 24)}`;
   refuseUncanonicalPayload(intent, payload);
+  const payloadDigest = input.dependencies.sha256.digest(canonicalBytes(canonicalValue(payload)));
+  // The identity carries what the command says, not only which step said it.
+  // Keyed on the step alone, a phase that ran twice produced two different
+  // decisions under one identity, and the authority refused the second for
+  // conflicting with the first. Replay still works: the same decision digests
+  // the same and is recognised as the command already recorded.
+  const commandId = `command_${suffix}-${input.dependencies.sha256
+    .digest(canonicalBytes(canonicalValue({ runId: input.runId, suffix, payloadDigest })))
+    .slice(0, 24)}`;
   let allocation = 0;
   const receipt = supervisor.commandAuthority.submit(
     decodeCommandEnvelope({
@@ -993,7 +999,7 @@ function submit(
       runId: input.runId,
       intent: { type: intent },
       payload: payload as never,
-      payloadDigest: input.dependencies.sha256.digest(canonicalBytes(canonicalValue(payload))),
+      payloadDigest,
       expectedGraphRevision: graphRevision,
       ...(exactObjectDigest === undefined ? {} : { exactObjectDigest }),
       ...(expectedDefinitionRevision === undefined ? {} : { expectedDefinitionRevision }),

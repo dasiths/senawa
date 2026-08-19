@@ -709,7 +709,16 @@ function driveRun(
         },
       });
       return classifyOutcome(outcome) === "progress" && outcome.kind !== "finished";
-    } catch {
+    } catch (error) {
+      // A workflow that no longer compiles, or a run this service was not
+      // started alongside, must not take the supervisor down. It must not
+      // disappear either: a run that stops advancing for an unreported reason
+      // is the hardest possible thing to diagnose.
+      process.stderr.write(
+        `drive-run-failed ${repositoryId} ${runId}: ${
+          error instanceof Error ? (error.stack ?? error.message) : String(error)
+        }\n`,
+      );
       return false;
     }
   };

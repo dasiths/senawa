@@ -3051,3 +3051,57 @@ three.
 
 The budget is now sized from the phase's own ceiling. They are two counters for
 one thing and there is no reading under which they should differ.
+
+## F-028: a step could be taken once per run, whatever it decided
+
+The first self-driving run stalled closing its research phase:
+`evaluate-gate was refused: command-id-conflict: Command identity is already
+bound to a different canonical envelope`, and every retry gave the same answer,
+so the run could not proceed by any route.
+
+`submit` derived a command identity from the run and the step name and nothing
+else. Two different decisions from the same step therefore arrived under one
+identity, and the authority correctly refused the second for conflicting with
+the first. A phase that reached a step twice — which any retried phase does —
+was stuck there for good.
+
+The identity now carries the payload digest as well. Replay is unchanged: the
+same decision digests the same and is recognised as the command already
+recorded. A genuinely different decision is a different command, which is what
+it is.
+
+Fixing it let the live example close research and dispatch its plan phase.
+
+## F-029: a gate-refused phase cannot close on a later attempt
+
+Writing the regression test for F-028 found the next wall. A scenario whose
+sensor fails once and then passes gets as far as the second attempt's
+completion and is refused:
+`submit-completion was refused: candidate-exists: Completion cannot change
+after candidate creation`.
+
+The first attempt's refusal created a candidate for the phase, and the
+authority holds that a completion may not change what a candidate already
+decided. That is right for one attempt. It is wrong across attempts: the
+retry exists precisely to decide again, and nothing supersedes the earlier
+candidate when a phase is retried.
+
+The test is not kept, because a test that asserts a defect is a test that has
+to be deleted to fix it. What is recorded here is the reproduction:
+
+```
+startScenario("gate-then-pass", {
+  attempts: 3,
+  secondPhase: true,
+  sensorCommand: "test -f passed || { touch passed; exit 1; }",
+})
+```
+
+complete, advance (refused, retrying), complete the retry, advance. The last
+step is the one that fails.
+
+The three retry defects found this session — F-025's task set, F-028's command
+identity, and this — are all the same shape: the phase model was built and
+tested one attempt at a time, and every mechanism that records a phase's
+decision assumes it happens once. Retrying is authored, documented, and covered
+by tests that stop at the retry.
