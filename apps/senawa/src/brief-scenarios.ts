@@ -44,6 +44,7 @@ export const dependencies: RuntimeDependencies = {
     { intent: "start-phase-attempt", roles: ["release-manager"] },
     { intent: "create-escalation", roles: ["release-manager"] },
     { intent: "steer-agent", roles: ["operator", "release-manager"] },
+    { intent: "override-member", roles: ["release-manager"] },
     { intent: "submit-amendment-proposal", roles: ["engine", "release-manager"] },
     { intent: "record-amendment-decision", roles: ["engine", "release-manager"] },
     { intent: "apply-approved-amendment", roles: ["trusted-supervisor"] },

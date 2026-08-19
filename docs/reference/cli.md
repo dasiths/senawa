@@ -41,6 +41,22 @@ senawa answer <repository> <run> <text>
 
 A rejection must carry a reason. The next attempt is a guess without one.
 
+### Overriding
+
+```bash
+senawa override <repository> <run> <reason>
+```
+
+Accepts work the run judged unfinished, so the rest of the run can continue.
+
+A reason is required and is kept as written. An override is the one place a
+run's outcome stops being derivable from its evidence, so what you said at the
+time is the only thing that explains it afterwards. It is recorded with who you
+are and when, and it stays in the run's history.
+
+Only work that reported it could not finish can be accepted this way. Work still
+running has no outcome to accept.
+
 ### Steering
 
 ```bash

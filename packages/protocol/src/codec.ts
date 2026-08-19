@@ -16,6 +16,7 @@ import {
   type ImportPlanPayload,
   type JsonValue,
   type OpaqueIdentity,
+  type OverrideMemberPayload,
   PROTOCOL_VERSION,
   type ProjectionEnvelope,
   type ReceiptPage,
@@ -113,6 +114,7 @@ const INTENT_TYPES = new Set<CommandIntent["type"]>([
   "create-escalation",
   "answer-question",
   "steer-agent",
+  "override-member",
   "grant-allowance",
   "pause-run",
   "resume-run",
@@ -303,6 +305,37 @@ export function decodeSteerAgentPayload(input: string | unknown): SteerAgentPayl
 
 export function encodeSteerAgentPayload(input: unknown): string {
   return canonicalStringify(decodeSteerAgentPayload(input));
+}
+
+export function decodeOverrideMemberPayload(input: string | unknown): OverrideMemberPayload {
+  const object = exactObject(decodeWireValue(input), "$", [
+    "dispatchId",
+    "taskId",
+    "definitionGeneration",
+    "reason",
+  ]);
+  identity(object.dispatchId, "$.dispatchId");
+  identity(object.taskId, "$.taskId");
+  positiveSequence(object.definitionGeneration, "$.definitionGeneration");
+  // An override with no reason records that somebody overrode something and
+  // nothing about why, which is the only part anybody will need later.
+  if (typeof object.reason !== "string" || object.reason.length === 0) {
+    throw new ProtocolValidationError(
+      "invalid-value",
+      "$.reason",
+      "An override must say why the work was accepted",
+    );
+  }
+  return Object.freeze({
+    dispatchId: object.dispatchId as string,
+    taskId: object.taskId as string,
+    definitionGeneration: object.definitionGeneration as number,
+    reason: object.reason,
+  });
+}
+
+export function encodeOverrideMemberPayload(input: unknown): string {
+  return canonicalStringify(decodeOverrideMemberPayload(input));
 }
 
 export function decodeGrantAllowancePayload(input: string | unknown): GrantAllowancePayload {

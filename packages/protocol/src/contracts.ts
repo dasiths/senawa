@@ -57,6 +57,7 @@ export type CommandIntent =
   | { readonly type: "create-escalation" }
   | { readonly type: "answer-question" }
   | { readonly type: "steer-agent" }
+  | { readonly type: "override-member" }
   | { readonly type: "grant-allowance" }
   | { readonly type: "pause-run" }
   | { readonly type: "resume-run" }
@@ -87,6 +88,20 @@ export interface SteerAgentPayload {
   readonly definitionGeneration: number;
   readonly delivery: "live" | "queued" | "abort-retry";
   readonly instruction: string;
+}
+
+/**
+ * A person accepting a piece of work the run judged unfinished.
+ *
+ * The reason is required and is kept as written. An override is the one place a
+ * run's outcome stops being derivable from its evidence, so the only thing that
+ * explains it later is what the person said at the time.
+ */
+export interface OverrideMemberPayload {
+  readonly dispatchId: OpaqueIdentity;
+  readonly taskId: OpaqueIdentity;
+  readonly definitionGeneration: number;
+  readonly reason: string;
 }
 
 export interface GrantAllowancePayload {

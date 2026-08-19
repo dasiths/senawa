@@ -412,8 +412,10 @@ Acceptance:
   holds one policy per run, so a run any phase wants stopped is stopped. F-013.**
 * [ ] Make amendment quiescence transitive over member phases before an approved
   amendment can apply.
-* [ ] Let a human mark a member done over red gates as an explicit authority
-  decision carrying principal, timestamp, and reason.
+* [x] Let a human mark a member done over red gates as an explicit authority
+  decision carrying principal, timestamp, and reason. **`senawa override` records
+  all three and the reason as written. Only work that reported it could not
+  finish can be accepted: work still running has no outcome to vouch for.**
 * [x] Let a human supply queued or retry steering to a stuck member before live
   steering lands in Phase 10. **`senawa steer` targets the agent that is
   working, and for a fan-out that is the member. All three deliveries reach it.
@@ -439,7 +441,9 @@ Acceptance:
   beyond the bound is refused at authoring time. **Partial: the bound is one
   level in v1 and nesting past it is refused when written. A member running its
   own complete loop needs members as phases, which D-025 defers.**
-* [ ] Human override remains visible in history and the final report.
+* [x] Human override remains visible in history and the final report. **The
+  reason, the principal, and the time are held in `context_member_overrides` and
+  asserted as written rather than paraphrased.**
 
 * [x] Make worker credentials durable so a dispatch minted by `start` or
   `advance` is honoured by the daemon that serves the agent channel.

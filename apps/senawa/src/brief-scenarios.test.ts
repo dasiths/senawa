@@ -20,7 +20,7 @@ import {
   type Scenario,
   startScenario,
 } from "./brief-scenarios.js";
-import { decidePhase, type SteerInput, steerAgent } from "./decide.js";
+import { decidePhase, overrideMember, type SteerInput, steerAgent } from "./decide.js";
 import { listArtifacts } from "./inspect.js";
 import { runGates } from "./run-gates.js";
 
@@ -188,6 +188,78 @@ describe("running every member of a fan-out", () => {
     // Spending the remaining attempts on work that will be thrown away is the
     // cost that policy exists to avoid, so it has to actually stop.
     expect(await driveMembers({ failFast: true })).toHaveLength(1);
+  });
+
+  it("carries on after a person accepts the work the run would not", async () => {
+    const scenario = await startScenario("fanout-override", {
+      fanOut: "complete",
+      failFast: true,
+    });
+    await agentTurn(
+      scenario,
+      scenario.dispatchId,
+      canonicalValue({ tasks: [{ id: "one" }, { id: "two" }] }),
+    );
+    await advance(scenario);
+    await advance(scenario);
+    const first = await advance(scenario);
+    if (first.kind !== "dispatched") throw new Error("expected the first member");
+    await agentTurn(scenario, first.dispatchId, canonicalValue({ verified: true }), {
+      blocked: true,
+    });
+
+    const overridden = overrideMember({
+      assetDirectory: scenario.paths.assetDirectory,
+      currentTime: NOW,
+      databasePath: scenario.paths.databasePath,
+      dependencies,
+      principal: runtimePrincipal,
+      reason: "the remaining work does not depend on this",
+      repositoryId: scenario.repositoryId,
+      runId: scenario.runId,
+    });
+    expect(overridden.exitCode).toBe(0);
+
+    // Overriding the work and then halting on it anyway would make the override
+    // a gesture rather than a decision.
+    expect(await advance(scenario)).toMatchObject({ kind: "dispatched" });
+
+    // The reason survives as written. It is the only thing that explains, later,
+    // why this run finished over its own judgement.
+    const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+    try {
+      const row = database
+        .prepare("SELECT reason, canonical_principal, overridden_at FROM context_member_overrides")
+        .get() as {
+        readonly reason: string;
+        readonly canonical_principal: string;
+        readonly overridden_at: string;
+      };
+      expect(row.reason).toBe("the remaining work does not depend on this");
+      expect(row.canonical_principal).toContain(runtimePrincipal.subject);
+      expect(row.overridden_at).toBe(NOW);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("refuses an override when nothing reported that it could not finish", async () => {
+    const scenario = await startScenario("fanout-no-override", { fanOut: "complete" });
+    const result = overrideMember({
+      assetDirectory: scenario.paths.assetDirectory,
+      currentTime: NOW,
+      databasePath: scenario.paths.databasePath,
+      dependencies,
+      principal: runtimePrincipal,
+      reason: "nothing to accept",
+      repositoryId: scenario.repositoryId,
+      runId: scenario.runId,
+    });
+
+    // Accepting work that is still running would vouch for an outcome nobody
+    // has seen.
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain("could not finish");
   });
 });
 

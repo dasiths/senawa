@@ -267,7 +267,26 @@ async function step(
           ) && String(entry.fact.assessment.submission.disposition) === "blocked",
       )
       .map((entry) => String(entry.fact.assessment.submission.summary));
-    if (blocked.length > 0 && executionFailurePolicy(snapshot) === "fail-fast") {
+    // A person may accept work the run judged unfinished. Once they have, the
+    // run stops treating it as a failure: overriding it and then halting on it
+    // anyway would make the override a gesture rather than a decision.
+    const overridden = new Set(
+      supervisor.commandAuthority
+        .listMemberOverrides({ repositoryId: input.repositoryId, runId: input.runId })
+        .map((entry) => entry.dispatchId),
+    );
+    const unaccepted = state.completionOutbox
+      .filter(
+        (entry) =>
+          String(entry.fact.assessment.submission.disposition) === "blocked" &&
+          !overridden.has(String(entry.fact.dispatchId)),
+      )
+      .map((entry) => String(entry.fact.dispatchId));
+    if (
+      blocked.length > 0 &&
+      unaccepted.length > 0 &&
+      executionFailurePolicy(snapshot) === "fail-fast"
+    ) {
       return { kind: "rejected", phaseKey, reasons: blocked };
     }
     const dispatched = dispatchPhase({

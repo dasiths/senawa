@@ -313,3 +313,106 @@ export function steerAgent(input: SteerInput): CliResult {
     authority.close();
   }
 }
+
+export interface OverrideInput extends Omit<DecideInput, "decision"> {
+  readonly reason: string;
+}
+
+/**
+ * Accepts work the run judged unfinished.
+ *
+ * The reason is required and kept as written. An override is the one place a
+ * run's outcome stops being derivable from its evidence, so what the person said
+ * at the time is the only thing that explains it afterwards.
+ */
+export function overrideMember(input: OverrideInput): CliResult {
+  if (input.reason.length === 0)
+    return {
+      exitCode: 2,
+      output: "An override must say why the work was accepted. Nothing else will explain it later.",
+    };
+
+  const broker = new SqliteContextBroker({
+    databasePath: input.databasePath,
+    dependencies: {
+      sha256: input.dependencies.sha256,
+      currentTime: () => input.currentTime,
+      issueGrantToken: () => new Uint8Array(32),
+    },
+  });
+  let blocked:
+    | ReturnType<SqliteContextBroker["authority"]["snapshot"]>["dispatches"][number]
+    | undefined;
+  try {
+    const state = broker.authority.snapshot();
+    // Only work that reported it could not finish can be accepted over. Work
+    // still running has no outcome to accept, and the person would be vouching
+    // for something that has not happened.
+    const unfinished = new Set(
+      state.completionOutbox
+        .filter((entry) => String(entry.fact.assessment.submission.disposition) === "blocked")
+        .map((entry) => String(entry.fact.dispatchId)),
+    );
+    blocked = state.dispatches
+      .filter(
+        (candidate) => candidate.runId === input.runId && unfinished.has(candidate.dispatchId),
+      )
+      .sort((left, right) => left.ordinal - right.ordinal)
+      .at(-1);
+  } finally {
+    broker.close();
+  }
+  if (blocked === undefined)
+    return {
+      exitCode: 1,
+      output: "Nothing reported that it could not finish. Run senawa status to see the run.",
+    };
+
+  const authority = new SqliteAuthority({
+    assetDirectory: input.assetDirectory,
+    databasePath: input.databasePath,
+    dependencies: input.dependencies,
+  });
+  try {
+    const payload = {
+      definitionGeneration: blocked.task.definitionGeneration,
+      dispatchId: blocked.dispatchId,
+      reason: input.reason,
+      taskId: blocked.task.taskId,
+    };
+    const commandId = `command_override-${input.dependencies.sha256
+      .digest(canonicalBytes(payload))
+      .slice(0, 32)}`;
+    let allocation = 0;
+    const receipt = authority.submit(
+      decodeCommandEnvelope({
+        apiVersion: PROTOCOL_VERSION,
+        commandId,
+        intent: { type: "override-member" },
+        payload,
+        payloadDigest: input.dependencies.sha256.digest(canonicalBytes(payload)),
+        principal: input.principal,
+        repositoryId: input.repositoryId,
+        runId: input.runId,
+        transport: { kind: "cli", requestId: `request_${commandId}` },
+      }),
+      {
+        allocateId: (kind) => {
+          allocation += 1;
+          return `${kind}_${commandId.slice(8)}${allocation}`;
+        },
+        currentTime: input.currentTime,
+        facts: { source: "cli-override" },
+      },
+    );
+    if (receipt.status !== "completed") {
+      return {
+        exitCode: 1,
+        output: `refused: ${receipt.error?.code ?? "unknown"}: ${receipt.error?.message ?? ""}`,
+      };
+    }
+    return { exitCode: 0, output: `accepted over the run's judgement: ${input.reason}` };
+  } finally {
+    authority.close();
+  }
+}

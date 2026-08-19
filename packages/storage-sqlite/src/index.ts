@@ -73,6 +73,7 @@ import {
   decodeEventReplayPage,
   decodeEventStreamFrame,
   decodeGrantAllowancePayload,
+  decodeOverrideMemberPayload,
   decodePortalAllowanceReview,
   decodePortalArtifactContent,
   decodePortalArtifactPage,
@@ -1782,6 +1783,37 @@ export class SqliteAuthority
    * A person may redirect an agent more than once, and later words do not cancel
    * earlier ones, so all of them are returned in the order they were given.
    */
+  /** The overrides recorded in a run, oldest first. */
+  listMemberOverrides(runKey: { readonly repositoryId: string; readonly runId: string }): readonly {
+    readonly dispatchId: string;
+    readonly taskId: string;
+    readonly reason: string;
+    readonly overriddenAt: string;
+  }[] {
+    return this.#database
+      .prepare<
+        [string],
+        {
+          dispatch_id: string;
+          task_id: string;
+          reason: string;
+          overridden_at: string;
+        }
+      >(
+        `SELECT dispatch_id, task_id, reason, overridden_at
+         FROM context_member_overrides WHERE run_key = ? ORDER BY rowid`,
+      )
+      .all(canonicalStringify([runKey.repositoryId, runKey.runId]))
+      .map((row) =>
+        Object.freeze({
+          dispatchId: row.dispatch_id,
+          taskId: row.task_id,
+          reason: row.reason,
+          overriddenAt: row.overridden_at,
+        }),
+      );
+  }
+
   listAgentSteerings(dispatchId: string): readonly {
     readonly steeringId: string;
     readonly delivery: "live" | "queued" | "abort-retry";
@@ -5656,6 +5688,7 @@ function isHumanAuthorityIntent(intent: CommandEnvelope["intent"]["type"]): bool
   return [
     "answer-question",
     "steer-agent",
+    "override-member",
     "grant-allowance",
     "pause-run",
     "resume-run",
@@ -5691,6 +5724,8 @@ function buildTrustedHumanAuthorityDecision(
       return buildTrustedQuestionAnswer(database, command, currentTime, dependencies);
     case "steer-agent":
       return buildTrustedAgentSteering(database, command, currentTime, dependencies);
+    case "override-member":
+      return buildTrustedMemberOverride(database, command, currentTime, dependencies);
     case "grant-allowance":
       return buildTrustedAllowanceGrant(
         database,
@@ -5826,6 +5861,54 @@ function buildTrustedQuestionAnswer(
  * a dispatch that has already been superseded would record an instruction
  * nobody will ever read, and the person who gave it would have no way to tell.
  */
+/**
+ * Validates a person accepting work the run judged unfinished.
+ *
+ * The dispatch has to exist and to have finished. Overriding work that is still
+ * running would accept an outcome nobody has seen yet, and the person would be
+ * vouching for something that had not happened.
+ */
+function buildTrustedMemberOverride(
+  database: Database.Database,
+  command: CommandEnvelope,
+  currentTime: string,
+  dependencies: RuntimeDependencies,
+): TrustedHumanAuthorityDecision {
+  const payload = decodeOverrideMemberPayload(command.payload);
+  const row = database
+    .prepare<[string], { repository_id: string; run_id: string }>(
+      "SELECT repository_id, run_id FROM context_dispatches WHERE dispatch_id = ?",
+    )
+    .get(payload.dispatchId);
+  if (
+    row === undefined ||
+    row.repository_id !== command.repositoryId ||
+    row.run_id !== command.runId
+  ) {
+    return trustedRefusal("unknown-dispatch", "Dispatch does not exist in this run");
+  }
+  const existing = database
+    .prepare<[string], { present: number }>(
+      "SELECT 1 AS present FROM context_member_overrides WHERE dispatch_id = ?",
+    )
+    .get(payload.dispatchId);
+  if (existing !== undefined) {
+    return trustedRefusal("already-overridden", "This work already carries an override");
+  }
+  return Object.freeze({
+    result: Object.freeze({
+      overrideId: `override_${dependencies.sha256
+        .digest(canonicalBytes({ dispatchId: payload.dispatchId, reason: payload.reason }))
+        .slice(0, 32)}`,
+      dispatchId: payload.dispatchId,
+      taskId: payload.taskId,
+      definitionGeneration: payload.definitionGeneration,
+      reason: payload.reason,
+      overriddenAt: currentTime,
+    }),
+  });
+}
+
 function buildTrustedAgentSteering(
   database: Database.Database,
   command: CommandEnvelope,
@@ -6016,6 +6099,30 @@ function persistTrustedHumanAuthorityDecision(
   const runKey = canonicalStringify([command.repositoryId, command.runId]);
   const principal = canonicalStringify(command.principal);
   const principalDigest = dependencies.sha256.digest(canonicalBytes(command.principal));
+  if (command.intent.type === "override-member") {
+    const payload = decodeOverrideMemberPayload(command.payload);
+    database
+      .prepare(
+        `INSERT INTO context_member_overrides(
+           override_id, run_key, command_id, dispatch_id, task_id,
+           definition_generation, reason, principal_digest, canonical_principal,
+           overridden_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        result.overrideId,
+        runKey,
+        command.commandId,
+        payload.dispatchId,
+        payload.taskId,
+        payload.definitionGeneration,
+        payload.reason,
+        principalDigest,
+        principal,
+        currentTime,
+      );
+    return;
+  }
   if (command.intent.type === "steer-agent") {
     const payload = decodeSteerAgentPayload(command.payload);
     // Recorded before anything tries to deliver it, so a run that changes course

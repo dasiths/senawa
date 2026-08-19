@@ -61,6 +61,8 @@ claims are made; it does not certify the ones that are absent.
 | A fan-out closes once every member has finished | docs/reference/authoring.md | `brief-scenarios.test.ts > closes the phase once every member has finished` |
 | One member failing does not stop the rest under `continue` | docs/reference/authoring.md | `brief-scenarios.test.ts > runs the members that can finish when an earlier one cannot` |
 | `fail-fast` stops the fan-out at the first failing member | docs/reference/authoring.md | `brief-scenarios.test.ts > stops the fan-out on the first failing member under fail-fast` |
+| A person can accept work the run would not, and the run continues | docs/reference/cli.md | `brief-scenarios.test.ts > carries on after a person accepts the work the run would not` |
+| An override is refused when nothing failed | docs/reference/cli.md | `brief-scenarios.test.ts > refuses an override when nothing reported that it could not finish` |
 
 ## The command line
 
