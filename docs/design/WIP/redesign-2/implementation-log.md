@@ -2790,3 +2790,51 @@ exist to carry an installed base forward should be told that v1 has none.
 Two counted claims were checked and are correct: twelve components, and eight
 manifests read by the boundary script. Counting them was cheap and the alternative
 was leaving two more numbers nobody had verified.
+
+## F-019: the driver ran the phases in alphabetical order
+
+Building the first example outside the test suite produced a run that finished
+after one phase. The workflow declares `research`, `plan`, `implement`, and the
+research agent did its work, closed, and the driver reported "every phase is
+done".
+
+`nextPhase` read the phase order from `snapshot.phaseDataflow` and took the
+entry after the one that closed. That registry is sorted by key, because every
+registry in a configuration snapshot is sorted for canonicalisation. The order
+it holds is alphabetical: `implement`, `plan`, `research`. Closing `research`
+found the last entry, so there was nothing after it.
+
+The graph is not the answer either. `sortNodes` orders nodes by definition id,
+which is a digest. In this example the three digests happened to ascend in the
+authored order, which is how a first reading of the live database appeared to
+confirm that the graph preserved declaration order. It does not; it agreed by
+coincidence, and a workflow with one more phase would have disagreed.
+
+What survives canonicalisation is `dependsOn`, which the authored `needs:`
+lowers to. `phaseSequence` now recovers the order from it: no phase precedes
+something it needs, and phases that need nothing from each other keep the
+registry's stable key order, so nothing that had no dependencies changes.
+
+The severity is in what the suite could not see. Every phase pair in the
+scenarios is named in alphabetical order — `define` then `verify`, `define`
+then `implement` then `verify` — so registry order and authored order agreed in
+every test, and the bug was invisible to 1484 of them. The workflow that
+`senawa init` writes is `plan` then `implement`, which is the opposite order:
+the template shipped a second phase no run could reach. The regression test
+names its second phase `assemble` for that reason, and was confirmed to fail on
+the old code before the fix was kept.
+
+## F-020: the production policy had never been asked about `start-phase-attempt`
+
+Fixing F-019 turned "every phase is done" into "start-phase-attempt was refused:
+unauthorized". `runtimeDependencies.authorization` listed twenty-two of the
+twenty-three intents the protocol accepts, and the missing one was the intent
+that starts the second phase. A policy that denies by default plus an intent
+nothing ever sent is a gap that stays silent for as long as the other bug lasts:
+each defect was the reason the other could not be observed.
+
+Listing the intent is a one-line fix and worth little on its own. The guard is
+the test: a `Record<CommandIntent["type"], readonly string[]>` naming a role for
+every intent, asserted against the shipped policy. It fails to compile when the
+protocol gains an intent, which forces the decision about who may send it to be
+made when the intent is introduced rather than the first time a user reaches it.

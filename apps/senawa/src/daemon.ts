@@ -631,6 +631,7 @@ export const runtimeDependencies: RuntimeDependencies = Object.freeze({
   },
   authorization: createRoleAuthorizationPolicy([
     { intent: "instantiate-run", roles: ["release-manager"] },
+    { intent: "start-phase-attempt", roles: ["engine", "release-manager"] },
     { intent: "accept-graph-revision", roles: ["release-manager"] },
     { intent: "submit-completion", roles: ["engine", "release-manager"] },
     { intent: "evaluate-gate", roles: ["engine", "release-manager"] },

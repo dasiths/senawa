@@ -182,10 +182,13 @@ describe("the command surface end to end", () => {
       expect(refused.stdout).toContain("does not satisfy plan");
 
       // The whole point of the redesign: an authored workflow, driven from the
-      // command line, reaching the end on the strength of an agent's work.
+      // command line, reaching its next phase on the strength of an agent's
+      // work. This read "every phase is done" while the driver took the phase
+      // order from a key-sorted registry: the template's second phase sorts
+      // ahead of its first, so one closed phase looked like a finished run.
       const repository = /^repository: (.+)$/m.exec(started.stdout)?.[1] ?? "";
       const advanced = await senawa(project, stateRoot, "advance", repository, "run_agent");
-      expect(advanced.stdout).toContain("every phase is done");
+      expect(advanced.stdout).toContain("closed plan");
 
       // A finished run has to show what it produced.
       const artifacts = await senawa(

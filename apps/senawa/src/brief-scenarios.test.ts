@@ -734,6 +734,20 @@ describe("one phase in sequence", () => {
     expect(await advance(scenario)).toEqual({ kind: "closed", phaseKey: "define" });
     expect(await advance(scenario)).toMatchObject({ kind: "dispatched", phaseKey: "verify" });
   });
+
+  // Every other phase pair in this file is named in alphabetical order, so a
+  // driver that read the order from the key-sorted registry looked correct
+  // here and finished a real workflow after its first phase.
+  it("follows the authored order when it disagrees with the alphabet", async () => {
+    const scenario = await startScenario("advance-order", {
+      secondPhase: true,
+      secondPhaseName: "assemble",
+    });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+
+    expect(await advance(scenario)).toEqual({ kind: "closed", phaseKey: "define" });
+    expect(await advance(scenario)).toMatchObject({ kind: "dispatched", phaseKey: "assemble" });
+  });
 });
 
 /** Reads the session bindings recorded for a run, oldest first. */

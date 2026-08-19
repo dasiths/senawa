@@ -56,6 +56,8 @@ export interface ScenarioOptions {
   readonly sensorCommand?: string;
   /** Adds a second phase that depends on the first. */
   readonly secondPhase?: boolean;
+  /** Names that second phase, to author an order that is not alphabetical. */
+  readonly secondPhaseName?: string;
   /** Makes the phase wait for a person before it closes. */
   readonly approval?: boolean;
   /** Refuses any output that is not an object with a boolean `verified`. */
@@ -568,7 +570,7 @@ function workflow(options: ScenarioOptions): string {
 `
       : options.secondPhase === true
         ? `
-  - name: verify
+  - name: ${options.secondPhaseName ?? "verify"}
     agent: verifier
     needs: [define]
     output: schemas/verification.schema.json

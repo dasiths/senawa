@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CopilotSdkSessionConfig, CopilotSdkSessionPort } from "@senawa/execution-host";
 import {
+  type CommandIntent,
   canonicalBytes,
   decodeAuthenticatedPrincipal,
   decodeCanonicalJsonValue,
@@ -41,6 +42,55 @@ afterEach(() => {
 });
 
 describe("daemon worker composition", () => {
+  // The shipped policy denies any intent it does not list, and the driver only
+  // reaches its later intents once earlier ones succeed. `start-phase-attempt`
+  // was absent from this policy for as long as a second phase was unreachable,
+  // so nothing refused and nothing complained. The record below is exhaustive
+  // by type, so a new intent fails to compile until someone decides who may
+  // send it.
+  it("says who may send every intent the protocol accepts", () => {
+    const senders: Record<CommandIntent["type"], readonly string[]> = {
+      "instantiate-run": ["release-manager"],
+      "start-phase-attempt": ["release-manager"],
+      "accept-graph-revision": ["release-manager"],
+      "submit-completion": ["engine"],
+      "evaluate-gate": ["engine"],
+      "record-authority-decision": ["release-manager"],
+      "close-phase": ["engine"],
+      "record-phase-attempt-transition": ["engine"],
+      "import-plan": ["engine"],
+      "record-fan-out-diff-decision": ["engine"],
+      "submit-amendment-proposal": ["engine"],
+      "withdraw-amendment-proposal": ["release-manager"],
+      "record-amendment-decision": ["engine"],
+      "apply-approved-amendment": ["trusted-supervisor"],
+      "record-integration-barrier": ["trusted-supervisor"],
+      "create-escalation": ["engine"],
+      "answer-question": ["operator"],
+      "steer-agent": ["operator"],
+      "override-member": ["release-manager"],
+      "grant-allowance": ["release-manager"],
+      "pause-run": ["operator"],
+      "resume-run": ["operator"],
+      "end-run": ["release-manager"],
+    };
+    for (const [type, roles] of Object.entries(senders)) {
+      const principal = decodeAuthenticatedPrincipal({
+        issuer: "senawa.local",
+        subject: "policy-check",
+        tenant: "local",
+        assurance: "single-factor",
+        roles,
+      });
+      expect({
+        type,
+        allowed: runtimeDependencies.authorization.authorize(principal, {
+          type,
+        } as CommandIntent),
+      }).toEqual({ type, allowed: true });
+    }
+  });
+
   it("keeps the remote connector disabled by default", async () => {
     const { environment } = sandbox("senawa-daemon-remote-disabled-", false);
     const started = await startSenawaService(environment);

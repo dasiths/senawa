@@ -650,7 +650,7 @@ function nextPhase(
   snapshot: ConfigurationSnapshot,
   closedKey: string,
 ): { readonly key: string; readonly id: string; readonly generation: number } | undefined {
-  const keys = snapshot.phaseDataflow.map((entry) => entry.key);
+  const keys = phaseSequence(snapshot);
   const following = keys[keys.indexOf(closedKey) + 1];
   if (following === undefined) return undefined;
   const node = snapshot.graph.nodes.find(
@@ -658,6 +658,39 @@ function nextPhase(
   );
   if (node === undefined || node.kind !== "phase") return undefined;
   return { key: following, id: node.definition.id, generation: node.definition.generation };
+}
+
+/**
+ * The phase keys in the order a sequential run reaches them.
+ *
+ * Both registries this could be read from are sorted for canonicalisation: the
+ * dataflow registry by key, the graph by node id. Reading either one directly
+ * runs the workflow in an order nobody authored, and a workflow whose last
+ * phase alphabetically is also its first declares itself finished after one
+ * phase. What survives canonicalisation is `dependsOn`, so the order is
+ * recovered from it: a phase never precedes something it needs, and phases
+ * that need nothing from each other keep the registry's stable key order.
+ */
+function phaseSequence(snapshot: ConfigurationSnapshot): readonly string[] {
+  const remaining = snapshot.phaseDataflow.map((entry) => entry.value as unknown as SnapshotPhase);
+  const ordered: string[] = [];
+  const placed = new Set<string>();
+  while (remaining.length > 0) {
+    const at = remaining.findIndex((phase) =>
+      (phase.dependsOn ?? []).every((need) => placed.has(need) || !known(remaining, need)),
+    );
+    // A dependency cycle would leave every phase waiting. The compiler rejects
+    // those, so take the head rather than loop forever if one ever arrives.
+    const [phase] = remaining.splice(at < 0 ? 0 : at, 1);
+    if (phase === undefined) break;
+    ordered.push(phase.key);
+    placed.add(phase.key);
+  }
+  return ordered;
+}
+
+function known(phases: readonly SnapshotPhase[], key: string): boolean {
+  return phases.some((phase) => phase.key === key);
 }
 
 /** Runs the phase's sensors for real, so the gate rests on something executed. */
