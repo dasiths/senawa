@@ -3130,3 +3130,19 @@ describe. The contract's sentence is now true.
 Worth noting how this was found: not by a test, but by reading what a real agent
 asked a real person. The instruction and the tool list were each correct in
 isolation and nothing compared them.
+
+## F-031: a worker that produced nothing kills its task, with attempts left
+
+The live example's plan phase was dispatched twice. The second attempt produced
+no submissions at all and ended `missing-completion`, which is a failed effect,
+which fences the task: `claims_accepted 0, fence_generation 2`. The phase had
+authored eight attempts and had used two.
+
+A fence is permanent and there is no path back, so the run ends there. That is
+right for a worker that corrupted something and wrong for one that simply did
+nothing: the attempt ceiling exists precisely to decide how many empty turns are
+tolerable, and fencing on the first one takes that decision away from the author.
+
+Not fixed here. It needs a distinction the failure policy does not currently
+draw, between an effect that failed and an effect that finished without doing
+anything, and that is a policy question rather than a bug to patch.
