@@ -1,9 +1,4 @@
----
-title: Troubleshooting and limits
-description: Platform matrix, build requirements, common failures with exact messages, and deferred behavior
-ms.date: 2026-08-16
-ms.topic: troubleshooting
----
+# Troubleshooting and limits
 
 This page covers what senawa requires, what it deliberately does not do, and
 what its failure messages mean.

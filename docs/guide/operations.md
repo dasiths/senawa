@@ -1,9 +1,4 @@
----
-title: Operations
-description: Local paths, credentials, sessions, backup, restore, recovery, diagnostics, platform limits, and failure handling
-ms.date: 2026-08-16
-ms.topic: how-to
----
+# Operations
 
 Everything Senawa needs to run lives on one host. This page covers where that
 state lives, how to protect it, and what to do when something goes wrong.

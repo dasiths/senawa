@@ -1,9 +1,4 @@
----
-title: Senawa Consumer Guide
-description: Index of the Senawa adoption, authoring, operations, and troubleshooting guides
-ms.date: 2026-08-16
-ms.topic: overview
----
+# Senawa Consumer Guide
 
 The consumer set explains how to adopt, configure, operate, and troubleshoot the
 Senawa without reading implementation history or source code.

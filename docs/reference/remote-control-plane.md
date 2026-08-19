@@ -1,9 +1,4 @@
----
-title: Remote Control-Plane Reference
-description: Alpha outbound connector, enrollment, trust, synchronization, and conformance limits
-ms.date: 2026-08-16
-ms.topic: reference
----
+# Remote Control-Plane Reference
 
 ## Scope
 

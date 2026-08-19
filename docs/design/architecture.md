@@ -1,9 +1,4 @@
----
-title: Architecture
-description: Component responsibilities, dependency direction, and boundary rules across the Senawa workspace
-ms.date: 2026-08-16
-ms.topic: concept
----
+# Architecture
 
 Senawa is a pnpm workspace of ten packages and two applications. Authority flows
 in one direction: the kernel decides, storage commits, adapters act, and clients

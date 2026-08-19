@@ -1,9 +1,4 @@
----
-title: Senawa v1 redesign research
-description: Verified findings on what the current implementation does, what it cannot do, and which parts of it should survive v1
-ms.date: 2026-08-16
-ms.topic: concept-article
----
+# Senawa v1 redesign research
 
 This document records what the implementation on `redesign/workflow-state-machine`
 actually does, established by reading and running the code rather than its

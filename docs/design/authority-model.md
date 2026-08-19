@@ -1,9 +1,4 @@
----
-title: Authority Model
-description: How Senawa turns a command into a durable receipt and an intent into a committed effect
-ms.date: 2026-08-16
-ms.topic: concept
----
+# Authority Model
 
 Authority in Senawa is the answer to one question: which facts are allowed to
 change what the system believes. The answer has three parts. Commands become

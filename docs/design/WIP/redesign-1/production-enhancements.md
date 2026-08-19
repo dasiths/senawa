@@ -1,9 +1,4 @@
----
-title: Production Enhancements
-description: Evidence-backed deferred hardening for the Senawa alpha
-ms.date: 2026-08-15
-ms.topic: reference
----
+# Production Enhancements
 
 Every entry records observed evidence, the current pragmatic behavior, its risk
 and tradeoff, why it is deferred, the trigger for revisiting it, and a concrete

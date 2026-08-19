@@ -1,9 +1,4 @@
----
-title: Worktree mode
-description: The optional isolated Git worktree workspace mode, what it requires, and its testing rule
-ms.date: 2026-08-16
-ms.topic: how-to
----
+# Worktree mode
 
 `execution.workspaceMode` selects how run work touches the repository. The
 default is `repository`. Worktree mode is optional and requires explicit

@@ -1,9 +1,4 @@
----
-title: Portal
-description: The Senawa browser run console, its workflow diagram, agent output view, and human decision surfaces
-ms.date: 2026-08-16
-ms.topic: how-to
----
+# Portal
 
 The portal is a local browser run console served by the supervisor over
 loopback. It observes durable authority and submits exact human decisions. It

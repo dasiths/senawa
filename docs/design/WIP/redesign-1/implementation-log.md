@@ -1,9 +1,4 @@
----
-title: Redesign Implementation Log
-description: Decisions, validation, and review outcomes for the Senawa alpha redesign
-ms.date: 2026-08-15
-ms.topic: reference
----
+# Redesign Implementation Log
 
 This file records major implementation decisions, alternatives, deviations,
 validation results, commits, pushes, and unresolved risks for the autonomous

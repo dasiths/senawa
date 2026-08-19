@@ -1,9 +1,4 @@
----
-title: Durability
-description: SQLite schema families, migrations, content addressing, transaction boundaries, crash recovery, backup, restore, and integrity verification
-ms.date: 2026-08-16
-ms.topic: concept
----
+# Durability
 
 Senawa keeps all authority in one SQLite database plus one content-addressed
 asset directory. Both are local files. There is no server, no cache tier, and no

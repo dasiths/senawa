@@ -1,9 +1,4 @@
----
-title: Dataflow
-description: How values move from workflow input through phase attempts, mapped inputs, schema-validated outputs, and generated tasks
-ms.date: 2026-08-16
-ms.topic: concept
----
+# Dataflow
 
 Data moves through a Senawa run as a chain of content-addressed bindings. A
 value is validated against a declared schema, stored as canonical bytes,

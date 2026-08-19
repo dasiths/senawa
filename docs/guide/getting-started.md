@@ -1,9 +1,4 @@
----
-title: Getting started with Senawa
-description: Install senawa, author a workflow, start a run, and drive it to completion
-ms.date: 2026-08-16
-ms.topic: tutorial
----
+# Getting started with Senawa
 
 This journey takes you from an empty directory to a running local supervisor, a
 validated workflow tree, an open portal, a durable command receipt, and a clean

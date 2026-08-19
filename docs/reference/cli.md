@@ -1,9 +1,4 @@
----
-title: CLI Reference
-description: The senawa command surface: the run loop, decisions, and the local supervisor
-ms.date: 2026-08-15
-ms.topic: reference
----
+# CLI Reference
 
 ## Commands
 

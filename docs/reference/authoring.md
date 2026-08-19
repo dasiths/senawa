@@ -1,9 +1,4 @@
----
-title: Authoring reference
-description: Every field in agents.yaml, workflow.yaml, and sensors.yaml, with its default, its expanded form, and the refusal it produces
-ms.date: 2026-08-18
-ms.topic: reference
----
+# Authoring reference
 
 A consumer authors three YAML documents plus prompts and JSON schemas. This page
 lists every field each accepts, what it defaults to when omitted, and what senawa

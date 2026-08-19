@@ -1,9 +1,4 @@
----
-title: Design Overview
-description: The philosophy behind the Senawa deterministic workflow kernel and its eight governing principles
-ms.date: 2026-08-16
-ms.topic: overview
----
+# Design Overview
 
 Senawa executes consumer-defined workflows as a deterministic state machine. A
 run is a sequence of immutable, content-addressed records derived from exact

@@ -1,9 +1,4 @@
----
-title: Security
-description: Principals, roles, capabilities, grants, approvals, proposals, and the local and remote trust boundaries
-ms.date: 2026-08-16
-ms.topic: concept
----
+# Security
 
 Senawa's security model is one sentence: authority flows one way, and nothing a
 model, a prompt, a client, or a remote peer says can widen it. This page states

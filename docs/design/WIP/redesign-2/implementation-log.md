@@ -1,9 +1,4 @@
----
-title: Senawa v1 implementation log
-description: Narrative record of decisions, deviations, and validation across the v1 redesign
-ms.date: 2026-08-16
-ms.topic: concept-article
----
+# Senawa v1 implementation log
 
 This is the narrative of the v1 redesign. It records what was decided, what was
 deviated from, and what was learned, so the reasoning survives past the diff.

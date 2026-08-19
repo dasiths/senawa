@@ -1,9 +1,4 @@
----
-title: Senawa v1 redesign brief
-description: Consolidated statement of the v1 goal, the consumer experience, the runtime loop, and the decisions that constrain the design
-ms.date: 2026-08-16
-ms.topic: concept-article
----
+# Senawa v1 redesign brief
 
 This brief records what v1 must do, why the current branch cannot do it, and
 which decisions are already settled. It is the reference the redesign analysis

@@ -1,9 +1,4 @@
----
-title: Senawa v1 redesign plan
-description: Sequenced plan to make an authored workflow drive real agents to completion, with a simpler authoring surface and a progressive portal
-ms.date: 2026-08-16
-ms.topic: concept-article
----
+# Senawa v1 redesign plan
 
 This plan turns [the brief](brief.md) into sequenced work, using the evidence in
 [the research](research.md). It replaces the redesign-1 plan as the active

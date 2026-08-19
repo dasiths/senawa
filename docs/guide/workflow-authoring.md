@@ -1,9 +1,4 @@
----
-title: Workflow authoring
-description: How to describe a workflow in the three authored files senawa reads
-ms.date: 2026-08-18
-ms.topic: how-to
----
+# Workflow authoring
 
 You describe a workflow in three files under `.senawa`, plus the prompts and
 schemas they point at. Senawa compiles them into an immutable, content-addressed

@@ -1,9 +1,4 @@
----
-title: Extending Senawa
-description: Adding adapters, sensors, workers, and transports within the enforced dependency rules
-ms.date: 2026-08-16
-ms.topic: how-to
----
+# Extending Senawa
 
 Extension in Senawa follows one pattern: define behavior against an abstract port
 in `runtime`, implement that port in a Node-capable package, and bind the

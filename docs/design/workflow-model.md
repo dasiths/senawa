@@ -1,9 +1,4 @@
----
-title: Workflow Model
-description: The canonical graph, phase lifecycle, evidence policy, budgets, and additive amendments
-ms.date: 2026-08-16
-ms.topic: concept
----
+# Workflow Model
 
 A Senawa workflow is a directed graph of definitions plus a set of policies that
 decide when each part of that graph is finished. The graph is compiled once per

@@ -1,9 +1,4 @@
----
-title: Local Supervisor HTTP Reference
-description: Alpha Unix-socket and loopback HTTP transport and security contracts
-ms.date: 2026-08-16
-ms.topic: reference
----
+# Local Supervisor HTTP Reference
 
 ## Transports
 

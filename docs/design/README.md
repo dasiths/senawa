@@ -1,9 +1,4 @@
----
-title: Senawa Design
-description: Index of the Senawa design set, its vocabulary, and the active execution records
-ms.date: 2026-08-16
-ms.topic: overview
----
+# Senawa Design
 
 The design set explains why Senawa exists, how its authority model works, and how
 every component fits together, in enough depth to reason about the system without

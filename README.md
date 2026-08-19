@@ -1,9 +1,4 @@
----
-title: Senawa
-description: Deterministic workflow kernel and v1 command-line tooling
-ms.date: 2026-08-17
-ms.topic: overview
----
+# Senawa
 
 Senawa is the deterministic workflow kernel of a consumer-defined software
 factory. It executes consumer-defined workflows as an auditable state machine on
