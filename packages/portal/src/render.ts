@@ -260,9 +260,13 @@ function renderHeader(state: PortalState, actions: PortalRenderActions): HTMLEle
   });
   runSwitch.append(select);
   const tools = element("div", "header-tools");
-  const needsButton = commandButton(`Needs ${state.humanNeeds.length}`, () =>
-    actions.toggleRightRail(true),
-  );
+  // Opening a rail that is already open looks like a dead control, which is what
+  // this was whenever the rail was left open. A badge that counts what needs you
+  // should take you to it.
+  const needsButton = commandButton(`Needs ${state.humanNeeds.length}`, () => {
+    if (state.humanNeeds.length > 0) actions.navigate("needs");
+    actions.toggleRightRail(true);
+  });
   needsButton.className = "rail-toggle";
   tools.append(needsButton, statusBadge(state.session.status, state.session.status));
   header.append(identity, runSwitch, tools);
@@ -1337,6 +1341,9 @@ function renderDialog(
   dialog.append(form);
   root.append(dialog);
   dialog.showModal();
+  // Focus lands on the first focusable child otherwise, which is the exact-record
+  // disclosure. A person opening this dialog came to write in it.
+  form.querySelector<HTMLElement>("textarea, input:not([type=hidden]), select")?.focus();
 }
 
 function appendDialogFields(
@@ -1698,7 +1705,7 @@ function routeLabel(route: PortalRouteName): string {
 
 function dialogConsequence(kind: DialogKind): string {
   const consequences: Readonly<Record<DialogKind, string>> = {
-    answer: "This records an immutable answer and requires a fresh dispatch boundary.",
+    answer: "The agent reads this as written, and nobody can change it once sent.",
     approval: "This decision applies only to the displayed candidate digest and graph revision.",
     amendment: "Approval records a decision only. Trusted supervisor recovery owns application.",
     allowance: "This changes one bounded budget limit without resetting prior accounting.",

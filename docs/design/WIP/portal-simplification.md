@@ -97,33 +97,10 @@ Everything else — revisions, digests, cursors, generations — is the *proof*
 layer. It has to remain reachable, because being able to check is the product.
 It does not have to be first.
 
-## The shape to move to
+## The vocabulary to move to
 
-### One run page, three bands
-
-Replace the nine-tab workspace with a single scrolling run page:
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  ● rpi · building a tic-tac-toe game        [needs you] │  ← state, one line
-├─────────────────────────────────────────────────────────┤
-│  ◇ research  ✓ closed      3 questions asked            │
-│  ◆ plan      ● working     planner · haiku · 2m         │  ← the workflow
-│  ○ implement   waiting                                  │
-├─────────────────────────────────────────────────────────┤
-│  ▸ Record                                               │  ← collapsed proof
-└─────────────────────────────────────────────────────────┘
-```
-
-* **Band 1** is the answer to "does it need me". When something is pending it is
-  the question itself with an answer box, not a badge that counts them.
-* **Band 2** is the workflow as a vertical list of phases, each expandable to its
-  agents and their attempts. This replaces Overview, Graph, Delivery, Agents, and
-  Workspaces for the ordinary case.
-* **Band 3** is `Record`, collapsed. Opening it reveals today's Activity,
-  Artifacts, Amendments, and the revision counters, unchanged.
-
-Nothing is removed. Four views become one band and a disclosure triangle.
+The per-tab analysis further down decides the structure. This section decides how
+things are *rendered* once they are in it.
 
 ### Icons carry the kinds
 
@@ -186,21 +163,399 @@ is silent when healthy and explicit when not. The screen-reader duplicate
 becomes an `aria-live` region on the same element rather than a second visible
 copy.
 
+## The escalation path, component by component
+
+Everything below was exercised in a browser against a live pending question, by
+clicking, typing, and pressing keys — not by reading the markup.
+
+### The same question is rendered three times and only one copy can answer it
+
+A single pending question appears simultaneously in:
+
+1. the alert banner above the workspace, with **Answer this question**;
+2. the **Human needs** view, with only **Review exact record**;
+3. the right rail's **Human queue**, with only **Review exact record**.
+
+The view named for the job cannot do the job. Someone who clicks `Human needs`
+because they want to answer a need finds a card with one button that sounds like
+an audit action.
+
+It is worse than that: **Review exact record opens the same dialog as Answer this
+question.** Identical content, same textarea, same `Submit exact answer`. Two
+names, three placements, one behaviour, and the name that sounds read-only is the
+one on two of the three copies.
+
+### The primary button can be covered by the attention rail
+
+Measured once at 1052×578 with the rail open: the button's centre hit-tests to
+`div.rail-heading` inside `aside.right-rail`, which is `position: fixed;
+z-index: 120`. Playwright retried the click for ten seconds and never landed it.
+
+The cause is structural rather than a specific breakpoint: the alert banner spans
+the full window and does not reserve the rail's width, and the rail switches
+between `fixed` and `sticky` depending on width. At 1600px the alert still
+overlaps the rail (`alert.right` 1585 against `rail.left` 1265) and happens to
+remain clickable. Whether the most important button in the product is reachable
+is therefore incidental.
+
+### The Needs badge was inert
+
+Clicking `Needs 1` in the banner did nothing: it called `toggleRightRail(true)`
+on a rail that was already open, so the URL was unchanged and no view was
+selected. It looked exactly like the affordance that should take you to the thing
+needing you. Fixed in this branch: it now navigates to the needs view when there
+is something to see.
+
+### Three minutes old is "Overdue"
+
+The question was flagged `Overdue` in red at three minutes. For a workflow whose
+premise is that a person may be away, an overdue marker that is always on carries
+no information.
+
+### The answer dialog: what is right
+
+Worth keeping, and worth saying because it is the part that works:
+
+* A native `<dialog>`, genuinely modal (`:modal` is true).
+* `Escape` closes it and **focus returns to the trigger**.
+* The textarea is `required`, so an empty submit is refused by the browser.
+* Submitting shows `answer-question completed` and the need clears.
+
+### The answer dialog: what is wrong
+
+| Observed | Why it matters |
+| --- | --- |
+| Focus lands on `summary`, the disclosure triangle | The person came to type. They must Tab past a JSON tree to reach the field |
+| First line is "This records an immutable answer and requires a fresh dispatch boundary" | "Fresh dispatch boundary" is internal vocabulary in the sentence a person reads before answering |
+| `Exact review source $ {2} need {11} question {7}` | A raw JSON tree with key counts, above the answer field |
+| Never says who asked or which phase | `namesWhoAsked: false`, `showsPhase: false`. You answer without knowing which agent is blocked or what it is doing |
+| No length bound or counter | `maxLength: null` |
+| Empty submit gives only "Please fill out this field." | The browser default; no in-app guidance |
+
+On the last two: a 9,000-character answer submitted cleanly and was recorded as
+`answer-question completed`. There is no counter, no bound, and no confirmation
+step — for a value the dialog itself calls immutable.
+
+### The steer dialog already solves most of this
+
+The same codebase, one view away:
+
+* Title names the target: **Redirect researcher**.
+* Consequence in plain words: "This is recorded with your name and the time
+  before anything tries to deliver it."
+* The delivery select reads **When this turn ends / During this turn / Stop this
+  turn and start again** — policy expressed as choices a person can weigh.
+* The action reads **Send to the agent**, not "Submit exact steering".
+
+It shares the two structural faults — focus on `summary`, and a raw
+`dispatchId`/`taskId` tree above the field — but its *language* is the model the
+answer dialog should copy. Nothing needs inventing.
+
+### Chrome duplication measured
+
+* Three renderings of the same fact: `Needs 1` badge, `1 human needs` in the
+  status strip, and `live; current; 0 pending; 1 human needs`.
+* Two controls to dismiss one rail: `Collapse attention rail` (an aria-labelled
+  `›`) and `Close` (**no accessible name at all** — `aria-label` and `title` are
+  both null, so it is announced from its text alone and was unreachable by role
+  query).
+* Plus `Resize attention rail` and `Resize navigation rail` separators: three
+  mechanisms per rail.
+* Tabs use roving `tabindex`, so only the selected tab is in the tab order. That
+  is correct for a tablist, and it means the nine views cost one Tab stop — the
+  one piece of the chrome that is already efficient.
+
+### What the escalation path should be
+
+One rule: **the question appears once, where you are, with the answer box in it.**
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ ◆ research · ● researcher is waiting on you      4m      │
+│                                                          │
+│ "Which Node.js version should this target?"              │
+│                                                          │
+│ ┌──────────────────────────────────────────────────────┐ │
+│ │ your answer                                          │ │
+│ └──────────────────────────────────────────────────────┘ │
+│ Nobody can change this once sent.        [ Send ]  ▸ why │
+└──────────────────────────────────────────────────────────┘
+```
+
+* The phase and the agent are named, because that is what the question is
+  *about*.
+* The answer field is present, not behind a button. Answering a question is not
+  a modal decision; it is a reply.
+* The immutability warning is one short sentence in words a person owns.
+* `▸ why` opens today's exact-review tree, unchanged, for anyone who wants it.
+* `Review exact record` stops being a second door to the same dialog and becomes
+  what its name says.
+
+Concretely, in order:
+
+1. **Focus the textarea, not the disclosure.** One line, fixes the worst of it.
+2. **Name the agent and phase in the dialog title**, copying the steer dialog.
+3. **Rewrite the immutability sentence** without "fresh dispatch boundary".
+4. **Make the Needs badge navigate** to the needs view, or remove it.
+5. **Give the Human needs view and the rail card a real answer action** — or
+   inline the answer box and delete the modal.
+6. **Bound the answer** with a counter, matching the authority's limit.
+7. **Reserve the rail width in the alert**, or move the alert inside the main
+   column so it cannot be covered.
+8. **Collapse the three rail controls to one**, and give it a name.
+9. **Make "Overdue" mean something** — a threshold the workflow author sets, or
+   nothing at all.
+
+Items 1 through 4 are each a few lines and independently shippable.
+
+## Every tab, what it really is, and where it goes
+
+Nine tabs is not nine subjects. It is four subjects, one of them shown four
+times.
+
+### The nine, measured
+
+| Tab | What it actually shows | Keyed by | Rows on a live run |
+| --- | --- | --- | --- |
+| Overview | six counts and eight revision numbers | the run | — (218 chars) |
+| Graph | workflow / phase / task / criterion nodes | the tree | 8 |
+| Delivery | `Kind · Phase or task · Attempt · State · Metadata` | the tree | 7 |
+| Activity | every durable event, fully expanded | the run | — (23,903 chars) |
+| Artifacts | `Artifact · Type · Size · Sensitivity · Digest` | a phase output | 1 |
+| Human needs | questions, approvals, escalations | a task | 0–1 |
+| Amendments | proposals, source, impact, diff | the tree | 0 |
+| Workspaces | `Task · Mode · State · Completion · Result` and cohorts | a task | 0 |
+| Agents | `Persona · Working on · Attempt · Model · State · Session` | a dispatch of a task | 6 |
+
+Read the `Keyed by` column. **Graph, Delivery, Workspaces, Agents, and Artifacts
+are all keyed by a node in the same tree.** They are five renderings of one
+structure, split apart by which columns someone wanted to see at the time.
+
+### Graph is not a graph, it is the workflow
+
+`Graph` is the internal word. What the tab shows is the thing the author wrote in
+`workflow.yaml`: phases, the work under them, and what each must satisfy. It
+should be called **Workflow**, and `Kind` should stop being a column because a
+phase and a criterion should not look alike enough to need one.
+
+The evidence that they currently do: clicking the row for the `research` phase
+selects `research-produced`, a criterion, because both are rows in one flat table
+and the criterion sorts first. The two are different kinds of thing and the table
+renders them identically.
+
+### The fold is already half-built
+
+Selecting a node in Graph today produces exactly the right shape:
+
+```
+research-produced
+[ Copy identity ] [ Focus in diagram ] [ Review linked human need ]
+Identity      criterion_8d36921e30caaea…
+Source        /phases/research/executor/completionPolicy/criteria/research-produced
+Superseded by No successor
+──────────────
+Agent output   [ Scope to whole run ] [ Copy output ] [ Download output ]
+```
+
+A heading, a **toolbar of actions on the selection**, a detail list, and a
+transcript panel. That is the docking point for everything else. Agents,
+Delivery, Workspaces and Artifacts are not separate views; they are *more panels
+for the same selection*.
+
+(Two bugs visible in that same capture: the detail panel says a criterion is
+selected while the transcript panel says `No node selected`, and `Review linked
+human need` is disabled with no explanation of what would enable it.)
+
+### What each tab becomes
+
+**Overview → the Workflow view's header, plus Record.**
+Its six counts are summaries of the tree that the tree itself shows better. Its
+eight revision numbers are proof-layer material. Nothing is lost; nothing needs
+its own tab.
+
+**Graph → Workflow.** The one structural view. Phases as a vertical list; the
+work under each phase nested; criteria shown as a phase's exit conditions rather
+than as sibling rows.
+
+**Delivery → attempt state on each node.** `Attempt` and `State` become the badge
+on a phase row. `Metadata` becomes part of the selection detail. The dataflow and
+task-frontier revisions go to Record.
+
+**Agents → into the phase row, and this is the strongest case.** An agent is not
+a separate population; it is *what is executing a phase right now*. Steering it
+from a table that names its task as `task_e30bb4a5…` is worse in every way than
+steering it from the phase it is working on, where the phase's name, its attempt,
+its question and its output are already on screen. Fold the persona, model, and
+state into the phase row, and put `Steer` and `Override` in the selection
+toolbar that already exists.
+
+**Workspaces → a panel on a task's selection, and its conflicts become needs.**
+Git mode, state, completion, and result are *about one task*. The
+conflict-and-rework half is not a report at all: `integration-conflict` and
+`integration-rework` are human need kinds, so they belong in the queue with the
+questions.
+
+**Artifacts → a panel on a phase's selection, and a run-level list.** What a
+phase produced belongs with the phase. The flat list stays useful for "show me
+everything this run made", so it survives as a section of the Workflow view's
+footer rather than a tab.
+
+**Human needs → gone as a tab; the need appears on the node it blocks.** Covered
+in the escalation section above. A question about the research phase belongs on
+the research phase.
+
+**Activity → Record.** Renamed, collapsed to one line per event, and joined by
+receipts, revisions, and the exact-record trees.
+
+**Amendments → a need, not a tab.** See below: `amendment-decision` and
+`amendment-application` are two of the eight `PortalHumanNeedKind` values. They
+belong wherever the other six appear.
+
+### An amendment is a human need, and so are five other things
+
+The authority already says this. `PortalHumanNeedKind` is:
+
+```
+question              an agent asked something
+candidate-approval    a phase wants a person to approve it
+amendment-decision    approve or reject a proposed change to the workflow
+amendment-application apply an amendment that was approved
+escalation            a budget or allowance ceiling was reached
+integration-conflict  a worktree conflict needs a person
+integration-rework    work needs redoing after integration
+ending-uncertain      ending the run needs a person
+```
+
+Eight kinds, one type, one queue, and each need carries its own
+`allowedCommands` — the live question carried `["answer-question"]`. The data
+model has already decided that these are one thing and that a surface rendering
+them can be generic.
+
+The UI disagrees with its own model. It puts:
+
+* `question`, `candidate-approval`, `escalation` in **Human needs**;
+* `amendment-decision` and `amendment-application` in **Amendments**;
+* `integration-conflict` and `integration-rework` in **Workspaces**.
+
+So three of the eight ways a run can need you are somewhere other than the place
+called "human needs", and two of those places are tabs that are empty on nearly
+every run — meaning a person learns to ignore the region where a blocking
+decision will eventually appear.
+
+`Amendments` and `Workspaces` are not subjects. They are *renderings of two
+need kinds each*, plus a detail panel that belongs on the node.
+
+### The result: two tabs
+
+```
+  ◆ Workflow    the tree, its agents, its state, what it needs, what it produced
+  ▤ Record      events, receipts, revisions, exact records
+```
+
+`Amendments` disappears as a tab: an amendment decision is a need, so it appears
+where every other need appears — on the node it concerns, and in the one queue.
+Its source, impact, and diff become the detail panel of that need, which is
+exactly what they already are.
+
+`Workspaces` disappears the same way: a conflict is a need on the task that
+conflicted, and the git state is a panel on that task.
+
+`Human needs` disappears as a tab because a need is never *about* nothing — it
+is about a phase, a task, or the run — and it belongs on that thing. The queue
+survives in the rail, as the list of everything currently waiting on you, which
+is the one legitimate cross-cutting view.
+
+### Sub-structure inside Workflow
+
+The one view that carries the load needs internal shape. Three bands, top to
+bottom:
+
+```
+┌─ rpi ───────────────────────────────── running · 6m ──┐
+│  ● researcher is waiting on you                        │  ← only when true
+├────────────────────────────────────────────────────────┤
+│ ◆ research    ✓ closed        3 questions · 1 output   │
+│ ◆ plan        ● working       planner · haiku · 2m   ▸ │
+│ ◆ implement   ○ waiting       fans out over plan.tasks │
+├────────────────────────────────────────────────────────┤
+│ ▸ What this run produced                    1 artifact │
+└────────────────────────────────────────────────────────┘
+```
+
+Expanding a phase (`▸`) reveals, in this order:
+
+1. **Who is on it** — persona, model, attempt, elapsed, with `Steer` and
+   `Override` right there.
+2. **What it is waiting for** — the question with its answer box, or the gate and
+   its last reading.
+3. **What it produced** — outputs with size and sensitivity, and its workspace if
+   it has one.
+4. **Its exit conditions** — the criteria, which is where `criterion` nodes stop
+   being siblings of phases.
+5. **`▸ exact record`** — identities, digests, source pointers, superseded-by.
+
+A fan-out phase expands to its members, each collapsible the same way, which is
+the case the current flat table handles worst.
+
+### Retire the three display modes
+
+`Diagram | Table | Tree` are three renderings of eight rows, defaulting to the
+one that reads least like a workflow. The nested phase list *is* the tree. Keep
+the diagram as a toggle for people who want the picture; drop Table.
+
+### What this removes
+
+* Nine tabs to three, two of which are usually one.
+* Four views of one tree to one.
+* `Kind`, `Generation`, and `Lifecycle` columns disappear into icons, state
+  colour, and the exact record.
+* The `Working on` column disappears entirely: an agent is rendered inside the
+  thing it is working on.
+
 ## Order of work
 
-1. **Names over identities.** Highest value, lowest risk, no layout change.
-   Fixes the Agents table and half the Graph table on its own.
-2. **Collapse Activity.** One line per event, expandable. Removes 23,000
-   characters and 168 digests from the default view.
-3. **Fold attempts into agents.** Six rows become two.
-4. **Merge the nine tabs into three bands.** The structural change; do it after
-   the content is legible so the layout is judged on the right material.
-5. **Icons and state colour.** Once rows are short enough for a mark to matter.
-6. **Hide empty sections.**
+Grouped so that each step is shippable and the risky one comes last.
 
-Steps 1 through 3 are content-only and can ship one at a time. Step 4 is the one
-that needs the browser tests rewritten, and the existing thirty-four are the
-safety net for it.
+**Already done** (in this branch):
+
+* Focus the answer field rather than the exact-record disclosure.
+* "The agent reads this as written, and nobody can change it once sent." in
+  place of "requires a fresh dispatch boundary".
+* The `Needs` badge navigates instead of re-opening an open rail.
+
+**Content, no layout change.** Each independently shippable:
+
+1. **Names over identities.** `research` not `task_e30bb4a5…`, `claude-haiku-4.5`
+   not `unknown (route 0)`. Fixes the Agents table and half the Workflow table
+   on its own.
+2. **Name the agent and phase in every dialog title**, copying the steer dialog.
+3. **Collapse Activity** to one line per event, expandable. Removes 23,000
+   characters and 168 digests from the default view.
+4. **Fold attempts into the agent** that made them. Six rows become two.
+5. **Bound the answer field** with a counter matching the authority's limit.
+
+**Structure.** Needs the browser tests rewritten:
+
+6. **Rename Graph to Workflow** and nest the tree: phases, their work, their
+   criteria as exit conditions rather than sibling rows.
+7. **Fold Agents, Delivery, and Workspaces into the selection** that Workflow
+   already has, and put `Steer` and `Override` in its existing toolbar.
+8. **Fold every need onto the node it blocks**, with its action inline. This is
+   one generic surface driven by `kind` and `allowedCommands`, not eight
+   special cases, and it retires the Amendments tab and the conflict half of
+   Workspaces along with Human needs.
+9. **Merge Overview and Activity into Record.**
+
+**Polish.** Once rows are short enough for a mark to matter:
+
+10. Icons for the kinds, state as colour and motion.
+11. One rail control with a name, one status line, `Overdue` given a real
+    threshold or removed.
+12. Reserve the rail width in the alert so the primary button cannot be covered.
+
+Steps 1 through 5 are content-only. Step 6 is where the thirty-four browser tests
+become the safety net rather than the obstacle: rewrite them against the nested
+structure first, then move the views under them.
 
 ## What must not be lost
 

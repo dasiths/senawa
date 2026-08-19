@@ -84,6 +84,8 @@ const IDENTITY_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 const COMMAND_ID_PATTERN =
   /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|command_[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$/;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+/** What a worker context can carry back to the agent, so nothing longer is accepted. */
+const MAX_ANSWER_LENGTH = 4_096;
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const ROLE_PATTERN = /^[a-z0-9](?:[a-z0-9:-]{0,62}[a-z0-9])?$/;
 const TOKEN_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
@@ -246,6 +248,12 @@ export function decodeAnswerQuestionPayload(input: string | unknown): AnswerQues
   digest(object.contextDigest, "$.contextDigest");
   identity(object.taskId, "$.taskId");
   positiveSequence(object.definitionGeneration, "$.definitionGeneration");
+  // The worker context bounds the text it carries back to the agent. Accepting a
+  // longer answer records an immutable decision that can never be delivered,
+  // which strands the run with no way to replace it.
+  if (typeof object.answer === "string" && object.answer.length > MAX_ANSWER_LENGTH) {
+    fail("oversized", "$.answer", `is longer than ${MAX_ANSWER_LENGTH} characters`);
+  }
   return Object.freeze({
     submissionId: object.submissionId as string,
     questionDigest: object.questionDigest as string,
