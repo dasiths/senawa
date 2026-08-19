@@ -11179,9 +11179,14 @@ function buildTrustedAmendmentQuiescence(
     }
   }
   const affected = lifecycle.proposal.impact.affectedTaskScopes;
+  // Quiescence has to reach the members beneath an affected phase, not only the
+  // scopes the proposal names. A fan-out member is a task of its own, so an
+  // amendment could otherwise apply while one was still working and rewrite the
+  // graph under it.
+  const counted = withMemberScopes(database, command.runId, affected);
   let liveClaimCount = 0;
   let nonterminalEffectCount = 0;
-  for (const scope of affected) {
+  for (const scope of counted) {
     liveClaimCount +=
       database
         .prepare<[string, string, number], { count: number }>(
@@ -16541,4 +16546,49 @@ function readRefusals(value: string | null): readonly string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Widens task scopes to every sibling working under the same phase.
+ *
+ * The phase a task belongs to is recorded on the context it was dispatched
+ * with, which is the only place the relationship survives an amendment.
+ */
+function withMemberScopes(
+  database: Database.Database,
+  runIdValue: string,
+  scopes: readonly { readonly taskId: string; readonly definitionGeneration: number }[],
+): readonly { readonly taskId: string; readonly definitionGeneration: number }[] {
+  const widened = new Map(
+    scopes.map((scope) => [`${scope.taskId}\u0001${scope.definitionGeneration}`, scope]),
+  );
+  const siblings = database.prepare<
+    [string, string, string],
+    { task_id: string; definition_generation: number }
+  >(
+    `SELECT DISTINCT
+       json_extract(b.canonical_context, '$.task.taskId') AS task_id,
+       json_extract(b.canonical_context, '$.task.definitionGeneration') AS definition_generation
+     FROM context_dispatches d
+     JOIN context_bases b ON b.context_id = d.context_id
+     WHERE d.run_id = ?
+       AND json_extract(b.canonical_context, '$.phaseAttempt.phase.phaseId') IN (
+         SELECT json_extract(b2.canonical_context, '$.phaseAttempt.phase.phaseId')
+         FROM context_dispatches d2
+         JOIN context_bases b2 ON b2.context_id = d2.context_id
+         WHERE d2.run_id = ? AND json_extract(b2.canonical_context, '$.task.taskId') = ?
+       )`,
+  );
+  for (const scope of scopes) {
+    for (const row of siblings.all(runIdValue, runIdValue, scope.taskId)) {
+      if (row.task_id === null || row.definition_generation === null) continue;
+      const key = `${row.task_id}\u0001${row.definition_generation}`;
+      if (widened.has(key)) continue;
+      widened.set(key, {
+        taskId: row.task_id,
+        definitionGeneration: row.definition_generation,
+      });
+    }
+  }
+  return [...widened.values()];
 }

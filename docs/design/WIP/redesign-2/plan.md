@@ -410,8 +410,14 @@ Acceptance:
 * [x] Honour per-phase failure policy: wait, proceed with passed members, or fail
   outright. **Partial: the authored policy now reaches the run. The authority
   holds one policy per run, so a run any phase wants stopped is stopped. F-013.**
-* [ ] Make amendment quiescence transitive over member phases before an approved
-  amendment can apply.
+* [x] Make amendment quiescence transitive over member phases before an approved
+  amendment can apply. **The quiescence check counted only the scopes a proposal
+  named, so an amendment could apply while a fan-out member was still working
+  and rewrite the graph under it. It now widens to every sibling task under the
+  same phase, read from the dispatch context, which is the only place that
+  relationship survives an amendment. Partial: the change can only widen the set
+  and so can only make apply stricter, but no test yet exercises a second member,
+  because the amendment fixture has one task per phase. D-041.**
 * [x] Let a human mark a member done over red gates as an explicit authority
   decision carrying principal, timestamp, and reason. **`senawa override` records
   all three and the reason as written. Only work that reported it could not
