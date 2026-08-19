@@ -1024,6 +1024,16 @@ function admitCompletion(
   if (result.status === "accepted" && result.completionFact !== undefined) {
     state.completionDisposition = (payload.completion as CompletionSubmission).disposition;
   }
+  // A rejected submission was reported as a successful call carrying the word
+  // "stale", so an agent had to know that a success meant refusal and guess what
+  // to do about it. One live planner submitted a valid plan repeatedly and was
+  // told nothing else each time.
+  if (result.status === "stale") {
+    return failure(
+      "completion-stale",
+      "This dispatch is no longer the current attempt for its task, so nothing it submits can be accepted. Stop and wait; a later attempt carries the work.",
+    );
+  }
   return success({ status: result.status, replayed: result.replayed });
 }
 
