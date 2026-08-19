@@ -9,6 +9,8 @@ export interface CommandNarration {
   readonly intent: string;
   readonly phase: CommandNarrationPhase;
   readonly receiptStatus?: string;
+  /** Why the authority refused, which is the only part a person can act on. */
+  readonly reason?: string;
 }
 
 export const IDLE_NARRATION = "No command has been submitted from this browser.";
@@ -27,11 +29,13 @@ export function narrateReceipt(
   receipt: DurableReceipt,
 ): CommandNarration | undefined {
   if (narration === undefined || narration.commandId !== receipt.commandId) return narration;
+  const reason = receipt.error?.message;
   return Object.freeze({
     commandId: narration.commandId,
     intent: narration.intent,
     phase: isTerminalReceipt(receipt) ? ("resolved" as const) : ("acknowledged" as const),
     receiptStatus: receipt.status,
+    ...(reason === undefined ? {} : { reason }),
   });
 }
 
@@ -52,9 +56,12 @@ export function narrationText(narration: CommandNarration | undefined): string {
       ? `${narration.intent} resolved without a receipt`
       : `${narration.intent} is in progress`;
   }
+  // "answer-question refused" tells a person nothing they can act on, and the
+  // dialog closes on refusal, so this line is all that is left of the attempt.
+  const reason = narration.reason === undefined ? "" : `: ${narration.reason}`;
   return narration.phase === "resolved"
-    ? `${narration.intent} ${narration.receiptStatus}`
-    : `${narration.intent} is ${narration.receiptStatus}`;
+    ? `${narration.intent} ${narration.receiptStatus}${reason}`
+    : `${narration.intent} is ${narration.receiptStatus}${reason}`;
 }
 
 export function narrationBusy(narration: CommandNarration | undefined): boolean {

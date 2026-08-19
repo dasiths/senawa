@@ -358,12 +358,10 @@ export class PortalApplication {
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
         if (summary.graphRevision !== overview.sync.graphRevision)
           throw new Error("Graph summary revision changed during assembly");
-        const [nodes, edges, workspaces, agents] = await Promise.all([
+        const [nodes, edges, workspaces] = await Promise.all([
           this.#client.graphNodes(repositoryId, runId, summary.graphRevision),
           this.#client.graphEdges(repositoryId, runId, summary.graphRevision),
           this.#client.workspaces(repositoryId, runId),
-          // The transcript names its lines by agent, so this view needs them too.
-          this.#client.agents(repositoryId, runId),
         ]);
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
         if (
@@ -376,7 +374,16 @@ export class PortalApplication {
         this.#dispatch({ type: "cache", cache: "graphNodes", key: revision, value: nodes });
         this.#dispatch({ type: "cache", cache: "graphEdges", key: revision, value: edges });
         this.#dispatch({ type: "cache", cache: "workspaces", key, value: workspaces });
-        this.#dispatch({ type: "cache", cache: "agents", key, value: agents });
+        // The transcript names its lines by agent, but a name is a nicety and
+        // this view is how a person answers a blocked agent. Letting it fail the
+        // assembly would take every command offline to spare a label.
+        void this.#client
+          .agents(repositoryId, runId)
+          .then((agents) => {
+            if (this.#isCurrentAssembly(repositoryId, runId, route))
+              this.#dispatch({ type: "cache", cache: "agents", key, value: agents });
+          })
+          .catch(() => undefined);
         void this.#syncTranscript();
         return true;
       }

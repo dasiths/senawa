@@ -458,10 +458,14 @@ async function step(
   }
 
   if (!completed || published.length === 0) {
+    // A turn that stopped to ask is waiting for a person, not spent. Retrying it
+    // dispatches an agent with the same context, which asks the same question
+    // again and spends an attempt doing it.
+    const asked = state.questions.some((question) => String(question.dispatchId) === dispatchId);
     // A dispatch that ended without handing anything in is a spent attempt, not
     // work still in progress. Reporting it as awaiting the agent waits for a
     // turn that is already over, which stalls the run until a person notices.
-    if (spentDispatch(input, dispatchId)) {
+    if (!asked && spentDispatch(input, dispatchId)) {
       const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
       if (attempt < maximumAttempts) {
         const retried = dispatchPhase({

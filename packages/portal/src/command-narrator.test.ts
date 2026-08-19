@@ -55,6 +55,26 @@ describe("command narrator", () => {
     expect(narrationBusy(completed)).toBe(false);
   });
 
+  it("says why the authority refused, not only that it did", () => {
+    const submitted = narrateSubmission(pending);
+    const refused = narrateReceipt(submitted, {
+      ...receipt("command_one", "refused"),
+      error: {
+        apiVersion: "senawa.dev/protocol/v1",
+        code: "stale-question",
+        commandId: "command_one",
+        message: "Question answer guards do not match current authority",
+        retryable: false,
+      },
+    } as unknown as DurableReceipt);
+
+    // The dialog closes on refusal, so this line is the whole report. "answer-question
+    // refused" leaves a person with nothing to act on and no way to find the reason.
+    expect(narrationText(refused)).toBe(
+      "answer-question refused: Question answer guards do not match current authority",
+    );
+  });
+
   it("treats every terminal receipt status as resolved", () => {
     const submitted = narrateSubmission(pending);
     for (const status of ["completed", "refused", "expired", "cancelled", "unknown-effect"]) {

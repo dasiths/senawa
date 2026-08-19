@@ -3321,3 +3321,51 @@ is what happened repeatedly while these fixes were being developed.
 
 Hanging up is not part of the turn. A disconnect failure is now noted in the
 transcript and leaves the outcome alone.
+
+## F-039: one failing endpoint took every command offline
+
+Naming transcript lines by agent needed the agent list, so the run view fetched
+it alongside the graph. That list then returned 500, the whole assembly failed,
+the portal reported `Connection offline`, and **every** button was disabled —
+including the one that answers a blocked agent's question, which has nothing to
+do with agents or the graph.
+
+A person watching a run that needs them was left with a page that showed the
+question and refused to let them answer it.
+
+The naming is a nicety. It is now fetched on its own and its failure is ignored,
+so a label can never cost a person the ability to act. The underlying 500 on
+`/agents` is not fixed and not understood; it is recorded here because the
+coupling, not the 500, is what made it fatal.
+
+## F-040: a refused command said only that it was refused
+
+Answering any of four queued questions produced `answer-question refused` in the
+status line, and the dialog closed. There was no reason anywhere in the UI. The
+receipt held one:
+
+```
+stale-question: Question answer guards do not match current authority
+```
+
+Those questions were asked by dispatches whose task later moved on, so their
+guards no longer bind and they can never be answered. The portal still listed
+them as things waiting on a person, offered a button, and reported nothing
+useful when it failed.
+
+The narration now carries the refusal's message. Two things remain unfixed and
+are recorded: a question whose guards are stale is still queued as a human need
+forever, and nothing prunes it; and the dialog closes on refusal rather than
+staying open with the reason beside the field a person just filled in.
+
+## F-041: retrying a turn that asked a question asks it again
+
+The spent-attempt retry from F-036 fired on turns that ended `awaiting-answer`
+as well, because those are cancelled effects too. The driver re-dispatched with
+the same context, the agent asked the same question again, and the queue grew:
+one live run reached seven dispatches and five identical questions in a few
+minutes, spending an attempt on each.
+
+A turn that stopped to ask is waiting for a person, not spent. The retry now
+skips a dispatch that has an unanswered question against it; the existing
+answered-question path already handles the other half.
