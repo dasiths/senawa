@@ -116,6 +116,7 @@ export async function startAuthoredRun(input: StartAuthoredRunInput): Promise<St
       snapshot,
       dataflow,
       contextBroker,
+      sessionLedger: authority,
       dependencies: input.dependencies,
       repositoryId: input.repositoryId,
       runId: input.runId,

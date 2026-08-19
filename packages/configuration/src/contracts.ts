@@ -280,6 +280,14 @@ export type RoleDeclaration =
       readonly capabilities: readonly string[];
       readonly prompt: string;
       readonly modelPolicy: string;
+      /**
+       * How long one conversation with this persona lives. An `attempt` scope
+       * starts fresh every dispatch. A `phase` scope carries a retry's history
+       * into the next attempt. A `run` scope keeps the persona talking across
+       * phases, which is what lets a reviewer remember why it rejected work.
+       * Defaults to `attempt`.
+       */
+      readonly sessionScope?: "attempt" | "phase" | "run";
     }
   | {
       readonly key: string;

@@ -1,4 +1,10 @@
-import { validateWorkerModelRouteSelection, type WorkerModelRouteSelection } from "@senawa/kernel";
+import {
+  type AgentSessionResumeBinding,
+  type AgentSessionScope,
+  validateAgentSessionResumeBinding,
+  validateWorkerModelRouteSelection,
+  type WorkerModelRouteSelection,
+} from "@senawa/kernel";
 import { canonicalBytes, type JsonValue, WORKER_PROTOCOL_LIMITS } from "@senawa/protocol";
 import {
   type AgentTranscriptPort,
@@ -30,6 +36,12 @@ export interface CopilotWorkerEffectInput {
   readonly routeSelection: WorkerModelRouteSelection;
   readonly timeoutMs: number;
   readonly grantPolicy: CopilotWorkerGrantPolicy;
+  /** The conversation this dispatch continues, when its agent declared one. */
+  readonly sessionResume?: Readonly<{
+    readonly scope: AgentSessionScope;
+    readonly requestedBinding: AgentSessionResumeBinding;
+    readonly authorizedBinding: AgentSessionResumeBinding;
+  }>;
 }
 
 export interface PhaseOutputSchemaResolverPort {
@@ -116,6 +128,7 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
           ? {}
           : { phaseOutputSchemas: this.phaseOutputSchemas.resolve(stored) }),
         ...(this.transcript === undefined ? {} : { transcript: this.transcript }),
+        ...(input.sessionResume === undefined ? {} : { sessionResume: input.sessionResume }),
         timeoutMs: input.timeoutMs,
         signal: AbortSignal.any([context.signal, localAbort.signal]),
       });
@@ -224,7 +237,11 @@ export function decodeCopilotWorkerEffectInput(
   value: unknown,
   broker: ContextBrokerClient,
 ): CopilotWorkerEffectInput {
-  assertExactObject(value, ["dispatchId", "routeSelection", "timeoutMs", "grantPolicy"]);
+  assertExactObject(
+    value,
+    ["dispatchId", "routeSelection", "timeoutMs", "grantPolicy"],
+    ["sessionResume"],
+  );
   if (typeof value.dispatchId !== "string" || value.dispatchId.length === 0) {
     throw new TypeError("Copilot worker effect dispatchId must be non-empty");
   }
@@ -264,19 +281,49 @@ export function decodeCopilotWorkerEffectInput(
   if (grantPolicy.maxChunkBytes > grantPolicy.maxBytes) {
     throw new TypeError("Copilot worker grant chunk budget must not exceed total bytes");
   }
-  return Object.freeze({ dispatchId: value.dispatchId, routeSelection, timeoutMs, grantPolicy });
+  const sessionResume =
+    value.sessionResume === undefined
+      ? undefined
+      : decodeSessionResume(value.sessionResume, broker.dependencies.sha256);
+  return Object.freeze({
+    dispatchId: value.dispatchId,
+    routeSelection,
+    timeoutMs,
+    grantPolicy,
+    ...(sessionResume === undefined ? {} : { sessionResume }),
+  });
+}
+
+function decodeSessionResume(
+  value: unknown,
+  sha256: Parameters<typeof validateAgentSessionResumeBinding>[1],
+): CopilotWorkerEffectInput["sessionResume"] {
+  assertExactObject(value, ["scope", "requestedBinding", "authorizedBinding"]);
+  if (value.scope !== "attempt" && value.scope !== "phase" && value.scope !== "run") {
+    throw new TypeError("Copilot worker effect session scope must be attempt, phase, or run");
+  }
+  return Object.freeze({
+    scope: value.scope,
+    requestedBinding: validateAgentSessionResumeBinding(value.requestedBinding, sha256),
+    authorizedBinding: validateAgentSessionResumeBinding(value.authorizedBinding, sha256),
+  });
 }
 
 function assertExactObject(
   value: unknown,
   keys: readonly string[],
+  optional: readonly string[] = [],
 ): asserts value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError("Copilot worker effect input must be an object");
   }
   const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+  const permitted = new Set([...keys, ...optional]);
+  if (actual.some((key) => !permitted.has(key))) {
+    throw new TypeError("Copilot worker effect input contains unexpected fields");
+  }
+  const missing = keys.filter((key) => !actual.includes(key));
+  if (missing.length > 0) {
     throw new TypeError("Copilot worker effect input contains unexpected fields");
   }
 }

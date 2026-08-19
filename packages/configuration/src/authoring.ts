@@ -171,6 +171,10 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
         capabilities: [...AGENT_CAPABILITIES, `${agent.key}-work`].sort(compare),
         prompt: agent.key,
         modelPolicy: agent.key,
+        // An element-scoped persona is a fresh conversation each time it works,
+        // which at role level is the same rule as attempt scope. Fan-out members
+        // get their own line whatever the role says.
+        sessionScope: agent.session === "element" ? "attempt" : agent.session,
       }))
       .sort((left, right) => compare(left.key, right.key)),
     modelPolicies: [...agentsByKey.values()]

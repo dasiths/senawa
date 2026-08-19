@@ -71,7 +71,7 @@ export class BrokerWorkerSubmissionSink implements WorkerSubmissionSink {
         submission.kind === "question"
           ? { question: submission.question, urgency: "normal" as const }
           : { question: submission.reason, urgency: "blocking" as const };
-      return this.#admit(stored, scope, "question", submissionId, "question", payload);
+      return this.#admit(stored, "question", submissionId, "question", payload);
     }
 
     if (submission.kind !== "complete") {
@@ -126,13 +126,12 @@ export class BrokerWorkerSubmissionSink implements WorkerSubmissionSink {
     }
 
     for (const output of submission.outputs) {
-      results.push(this.#publish(stored, scope, snapshot, submissionId, output.name, output.value));
+      results.push(this.#publish(stored, snapshot, submissionId, output.name, output.value));
     }
 
     results.push(
       this.#admit(
         stored,
-        scope,
         "completion",
         BrokerWorkerSubmissionSink.#derive(submissionId, "c"),
         "completion",
@@ -144,7 +143,6 @@ export class BrokerWorkerSubmissionSink implements WorkerSubmissionSink {
 
   #publish(
     stored: ReturnType<SqliteContextBroker["listWorkerDispatches"]>[number],
-    scope: AcceptedWorkerSubmission["scope"],
     snapshot: ConfigurationSnapshot,
     submissionId: string,
     outputName: string,
@@ -200,7 +198,6 @@ export class BrokerWorkerSubmissionSink implements WorkerSubmissionSink {
 
     return this.#admit(
       stored,
-      scope,
       "phase-output",
       BrokerWorkerSubmissionSink.#derive(submissionId, "o"),
       "output",
@@ -223,7 +220,6 @@ export class BrokerWorkerSubmissionSink implements WorkerSubmissionSink {
 
   #admit(
     stored: ReturnType<SqliteContextBroker["listWorkerDispatches"]>[number],
-    scope: AcceptedWorkerSubmission["scope"],
     type: "question" | "completion" | "phase-output",
     submissionId: string,
     payloadKey: "question" | "completion" | "output",

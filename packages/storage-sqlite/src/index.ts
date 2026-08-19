@@ -1702,7 +1702,13 @@ export class SqliteAuthority
     }
   }
 
-  putAgentSessionResumeBinding(value: AgentSessionResumeBinding): "created" | "replayed" {
+  putAgentSessionResumeBinding(
+    value: AgentSessionResumeBinding,
+    sessionLineKey: string,
+  ): "created" | "replayed" {
+    if (sessionLineKey.length === 0) {
+      throw new TypeError("Agent session resume binding requires a session line key");
+    }
     const binding = validateAgentSessionResumeBinding(value, this.dependencies.sha256);
     const canonical = canonicalStringify(binding);
     const prior = this.#database
@@ -1723,8 +1729,9 @@ export class SqliteAuthority
            task_id, task_generation, context_id, context_digest, graph_revision_digest,
            configuration_snapshot_digest, prompt_resource_digest, prompt_content_digest,
            prompt_pack_digest, mapped_input_digest, model_selection_digest,
-           repository_commit_digest, repository_tree_digest, canonical_binding
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           repository_commit_digest, repository_tree_digest, canonical_binding,
+           session_line_key
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         binding.bindingDigest,
@@ -1744,8 +1751,37 @@ export class SqliteAuthority
         binding.repositoryCommitDigest,
         binding.repositoryTreeDigest,
         canonical,
+        sessionLineKey,
       );
     return "created";
+  }
+
+  /** The most recently recorded binding on one conversation line, if any. */
+  queryLatestAgentSessionResumeBinding(
+    sessionLineKey: string,
+  ): AgentSessionResumeBinding | undefined {
+    const row = this.#database
+      .prepare<[string], { canonical_binding: string }>(
+        `SELECT canonical_binding FROM agent_session_resume_bindings
+         WHERE session_line_key = ? ORDER BY rowid DESC LIMIT 1`,
+      )
+      .get(sessionLineKey);
+    return row === undefined
+      ? undefined
+      : validateAgentSessionResumeBinding(
+          decodeCanonicalJsonValue(row.canonical_binding),
+          this.dependencies.sha256,
+        );
+  }
+
+  /** How many dispatches have already spoken on one conversation line. */
+  countAgentSessionResumeBindings(sessionLineKey: string): number {
+    const row = this.#database
+      .prepare<[string], { total: number }>(
+        "SELECT COUNT(*) AS total FROM agent_session_resume_bindings WHERE session_line_key = ?",
+      )
+      .get(sessionLineKey);
+    return row?.total ?? 0;
   }
 
   appliedEvaluation(key: {

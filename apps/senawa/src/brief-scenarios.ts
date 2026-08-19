@@ -80,6 +80,8 @@ export interface ScenarioOptions {
   readonly requireEvidence?: number;
   /** Declares the phase output confidential rather than the default internal. */
   readonly confidentialOutput?: boolean;
+  /** Gives `definer` a session of this scope, and a second phase to work on. */
+  readonly session?: "run" | "phase" | "element";
 }
 
 export interface Scenario {
@@ -382,13 +384,21 @@ async function authoredProject(options: ScenarioOptions): Promise<string> {
   await mkdir(join(configuration, "schemas"), { recursive: true });
   await writeFile(
     join(configuration, "agents.yaml"),
-    options.routeLimits === true ? AGENTS_ROUTED : AGENTS,
+    options.routeLimits === true
+      ? AGENTS_ROUTED
+      : options.session === undefined
+        ? AGENTS
+        : AGENTS.replace("definer:\n", `definer:\n  session: ${options.session}\n`),
   );
   await writeFile(join(configuration, "workflow.yaml"), workflow(options));
   await writeFile(join(configuration, "sensors.yaml"), sensors(options));
   await writeFile(
     join(configuration, "prompts", "definer.md"),
-    "Define the work.\n\nRequest: ${{ input.request }}\n",
+    // A persona that works two phases sees a different input in each, so a
+    // template naming a field of the first would refuse in the second.
+    options.session === undefined
+      ? "Define the work.\n\nRequest: ${{ input.request }}\n"
+      : "Define the work.\n",
   );
   await writeFile(join(configuration, "prompts", "verifier.md"), "Verify the work.\n");
   for (const [name, id] of [
@@ -471,15 +481,22 @@ function fanOutPhase(options: ScenarioOptions): string {
 
 function workflow(options: ScenarioOptions): string {
   const second =
-    options.secondPhase === true
+    options.session !== undefined
       ? `
+  - name: verify
+    agent: definer
+    needs: [define]
+    output: schemas/verification.schema.json
+`
+      : options.secondPhase === true
+        ? `
   - name: verify
     agent: verifier
     needs: [define]
     output: schemas/verification.schema.json
     gates: [check]
 `
-      : "";
+        : "";
   return `
 name: delivery
 input: schemas/request.schema.json

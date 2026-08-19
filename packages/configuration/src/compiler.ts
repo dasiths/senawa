@@ -135,6 +135,7 @@ interface ParsedRole {
   readonly capabilities: readonly string[];
   readonly prompt?: string;
   readonly modelPolicy?: string;
+  readonly sessionScope?: "attempt" | "phase" | "run";
 }
 
 interface ParsedModelPolicy {
@@ -1350,7 +1351,7 @@ function parseRoles(
       item,
       pointer,
       ["key", "kind", "capabilities"],
-      ["prompt", "modelPolicy"],
+      ["prompt", "modelPolicy", "sessionScope"],
       collector,
     );
     if (object === undefined) return undefined;
@@ -1374,6 +1375,31 @@ function parseRoles(
     const prompt = Object.hasOwn(object, "prompt")
       ? parseReference(object.prompt, `${pointer}/prompt`, collector)
       : undefined;
+    let sessionScope: ParsedRole["sessionScope"];
+    if (Object.hasOwn(object, "sessionScope")) {
+      if (
+        object.sessionScope === "attempt" ||
+        object.sessionScope === "phase" ||
+        object.sessionScope === "run"
+      ) {
+        sessionScope = object.sessionScope as ParsedRole["sessionScope"];
+      } else {
+        addDiagnostic(
+          collector,
+          "invalid-role",
+          `${pointer}/sessionScope`,
+          "Role sessionScope must be attempt, phase, or run",
+        );
+      }
+      if (kind !== "agent" && sessionScope !== undefined) {
+        addDiagnostic(
+          collector,
+          "invalid-role",
+          `${pointer}/sessionScope`,
+          "Only agent roles hold a session",
+        );
+      }
+    }
     if (key === undefined || kind === undefined || capabilities === undefined) return undefined;
     return {
       pointer,
@@ -1382,6 +1408,7 @@ function parseRoles(
       capabilities,
       ...(prompt === undefined ? {} : { prompt }),
       ...(modelPolicy === undefined ? {} : { modelPolicy }),
+      ...(sessionScope === undefined ? {} : { sessionScope }),
     };
   });
 }

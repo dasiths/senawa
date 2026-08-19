@@ -19,6 +19,10 @@ CREATE TABLE agent_session_resume_bindings (
   repository_commit_digest TEXT NOT NULL CHECK (length(repository_commit_digest) = 64),
   repository_tree_digest TEXT NOT NULL CHECK (length(repository_tree_digest) = 64),
   canonical_binding TEXT NOT NULL,
+  -- The conversation line this binding belongs to. Two agents, or two fan-out
+  -- members of one agent, must never resume into each other's session, so the
+  -- line is what a successor searches by rather than the role alone.
+  session_line_key TEXT NOT NULL,
   UNIQUE (predecessor_dispatch_id, predecessor_session_id)
 ) STRICT;
 
@@ -1272,6 +1276,9 @@ CREATE TABLE workflow_input_bindings (
 
 CREATE INDEX agent_session_resume_task_idx
   ON agent_session_resume_bindings(task_id, task_generation, binding_digest);
+
+CREATE INDEX agent_session_resume_bindings_by_line
+  ON agent_session_resume_bindings(session_line_key, binding_digest);
 
 CREATE INDEX amendment_decisions_proposal_idx
   ON amendment_decisions(amendment_id, proposal_digest);

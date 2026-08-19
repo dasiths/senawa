@@ -172,10 +172,29 @@ An agent's prompt describes the work and never mentions senawa. The operating
 contract that tells an agent how to finish is generated at dispatch and appended
 after the prompt; see [the CLI reference](cli.md#the-agent-channel).
 
+### session
+
+`session` says how much an agent remembers between the times it works.
+
+| Value | The agent remembers |
+| --- | --- |
+| `run` (default) | everything it did earlier in this run |
+| `phase` | its earlier attempts at the phase it is working on |
+| `element` | nothing; it starts fresh each time |
+
+Each agent holds its own conversation, and one agent never resumes into
+another's. Under `run`, a fan-out member still gets a conversation of its own,
+because a member is a piece of work rather than a train of thought.
+
+A remembered conversation is only resumed when the work around it has not moved
+underneath it. Under `phase`, a changed graph or configuration starts a fresh
+conversation rather than a misleading one; under `run`, only a configuration
+change does. When a conversation is dropped this way, the run says so instead of
+quietly starting over.
+
 > [!NOTE]
-> `session` and the order of `models` are compiled and validated, and no runtime
-> reads either yet. An agent's session is not carried across phases and a route
-> is not retried with the next one on exhaustion.
+> The order of `models` is compiled and validated, but no runtime reads it yet:
+> a route is not retried with the next one on exhaustion.
 
 ## sensors.yaml
 

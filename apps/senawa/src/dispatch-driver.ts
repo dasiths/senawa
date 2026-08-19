@@ -1,13 +1,17 @@
 import type { ConfigurationRegistryEntry, ConfigurationSnapshot } from "@senawa/configuration";
 import type { AssetSensitivity, ContextBudget, DataMappingDeclaration } from "@senawa/kernel";
 import {
+  type AgentSessionResumeBinding,
+  type AgentSessionScope,
   type CanonicalValue,
   canonicalDigest,
   canonicalValue,
   consumerKey,
+  createAgentSessionResumeBinding,
   createWorkerContextBase,
   createWorkerDispatch,
   createWorkerModelRouteSelection,
+  decideAgentSessionResume,
   deriveCompletionRequirements,
   runId as kernelRunId,
   type MappingSourceBinding,
@@ -53,6 +57,22 @@ interface SnapshotAgentRole {
   readonly capabilities: readonly string[];
   readonly prompt: string;
   readonly modelPolicy: string;
+  readonly sessionScope?: AgentSessionScope;
+}
+
+/**
+ * Where session continuity is recorded between dispatches.
+ *
+ * The driver cannot hold this in memory: a run advances one durable step per
+ * process, so the only place a successor can learn which conversation preceded
+ * it is the authority.
+ */
+export interface AgentSessionLedgerPort {
+  queryLatestAgentSessionResumeBinding(
+    sessionLineKey: string,
+  ): AgentSessionResumeBinding | undefined;
+  countAgentSessionResumeBindings(sessionLineKey: string): number;
+  putAgentSessionResumeBinding(binding: AgentSessionResumeBinding, sessionLineKey: string): unknown;
 }
 
 interface SnapshotModelPolicy {
@@ -107,6 +127,8 @@ export interface DispatchPhaseInput {
   readonly timeoutMs?: number;
   /** Credit ceiling for this dispatch. The compiler has no route field for it. */
   readonly maxAiCredits?: number;
+  /** Where session continuity is read and recorded. Omitted, every dispatch is fresh. */
+  readonly sessionLedger?: AgentSessionLedgerPort;
 }
 
 export interface DispatchPhaseResult {
@@ -114,6 +136,25 @@ export interface DispatchPhaseResult {
   readonly dispatch: WorkerDispatch;
   /** The route this dispatch runs under, which a worker adapter needs to run it. */
   readonly routeSelection: WorkerModelRouteSelection;
+  /**
+   * The conversation this dispatch joins, and the one it starts.
+   *
+   * `resumed` is absent when the persona is attempt-scoped, when this is its
+   * first dispatch on the line, or when the recorded predecessor no longer
+   * matches: a lost session is a visible absence here rather than a silent
+   * restart inside the adapter.
+   */
+  readonly session: Readonly<{
+    readonly scope: AgentSessionScope;
+    readonly lineKey: string;
+    readonly sessionId: string;
+    readonly turn: number;
+    readonly resumed?: AgentSessionResumeBinding;
+    /** Which fields stopped a recorded predecessor from being resumed. */
+    readonly lost?: readonly string[];
+    /** This dispatch's own binding, recorded so its successor can find it. */
+    readonly binding: AgentSessionResumeBinding;
+  }>;
 }
 
 /** A member's input is its element, which the template maps whole. */
@@ -361,42 +402,62 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
   );
 
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  return {
+  const { record: recordSession, session } = resolveSession({
+    ledger: input.sessionLedger,
+    scope: role.sessionScope ?? "attempt",
+    runId: input.runId,
+    roleKey: role.key,
+    isMember: declaration.executor.kind === "task-frontier",
+    taskNodeId: String(taskNode.definition.id),
     context,
+    dispatch,
     routeSelection,
-    dispatch: input.contextBroker.registerDispatch({
-      context,
-      dispatch,
-      completionRequirements: deriveCompletionRequirements(
-        snapshot.graph,
-        [dispatch.task],
-        sha256,
-      )[0],
-      taskScope: {
-        runId: input.runId,
-        taskId: dispatch.task.taskId,
-        definitionGeneration: dispatch.task.definitionGeneration,
-        acceptedContextDigest: context.contextDigest,
-        fenceGeneration: 1,
-      },
-      // Omitting the effect registers a dispatch the scheduler silently ignores,
-      // which strands the run with no error anywhere.
-      effect: {
-        input: decodeCanonicalJsonValue({
-          dispatchId: dispatch.dispatchId,
-          routeSelection,
-          timeoutMs,
-          grantPolicy: {
-            expiresAfterMs: timeoutMs * 2,
-            maxOperations: 64,
-            maxBytes: 1_048_576,
-            maxChunkBytes: 65_536,
-          },
-        }),
-        budgetReservation: { unit: "review-iteration", amount: 1 },
-      },
-    }),
-  };
+    repositoryBase: input.repositoryBase,
+    sha256,
+  });
+  const registered = input.contextBroker.registerDispatch({
+    context,
+    dispatch,
+    completionRequirements: deriveCompletionRequirements(
+      snapshot.graph,
+      [dispatch.task],
+      sha256,
+    )[0],
+    taskScope: {
+      runId: input.runId,
+      taskId: dispatch.task.taskId,
+      definitionGeneration: dispatch.task.definitionGeneration,
+      acceptedContextDigest: context.contextDigest,
+      fenceGeneration: 1,
+    },
+    // Omitting the effect registers a dispatch the scheduler silently ignores,
+    // which strands the run with no error anywhere.
+    effect: {
+      input: decodeCanonicalJsonValue({
+        dispatchId: dispatch.dispatchId,
+        routeSelection,
+        timeoutMs,
+        grantPolicy: {
+          expiresAfterMs: timeoutMs * 2,
+          maxOperations: 64,
+          maxBytes: 1_048_576,
+          maxChunkBytes: 65_536,
+        },
+        ...(session.resumed === undefined
+          ? {}
+          : {
+              sessionResume: {
+                scope: session.scope,
+                requestedBinding: session.binding,
+                authorizedBinding: session.resumed,
+              },
+            }),
+      }),
+      budgetReservation: { unit: "review-iteration", amount: 1 },
+    },
+  });
+  recordSession();
+  return { context, routeSelection, session, dispatch: registered };
 }
 
 function requiredNode(snapshot: ConfigurationSnapshot, kind: "phase", key: string) {
@@ -430,4 +491,107 @@ function registryValue<T>(entry: ConfigurationRegistryEntry): T {
 
 function compare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
+ * Decides which conversation this dispatch joins, and records the one it starts.
+ *
+ * A line is the unit of continuity. Two personas never share one, and neither do
+ * two fan-out members of the same persona: a member is a leaf of work rather
+ * than a thread of thought, so each gets its own conversation even under a
+ * run-scoped role.
+ */
+function resolveSession(input: {
+  readonly ledger: AgentSessionLedgerPort | undefined;
+  readonly scope: AgentSessionScope;
+  readonly runId: string;
+  readonly roleKey: string;
+  readonly isMember: boolean;
+  readonly taskNodeId: string;
+  readonly context: WorkerContextBase;
+  readonly dispatch: WorkerDispatch;
+  readonly routeSelection: WorkerModelRouteSelection;
+  readonly repositoryBase: {
+    readonly commitDigest: Sha256Digest;
+    readonly treeDigest: Sha256Digest;
+  };
+  readonly sha256: RuntimeDependencies["sha256"];
+}): {
+  readonly record: () => void;
+  readonly session: DispatchPhaseResult["session"];
+} {
+  const { scope, ledger, sha256 } = input;
+  const identity =
+    scope === "phase" || input.isMember
+      ? `${encodeURIComponent(input.roleKey)}/${encodeURIComponent(input.taskNodeId)}`
+      : encodeURIComponent(input.roleKey);
+  // Every part is escaped and joined by a character escaping removes, so no two
+  // distinct lines can spell the same key. A NUL separator cannot be used: the
+  // store truncates the text there, which would collapse every persona in a run
+  // onto one line and let one resume into another's conversation.
+  const lineKey = `${encodeURIComponent(input.runId)}/${scope}/${identity}`;
+
+  // An attempt-scoped persona has no line to join, so nothing is looked up and
+  // nothing is recorded: recording would imply a continuity that does not exist.
+  const predecessor =
+    scope === "attempt" || ledger === undefined
+      ? undefined
+      : ledger.queryLatestAgentSessionResumeBinding(lineKey);
+  const turn =
+    ledger === undefined || scope === "attempt"
+      ? 1
+      : ledger.countAgentSessionResumeBindings(lineKey) + 1;
+
+  const own = (sessionId: string): AgentSessionResumeBinding =>
+    createAgentSessionResumeBinding(
+      {
+        predecessorDispatchId: input.dispatch.dispatchId,
+        predecessorSessionId: sessionId,
+        promptResourceDigest: input.dispatch.promptResource.resourceDigest,
+        promptContentDigest: input.dispatch.promptResource.contentDigest,
+        promptPackDigest: input.dispatch.promptPackDigest,
+        mappedInputDigest: input.context.mappedInput.valueDigest,
+        contextId: input.context.contextId,
+        contextDigest: input.context.contextDigest,
+        graphRevisionDigest: input.context.phaseAttempt.graphRevisionDigest,
+        configurationSnapshotDigest: input.context.configurationSnapshotDigest,
+        taskId: input.dispatch.task.taskId,
+        taskGeneration: input.dispatch.task.definitionGeneration,
+        modelSelectionDigest: input.routeSelection.selectionDigest,
+        repositoryCommitDigest: input.repositoryBase.commitDigest,
+        repositoryTreeDigest: input.repositoryBase.treeDigest,
+      },
+      sha256,
+    );
+
+  // The decision is taken here rather than left to the adapter, because a lost
+  // session must be visible to the run as a degraded outcome. An adapter that
+  // quietly starts over turns forgotten context into an unexplained regression.
+  const candidate = own(predecessor?.predecessorSessionId ?? input.dispatch.dispatchId);
+  const decision =
+    predecessor === undefined
+      ? undefined
+      : decideAgentSessionResume(candidate, predecessor, sha256, scope);
+  const resumed = decision?.action === "resume" ? predecessor : undefined;
+  const sessionId = resumed?.predecessorSessionId ?? input.dispatch.dispatchId;
+  const binding = resumed === undefined ? own(sessionId) : candidate;
+  // A binding names the dispatch whose conversation it records, and the ledger
+  // holds that reference, so it cannot be written until the dispatch exists.
+  // Recording is handed back as a step the caller runs after registration.
+  const record = () => {
+    if (ledger !== undefined && scope !== "attempt")
+      ledger.putAgentSessionResumeBinding(binding, lineKey);
+  };
+  return {
+    record,
+    session: Object.freeze({
+      scope,
+      lineKey,
+      sessionId,
+      turn,
+      binding,
+      ...(resumed === undefined ? {} : { resumed }),
+      ...(decision?.action === "new-session" ? { lost: decision.mismatchFields } : {}),
+    }),
+  };
 }

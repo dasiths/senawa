@@ -580,3 +580,66 @@ describe("one phase in sequence", () => {
     expect(await advance(scenario)).toMatchObject({ kind: "dispatched", phaseKey: "verify" });
   });
 });
+
+/** Reads the session bindings recorded for a run, oldest first. */
+function sessionBindings(scenario: Scenario) {
+  const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+  try {
+    return database
+      .prepare(
+        "SELECT session_line_key, predecessor_session_id, predecessor_dispatch_id" +
+          " FROM agent_session_resume_bindings ORDER BY rowid",
+      )
+      .all() as unknown as readonly {
+      readonly session_line_key: string;
+      readonly predecessor_session_id: string;
+      readonly predecessor_dispatch_id: string;
+    }[];
+  } finally {
+    database.close();
+  }
+}
+
+describe("a persona that keeps its session", () => {
+  it("carries one conversation across two phases of the same run", async () => {
+    const scenario = await startScenario("session-run", { session: "run" });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+    expect(await advance(scenario)).toMatchObject({ kind: "closed", phaseKey: "define" });
+    const second = await advance(scenario);
+    expect(second).toMatchObject({ kind: "dispatched", phaseKey: "verify" });
+
+    // Two dispatches, one conversation: the second binding must name the session
+    // the first one opened, not a session of its own.
+    const bindings = sessionBindings(scenario);
+    expect(bindings).toHaveLength(2);
+    expect(bindings[1]?.session_line_key).toBe(bindings[0]?.session_line_key);
+    expect(bindings[1]?.predecessor_session_id).toBe(bindings[0]?.predecessor_session_id);
+    expect(bindings[1]?.predecessor_dispatch_id).not.toBe(bindings[0]?.predecessor_dispatch_id);
+    expect(bindings[0]?.predecessor_session_id).toBe(scenario.dispatchId);
+  });
+
+  it("gives each persona its own line, so one never resumes into another's", async () => {
+    const scenario = await startScenario("session-lines", { secondPhase: true });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+    await advance(scenario);
+    await advance(scenario);
+
+    // Two personas worked, so there are two lines. Sharing one would let the
+    // verifier resume into the definer's conversation and inherit its reasoning.
+    const bindings = sessionBindings(scenario);
+    expect(bindings).toHaveLength(2);
+    expect(bindings[1]?.session_line_key).not.toBe(bindings[0]?.session_line_key);
+    expect(bindings[1]?.predecessor_session_id).not.toBe(bindings[0]?.predecessor_session_id);
+  });
+
+  it("records nothing for a persona that starts fresh every time it works", async () => {
+    const scenario = await startScenario("session-none", { session: "element" });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+    await advance(scenario);
+    await advance(scenario);
+
+    // Recording a binding no successor may use would imply a continuity that
+    // does not exist, so an element-scoped persona leaves no trace to resume.
+    expect(sessionBindings(scenario)).toHaveLength(0);
+  });
+});
