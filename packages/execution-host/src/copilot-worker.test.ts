@@ -1086,6 +1086,38 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect(fixture.broker.installedOutputs).toHaveLength(0);
   });
 
+  // A refusal that names only itself teaches nothing. One planner tried every
+  // structure it could think of against `output-arguments-invalid`, failed
+  // identically each time, and stopped to ask a person what the tool wanted.
+  it("says why it refuses a phase output it cannot read", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk, { phaseOutput: true });
+    let refusal: CopilotSdkToolResult | undefined;
+    sdk.onSend = async (config, session) => {
+      const tool = required(config.tools.find((candidate) => candidate.name === "senawa_complete"));
+      refusal = await invoke(tool, session.sessionId, "call_uncanonical", {
+        disposition: "completed",
+        summary: "Completed",
+        criteria: [],
+        completionEvidence: [],
+        // A number JSON can carry but canonical JSON cannot.
+        outputs: {
+          verification: { verified: true, summary: "ok", scale: Number.POSITIVE_INFINITY },
+        },
+      });
+    };
+
+    await fixture.adapter.run(fixture.input);
+
+    const reported = JSON.parse(required(refusal).textResultForLlm) as {
+      readonly code: string;
+      readonly findings?: readonly { readonly message: string }[];
+    };
+    expect(reported.code).not.toBe("");
+    expect(reported.findings ?? []).not.toHaveLength(0);
+    expect(fixture.broker.installedOutputs).toHaveLength(0);
+  });
+
   it("teaches the handshake from the generated contract, not the authored prompt", async () => {
     const sdk = new FakeSdkPort();
     const fixture = harness(sdk, { phaseOutput: true });

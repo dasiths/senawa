@@ -3834,3 +3834,28 @@ for a fault that is not there. It names what is actually blocking now.
 Still open: `grant-allowance` is authorised in the daemon's policy and has no
 command-line surface at all. The portal can grant one; the command line cannot.
 For an example driven mostly from a terminal that is a real gap.
+
+## F-051: a refusal an agent could not learn from
+
+The planner stopped and asked a person for help, in its own words:
+
+> I'm attempting to submit a plan but consistently receive
+> "output-arguments-invalid" errors regardless of JSON structure. I've tried
+> multiple formats: detailed task descriptions, minimal task descriptions, and
+> extremely simplified structures — all fail the same way.
+
+It was right to be confused. Both places that raise that code caught their error
+and threw it away, returning the code with an empty `findings` array. The agent
+was told its arguments were wrong and nothing whatever about which part, so its
+only strategy was to guess, and guessing does not converge.
+
+The findings channel already exists and schema refusals use it well. These two
+now use it too, carrying the bounded message of whatever actually failed.
+
+Worth noting what the refusal turned out to be: not a wrong shape at all, but a
+value canonical JSON cannot carry. The agent could never have guessed that from
+the shape of its own arguments, which is exactly why the reason had to travel.
+
+This is the fourth time this session, and it is the same sentence every time. A
+swallowed reason is a defect nobody can fix — not the person watching, and not
+the agent, which is the one actually able to correct itself in the next turn.

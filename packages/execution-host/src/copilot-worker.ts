@@ -961,8 +961,8 @@ function checkOutput(
   let canonical: CanonicalValue;
   try {
     canonical = canonicalValue(value);
-  } catch {
-    return { reason: "output-arguments-invalid", findings: [] };
+  } catch (error) {
+    return { reason: "output-arguments-invalid", findings: [argumentFinding(error)] };
   }
   if (canonicalBytes(canonical).byteLength > maxBytes) {
     return { reason: "output-too-large", findings: [] };
@@ -1110,8 +1110,10 @@ async function submitPhaseOutput(
     const wrapper = exactObject(args, ["output"], ["changeNotes"]);
     changeNotes(wrapper.changeNotes);
     output = wrapper.output;
-  } catch {
-    return recordRejected(input, state, sha256, identity, "output-arguments-invalid", []);
+  } catch (error) {
+    return recordRejected(input, state, sha256, identity, "output-arguments-invalid", [
+      argumentFinding(error),
+    ]);
   }
   try {
     assertBoundedArgument(output, maxBytes);
@@ -1120,8 +1122,10 @@ async function submitPhaseOutput(
   }
   try {
     canonical = canonicalValue(output);
-  } catch {
-    return recordRejected(input, state, sha256, identity, "output-arguments-invalid", []);
+  } catch (error) {
+    return recordRejected(input, state, sha256, identity, "output-arguments-invalid", [
+      argumentFinding(error),
+    ]);
   }
   const bytes = canonicalBytes(canonical);
   if (bytes.byteLength > maxBytes) {
@@ -1547,6 +1551,22 @@ function failure(code: string, detail?: string): CopilotSdkToolResult {
 function refusalDetail(error: unknown): string | undefined {
   if (!(error instanceof Error) || error.message.length === 0) return undefined;
   return error.message.slice(0, 512);
+}
+
+/**
+ * Why the arguments were refused, in the shape schema findings already use.
+ *
+ * `output-arguments-invalid` used to arrive with no findings at all, so an agent
+ * that shaped its arguments wrongly was told only that they were wrong. One
+ * planner tried every structure it could think of, failed identically each
+ * time, and eventually stopped to ask a person what the tool wanted.
+ */
+function argumentFinding(error: unknown): Readonly<Record<string, string>> {
+  return {
+    code: "invalid-arguments",
+    pointer: "",
+    message: refusalDetail(error) ?? "Tool arguments could not be read",
+  };
 }
 
 /** The refusal a failed tool result carried, for the transcript a person reads. */
