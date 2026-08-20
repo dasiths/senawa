@@ -45,7 +45,10 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   const question = page.locator(".need-row").filter({ hasText: "question" }).first();
   await question.getByRole("button", { name: "Review exact record" }).click();
   const questionDialog = page.getByRole("dialog");
-  await expect(questionDialog).toContainText("fresh dispatch boundary");
+  // The consequence has to say what happens to the person answering. It used to
+  // read "requires a fresh dispatch boundary", which describes the machinery and
+  // not the outcome.
+  await expect(questionDialog).toContainText("nobody can change it once sent");
   await expect(questionDialog).toContainText("<script>blocked()</script>");
   await captureState(page, "need-review", mobile);
   await questionDialog.press("Escape");

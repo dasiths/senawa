@@ -4423,8 +4423,9 @@ export class SqlitePortalQueryAuthority {
    * Every agent the run has dispatched, newest first.
    *
    * Read from the dispatch's own context rather than from a report, because the
-   * context is what the agent was actually given: the persona, the model route,
-   * the attempt, and the refusals it was told to act on.
+   * context is what the agent was actually given: the persona, the attempt, and
+   * the refusals it was told to act on. The model is the exception: the context
+   * names its policy by digest only, so the chosen route comes from the effect.
    */
   listAgents(
     repositoryId: string,
@@ -4436,6 +4437,7 @@ export class SqlitePortalQueryAuthority {
     validateOpaqueIdentity(runId);
     if (after !== undefined) validateOpaqueIdentity(after);
     validatePortalLimit(limit, PORTAL_LIMITS.maxAgentItems);
+    const runKey = canonicalStringify([repositoryId, runId]);
     const rows = this.#database
       .prepare<
         [string, string, string, number],
@@ -4456,9 +4458,7 @@ export class SqlitePortalQueryAuthority {
                 json_extract(b.canonical_context, '$.role.key') AS persona,
                 json_extract(b.canonical_context, '$.phaseAttempt.phase.phaseId') AS phase_id,
                 json_extract(b.canonical_context, '$.task.taskId') AS task_id,
-                json_extract(b.canonical_context, '$.phaseAttempt.attempt') AS attempt,
-                json_extract(b.canonical_context, '$.modelPolicy.model') AS model,
-                json_extract(b.canonical_context, '$.modelPolicy.routeIndex') AS route_index,
+                json_extract(b.canonical_context, '$.phaseAttempt.phase.attempt') AS attempt,
                 json_extract(b.canonical_context, '$.priorRefusals') AS refusals,
                 (SELECT 1 FROM context_terminal_completions t
                   WHERE t.dispatch_id = d.dispatch_id) AS finished,
@@ -4470,6 +4470,8 @@ export class SqlitePortalQueryAuthority {
          ORDER BY d.dispatch_id LIMIT ?`,
       )
       .all(repositoryId, runId, after ?? "", limit + 1);
+    const names = this.#nodeNames(repositoryId, runId);
+    const routes = this.#dispatchRoutes(repositoryId, runId);
     return decodePortalAgentPage({
       apiVersion: PROTOCOL_VERSION,
       repositoryId,
@@ -4482,14 +4484,19 @@ export class SqlitePortalQueryAuthority {
         // read as a list of live problems.
         const refusals = readRefusals(row.refusals);
         const latest = refusals[refusals.length - 1];
+        const phaseName = row.phase_id === null ? undefined : names.get(row.phase_id);
+        const taskName = row.task_id === null ? undefined : names.get(row.task_id);
+        const route = routes.get(row.dispatch_id);
         return {
           dispatchId: row.dispatch_id,
           persona: row.persona ?? "unknown",
           phaseId: row.phase_id ?? "unknown",
           taskId: row.task_id ?? "unknown",
+          ...(phaseName === undefined ? {} : { phaseName }),
+          ...(taskName === undefined ? {} : { taskName }),
           attempt: row.attempt ?? 1,
-          model: row.model ?? "unknown",
-          routeIndex: row.route_index ?? 0,
+          model: route?.model ?? "unknown",
+          routeIndex: route?.routeIndex ?? 0,
           state: row.finished === 1 ? "finished" : "working",
           ...(row.session_id === null ? {} : { sessionId: row.session_id }),
           ...(latest === undefined ? {} : { latestRefusal: latest.slice(0, MAX_REFUSAL_LENGTH) }),
@@ -4820,6 +4827,48 @@ export class SqlitePortalQueryAuthority {
     validateOpaqueIdentity(repositoryId);
     validateOpaqueIdentity(runId);
     return this.#runtimeService().queryRunScheduling(repositoryId, runId)?.graph;
+  }
+
+  /**
+   * The model each dispatch was actually given, by dispatch. The context names
+   * a model policy by digest and never a model, so reading one from it reported
+   * `unknown` for every agent a run ever had. The route the driver chose is
+   * recorded with the dispatch's effect, from the moment it is registered.
+   */
+  #dispatchRoutes(
+    repositoryId: string,
+    runId: string,
+  ): ReadonlyMap<string, { readonly model: string; readonly routeIndex: number }> {
+    const routes = new Map<string, { model: string; routeIndex: number }>();
+    for (const row of this.#database
+      .prepare<
+        [string, string],
+        { dispatch_id: string | null; model: string | null; route: number | null }
+      >(
+        `SELECT json_extract(e.value, '$.dispatch.dispatchId') AS dispatch_id,
+                json_extract(e.value, '$.effect.input.routeSelection.modelPolicy.model') AS model,
+                json_extract(e.value, '$.effect.input.routeSelection.modelPolicy.routeIndex')
+                  AS route
+           FROM context_authority_state s, json_each(s.canonical_json, '$.dispatches') e
+          WHERE json_extract(e.value, '$.dispatch.repositoryId') = ?
+            AND json_extract(e.value, '$.dispatch.runId') = ?`,
+      )
+      .all(repositoryId, runId)) {
+      if (row.dispatch_id === null || row.model === null) continue;
+      routes.set(row.dispatch_id, { model: row.model, routeIndex: row.route ?? 0 });
+    }
+    return routes;
+  }
+
+  /**
+   * The authored name of every node in the run, by identity. A digest tells a
+   * person nothing, and the name the workflow author wrote is already in the
+   * graph, so any view showing an identity can show the name beside it.
+   */
+  #nodeNames(repositoryId: string, runId: string): ReadonlyMap<string, string> {
+    const graph = this.#graph(repositoryId, runId);
+    if (graph === undefined) return new Map();
+    return new Map(graph.nodes.map((node) => [node.definition.id, node.definition.key]));
   }
 
   #requiredGraphRevision(repositoryId: string, runId: string, graphRevision: string) {

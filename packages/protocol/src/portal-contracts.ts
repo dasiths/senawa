@@ -436,6 +436,13 @@ export interface PortalAgentSummary {
   readonly persona: string;
   readonly phaseId: OpaqueIdentity;
   readonly taskId: OpaqueIdentity;
+  /**
+   * The authored names of the phase and task the identities above point at. A
+   * digest is never the primary rendering of anything, so a view shows these
+   * and keeps the identities for the row a person opens to check.
+   */
+  readonly phaseName?: string;
+  readonly taskName?: string;
   readonly attempt: number;
   readonly model: string;
   readonly routeIndex: number;

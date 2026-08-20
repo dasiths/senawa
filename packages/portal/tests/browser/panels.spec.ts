@@ -334,5 +334,12 @@ test("shows who is working, on what, and on which model", async ({ page }) => {
   await expect(table.getByRole("columnheader", { name: "Model" })).toBeVisible();
   await expect(table.getByRole("columnheader", { name: "Last refusal" })).toBeVisible();
   await expect(table.locator("tbody tr")).not.toHaveCount(0);
+  // Headers alone passed while every cell under them read as a digest. A digest
+  // identifies a row to a machine and nothing to a person, so no cell may be
+  // one, and the identity it stands for is on the cell for hovering.
+  const cells = await table.locator("tbody td").allTextContents();
+  expect(
+    cells.filter((cell) => /^(?:task|phase|dispatch)_[0-9a-f]{64}$/u.test(cell.trim())),
+  ).toEqual([]);
   expect(diagnostics.severe()).toEqual([]);
 });

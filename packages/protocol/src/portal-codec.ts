@@ -1219,12 +1219,20 @@ function agentSummary(value: unknown, path: string): PortalAgentSummary {
     value,
     path,
     ["dispatchId", "persona", "phaseId", "taskId", "attempt", "model", "routeIndex", "state"],
-    ["sessionId", "latestRefusal"],
+    ["phaseName", "taskName", "sessionId", "latestRefusal"],
   );
   identity(object.dispatchId, `${path}.dispatchId`);
   token(object.persona, `${path}.persona`);
   identity(object.phaseId, `${path}.phaseId`);
   identity(object.taskId, `${path}.taskId`);
+  // An authored name is whatever the workflow author wrote, so it is bounded
+  // free text rather than a token the reader gets to constrain.
+  if (object.phaseName !== undefined) {
+    boundedString(object.phaseName, `${path}.phaseName`, 1, 128);
+  }
+  if (object.taskName !== undefined) {
+    boundedString(object.taskName, `${path}.taskName`, 1, 128);
+  }
   integer(object.attempt, `${path}.attempt`, 1);
   // A model name comes from a vendor and carries whatever they use, such as the
   // dot in `claude-haiku-4.5`. It is reported, never matched on.

@@ -1150,11 +1150,17 @@ function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLEle
       ["Persona", "Working on", "Attempt", "Model", "State", "Session", "Last refusal"],
       agents.map((agent) => [
         agent.persona,
-        agent.taskId,
+        { text: agent.taskName ?? agent.taskId, title: agent.taskId },
         String(agent.attempt),
-        `${agent.model} (route ${String(agent.routeIndex)})`,
+        // Route zero is the authored first choice and says nothing. A later
+        // route means this agent was moved, which is worth saying.
+        agent.routeIndex === 0
+          ? agent.model
+          : `${agent.model} (fallback route ${String(agent.routeIndex)})`,
         agent.state,
-        agent.sessionId ?? "fresh each time",
+        agent.sessionId === undefined
+          ? "fresh each time"
+          : { text: "continued", title: agent.sessionId },
         agent.latestRefusal ?? "nothing refused",
       ]),
       "Every agent this run has dispatched",
@@ -1169,7 +1175,12 @@ function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLEle
       const button = document.createElement("button");
       button.type = "button";
       button.id = triggerId;
-      button.textContent = `Steer ${agent.persona}`;
+      // Several agents share a persona, so a button naming only the persona
+      // appears three times over with nothing to choose between them.
+      button.textContent =
+        agent.taskName === undefined
+          ? `Steer ${agent.persona}`
+          : `Steer ${agent.persona} on ${agent.taskName}`;
       button.addEventListener("click", () => actions.openAgentAction("steer", agent, triggerId));
       list.append(button);
     }
@@ -1535,9 +1546,16 @@ function jsonNode(node: BoundedJsonNode): HTMLElement {
   return details;
 }
 
+/**
+ * A cell reads as a name. Where the name stands in for an identity, the
+ * identity is still there to hover, because a digest is what you check a row
+ * against rather than what you read it by.
+ */
+type SummaryCell = string | { readonly text: string; readonly title: string };
+
 function summaryTable(
   headers: readonly string[],
-  rows: readonly (readonly string[])[],
+  rows: readonly (readonly SummaryCell[])[],
   captionText: string,
 ): HTMLElement {
   const wrapper = element("div", "table-scroll");
@@ -1552,7 +1570,11 @@ function summaryTable(
   for (const values of rows) {
     const row = document.createElement("tr");
     for (const [index, value] of values.entries()) {
-      const cell = textElement("td", "", value);
+      const cell =
+        typeof value === "string"
+          ? textElement("td", "", value)
+          : textElement("td", "", value.text);
+      if (typeof value !== "string") cell.title = value.title;
       cell.dataset.label = headers[index] ?? "Value";
       row.append(cell);
     }

@@ -3687,3 +3687,47 @@ Left undone deliberately: the forty verification messages still name an invarian
 without naming the row that broke it. F-048 cost an hour of grepping for exactly
 that reason. It is a mechanical change across a large surface, and it belongs
 with whoever next has a failing record in front of them to test against.
+
+## Portal, first pass: names instead of identities
+
+The agent list is the view that answers "who is stuck, and on what". Measured
+against a real run it answered neither. `Working on` read
+`task_e30bb4a5f7e1cba2…`. `Model` read `unknown (route 0)`. `Attempt` read `1`
+for every row including the retries. Three separate defects wearing one costume.
+
+The model was the interesting one. It was read from `$.modelPolicy.model` in the
+dispatch context, and that key has never existed: a context names a model policy
+by digest only, so the query asked for something no context has ever carried and
+faithfully reported `unknown` for every agent in every run since the view was
+written. The chosen route is recorded with the dispatch's effect, from the moment
+it is registered, and that is now where it comes from.
+
+The first attempt read it from `runner_effect_intents`, which is populated only
+once a runner claims the work. That passed against the example database, where
+everything had been claimed, and failed against a freshly registered dispatch.
+Worth recording: querying live data proved the idea and hid the bug, and only a
+test at the earliest moment in the lifecycle found it.
+
+`Attempt` was the same class of mistake one level down — `$.phaseAttempt.attempt`
+where the value lives at `$.phaseAttempt.phase.attempt`.
+
+Names now come from the graph, which has carried the authored key all along and
+already renders it in another view. Identities stay on the cell for hovering,
+because a digest is what you check a row against, not what you read it by.
+
+Two smaller things fell out. Route zero is the authored first choice and adds
+nothing, so it is shown only when an agent was actually moved to a fallback. And
+the steer buttons read `Steer researcher` three times with nothing to choose
+between them; they name the work now.
+
+The lesson is the one this log keeps finding: nothing exercised `listAgents` at
+all. No test, anywhere. That is how a validator that refuses real data reached a
+release, and how three wrong JSON paths sat in one query. There are tests now, at
+both ends — a dispatch just registered, and a full journey that ran.
+
+Two browser tests failed on this pass and both were right to. They asserted the
+old wording of things earlier commits deliberately changed: a transcript labelled
+by dispatch identity rather than by the agent, and a dialog that told a person
+their answer "requires a fresh dispatch boundary". The tests now assert the
+readable versions, and one of them checks that no cell in the agent table is a
+bare digest, which is the rule the whole pass is about.

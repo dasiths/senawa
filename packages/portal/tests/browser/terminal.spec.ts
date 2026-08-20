@@ -23,13 +23,13 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   await expect(page.locator(".agent-terminal-scope")).toHaveText("No node selected");
 
   // Repository mode records no workspace row, so the node's own current dispatch
-  // is the only owner the writer and the pane can agree on.
+  // is the only owner the writer and the pane can agree on. It is labelled by the
+  // persona that wrote the lines, because a dispatch identity says who to a
+  // machine and nobody to a reader. The exported file still carries the
+  // identity, since a file has to name exactly one thing.
   await page.getByRole("button", { name: /^task verify,/u }).click();
-  await expect(page.locator(".agent-terminal-scope")).toHaveText(`dispatch ${journeyDispatchId}`);
-  await expect(pane).toHaveAttribute(
-    "aria-label",
-    `Agent output for dispatch ${journeyDispatchId}`,
-  );
+  await expect(page.locator(".agent-terminal-scope")).toHaveText("implementer");
+  await expect(pane).toHaveAttribute("aria-label", "Agent output for implementer");
   await expect(pane).toHaveAttribute("tabindex", "0");
   await expect.poll(async () => (await snapshot(page)).lineCount).toBe(144);
 
@@ -135,7 +135,7 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   await expect(page.locator(".agent-terminal-log")).toContainText("phase attempt 1 opened");
   await expect(
     page.locator(".agent-terminal-row").first().locator(".agent-terminal-owner"),
-  ).toHaveText(`dispatch ${journeyDispatchId}`);
+  ).toHaveText("implementer");
   await expect(
     page.locator(".agent-terminal-row").last().locator(".agent-terminal-owner"),
   ).toHaveText("phase phase_delivery");

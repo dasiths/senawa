@@ -12,6 +12,7 @@ import {
   SqliteAuthority,
   SqliteCanonicalJsonAssetStore,
   SqliteContextBroker,
+  SqlitePortalQueryAuthority,
 } from "@senawa/storage-sqlite";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
@@ -110,6 +111,25 @@ describe("dispatch driver", () => {
       expect(dispatches.map(({ dispatch }) => dispatch.dispatchId)).toEqual([
         result.dispatch.dispatchId,
       ]);
+
+      // The context names a model policy by digest and never a model, so the
+      // agent list reported `unknown` for every agent ever dispatched. The
+      // route the driver chose is recorded with the effect, and that is the
+      // answer a person is looking for.
+      const portal = new SqlitePortalQueryAuthority({ databasePath, assetDirectory, dependencies });
+      try {
+        expect(portal.listAgents(REPOSITORY_ID, RUN_ID).agents).toEqual([
+          expect.objectContaining({
+            persona: "definer",
+            model: "gpt-5",
+            routeIndex: 0,
+            attempt: 1,
+            phaseName: "define",
+          }),
+        ]);
+      } finally {
+        portal.close();
+      }
     } finally {
       contextBroker.close();
       authority.close();

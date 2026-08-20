@@ -313,6 +313,20 @@ describe("Phase 14F no-credit acceptance", () => {
         assetDirectory: fixture.assetDirectory,
         dependencies,
       });
+      // The agent list is the view that answers "who is stuck, and on what". It
+      // named an agent's work by digest, and nothing else exercises this query,
+      // which is how a validator that refused real data reached a release.
+      const agents = allowancePortal.listAgents(ACCEPTANCE_REPOSITORY_ID, ACCEPTANCE_RUN_ID).agents;
+      expect(agents.length).toBeGreaterThan(0);
+      for (const agent of agents) {
+        expect({
+          namedTask: agent.taskName !== undefined && agent.taskName !== agent.taskId,
+          namedPhase: agent.phaseName !== undefined && agent.phaseName !== agent.phaseId,
+          // This journey runs deterministic writers and never chooses a model,
+          // so having none to report is the correct answer here.
+          model: agent.model,
+        }).toEqual({ namedTask: true, namedPhase: true, model: "unknown" });
+      }
       const allowanceReview = required(
         allowancePortal.getAllowanceReview(
           ACCEPTANCE_REPOSITORY_ID,
