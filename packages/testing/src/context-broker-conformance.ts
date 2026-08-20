@@ -803,6 +803,20 @@ export function registerContextBrokerConformance(
         ).toThrowError(ContextBrokerError);
       }
       expect(harness.authority.snapshot().phaseOutputOutbox).toHaveLength(1);
+
+      // A second submission of the same output is a duplicate, which a retried
+      // agent produces routinely. The event recording it must agree with the
+      // result, because replay compares them and refuses the whole database when
+      // they differ: one live run became unopenable this way.
+      expect(
+        admit(harness, { ...current, submissionId: "submission_phase-output-again" }),
+      ).toMatchObject({ status: "duplicate" });
+      expect(() =>
+        InMemoryContextAuthority.fromDurableCanonicalJson(
+          harness.authority.toDurableCanonicalJson(),
+          contextBrokerSha256,
+        ),
+      ).not.toThrow();
     });
 
     it("records finite attributable phase output attempts", () => {

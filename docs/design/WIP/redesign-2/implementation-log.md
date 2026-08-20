@@ -3517,3 +3517,36 @@ The completion plan still calls for the attempt lifecycle to be recorded rather
 than inferred, and it should be. This makes the signal the driver already reads
 mean what the driver assumes, which is the smaller half of that and the half
 that unblocks the run.
+
+## F-048: a duplicate phase output made the run unopenable
+
+The clean run of phase 2 stopped answering `senawa status` at all:
+
+```
+TypeError: Invalid durable context authority snapshot:
+events[4].payload does not match its submission result
+```
+
+Replay checks an event's type against the stored result of the submission it
+names. The broker wrote the result with one expression and the event type with
+another:
+
+```ts
+status: stale ? "stale" : (duplicateCompletion || duplicateOutput) ? "duplicate" : "accepted"
+...
+stale ? "worker-submission-stale"
+  : duplicateCompletion ? "worker-submission-duplicate"
+  : "worker-submission-accepted"
+```
+
+The event arm omits `duplicateOutput`, so a duplicate *phase output* recorded
+`worker-submission-accepted` beside a result of `duplicate`, and every later open
+of that database refused. A retried agent submitting the same output twice is
+routine, so this bricks a run for doing something normal.
+
+The event type is now derived from the result, which is the only arrangement in
+which the two cannot disagree.
+
+This is the second half of F-035, arriving on its own: an unopenable run is not
+merely unreadable, it takes the supervisor down with it. That half is still
+unfixed.

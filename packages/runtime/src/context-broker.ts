@@ -1797,16 +1797,14 @@ export class ContextBroker implements ContextBrokerClient {
       Object.freeze({ canonicalSubmission, submission, result }),
     );
     if (submission.type === "question") this.authority.questions.push(submission);
-    this.appendEvent(
-      stored.dispatch,
-      stale
-        ? "worker-submission-stale"
-        : duplicateCompletion
-          ? "worker-submission-duplicate"
-          : "worker-submission-accepted",
-      occurredAt,
-      { submissionId: submission.submissionId, submissionType: submission.type },
-    );
+    // Replay checks the event type against the stored result, so deriving one
+    // from the other is the only way they cannot disagree. Spelling the
+    // condition out a second time here missed a duplicate phase output, and the
+    // database it wrote could never be opened again.
+    this.appendEvent(stored.dispatch, `worker-submission-${result.status}`, occurredAt, {
+      submissionId: submission.submissionId,
+      submissionType: submission.type,
+    });
     if (completionFact !== undefined) {
       this.authority.completionOutbox.set(
         submission.submissionId,
