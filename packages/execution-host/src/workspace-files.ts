@@ -166,9 +166,20 @@ export class RootScopedWorkspaceFiles implements WorkspaceFilePort {
 }
 
 export class WorkspaceFileError extends Error {
-  constructor(message: string) {
+  /**
+   * Whether the path simply is not there.
+   *
+   * An agent exploring a fresh workspace reads files that do not exist yet, and
+   * reporting that as a refusal told it that it lacked permission. One stopped
+   * and asked a person why every workspace operation was being denied, when the
+   * answer was that it had guessed a filename.
+   */
+  readonly missing: boolean;
+
+  constructor(message: string, missing = false) {
     super(message);
     this.name = "WorkspaceFileError";
+    this.missing = missing;
   }
 }
 
@@ -261,10 +272,9 @@ function runHelper(
         return;
       }
       if (code !== 0 || signal !== null) {
+        const reported = Buffer.concat(stderr).toString("utf8").trim() || "Workspace helper failed";
         reject(
-          new WorkspaceFileError(
-            Buffer.concat(stderr).toString("utf8").trim() || "Workspace helper failed",
-          ),
+          new WorkspaceFileError(reported, /no such file or directory|ENOENT/iu.test(reported)),
         );
         return;
       }

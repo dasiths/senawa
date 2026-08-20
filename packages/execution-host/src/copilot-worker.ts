@@ -42,6 +42,7 @@ import type {
 } from "./copilot-sdk-port.js";
 import {
   WORKSPACE_FILE_LIMITS,
+  WorkspaceFileError,
   type WorkspaceFilePatchChange,
   type WorkspaceFilePort,
 } from "./workspace-files.js";
@@ -621,7 +622,14 @@ function workspaceFileTools(files: WorkspaceFilePort, scope: RunScope): readonly
           // A refused workspace operation used to name only itself, so an agent
           // that could not write its files had nothing to correct and asked a
           // person what was wrong.
-          return failure("workspace-list-refused", refusalDetail(error));
+          // Absence is an answer, not a denial. An agent reading a file it
+          // has not written yet must not conclude it lacks permission.
+          return failure(
+            isMissingWorkspacePath(error)
+              ? "workspace-directory-missing"
+              : "workspace-list-refused",
+            refusalDetail(error),
+          );
         }
       },
     ),
@@ -644,7 +652,12 @@ function workspaceFileTools(files: WorkspaceFilePort, scope: RunScope): readonly
           // A refused workspace operation used to name only itself, so an agent
           // that could not write its files had nothing to correct and asked a
           // person what was wrong.
-          return failure("workspace-read-refused", refusalDetail(error));
+          // Absence is an answer, not a denial. An agent reading a file it
+          // has not written yet must not conclude it lacks permission.
+          return failure(
+            isMissingWorkspacePath(error) ? "workspace-file-missing" : "workspace-read-refused",
+            refusalDetail(error),
+          );
         }
       },
     ),
@@ -1616,6 +1629,11 @@ function failure(code: string, detail?: string): CopilotSdkToolResult {
       ...(detail === undefined ? {} : { detail }),
     }),
   });
+}
+
+/** Whether a workspace operation failed because the path is simply not there. */
+function isMissingWorkspacePath(error: unknown): boolean {
+  return error instanceof WorkspaceFileError && error.missing;
 }
 
 /** Bounded validation text, so a refused agent can correct what it sent. */

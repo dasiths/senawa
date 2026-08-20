@@ -3949,3 +3949,27 @@ The transcript had the same gap in the other direction: a refusal carrying
 findings printed only its code, so the person watching a stuck agent could not
 see what the agent was being told. It shows the first finding now, which is the
 one the agent has to act on. Both audiences read the same sentence.
+
+## F-055: absence reported as denial
+
+With reasons attached, the implementer's complaint decoded itself:
+
+```
+workspace-read-refused: workspace file open failed: No such file or directory
+workspace-list-refused: workspace directory open failed: No such file or directory
+```
+
+Nothing was refusing it. It was reading files it had not written yet, in a fresh
+and empty workspace, which is the first thing any agent does. Every one of those
+came back as a refusal, so it concluded it had no permission and stopped to ask
+a person how to proceed.
+
+Absence is an answer, not a denial. A missing path now reports
+`workspace-file-missing` and `workspace-directory-missing`, which an agent reads
+as "there is nothing there yet" and continues from. A real refusal keeps its own
+code and means what it says.
+
+Three findings in a row now have had the same root: a code that named itself and
+nothing else. The pattern is worth stating plainly. Every refusal in this system
+has two audiences, the person watching and the agent that must correct itself,
+and both need the same two things: what rule was broken, and where.
