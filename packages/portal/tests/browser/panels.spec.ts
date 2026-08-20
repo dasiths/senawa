@@ -347,3 +347,25 @@ test("shows who is working, on what, and on which model", async ({ page }) => {
   await expect(first.locator(".agent-work")).toHaveAttribute("title", /^task_/u);
   expect(diagnostics.severe()).toEqual([]);
 });
+
+// A need used to be a number on a row and a button on another tab. Reading a
+// phase told a person the run had stopped but not why, and acting on it meant
+// leaving the view that said so.
+test("offers the action for a need on the node the need is about", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await navigate(page, "Workflow");
+  const tree = page.getByRole("tree");
+  await expect(tree).toBeVisible();
+
+  const action = tree.locator(".workflow-need").first();
+  await expect(action).toBeVisible();
+  const owner = tree.locator(".workflow-node", { has: page.locator(".workflow-need") }).first();
+  // The action sits inside the row it belongs to, not in a list beside it.
+  await expect(owner.locator("> .workflow-line > .workflow-title")).not.toHaveText("");
+
+  await action.click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(diagnostics.severe()).toEqual([]);
+});

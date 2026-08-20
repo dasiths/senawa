@@ -789,9 +789,11 @@ function workflowTree(
   return tree;
 }
 
-/** Whether a need is about this node, so it can be shown where it applies. */
+// A need is never about nothing. One that names a task belongs on that task; one
+// that does not is about the run, which is the node the tree is rooted at.
 function needBlocks(need: PortalHumanNeed, node: PortalGraphNode): boolean {
-  return need.sourceId === node.nodeId || need.needId.includes(node.nodeId);
+  if (need.taskId !== undefined) return need.taskId === node.nodeId;
+  return node.kind === "workflow";
 }
 
 function needChip(
