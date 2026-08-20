@@ -4083,3 +4083,32 @@ back and watching the test fail. The ceiling half needed a fan-out phase with an
 attempt ceiling, which the scenario builder could not express — worth noting on
 its own, because a behaviour the harness cannot describe is a behaviour nothing
 was ever going to catch.
+
+## F-058: a file nobody could write
+
+Two runs in a row spent a question on the same thing:
+
+> I'm attempting to create scripts/check.mjs but the workspace filesystem tools
+> won't allow writing to a non-existent parent directory.
+
+It was right. Writing opened the parent and failed if it was missing, and there
+is no tool for making a directory. So no agent could ever write a nested path,
+and the plan it had been given asked for one. There was no move available to it
+except to stop and ask.
+
+A write now makes the directories its path names. Each component is created and
+then reopened through the same guarded resolver the rest of the helper uses, so
+making a directory is held to exactly the rules that opening one already is:
+beneath the root, no symlinks, no crossing devices. A patch does not create
+anything, because a patch has to match content that is already there.
+
+The test writes a nested file and then checks that the two escapes still fail
+and that nothing appeared outside the root.
+
+The verification is worth recording. The first attempt to prove the test by
+breaking the code did not build at all — the helper compiles with
+`-Werror=unused-function`, so removing the call left the old binary in place and
+the test passed against a fix that was still there. Breaking the function's body
+instead, so it still compiles and is still called, made the test fail. A break
+that does not build is not a break, and the compiler said so; nothing else would
+have.

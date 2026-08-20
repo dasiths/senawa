@@ -89,8 +89,41 @@ static void split_path(const char *path, char **parent, const char **name) {
     *name = path + (separator - copy) + 1;
 }
 
-static void failpoint(void) {
-    if (getenv("SENAWA_WORKSPACE_FAIL_BEFORE_RENAME") == NULL) return;
+/*
+ * Opens the parent of a write, making the directories it names.
+ *
+ * There is no tool for making a directory, so a nested path could not be
+ * written at all: an agent asked for scripts/check.mjs, was told the parent
+ * could not be opened, and had nowhere to go. Each component is created and
+ * then reopened through the same guarded resolver, so making a directory is
+ * held to the same rules as opening one.
+ */
+static int open_parent_making(int root, const char *parent_path) {
+    int current = open_beneath(root, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+    if (current < 0) fail("workspace root open failed");
+    if (strcmp(parent_path, ".") == 0) return current;
+
+    char *copy = strdup(parent_path);
+    if (copy == NULL) fail("allocation failed");
+    for (char *cursor = copy; cursor != NULL && *cursor != '\0';) {
+        char *separator = strchr(cursor, '/');
+        if (separator != NULL) *separator = '\0';
+        if (*cursor != '\0' && strcmp(cursor, ".") != 0) {
+            if (mkdirat(current, cursor, 0700) != 0 && errno != EEXIST) {
+                fail("workspace directory create failed");
+            }
+            int next = open_beneath(current, cursor, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+            if (next < 0) fail("workspace directory open failed");
+            close(current);
+            current = next;
+        }
+        cursor = separator == NULL ? NULL : separator + 1;
+    }
+    free(copy);
+    return current;
+}
+
+static void failpoint(void) {    if (getenv("SENAWA_WORKSPACE_FAIL_BEFORE_RENAME") == NULL) return;
     unsigned char byte = 1;
     write_all(CONTROL_FD, &byte, 1);
     for (;;) {
@@ -112,7 +145,11 @@ static void atomic_replace(
     char *parent_path = NULL;
     const char *name = NULL;
     split_path(path, &parent_path, &name);
-    int parent = open_beneath(root, parent_path, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+    // A patch has to match content that already exists, so it never makes a
+    // directory; only a plain write does.
+    int parent = expected_target == NULL
+        ? open_parent_making(root, parent_path)
+        : open_beneath(root, parent_path, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
     if (parent < 0) fail("workspace parent open failed");
 
     mode_t mode = fallback_mode;

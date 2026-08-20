@@ -1,4 +1,13 @@
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -51,6 +60,27 @@ describe("RootScopedWorkspaceFiles", () => {
     await expect(files.write("file-link", "changed")).rejects.toThrow("symbolic");
     await expect(files.write("directory-link/new.txt", "changed")).rejects.toThrow();
     await expect(readFile(join(outside, "secret.txt"), "utf8")).resolves.toBe("secret\n");
+  });
+
+  // Nothing makes a directory, so a nested path could not be written at all: a
+  // live agent asked for `scripts/check.mjs`, was told the parent could not be
+  // opened, and stopped to ask a person what to do.
+  it("makes the directories a nested write names, and still cannot leave the root", async () => {
+    const root = await temporaryRoot();
+    const outside = await temporaryRoot();
+    await symlink(outside, join(root, "directory-link"), "dir");
+    const files = await RootScopedWorkspaceFiles.create(root);
+
+    await files.write("scripts/deep/check.mjs", "export const ok = true;\n");
+
+    await expect(files.read("scripts/deep/check.mjs")).resolves.toContain("ok");
+    await expect(readFile(join(root, "scripts", "deep", "check.mjs"), "utf8")).resolves.toContain(
+      "ok",
+    );
+    // Making directories must obey the same rules as opening them.
+    await expect(files.write("../escaped/file.txt", "no")).rejects.toThrow();
+    await expect(files.write("directory-link/made/file.txt", "no")).rejects.toThrow();
+    await expect(readdir(outside)).resolves.toEqual([]);
   });
 
   it("rejects oversized reads and writes and leaves compare-mismatched files unchanged", async () => {
