@@ -3731,3 +3731,24 @@ by dispatch identity rather than by the agent, and a dialog that told a person
 their answer "requires a fresh dispatch boundary". The tests now assert the
 readable versions, and one of them checks that no cell in the agent table is a
 bare digest, which is the rule the whole pass is about.
+
+## Portal, second pass: attempts fold into the agent
+
+Six table rows for two agents, because the table listed dispatch attempts and
+called them agents. `researcher` appeared four times, and two of its rows differed
+only in a `State` cell reading `working` against `finished`, so the view looked
+like it was stuck repeating itself.
+
+An agent is one entry now, with its attempts listed underneath. Nothing is lost:
+the refusal each attempt was told to act on sits on that attempt, the session and
+the task identity are on the elements they belong to for hovering, and the
+heading carries the persona, the work, the model and the current state.
+
+Grouping is by persona and task together rather than by persona alone. A fan-out
+puts the same persona on several tasks at once, and merging those would claim two
+agents are one.
+
+The browser test that covered this asserted four column headers and that the body
+had rows. Every one of those assertions passed while every cell underneath read
+as a digest, which is why the view survived this long. It checks what a person
+can actually read now, and that no digest is rendered as text anywhere in it.

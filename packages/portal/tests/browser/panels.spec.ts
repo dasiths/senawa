@@ -326,20 +326,21 @@ test("shows who is working, on what, and on which model", async ({ page }) => {
 
   // The graph says which phases are open. It cannot say which persona is on its
   // third attempt or which model it is running on, and that is what this view
-  // exists to answer.
-  const table = page.getByRole("table", { name: "Every agent this run has dispatched" });
-  await expect(table).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Persona" })).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Attempt" })).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Model" })).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Last refusal" })).toBeVisible();
-  await expect(table.locator("tbody tr")).not.toHaveCount(0);
-  // Headers alone passed while every cell under them read as a digest. A digest
-  // identifies a row to a machine and nothing to a person, so no cell may be
-  // one, and the identity it stands for is on the cell for hovering.
-  const cells = await table.locator("tbody td").allTextContents();
-  expect(
-    cells.filter((cell) => /^(?:task|phase|dispatch)_[0-9a-f]{64}$/u.test(cell.trim())),
-  ).toEqual([]);
+  // exists to answer. One entry per agent with its attempts under it: a table of
+  // dispatches showed the same persona four times over, and two of those rows
+  // differed only in a state cell.
+  const roster = page.locator(".agent-roster");
+  await expect(roster).toBeVisible();
+  const entries = roster.locator(".agent-entry");
+  await expect(entries).not.toHaveCount(0);
+  const first = entries.first();
+  await expect(first.locator(".agent-persona")).not.toBeEmpty();
+  await expect(first.locator(".agent-model")).not.toBeEmpty();
+  await expect(first.locator(".agent-attempt")).not.toHaveCount(0);
+  // A digest identifies a row to a machine and nothing to a person, so none may
+  // be read here. The identity it stands for is kept for hovering.
+  const shown = await roster.allTextContents();
+  expect(shown.filter((text) => /(?:task|phase|dispatch)_[0-9a-f]{64}/u.test(text))).toEqual([]);
+  await expect(first.locator(".agent-work")).toHaveAttribute("title", /^task_/u);
   expect(diagnostics.severe()).toEqual([]);
 });

@@ -1146,24 +1146,11 @@ function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLEle
     return section;
   }
   section.append(
-    summaryTable(
-      ["Persona", "Working on", "Attempt", "Model", "State", "Session", "Last refusal"],
-      agents.map((agent) => [
-        agent.persona,
-        { text: agent.taskName ?? agent.taskId, title: agent.taskId },
-        String(agent.attempt),
-        // Route zero is the authored first choice and says nothing. A later
-        // route means this agent was moved, which is worth saying.
-        agent.routeIndex === 0
-          ? agent.model
-          : `${agent.model} (fallback route ${String(agent.routeIndex)})`,
-        agent.state,
-        agent.sessionId === undefined
-          ? "fresh each time"
-          : { text: "continued", title: agent.sessionId },
-        agent.latestRefusal ?? "nothing refused",
-      ]),
-      "Every agent this run has dispatched",
+    agentRoster(agents),
+    textElement(
+      "p",
+      "visually-hidden",
+      "Every agent this run has dispatched, with its attempts listed under it",
     ),
   );
 
@@ -1547,15 +1534,71 @@ function jsonNode(node: BoundedJsonNode): HTMLElement {
 }
 
 /**
- * A cell reads as a name. Where the name stands in for an identity, the
- * identity is still there to hover, because a digest is what you check a row
- * against rather than what you read it by.
+ * One row per agent, with its attempts listed under it.
+ *
+ * A table of dispatches showed the same persona four times over, and two of
+ * those rows differed only in a `State` cell, so the view read as though it were
+ * repeating itself. An agent is the unit a person reasons about: the attempts
+ * are how it got here, not four separate things to compare.
  */
-type SummaryCell = string | { readonly text: string; readonly title: string };
+function agentRoster(agents: readonly PortalAgentSummary[]): HTMLElement {
+  const byWork = new Map<string, PortalAgentSummary[]>();
+  for (const agent of agents) {
+    const key = `${agent.persona}\u0000${agent.taskId}`;
+    const existing = byWork.get(key);
+    if (existing === undefined) byWork.set(key, [agent]);
+    else existing.push(agent);
+  }
+  const roster = element("ul", "agent-roster");
+  for (const group of byWork.values()) {
+    const attempts = [...group].sort((left, right) => left.attempt - right.attempt);
+    const current = attempts[attempts.length - 1];
+    if (current === undefined) continue;
+    const entry = element("li", "agent-entry");
+    const heading = element("p", "agent-heading");
+    heading.append(textElement("span", "agent-persona", current.persona));
+    const work = textElement("span", "agent-work", current.taskName ?? current.taskId);
+    work.title = current.taskId;
+    heading.append(work);
+    heading.append(
+      textElement(
+        "span",
+        "agent-model",
+        // Route zero is the authored first choice and says nothing. A later
+        // route means this agent was moved, which is worth saying.
+        current.routeIndex === 0
+          ? current.model
+          : `${current.model} (fallback route ${String(current.routeIndex)})`,
+      ),
+    );
+    heading.append(textElement("span", `agent-state ${current.state}`, current.state));
+    entry.append(heading);
+    const strip = element("ol", "agent-attempts");
+    for (const attempt of attempts) {
+      const item = element("li", "agent-attempt");
+      item.append(
+        textElement("span", "agent-attempt-ordinal", `Attempt ${String(attempt.attempt)}`),
+      );
+      item.append(textElement("span", "agent-attempt-state", attempt.state));
+      if (attempt.latestRefusal !== undefined) {
+        item.append(textElement("span", "agent-attempt-refusal", attempt.latestRefusal));
+      }
+      if (attempt.sessionId !== undefined) {
+        const session = textElement("span", "agent-attempt-session", "continued");
+        session.title = attempt.sessionId;
+        item.append(session);
+      }
+      strip.append(item);
+    }
+    entry.append(strip);
+    roster.append(entry);
+  }
+  return roster;
+}
 
 function summaryTable(
   headers: readonly string[],
-  rows: readonly (readonly SummaryCell[])[],
+  rows: readonly (readonly string[])[],
   captionText: string,
 ): HTMLElement {
   const wrapper = element("div", "table-scroll");
@@ -1570,11 +1613,7 @@ function summaryTable(
   for (const values of rows) {
     const row = document.createElement("tr");
     for (const [index, value] of values.entries()) {
-      const cell =
-        typeof value === "string"
-          ? textElement("td", "", value)
-          : textElement("td", "", value.text);
-      if (typeof value !== "string") cell.title = value.title;
+      const cell = textElement("td", "", value);
       cell.dataset.label = headers[index] ?? "Value";
       row.append(cell);
     }
