@@ -101,6 +101,25 @@ adapter over the same mechanism. It canonicalizes a value, installs its bytes,
 and returns a descriptor of content digest and byte length. That is how phase
 outputs, evidence, and context payloads become addressable.
 
+### Refusal text is data, not presentation
+
+A kernel refusal is recorded as a receipt, and the receipt's digest covers the
+refusal's message. The wording is therefore durable content, not a label that a
+user interface happens to render.
+
+The consequence is easy to walk into. Rewording a refusal to read better makes
+every database that already recorded the old wording fail verification, because
+the stored receipt no longer matches a digest recomputed from the new message.
+There is no deprecation window and no migration: the text is inside the hash.
+
+So a refusal message is versioned like a schema. Reword one only alongside a
+migration that rewrites the affected receipts, or introduce a new refusal code
+and leave the existing message untouched. Explanatory detail that is expected to
+change belongs beside the receipt rather than inside it.
+
+The same rule holds for any string a digest is computed over. Refusals are called
+out because they read like prose, which invites the tidying that breaks them.
+
 ## Transaction boundaries
 
 Every authority mutation follows one shape:
