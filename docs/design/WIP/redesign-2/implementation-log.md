@@ -3859,3 +3859,40 @@ the shape of its own arguments, which is exactly why the reason had to travel.
 This is the fourth time this session, and it is the same sentence every time. A
 swallowed reason is a defect nobody can fix — not the person watching, and not
 the agent, which is the one actually able to correct itself in the next turn.
+
+## F-052: a tool schema that referred to something it did not carry
+
+Answering the planner's question moved the failure on to a better one:
+
+> Every attempt to call senawa_complete with the plan output fails with "Invalid
+> tool arguments: arguments do not match the tool schema" even with minimal
+> canonical JSON.
+
+That refusal comes from the model's own validator, before any Senawa code runs,
+which is why nothing the agent tried made any difference and why no finding of
+ours could explain it.
+
+The example's plan schema names another schema by identity:
+`"tasks": { "$ref": "urn:rpi:task-collection" }`. Senawa resolves that correctly
+everywhere it validates, because the referenced schemas travel beside the
+contract. The tool declaration was the one place they did not: the slot schema
+was copied in, `$schema` and `$id` stripped, and the reference left pointing at
+an identity the declaration had no way to resolve. One dangling reference makes
+the whole declaration invalid, so every call failed and the planner could never
+hand in work at all.
+
+The referenced schemas are now bundled into `$defs` and the references rewritten
+to point inside the document. A reference nothing supplies is left alone rather
+than rewritten, because that one is genuinely broken and hiding it would only
+move the confusion somewhere else.
+
+Two lessons.
+
+Any authored workflow using `$ref` across files could never complete a phase.
+That is a large hole to find this late, and it was found only by watching a real
+agent fail against a real workflow rather than a fixture. Every fixture in the
+test suite declared `externalSchemas: []`.
+
+And the planner's two questions were both, in effect, "your tool is broken and I
+cannot tell why". An agent stopping to ask that is the system working: it had no
+other move. The transcript of a stuck agent is a bug report.

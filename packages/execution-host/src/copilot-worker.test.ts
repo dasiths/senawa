@@ -93,6 +93,38 @@ const OUTPUT_CONTRACT = Object.freeze({
   schema: OUTPUT_SCHEMA,
   externalSchemas: [],
 });
+/** An authored schema that names another by identity, as the example workflows do. */
+const REFERRING_CONTRACT = Object.freeze({
+  key: "verification-output",
+  schemaResourceDigest: sha256Digest("c".repeat(64)),
+  validatorProfileDigest: sha256Digest("d".repeat(64)),
+  schema: canonicalValue({
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: "urn:senawa-test:referring",
+    type: "object",
+    additionalProperties: false,
+    required: ["verified", "detail"],
+    properties: {
+      verified: { type: "boolean" },
+      detail: { $ref: "urn:senawa-test:detail" },
+    },
+  }),
+  externalSchemas: Object.freeze([
+    Object.freeze({
+      id: "urn:senawa-test:detail",
+      schemaResourceDigest: sha256Digest("e".repeat(64)),
+      schema: canonicalValue({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: "urn:senawa-test:detail",
+        type: "object",
+        additionalProperties: false,
+        required: ["note"],
+        properties: { note: { type: "string", minLength: 1, maxLength: 200 } },
+      }),
+    }),
+  ]),
+});
+
 const OUTPUT_DECLARATION = Object.freeze({
   outputName: consumerKey("verification"),
   schemaKey: consumerKey("verification-output"),
@@ -1086,7 +1118,31 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect(fixture.broker.installedOutputs).toHaveLength(0);
   });
 
-  // A refusal that names only itself teaches nothing. One planner tried every
+  // A tool declaration is read on its own. An authored schema that names another
+  // by identity left a reference nothing could resolve, so the model's own
+  // validator refused every call before it reached any of this, and the agent
+  // was told its arguments did not match a schema it had no way to satisfy.
+  it("carries the schemas its output schema references into the tool it declares", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk, { phaseOutput: true, referencedOutputSchema: true });
+    let parameters: unknown;
+    sdk.onSend = async (config) => {
+      parameters = required(
+        config.tools.find((candidate) => candidate.name === "senawa_complete"),
+      ).parameters;
+    };
+
+    await fixture.adapter.run(fixture.input);
+
+    const declared = JSON.stringify(parameters);
+    expect(declared).toContain("$defs");
+    // Every reference must point inside the document it travels in.
+    expect([...declared.matchAll(/"\$ref":"([^"]+)"/gu)].map(([, target]) => target)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^#\//u)]),
+    );
+    expect(declared).not.toContain('"$ref":"urn:senawa-test:detail"');
+  });
+
   // structure it could think of against `output-arguments-invalid`, failed
   // identically each time, and stopped to ask a person what the tool wanted.
   it("says why it refuses a phase output it cannot read", async () => {
@@ -1388,6 +1444,7 @@ function harness(
     readonly provider?: string;
     readonly workspaceFiles?: WorkspaceFilePort;
     readonly phaseOutput?: boolean;
+    readonly referencedOutputSchema?: boolean;
     readonly transcript?: AgentTranscriptPort;
   } = {},
 ) {
@@ -1516,7 +1573,14 @@ function harness(
     workingDirectory: "/tmp/senawa-copilot/work",
     ...(options.workspaceFiles === undefined ? {} : { workspaceFiles: options.workspaceFiles }),
     ...(options.phaseOutput === true
-      ? { phaseOutputSchemas: new Map([["verification", OUTPUT_CONTRACT]]) }
+      ? {
+          phaseOutputSchemas: new Map([
+            [
+              "verification",
+              options.referencedOutputSchema === true ? REFERRING_CONTRACT : OUTPUT_CONTRACT,
+            ],
+          ]),
+        }
       : {}),
     ...(options.transcript === undefined ? {} : { transcript: options.transcript }),
     sessionBaseDirectory: sdk.baseDirectory,

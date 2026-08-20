@@ -1037,6 +1037,49 @@ function admitCompletion(
   return success({ status: result.status, replayed: result.replayed });
 }
 
+/**
+ * Inlines the schemas an authored schema references, so the tool declaration
+ * stands on its own.
+ *
+ * Each referenced schema becomes a `$defs` entry named after its position, and
+ * every `$ref` naming that identity is rewritten to point at the entry. A
+ * reference nothing supplies is left as it was: it was already broken, and
+ * rewriting it would only hide where it came from.
+ */
+function bundleReferencedSchemas(
+  schema: Readonly<Record<string, unknown>>,
+  externals: readonly Readonly<{ readonly id: string; readonly schema: unknown }>[],
+): Readonly<Record<string, unknown>> {
+  if (externals.length === 0) return schema;
+  const names = new Map(externals.map((external, index) => [external.id, `ref${index}`]));
+  const rewrite = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(rewrite);
+    if (value === null || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.entries(value as Readonly<Record<string, unknown>>).map(([key, nested]) => {
+        const target = key === "$ref" && typeof nested === "string" ? names.get(nested) : undefined;
+        return [key, target === undefined ? rewrite(nested) : `#/$defs/${target}`] as const;
+      }),
+    );
+  };
+  const defs: Record<string, unknown> = {};
+  for (const external of externals) {
+    const name = names.get(external.id);
+    if (name === undefined) continue;
+    defs[name] = Object.fromEntries(
+      Object.entries(rewrite(external.schema) as Readonly<Record<string, unknown>>).filter(
+        ([key]) => key !== "$schema" && key !== "$id",
+      ),
+    );
+  }
+  const rewritten = rewrite(schema) as Record<string, unknown>;
+  const existing = rewritten.$defs;
+  return {
+    ...rewritten,
+    $defs: typeof existing === "object" && existing !== null ? { ...existing, ...defs } : defs,
+  };
+}
+
 function completeParameters(slots: readonly PhaseOutputSlot[]): Readonly<Record<string, unknown>> {
   if (slots.length === 0) return COMPLETION_SCHEMA;
   const properties: Record<string, unknown> = {};
@@ -1046,9 +1089,16 @@ function completeParameters(slots: readonly PhaseOutputSlot[]): Readonly<Record<
     for (const [key, value] of Object.entries(schema)) {
       if (key !== "$schema" && key !== "$id") guidance[key] = value;
     }
+    // An authored schema may reference another by identity, and the tool
+    // declaration is read on its own with nothing to resolve those against. A
+    // single unresolvable reference makes the whole declaration invalid, so
+    // every call is refused before it reaches this code and the agent is told
+    // its arguments do not match a schema it cannot see. The referenced
+    // schemas travel with it.
+    const bundled = bundleReferencedSchemas(guidance, slot.contract.externalSchemas);
     const maxBytes = Math.min(slot.declaration.maxBytes, PHASE_OUTPUT_LIMITS.maxOutputBytes);
     properties[String(slot.declaration.outputName)] = {
-      ...guidance,
+      ...bundled,
       description: `Accepted "${String(slot.declaration.outputName)}" output. Canonical JSON must not exceed ${maxBytes} bytes.`,
     };
   }
