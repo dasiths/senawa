@@ -617,8 +617,11 @@ function workspaceFileTools(files: WorkspaceFilePort, scope: RunScope): readonly
               : positiveInteger(value.maxEntries, WORKSPACE_FILE_LIMITS.maxListEntries),
           );
           return success({ entries });
-        } catch {
-          return failure("workspace-list-refused");
+        } catch (error) {
+          // A refused workspace operation used to name only itself, so an agent
+          // that could not write its files had nothing to correct and asked a
+          // person what was wrong.
+          return failure("workspace-list-refused", refusalDetail(error));
         }
       },
     ),
@@ -637,8 +640,11 @@ function workspaceFileTools(files: WorkspaceFilePort, scope: RunScope): readonly
               : positiveInteger(value.maxBytes, WORKSPACE_FILE_LIMITS.maxFileBytes),
           );
           return success({ content });
-        } catch {
-          return failure("workspace-read-refused");
+        } catch (error) {
+          // A refused workspace operation used to name only itself, so an agent
+          // that could not write its files had nothing to correct and asked a
+          // person what was wrong.
+          return failure("workspace-read-refused", refusalDetail(error));
         }
       },
     ),
@@ -655,8 +661,11 @@ function workspaceFileTools(files: WorkspaceFilePort, scope: RunScope): readonly
             boundedString(value.content, WORKSPACE_FILE_LIMITS.maxFileBytes, true),
           );
           return success({ status: "written" });
-        } catch {
-          return failure("workspace-write-refused");
+        } catch (error) {
+          // A refused workspace operation used to name only itself, so an agent
+          // that could not write its files had nothing to correct and asked a
+          // person what was wrong.
+          return failure("workspace-write-refused", refusalDetail(error));
         }
       },
     ),
@@ -687,8 +696,11 @@ function workspaceFileTools(files: WorkspaceFilePort, scope: RunScope): readonly
           });
           await files.applyPatch(changes);
           return success({ status: "patched", changeCount: changes.length });
-        } catch {
-          return failure("workspace-patch-refused");
+        } catch (error) {
+          // A refused workspace operation used to name only itself, so an agent
+          // that could not write its files had nothing to correct and asked a
+          // person what was wrong.
+          return failure("workspace-patch-refused", refusalDetail(error));
         }
       },
     ),
