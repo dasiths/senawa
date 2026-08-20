@@ -100,10 +100,13 @@ person something real.
 * [x] A run that fails to verify takes the whole supervisor down with it. Scoped
   honestly: one record holds every run in a project, so there is no per-run unit
   to quarantine. It now says which record it is and how to recover. F-035.
-* [ ] `grant-allowance` is authorised and has no command-line surface. F-050.
-* [ ] An escalation for a budget that now has room stays queued and ungrantable.
+* [x] `grant-allowance` is authorised and has no command-line surface. F-050.
+  `senawa grant` reads the request, defaults the increase to the room the policy
+  already allows, and names what is blocking when nothing is grantable.
+* [x] An escalation for a budget that now has room stays queued and ungrantable.
   Three requests for one unit needed a single grant; the other two became
-  permanent entries with disabled buttons. F-050.
+  permanent entries with disabled buttons. F-050. A request whose unit now has
+  the room it asked for is no longer listed.
 
 ## Phase 4: simplify the portal
 

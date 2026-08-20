@@ -350,6 +350,66 @@ describe("SQLite Phase 11A human authority", () => {
     fixture.dispose();
   });
 
+  // One grant gives every request for that unit the room it asked for, but only
+  // the granted one is resolved. The rest stayed listed for ever, each offering
+  // a button that could do nothing, because what they asked for had happened.
+  it("stops listing a request once the budget has the room it asked for", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    const runner = configuredRunner(fixture);
+    const command = effectCommand();
+    runner.enqueue(command);
+    const result = runner.persistIntent(runInput(command));
+    if (result.type !== "escalated") throw new Error("Expected runner escalation");
+
+    // A second member asks for the same unit before anyone has looked at the
+    // first. This is the ordinary case, not a rare one: members run together.
+    const sibling = {
+      ...command,
+      sequence: 2,
+      commandId: "runner-command-phase11-sibling",
+      operationId: "operation_phase11_sibling",
+      input: { dispatchId: "dispatch_phase11_sibling" },
+    };
+    runner.enqueue(sibling);
+    const second = runner.persistIntent(runInput(sibling));
+    if (second.type !== "escalated") throw new Error("Expected a second runner escalation");
+
+    const before = new SqlitePortalQueryAuthority(fixture.options);
+    expect(
+      before
+        .listHumanNeeds(runtimeFixture.repositoryId, runtimeFixture.runId)
+        .needs.filter(({ kind }) => kind === "escalation").length,
+    ).toBe(2);
+    before.close();
+
+    // Granting one gives both the room they asked for, but only the granted one
+    // is resolved. The other is stale because the budget moved under it.
+    expect(
+      authority.submit(
+        grantAllowanceCommand({
+          commandId: "command_grant-sibling",
+          escalationDigest: deterministicSha256.digest(canonicalBytes(result.escalation)),
+          expectedLimit: 1,
+          increaseBy: 4,
+        }),
+        admission(),
+      ),
+    ).toMatchObject({ status: "completed" });
+
+    const after = new SqlitePortalQueryAuthority(fixture.options);
+    expect(
+      after
+        .listHumanNeeds(runtimeFixture.repositoryId, runtimeFixture.runId)
+        .needs.filter(({ kind }) => kind === "escalation").length,
+    ).toBe(0);
+    after.close();
+    authority.close();
+    runner.close();
+    fixture.dispose();
+  });
+
   it("projects only a complete unresolved allowance review from current authority", () => {
     const fixture = createFixture();
     const authority = new SqliteAuthority(fixture.options);

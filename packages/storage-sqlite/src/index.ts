@@ -5621,9 +5621,21 @@ export class SqlitePortalQueryAuthority {
     }
     for (const escalation of this.#database
       .prepare<[string], { command_id: string; canonical_escalation: string }>(
+        // A budget with room for what was asked is not waiting for anyone.
+        // Several members can each raise a request before a person sees any of
+        // them, and one grant gives all of them the room they asked for, but
+        // only the request that was granted gets a resolution row. The rest
+        // stayed listed for ever, each offering a button that could never do
+        // anything, because the thing they asked for had already happened.
         `SELECT e.command_id, e.canonical_escalation FROM runner_escalations e
          LEFT JOIN runner_allowance_resolutions r ON r.escalation_command_id = e.command_id
-         WHERE e.run_key = ? AND r.escalation_command_id IS NULL ORDER BY e.command_id`,
+         JOIN runner_budgets b
+           ON b.run_key = e.run_key
+          AND b.unit = json_extract(e.canonical_escalation, '$.unit')
+         WHERE e.run_key = ? AND r.escalation_command_id IS NULL
+           AND b.budget_limit - b.spent
+               < json_extract(e.canonical_escalation, '$.requested')
+         ORDER BY e.command_id`,
       )
       .all(canonicalStringify([repositoryId, runId]))) {
       const body = requiredJsonRecord(
