@@ -264,9 +264,9 @@ function renderHeader(state: PortalState, actions: PortalRenderActions): HTMLEle
   const tools = element("div", "header-tools");
   // Opening a rail that is already open looks like a dead control, which is what
   // this was whenever the rail was left open. A badge that counts what needs you
-  // should take you to it.
+  // should take you to it, and every need lives on the node it blocks.
   const needsButton = commandButton(`Needs ${state.humanNeeds.length}`, () => {
-    if (state.humanNeeds.length > 0) actions.navigate("needs");
+    if (state.humanNeeds.length > 0) actions.navigate("workflow");
     actions.toggleRightRail(true);
   });
   needsButton.className = "rail-toggle";
@@ -532,9 +532,6 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
       break;
     case "artifacts":
       main.append(renderArtifacts(state, actions));
-      break;
-    case "needs":
-      main.append(renderNeeds(state, actions));
       break;
     case "amendments":
       main.append(renderAmendments(state));
@@ -1086,25 +1083,6 @@ function renderAssetOverlay(
   overlay.append(bar, renderArtifactPreview(content.content, content.encoding, artifact.mediaType));
   root.append(overlay);
   overlay.showModal();
-}
-
-function renderNeeds(state: PortalState, actions: PortalRenderActions): HTMLElement {
-  const section = element("section", "needs-view");
-  section.append(filterInput(state, actions, "Filter human needs"));
-  const list = element("div", "need-list");
-  for (const need of state.humanNeeds) {
-    if (
-      !`${need.title} ${need.kind}`
-        .toLocaleLowerCase()
-        .includes(state.ui.filter.toLocaleLowerCase())
-    )
-      continue;
-    list.append(renderNeed(need, state, actions, "main"));
-  }
-  if (list.childElementCount === 0)
-    list.append(textElement("p", "empty-state", "No matching human needs."));
-  section.append(list);
-  return section;
 }
 
 function renderNeed(
@@ -1798,7 +1776,6 @@ function routeLabel(route: PortalRouteName): string {
     delivery: "Delivery",
     activity: "Activity",
     artifacts: "Artifacts",
-    needs: "Human needs",
     amendments: "Amendments",
     agents: "Agents",
     workspaces: "Workspaces",

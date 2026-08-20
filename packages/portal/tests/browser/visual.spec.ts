@@ -41,9 +41,9 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   await expect(page.getByRole("region", { name: "Portal status" })).toContainText("human needs");
   await captureState(page, "overview", mobile);
 
-  await navigate(page, "Human needs");
-  const question = page.locator(".need-row").filter({ hasText: "question" }).first();
-  await question.getByRole("button", { name: "Review exact record" }).click();
+  // The question is reachable on the node it blocks, which is the surface that
+  // survives a narrow viewport collapsing the rail.
+  await page.getByRole("button", { name: "Answer this question" }).first().click();
   const questionDialog = page.getByRole("dialog");
   // The consequence has to say what happens to the person answering. It used to
   // read "requires a fresh dispatch boundary", which describes the machinery and
@@ -53,10 +53,11 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   await captureState(page, "need-review", mobile);
   await questionDialog.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(question.getByRole("button", { name: "Review exact record" })).toBeFocused();
+  // Focus returns to the control that opened it, which is now on the node.
+  await expect(page.getByRole("button", { name: "Answer this question" }).first()).toBeFocused();
 
-  const amendment = page.locator(".need-row").filter({ hasText: "amendment-decision" }).first();
-  await amendment.getByRole("button", { name: "Review exact record" }).click();
+  const amendment = page.getByRole("button", { name: "Review this amendment-decision" }).first();
+  await amendment.click();
   const amendmentDialog = page.getByRole("dialog");
   await expect(amendmentDialog).toContainText("affectedTaskScopes");
   await expect(amendmentDialog).toContainText("reviewedResultGraph");

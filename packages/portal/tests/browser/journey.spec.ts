@@ -150,7 +150,6 @@ test("reloads authority after an event races the final overview read", async ({ 
 
 test("grants the exact maximum allowance through a reviewed command", async ({ browser }) => {
   const portal = await simulatedEventPortal(browser);
-  await navigate(portal.page, "Human needs");
   await reviewNeed(portal.page, "escalation");
   const dialog = portal.page.getByRole("dialog");
   const maximum = Number(await dialog.getByLabel("Allowance increase").getAttribute("max"));
@@ -168,7 +167,6 @@ test("preserves reviewed values across rerenders and closes authority on run cha
 }) => {
   const portal = await simulatedEventPortal(browser);
   const { page } = portal;
-  await navigate(page, "Human needs");
   await reviewNeed(page, "amendment-decision");
   const amendmentDialog = page.getByRole("dialog");
   const decision = amendmentDialog.getByLabel("Decision");
@@ -257,13 +255,11 @@ test("publishes only the selected run when authority loads overlap", async ({ br
 
 test("records exact human decisions with pending recovery", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
-  await navigate(page, "Human needs");
 
   const secondTab = await page.context().newPage();
   await secondTab.goto(`${new URL(page.url()).origin}/portal/`);
   await expect(secondTab.getByText("read-only", { exact: true })).toBeVisible();
   await selectRun(secondTab, runs.journey);
-  await navigate(secondTab, "Human needs");
   await expect(secondTab.locator(".need-row button:not([disabled])")).toHaveCount(0);
   await secondTab.close();
 

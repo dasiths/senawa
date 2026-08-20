@@ -154,8 +154,12 @@ layout is judged on legible material, and structure last.
   node it blocks. The thirty-four browser tests were moved with it and pass.
 * [ ] Fold Agents, Delivery and Workspaces into the selection the workflow view
   already has, and put `Steer` and `Override` in its toolbar.
-* [ ] Retire the Human needs and Amendments tabs, once every need renders on its
-  node with its action inline. The queue survives in the rail.
+* [x] Retire the Human needs tab. Every need renders on the node it blocks with
+  its action inline, and the queue survives in the rail, so the tab was
+  rendering the same needs a second time. That second copy is the one the live
+  run caught disagreeing with the first about whether a need was actionable.
+* [ ] Retire the Amendments tab, once an amendment's source, impact and diff are
+  the detail panel of the need rather than a tab of their own.
 * [ ] Merge Overview and Activity into one `Record` tab.
 
 Two things the live runs added to this. The attention rail can hold a button

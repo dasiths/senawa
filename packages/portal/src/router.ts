@@ -4,7 +4,6 @@ export const PORTAL_ROUTES = Object.freeze([
   "delivery",
   "activity",
   "artifacts",
-  "needs",
   "amendments",
   "workspaces",
   "agents",

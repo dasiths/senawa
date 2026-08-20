@@ -358,10 +358,13 @@ export class PortalApplication {
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
         if (summary.graphRevision !== overview.sync.graphRevision)
           throw new Error("Graph summary revision changed during assembly");
-        const [nodes, edges, workspaces] = await Promise.all([
+        const [nodes, edges, workspaces, questions] = await Promise.all([
           this.#client.graphNodes(repositoryId, runId, summary.graphRevision),
           this.#client.graphEdges(repositoryId, runId, summary.graphRevision),
           this.#client.workspaces(repositoryId, runId),
+          // A need renders on the node it blocks, so the question behind it has
+          // to be here rather than on a tab of its own.
+          this.#client.questions(repositoryId, runId),
         ]);
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
         if (
@@ -374,6 +377,7 @@ export class PortalApplication {
         this.#dispatch({ type: "cache", cache: "graphNodes", key: revision, value: nodes });
         this.#dispatch({ type: "cache", cache: "graphEdges", key: revision, value: edges });
         this.#dispatch({ type: "cache", cache: "workspaces", key, value: workspaces });
+        this.#dispatch({ type: "cache", cache: "questions", key, value: questions });
         // The transcript names its lines by agent, but a name is a nicety and
         // this view is how a person answers a blocked agent. Letting it fail the
         // assembly would take every command offline to spare a label.
@@ -403,17 +407,6 @@ export class PortalApplication {
           cache: "artifacts",
           key,
           value: artifacts,
-        });
-        return true;
-      }
-      case "needs": {
-        const questions = await this.#client.questions(repositoryId, runId);
-        if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
-        this.#dispatch({
-          type: "cache",
-          cache: "questions",
-          key,
-          value: questions,
         });
         return true;
       }

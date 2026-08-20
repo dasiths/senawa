@@ -73,7 +73,6 @@ test("restores an in-progress answer draft across a reload and clears it per que
   page,
 }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
-  await navigate(page, "Human needs");
   await openQuestion(page);
   await page.getByRole("dialog").getByLabel("Answer").fill("staging, with a bounded rationale");
   await page.getByRole("dialog").press("Escape");
@@ -86,9 +85,9 @@ test("restores an in-progress answer draft across a reload and clears it per que
   expect(identities).toHaveLength(1);
   expect(identities[0]).toContain(runs.journey);
 
-  await page.goto(`${new URL(page.url()).origin}/portal/${portalHash(runs.journey, "needs")}`);
+  await page.goto(`${new URL(page.url()).origin}/portal/${portalHash(runs.journey, "workflow")}`);
   await expect(page.getByText("read-write", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Human needs", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Workflow", level: 1 })).toBeVisible();
   await openQuestion(page);
   await expect(page.getByRole("dialog").getByLabel("Answer")).toHaveValue(
     "staging, with a bounded rationale",
@@ -273,8 +272,16 @@ test("expands a bounded artifact into a full-screen overlay that traps and resto
 });
 
 async function openQuestion(page: Page): Promise<void> {
-  const need = page.locator(".need-row").filter({ hasText: "question" }).first();
-  await need.getByRole("button", { name: "Review exact record" }).click();
+  // The question is reachable where it blocks. The rail carries the same queue,
+  // but it is collapsed on a narrow viewport, so the node is the surface that is
+  // always there.
+  const onNode = page.getByRole("button", { name: "Answer this question" }).first();
+  if ((await onNode.count()) > 0) {
+    await onNode.click();
+  } else {
+    const need = page.locator(".need-row").filter({ hasText: "question" }).first();
+    await need.getByRole("button", { name: "Review exact record" }).click();
+  }
   await expect(page.getByRole("dialog").getByLabel("Answer")).toBeEnabled();
 }
 
