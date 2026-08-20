@@ -85,7 +85,14 @@ export async function startAuthoredRun(input: StartAuthoredRunInput): Promise<St
       dependencies: input.dependencies,
     });
     if (receipt.status !== "completed") {
-      throw new Error(`Run instantiation was ${receipt.status}`);
+      // The receipt says why, and dropping it left a caller with a status word
+      // and nothing to act on. A refusal that names the rule takes minutes to
+      // fix; one that names only itself takes an afternoon.
+      throw new Error(
+        `Run instantiation was ${receipt.status}${
+          receipt.error?.message === undefined ? "" : `: ${receipt.error.message}`
+        }`,
+      );
     }
 
     const dataflow = new RuntimeDataflowAuthority(

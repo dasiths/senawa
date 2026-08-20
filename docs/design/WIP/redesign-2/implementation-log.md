@@ -3797,3 +3797,40 @@ Left open: a background failure in the supervisor is recorded only in the
 authority log, reachable through `senawa diagnostics create` and nowhere else. A
 run that stops for an unreported reason is the hardest thing to diagnose, which
 is written in a comment eleven lines above the code that swallowed this one.
+
+## F-050: the one budget a run spends had no ceiling
+
+The live example stopped for a third time, on a budget escalation: `Budget
+allowance requested for review-iteration`. The portal listed it, and the only
+control on it was disabled. `senawa approve` answered "Nothing is waiting for a
+decision on this run", which is a strange thing to read on a run whose status
+says it is waiting on you.
+
+A ceiling is what a person is permitted to grant when a budget runs out. The
+authored run declared ceilings for `dispatch-failure`, `work-attempt`, and
+`workspace-operations` — every unit that counts a failure, and not the unit an
+ordinary dispatch spends. So the single budget a healthy run actually exhausts
+was the one nobody could ever raise. The run had spent all eight of its
+review-iterations answering three questions and asked for a ninth, and there was
+no answer to that question anywhere in the product.
+
+This is F-040 again in a different costume: a human need in the queue that no
+human can satisfy. The queue is the portal's claim about what is blocked on a
+person, and a run stopped forever behind a disabled button is the worst version
+of getting that claim wrong.
+
+Two smaller things came out of it.
+
+The refusal for a malformed policy read `Run instantiation was refused`, dropping
+the receipt's own sentence. Adding the ceiling in the wrong position cost a full
+test cycle to diagnose; with the reason attached it reads `Allowance policy
+ceilings must be sorted by unit` and costs seconds. That is the same lesson as
+F-039 and F-045, now three times over.
+
+`senawa approve` decides phase candidates and nothing else, which is defensible,
+but saying "nothing is waiting" when something plainly is sends a person looking
+for a fault that is not there. It names what is actually blocking now.
+
+Still open: `grant-allowance` is authorised in the daemon's policy and has no
+command-line surface at all. The portal can grant one; the command line cannot.
+For an example driven mostly from a terminal that is a real gap.

@@ -44,8 +44,15 @@ export function instantiateAuthoredRun(input: InstantiateAuthoredRunInput): Dura
     escalationPolicyDigest: sha256Digest("9".repeat(64)),
     allowancePolicy: {
       policyDigest: sha256Digest("9".repeat(64)),
+      // A ceiling is what a person is allowed to grant when a budget runs out.
+      // The list named every failure unit and omitted `review-iteration`, which
+      // is the unit an ordinary dispatch spends, so the one budget a healthy run
+      // actually exhausts was the one nobody could ever top up: the run stopped
+      // on a request for more, and the portal offered no command to grant it.
+      // The authority requires these sorted by unit.
       ceilings: [
         { unit: "dispatch-failure", maximum: 64 },
+        { unit: "review-iteration", maximum: 64 },
         { unit: "work-attempt", maximum: 64 },
         { unit: "workspace-operations", maximum: 64 },
       ],

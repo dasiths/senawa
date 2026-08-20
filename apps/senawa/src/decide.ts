@@ -64,10 +64,19 @@ export function decidePhase(input: DecideInput): CliResult {
       candidate?.expectedGraphRevision === undefined ||
       candidate.exactObjectDigest === undefined
     ) {
+      // Saying only that nothing is waiting, on a run that is plainly waiting
+      // for somebody, reads as a contradiction and sends a person looking for a
+      // fault that is not there. This command decides phase candidates; other
+      // needs are named so it is clear which one is actually blocking.
+      const waiting = needs.needs.filter((need) => need.kind !== "candidate-approval");
       return {
         exitCode: 1,
         output:
-          "Nothing is waiting for a decision on this run. Run senawa status to see what it is waiting for.",
+          waiting.length === 0
+            ? "Nothing is waiting for a decision on this run. Run senawa status to see what it is waiting for."
+            : `No phase is waiting for approval. This run is waiting on ${waiting
+                .map((need) => `${need.kind}: ${need.title}`)
+                .join(", ")}. Open the portal to act on it.`,
       };
     }
     pending = {
