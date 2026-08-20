@@ -123,9 +123,18 @@ In the order the measurements justify:
 * Decide deliberately whether reading requires verifying. A reader that never
   writes does not obviously need to re-verify the whole database first, and
   there is already a command whose job is to verify on request.
-* Look at `verifyAmendmentTables` before the others. Sixty-four milliseconds for
-  one row is out of proportion with every other check, and the shape of that is
-  usually a digest recomputed inside a loop.
+* `verifyAmendmentTables` is the same problem again, and measuring it says so.
+  Its own work is trivial — nine rows across seven tables, parsed and normalised
+  in three milliseconds. The other four hundred are spent re-reading and
+  re-parsing two other canonical documents it happens to check on the way: every
+  configuration snapshot, re-serialised to compare against its stored bytes, and
+  the whole context authority state. Neither is an amendment.
+
+  So the single-parse fix took the largest instance of a pattern that is still
+  there. Verification reads the same canonical documents from the database and
+  parses them again in check after check. Threading the parsed state through the
+  checks, the way `verifyDatabase` now hands its authority to the constructor,
+  is the same change applied to the rest.
 * Nothing here points at process start, module loading, SQLite itself, or the
   assets. Those are measured and small, and are not worth touching.
 
