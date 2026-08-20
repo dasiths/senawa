@@ -4,7 +4,7 @@ import { assertDocumentFits, bootstrapPortal, navigate, runs, selectRun } from "
 
 test("renders, selects, traverses, and zooms the workflow diagram", async ({ page }, testInfo) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
-  await navigate(page, "Graph");
+  await navigate(page, "Workflow");
   await page.getByRole("tab", { name: "Diagram", exact: true }).click();
   await expect(page.locator(".diagram-node")).not.toHaveCount(0);
 
@@ -71,7 +71,7 @@ test("renders, selects, traverses, and zooms the workflow diagram", async ({ pag
   await assertDocumentFits(page);
 
   await selectRun(page, runs.workspace);
-  await navigate(page, "Graph");
+  await navigate(page, "Workflow");
   await page.getByRole("tab", { name: "Diagram", exact: true }).click();
   await expect(page.locator(".diagram-state-running")).not.toHaveCount(0);
   await expect(page.locator(".diagram-state-not-started")).not.toHaveCount(0);
@@ -80,7 +80,7 @@ test("renders, selects, traverses, and zooms the workflow diagram", async ({ pag
 
 test("orders phases by execution order in every graph view", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
-  await navigate(page, "Graph");
+  await navigate(page, "Workflow");
 
   // The authority pages nodes in digest order, so a view that echoes arrival
   // order renders the workflow in an order unrelated to how it runs.
@@ -88,13 +88,9 @@ test("orders phases by execution order in every graph view", async ({ page }) =>
   await expect(page.locator(".diagram-node")).not.toHaveCount(0);
   expect(await phaseOrder(page, ".diagram-node")).toEqual(PHASE_EXECUTION_ORDER);
 
-  await page.getByRole("tab", { name: "Tree", exact: true }).click();
+  await page.getByRole("tab", { name: "Outline", exact: true }).click();
   await expect(page.locator(".tree-item")).not.toHaveCount(0);
   expect(await phaseOrder(page, ".tree-item")).toEqual(PHASE_EXECUTION_ORDER);
-
-  await page.getByRole("tab", { name: "Table", exact: true }).click();
-  await expect(page.locator(".graph-table tbody tr")).not.toHaveCount(0);
-  expect(await phaseOrder(page, ".graph-table tbody tr")).toEqual(PHASE_EXECUTION_ORDER);
   expect(diagnostics.severe()).toEqual([]);
 });
 
@@ -112,6 +108,17 @@ async function phaseOrder(page: Page, selector: string): Promise<readonly string
         .join(" ")
         .trim();
       if (own.length > 0) return own.replace(/\s+/gu, " ");
+      // A workflow row carries its role, title and state in spans of their own,
+      // and its children in a nested list. Only the row's own line describes it,
+      // and its spans are adjacent, so joining without a separator would run the
+      // words together.
+      const line = element.querySelector(":scope > .workflow-line");
+      if (line !== null)
+        return [...line.children]
+          .map((child) => child.textContent ?? "")
+          .join(" ")
+          .replace(/\s+/gu, " ")
+          .trim();
       // Table cells carry no separator of their own, so join them.
       return [...element.children]
         .map((child) => child.textContent ?? "")

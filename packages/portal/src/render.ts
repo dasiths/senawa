@@ -61,7 +61,7 @@ import {
 import type { TranscriptScope } from "./transcript-view-model.js";
 import { transcriptNames } from "./transcript-view-model.js";
 
-const GRAPH_MODES: readonly GraphMode[] = Object.freeze(["diagram", "table", "tree"]);
+const GRAPH_MODES: readonly GraphMode[] = Object.freeze(["tree", "diagram"]);
 
 export interface PortalRenderActions {
   readonly navigate: (route: PortalRouteName) => void;
@@ -521,8 +521,8 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
     case "overview":
       main.append(renderOverview(state, actions));
       break;
-    case "graph":
-      main.append(renderGraph(state, actions));
+    case "workflow":
+      main.append(renderWorkflow(state, actions));
       break;
     case "delivery":
       main.append(renderDelivery(state));
@@ -654,7 +654,7 @@ function deliveryMetadata(record: PortalDeliveryRecord): string {
     .join(" / ");
 }
 
-function renderGraph(state: PortalState, actions: PortalRenderActions): HTMLElement {
+function renderWorkflow(state: PortalState, actions: PortalRenderActions): HTMLElement {
   const section = element("section", "graph-view");
   const ids = selectedIds(state);
   if (ids === undefined || state.vector === undefined)
@@ -664,7 +664,7 @@ function renderGraph(state: PortalState, actions: PortalRenderActions): HTMLElem
   const nodes = state.caches.graphNodes[key]?.nodes ?? [];
   const edges = state.caches.graphEdges[key]?.edges ?? [];
   const toolbar = element("div", "view-toolbar");
-  toolbar.append(filterInput(state, actions, "Filter loaded graph nodes"));
+  toolbar.append(filterInput(state, actions, "Filter the workflow"));
   const modes = element("div", "segmented-control");
   modes.setAttribute("role", "tablist");
   for (const mode of GRAPH_MODES) {
@@ -717,77 +717,62 @@ function graphBody(
           setViewport: (viewport) => actions.setGraphViewport(viewport),
         },
       });
-    case "table":
-      return graphTable(executionOrdered(filtered, edges), actions);
     case "tree":
-      return graphTree(executionOrdered(filtered, edges), actions);
+      return workflowTree(executionOrdered(filtered, edges), state, actions);
   }
 }
 
 function graphModeLabel(mode: GraphMode): string {
   const labels: Readonly<Record<GraphMode, string>> = {
     diagram: "Diagram",
-    table: "Table",
-    tree: "Tree",
+    tree: "Outline",
   };
   return labels[mode];
 }
 
-function graphTable(nodes: readonly PortalGraphNode[], actions: PortalRenderActions): HTMLElement {
-  const wrapper = element("div", "table-scroll");
-  const table = document.createElement("table");
-  table.className = "dense-table graph-table";
-  const caption = textElement("caption", "visually-hidden", "Loaded workflow graph nodes");
-  const head = document.createElement("thead");
-  const headRow = document.createElement("tr");
-  for (const label of ["Kind", "Title", "Generation", "Lifecycle", "Needs", "Evidence"])
-    headRow.append(textElement("th", "", label));
-  head.append(headRow);
-  const body = document.createElement("tbody");
-  for (const node of nodes) {
-    const row = document.createElement("tr");
-    row.tabIndex = 0;
-    row.dataset.focusKey = node.nodeId;
-    row.addEventListener("click", () => actions.focusRecord(node.nodeId));
-    row.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        actions.focusRecord(node.nodeId);
-      }
-    });
-    const cells = [
-      textElement("td", "mono", node.kind),
-      textElement("td", "row-title", node.title),
-      textElement("td", "numeric", String(node.definitionGeneration)),
-      textElement("td", "", node.lifecycle),
-      textElement("td", "numeric", String(node.humanNeedCount)),
-      textElement("td", "numeric", String(node.evidenceCount)),
-    ];
-    for (const [index, cell] of cells.entries())
-      cell.dataset.label =
-        ["Kind", "Title", "Generation", "Lifecycle", "Needs", "Evidence"][index] ?? "Value";
-    row.append(...cells);
-    body.append(row);
-  }
-  table.append(caption, head, body);
-  wrapper.append(table);
-  return wrapper;
-}
+// A criterion is how a phase is allowed to finish, not a sibling of the phase.
+// Reading them as peers is what made eight rows of one workflow look like a
+// table of unrelated records.
+const NODE_KIND_ROLE: Readonly<Record<string, string>> = {
+  workflow: "run",
+  phase: "phase",
+  task: "work",
+  criterion: "exit condition",
+};
 
-function graphTree(nodes: readonly PortalGraphNode[], actions: PortalRenderActions): HTMLElement {
-  const tree = element("ul", "graph-tree");
+function workflowTree(
+  nodes: readonly PortalGraphNode[],
+  state: PortalState,
+  actions: PortalRenderActions,
+): HTMLElement {
+  const tree = element("ul", "graph-tree workflow-tree");
   tree.setAttribute("role", "tree");
   const visible = new Set(nodes.map(({ nodeId }) => nodeId));
   const roots = nodes.filter(
     ({ parentNodeId }) => parentNodeId === undefined || !visible.has(parentNodeId),
   );
   const appendChildren = (parent: HTMLElement, node: PortalGraphNode, level: number) => {
-    const item = element("li", "tree-item");
+    const item = element("li", `tree-item workflow-node kind-${node.kind}`);
     item.setAttribute("role", "treeitem");
     item.setAttribute("aria-level", String(level));
     item.dataset.focusKey = node.nodeId;
+    item.dataset.kind = node.kind;
     item.tabIndex = parent.querySelector("[role=treeitem]") === null && level === 1 ? 0 : -1;
-    item.textContent = `${node.kind}: ${node.title} (${node.lifecycle})`;
+    const line = element("span", "workflow-line");
+    line.append(
+      textElement("span", "workflow-role", NODE_KIND_ROLE[node.kind] ?? node.kind),
+      textElement("span", "workflow-title", node.title),
+      textElement("span", `workflow-state state-${node.lifecycle}`, node.lifecycle),
+    );
+    // A need belongs on the thing it blocks. Scattering them across three tabs
+    // meant reading a phase told you nothing about why it had stopped.
+    const blocking = state.humanNeeds.filter((need) => needBlocks(need, node));
+    for (const need of blocking) line.append(needChip(need, state, actions, node.nodeId));
+    if (blocking.length === 0 && node.humanNeedCount > 0)
+      line.append(
+        textElement("span", "workflow-waiting", `${String(node.humanNeedCount)} waiting on you`),
+      );
+    item.append(line);
     item.addEventListener("click", () => actions.focusRecord(node.nodeId));
     item.addEventListener("keydown", treeKeydown);
     const children = nodes.filter(({ parentNodeId }) => parentNodeId === node.nodeId);
@@ -802,6 +787,35 @@ function graphTree(nodes: readonly PortalGraphNode[], actions: PortalRenderActio
   };
   for (const node of roots) appendChildren(tree, node, 1);
   return tree;
+}
+
+/** Whether a need is about this node, so it can be shown where it applies. */
+function needBlocks(need: PortalHumanNeed, node: PortalGraphNode): boolean {
+  return need.sourceId === node.nodeId || need.needId.includes(node.nodeId);
+}
+
+function needChip(
+  need: PortalHumanNeed,
+  state: PortalState,
+  actions: PortalRenderActions,
+  nodeId: string,
+): HTMLElement {
+  const triggerId = `review-node-${safeDomId(nodeId)}-${safeDomId(need.needId)}`;
+  const button = commandButton(needChipLabel(need), () => actions.openNeed(need, triggerId));
+  button.id = triggerId;
+  button.className = "workflow-need";
+  button.disabled =
+    actionsLocked(state) ||
+    need.allowedCommands.length === 0 ||
+    !needAllowedByCapabilities(need, state);
+  return button;
+}
+
+function needChipLabel(need: PortalHumanNeed): string {
+  if (need.kind === "question") return "Answer this question";
+  if (need.kind === "escalation") return "Review the budget it asked for";
+  if (need.kind === "candidate-approval") return "Approve or reject this phase";
+  return `Review this ${need.kind}`;
 }
 
 function graphDetail(
@@ -1778,7 +1792,7 @@ function needAllowedByCapabilities(need: PortalHumanNeed, state: PortalState): b
 function routeLabel(route: PortalRouteName): string {
   const labels: Readonly<Record<PortalRouteName, string>> = {
     overview: "Overview",
-    graph: "Graph",
+    workflow: "Workflow",
     delivery: "Delivery",
     activity: "Activity",
     artifacts: "Artifacts",

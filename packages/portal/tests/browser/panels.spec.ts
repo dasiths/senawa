@@ -190,7 +190,7 @@ test("offers one node toolbar tab stop with arrow movement and bounded actions",
   page,
 }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
-  await navigate(page, "Graph");
+  await navigate(page, "Workflow");
   await page.getByRole("tab", { name: "Diagram", exact: true }).click();
   await page.getByRole("button", { name: /^task verify,/u }).click();
 
@@ -220,7 +220,7 @@ test("offers one node toolbar tab stop with arrow movement and bounded actions",
   await buttons.nth(0).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("task_verify");
 
-  await page.getByRole("tab", { name: "Table", exact: true }).click();
+  await page.getByRole("tab", { name: "Outline", exact: true }).click();
   await expect(page.locator(".diagram-canvas")).toHaveCount(0);
   await expect(toolbar).toHaveCount(1);
   await buttons.nth(1).click();

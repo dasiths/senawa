@@ -161,7 +161,7 @@ describe("portal state", () => {
       stream: "stdout" as const,
       text: "one line",
     };
-    const scoped = portalReducer(initialPortalState({ name: "graph" }), {
+    const scoped = portalReducer(initialPortalState({ name: "workflow" }), {
       type: "transcript-owner",
       owner,
     });
@@ -201,13 +201,13 @@ describe("portal state", () => {
 
 describe("portal pure models", () => {
   it("parses only exact routes and round trips identities", () => {
-    const hash = portalHash("repository_one", "run_one", "graph");
+    const hash = portalHash("repository_one", "run_one", "workflow");
     expect(parsePortalHash(hash)).toEqual({
-      name: "graph",
+      name: "workflow",
       repositoryId: "repository_one",
       runId: "run_one",
     });
-    expect(parsePortalHash("#/runs/../run_one/graph")).toEqual({ name: "graph" });
+    expect(parsePortalHash("#/runs/../run_one/workflow")).toEqual({ name: "workflow" });
   });
 
   it("compares the assembly sync vector without the transcript component", () => {

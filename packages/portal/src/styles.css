@@ -604,6 +604,53 @@ button:disabled {
   list-style: none;
 }
 
+.workflow-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.workflow-role {
+  min-width: 92px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: lowercase;
+}
+
+.workflow-title {
+  font-weight: 600;
+}
+
+.workflow-state {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workflow-state.state-closed {
+  color: var(--positive, #2f6b34);
+}
+
+.workflow-waiting {
+  color: var(--attention, #8a5300);
+  font-size: 12px;
+}
+
+/* A need is an action, so it reads as one where it blocks rather than as a
+   count that sends a person to another tab to find the button. */
+.workflow-need {
+  padding: 1px 8px;
+  font-size: 12px;
+}
+
+.workflow-tree .tree-group {
+  margin: 0 0 0 18px;
+  padding: 0;
+  border-left: 1px solid var(--rule);
+  list-style: none;
+}
+
 .diagram-frame {
   display: grid;
   gap: 8px;

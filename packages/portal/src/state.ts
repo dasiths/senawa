@@ -128,7 +128,7 @@ export interface PortalDialogState {
   readonly answerDraft?: string;
 }
 
-export type GraphMode = "diagram" | "table" | "tree";
+export type GraphMode = "diagram" | "tree";
 
 export interface PortalGraphViewport {
   readonly scale: number;
@@ -264,7 +264,7 @@ export function initialPortalState(route: PortalRoute): PortalState {
       filter: "",
       focusedRecord: undefined,
       rightRailOpen: false,
-      graphMode: "table",
+      graphMode: "tree",
       graphViewport: INITIAL_GRAPH_VIEWPORT,
       transcript: emptyTranscriptView(),
       transcriptScope: "node",

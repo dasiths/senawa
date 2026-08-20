@@ -231,7 +231,7 @@ test("publishes only the selected run when authority loads overlap", async ({ br
     await journeyOverviewGate;
     await route.continue();
   });
-  await navigate(page, "Graph");
+  await navigate(page, "Workflow");
   await expect.poll(() => gatedRequests).toBeGreaterThan(0);
   await selectRun(page, runs.workspace);
   await page.evaluate((frame) => {
@@ -244,8 +244,8 @@ test("publishes only the selected run when authority loads overlap", async ({ br
   await expect(page.locator(".nav-facts dd").first()).toHaveText("running");
   await expect(page.getByRole("region", { name: "Portal status" })).toContainText("Data current");
   await expect(page.getByRole("region", { name: "Portal status" })).toContainText("2 human needs");
-  await expect(page.getByRole("heading", { name: "Graph", level: 1 })).toBeVisible();
-  await expect(page.locator(".graph-table tbody tr")).not.toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Workflow", level: 1 })).toBeVisible();
+  await expect(page.locator(".workflow-tree .tree-item")).not.toHaveCount(0);
   expect(await visibleCursor(page)).toBeLessThan(999_999);
   await expect
     .poll(() => page.evaluate(() => window.__senawaEventSources?.length ?? 0))

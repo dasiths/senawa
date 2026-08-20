@@ -146,14 +146,17 @@ layout is judged on legible material, and structure last.
 * [x] Collapse the activity view, which was 23,903 characters and 168 raw
   digests before a person had done anything. Measured at zero digests now.
 * [x] Fold attempts into the agent that made them: six rows become two.
-* [ ] Then the structural change: the graph becomes the workflow and nests, and
-  nine tabs become two, with every kind of human need folded onto the node it
-  blocks rather than scattered across three tabs, two of which are empty on
-  nearly every run.
-
-The structural step needs the thirty-four browser tests rewritten first. They
-are the safety net for it, and they are currently written against the shape
-being replaced.
+* [x] The graph becomes the workflow. The tab is `Workflow`, the default view
+  is the nested outline rather than the table, and `Table` is gone: it was three
+  renderings of eight rows defaulting to the one that reads least like a
+  workflow. A row now reads `phase research closed` instead of a `Kind`,
+  `Generation` and `Lifecycle` column, and a need appears as a button on the
+  node it blocks. The thirty-four browser tests were moved with it and pass.
+* [ ] Fold Agents, Delivery and Workspaces into the selection the workflow view
+  already has, and put `Steer` and `Override` in its toolbar.
+* [ ] Retire the Human needs and Amendments tabs, once every need renders on its
+  node with its action inline. The queue survives in the rail.
+* [ ] Merge Overview and Activity into one `Record` tab.
 
 Two things the live runs added to this. The attention rail can hold a button
 that cannot be scrolled to, so the only copy of a control was unreachable. And

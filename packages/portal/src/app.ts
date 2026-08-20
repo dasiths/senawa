@@ -353,7 +353,7 @@ export class PortalApplication {
     switch (route) {
       case "overview":
         return true;
-      case "graph": {
+      case "workflow": {
         const summary = await this.#client.graph(repositoryId, runId);
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
         if (summary.graphRevision !== overview.sync.graphRevision)
@@ -801,7 +801,7 @@ export class PortalApplication {
    */
   #transcriptOwner(): PortalTranscriptOwner | undefined {
     const identity = this.#selectedIdentity();
-    if (identity === undefined || this.#state.route.name !== "graph") return undefined;
+    if (identity === undefined || this.#state.route.name !== "workflow") return undefined;
     if (this.#state.ui.transcriptScope === "run")
       return Object.freeze({ kind: "run", id: identity.runId });
     const revision = this.#state.vector?.graphRevision;

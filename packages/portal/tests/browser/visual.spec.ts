@@ -133,11 +133,11 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
   const overviewTab = page.getByRole("tab", { name: "Overview", exact: true });
   await overviewTab.focus();
   await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("heading", { name: "Graph", level: 1 })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Graph", exact: true })).toBeFocused();
-  const filter = page.getByRole("searchbox", { name: "Filter loaded graph nodes" });
+  await expect(page.getByRole("heading", { name: "Workflow", level: 1 })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Workflow", exact: true })).toBeFocused();
+  const filter = page.getByRole("searchbox", { name: "Filter the workflow" });
   await filter.fill("verify");
-  const row = page.locator(".graph-table tbody tr").first();
+  const row = page.locator(".workflow-tree .tree-item").first();
   await row.focus();
   await page.keyboard.press("Enter");
   const detail = page.locator(".detail-panel");
@@ -145,7 +145,7 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
   await expect(detail).toContainText("prefix shown");
   await expect(detail.locator("script, style, svg, a, iframe, object, embed")).toHaveCount(0);
   await filter.fill("");
-  await page.getByRole("tab", { name: "Tree", exact: true }).click();
+  await page.getByRole("tab", { name: "Outline", exact: true }).click();
   const tree = page.getByRole("tree");
   await expect(tree).toBeVisible();
   const firstTreeItem = tree.getByRole("treeitem").first();
