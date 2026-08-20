@@ -1145,6 +1145,55 @@ describe("CopilotSerialWorkerAdapter", () => {
 
   // structure it could think of against `output-arguments-invalid`, failed
   // identically each time, and stopped to ask a person what the tool wanted.
+  // A model that hands a nested object back as encoded JSON does it with these
+  // arrays too. One live planner spent seven attempts being told
+  // `criteria must be an array` while sending exactly that, encoded.
+  it("reads a completion whose criteria arrive as encoded JSON", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk, { phaseOutput: true });
+    let result: CopilotSdkToolResult | undefined;
+    sdk.onSend = async (config, session) => {
+      const tool = required(config.tools.find((candidate) => candidate.name === "senawa_complete"));
+      result = await invoke(tool, session.sessionId, "call_encoded_criteria", {
+        disposition: "completed",
+        summary: "Completed",
+        criteria: "[]",
+        completionEvidence: "[]",
+        outputs: { verification: { verified: true, summary: "ok" } },
+      });
+    };
+
+    const run = await fixture.adapter.run(fixture.input);
+
+    expect(required(result).resultType).toBe("success");
+    expect(run.status).toBe("completed");
+  });
+
+  // Publishing succeeds, the completion fails for some other reason, and the
+  // retry finds its own accepted output waiting as a duplicate. Refusing that
+  // left a live planner unable to finish across seven attempts: the work the
+  // phase wanted was present the whole time.
+  it("lets an agent finish when its output was already published", async () => {
+    const sdk = new FakeSdkPort();
+    const fixture = harness(sdk, { phaseOutput: true });
+    fixture.broker.duplicateOutputs = true;
+    let result: CopilotSdkToolResult | undefined;
+    sdk.onSend = async (config, session) => {
+      const tool = required(config.tools.find((candidate) => candidate.name === "senawa_complete"));
+      result = await invoke(tool, session.sessionId, "call_after_publish", {
+        disposition: "completed",
+        summary: "Completed",
+        criteria: [],
+        completionEvidence: [],
+        outputs: { verification: { verified: true, summary: "ok" } },
+      });
+    };
+
+    await fixture.adapter.run(fixture.input);
+
+    expect(required(result).resultType).toBe("success");
+  });
+
   it("says why it refuses a phase output it cannot read", async () => {
     const sdk = new FakeSdkPort();
     const fixture = harness(sdk, { phaseOutput: true });
@@ -1317,6 +1366,8 @@ class CapturingBroker implements ContextBrokerClient {
   readonly reads: ReturnType<typeof decodeAssetReadRequest>[] = [];
   readonly submissions: WorkerSubmission[] = [];
   admission: SubmissionAdmissionResult["status"] = "accepted";
+  /** Reports a phase output as already recorded, the way a republished one is. */
+  duplicateOutputs = false;
   readGate?: Promise<void>;
   /** A host restart brings a new wall clock, which is what makes a re-drive collide. */
   currentTime = "2026-08-13T00:00:00.000Z";
@@ -1373,10 +1424,12 @@ class CapturingBroker implements ContextBrokerClient {
   admitSubmission(input: { readonly submission: unknown }): SubmissionAdmissionResult {
     const submission = decodeWorkerSubmission(input.submission);
     this.submissions.push(submission);
+    const status =
+      this.duplicateOutputs && submission.type === "phase-output" ? "duplicate" : this.admission;
     const base = {
       submissionId: submission.submissionId,
       type: submission.type,
-      status: this.admission,
+      status,
       replayed: false,
     } as const;
     if (submission.type !== "completion" || this.admission !== "accepted") return base;

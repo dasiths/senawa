@@ -874,8 +874,12 @@ function completeTool(
           completion = {
             disposition: wrapper.disposition,
             summary: wrapper.summary,
-            criteria: wrapper.criteria,
-            completionEvidence: wrapper.completionEvidence,
+            // The same model that hands a nested object back as encoded JSON
+            // does it with these arrays too. A live planner spent seven attempts
+            // being told `criteria must be an array` while sending exactly that,
+            // encoded. Decoding it here is not a mistake worth a turn.
+            criteria: decodedObject(wrapper.criteria),
+            completionEvidence: decodedObject(wrapper.completionEvidence),
           };
           outputs =
             slots.length === 0
@@ -1263,8 +1267,13 @@ async function submitPhaseOutput(
     return recordRejected(input, state, sha256, identity, "submission-refused", []);
   }
   state.submissions.push(result);
-  if (result.status !== "accepted") {
-    // A stale or duplicate admission is not an acceptance and must read as one.
+  // A duplicate says this exact output, by digest, is already recorded: the work
+  // the phase wanted is present. Refusing it deadlocked the run. An agent that
+  // published successfully and then failed its completion for any other reason
+  // could never try again, because its own accepted output came back as a
+  // duplicate and refused every retry after that. A stale admission is different
+  // and still refused: there, a later attempt owns the work.
+  if (result.status !== "accepted" && result.status !== "duplicate") {
     return recordRejected(input, state, sha256, identity, `output-${result.status}`, []);
   }
   try {

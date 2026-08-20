@@ -3896,3 +3896,38 @@ test suite declared `externalSchemas: []`.
 And the planner's two questions were both, in effect, "your tool is broken and I
 cannot tell why". An agent stopping to ask that is the system working: it had no
 other move. The transcript of a stuck agent is a bug report.
+
+## F-053: the planner could publish its work but never hand it in
+
+With the tool declaration fixed the planner got further, and then stalled on
+attempt seven with six phase outputs published and no completion. The transcript
+made it readable, which is the first time this session a stall explained itself:
+
+```
+tool senawa_complete failure: completion-refused: $.completion.criteria must be an array
+tool senawa_complete failure: output-duplicate
+session ended: the agent stopped without submitting anything
+```
+
+Two defects, one after the other.
+
+The model sent `criteria` as a JSON-encoded string. It does the same with
+`outputs`, which this codebase already tolerates and calls "not a mistake worth
+a turn". The same courtesy was not extended to `criteria` or
+`completionEvidence`, so the agent was told its array must be an array while
+sending exactly that, encoded, seven times over.
+
+Then the deadlock. The output published successfully on the first attempt. The
+completion failed for the reason above. On every retry the same output came back
+`duplicate` and was refused, so the phase could never close: the work it wanted
+was sitting in the record the whole time, and the agent was locked out of
+finishing by its own success.
+
+A duplicate is an idempotent acceptance. The exact output, by digest, is already
+recorded. `stale` stays a refusal, because there a later attempt genuinely owns
+the work — that distinction is the whole point, and collapsing the two into "not
+accepted" is what caused this.
+
+That makes at least six findings this session with the same shape: something
+ordinary — a question, an empty turn, a restart, a retry, a duplicate submission,
+a republished output — treated as a failure, and the failure permanent.
