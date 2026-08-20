@@ -4112,3 +4112,61 @@ the test passed against a fix that was still there. Breaking the function's body
 instead, so it still compiles and is still called, made the test fail. A break
 that does not build is not a break, and the compiler said so; nothing else would
 have.
+
+## F-059 A run that waits for ever on an agent that already finished
+
+The live run reached a state no command could get it out of. `senawa advance`
+answered `waiting for the agent working on implement` on every cycle, the portal
+showed nothing waiting on a person, and the run stayed `running` with all three
+phase outputs already published. It stayed there indefinitely.
+
+The receipt history says what happened, in order:
+
+| cursor | outcome | command |
+| --- | --- | --- |
+| 54 | completed | `answer-3ee5d085` |
+| 57 | completed | `worker-completion-a15a3ffb` |
+| 60 | completed | `completion-424f0…` |
+| 63, 66, 69 | refused `completion-exists` | `completion-…` |
+| 72 | completed | `gate-implement-5` |
+| 75 | refused `candidate-exists` | `worker-completion-4fe330ea` |
+
+The gate at cursor 72 created the phase's candidate. There is no
+`close-implement-5` after it. Then a worker handed in real work at cursor 75 and
+was refused, because a candidate already existed. That dispatch therefore has no
+completion and never can have one, and the fan-in added in F-056 correctly waits
+for exactly that: a member with no completion is a member still working. It will
+wait for ever, because the thing it is waiting for has already happened and was
+thrown away.
+
+So the deadlock is the fan-in doing its job on a dispatch that should never have
+existed. A member was dispatched into a phase that had already produced its
+candidate.
+
+What is not yet established is how that member came to be dispatched. Three
+explanations were each tested and each is wrong:
+
+* The outbox drains, so a member that has reported looks unreported again. It
+  does not drain — entries stay with `delivered: true`, and the live record still
+  holds all six.
+* A resumed member's abandoned dispatch carries the stale completion. Tested
+  directly; the phase waits for the resumed dispatch, not the abandoned one.
+* A member that asked a question reports a `blocked` completion, which counts as
+  handing in. Every completion in the live record has disposition `completed`;
+  none is blocked.
+
+All three are now regression tests, because each describes something the fan-in
+does have to get right, and each passing is worth keeping. None of them
+reproduces the live failure.
+
+Three dispatches in the record have no completion at all, and all three asked
+questions. Two of those are superseded attempts. That is the direction the next
+attempt should take: a question is answered, the member is resumed, and the
+resume is what has to be shown to be ordered after the gate rather than before
+it. Guessing has been tried three times and cost more than it returned; the next
+step is to make the driver say which member it selected and why, on a record
+that reproduces this, rather than to infer it from what was left behind.
+
+The fix is deliberately not being guessed at. Two changes were reverted earlier
+in this work for being unprovable, and a third would be worse than none: a run
+that hangs is at least visible, and a wrong fix for it would not be.

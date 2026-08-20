@@ -39,6 +39,7 @@ const MAX_OPERATIONAL_ARGUMENT_LENGTH = 4_096;
 
 import { runAdvanceCommand } from "./advance-command.js";
 import { answerQuestion, decidePhase, overrideMember, steerAgent } from "./decide.js";
+import { grantAllowance } from "./grant-allowance.js";
 import {
   type InspectOptions,
   inspectPhase,
@@ -82,6 +83,7 @@ const WORK_CREATING_COMMANDS = new Set([
   "approve",
   "reject",
   "answer",
+  "grant",
   "override",
   "steer",
 ]);
@@ -202,6 +204,19 @@ async function dispatchOperationalCli(
       currentTime: new Date().toISOString(),
       databasePath: paths.databasePath,
       dependencies,
+      principal: startPrincipal,
+      repositoryId: action,
+      runId: rest[0] ?? "",
+    });
+  }
+  if (group === "grant" && action !== undefined && rest.length >= 1) {
+    const amount = rest[1];
+    return grantAllowance({
+      assetDirectory: paths.assetDirectory,
+      currentTime: new Date().toISOString(),
+      databasePath: paths.databasePath,
+      dependencies,
+      ...(amount === undefined ? {} : { increaseBy: Number(amount) }),
       principal: startPrincipal,
       repositoryId: action,
       runId: rest[0] ?? "",

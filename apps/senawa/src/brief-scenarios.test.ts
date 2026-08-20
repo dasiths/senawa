@@ -199,7 +199,54 @@ describe("running every member of a fan-out", () => {
     expect(await advance(scenario)).toMatchObject({ kind: "awaiting-agent" });
   });
 
-  it("closes the phase once every member has finished", async () => {});
+  // A member reports once, and the record of that sits in an outbox only until
+  // it is drained. Reading "has this member handed work in?" from the outbox
+  // therefore answers yes for one cycle and no for every cycle after, so a
+  // member that had already finished started speaking for the phase again and
+  // closed it while a sibling was still working. The sibling then finished into
+  // a phase that had a candidate, its completion was refused for that, and the
+  // run waited for ever on an agent that had already done the work.
+  it("does not close the phase after a finished member's report is drained", async () => {
+    const scenario = await startScenario("fanout-drained", { fanOut: "complete" });
+    await agentTurn(
+      scenario,
+      scenario.dispatchId,
+      canonicalValue({ tasks: [{ id: "one" }, { id: "two" }, { id: "three" }] }),
+    );
+    await advance(scenario);
+    await advance(scenario);
+    const dispatched: string[] = [];
+    for (let member = 0; member < 3; member += 1) {
+      const outcome = await advance(scenario);
+      if (outcome.kind !== "dispatched") throw new Error(`member ${member}: ${outcome.kind}`);
+      dispatched.push(outcome.dispatchId);
+    }
+    const [first, second, third] = dispatched as [string, string, string];
+
+    await agentTurn(scenario, first, canonicalValue({ verified: true }));
+    // Twice, because one cycle is exactly the window in which the outbox still
+    // remembers. The phase owes two members and must say so the second time it
+    // is asked, not only the first.
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      expect(await advance(scenario), `cycle ${String(cycle)}`).toMatchObject({
+        kind: "awaiting-agent",
+      });
+    }
+
+    await agentTurn(scenario, second, canonicalValue({ verified: true }));
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      expect(await advance(scenario), `cycle ${String(cycle)}`).toMatchObject({
+        kind: "awaiting-agent",
+      });
+    }
+
+    // With nothing left working, the phase is free to close, and a fan-in that
+    // never lets go would be as broken as one that closes early.
+    await agentTurn(scenario, third, canonicalValue({ verified: true }));
+    const outcomes: string[] = [];
+    for (let cycle = 0; cycle < 4; cycle += 1) outcomes.push((await advance(scenario)).kind);
+    expect(outcomes, outcomes.join(",")).not.toContain("awaiting-agent");
+  }, 120_000);
 
   // A member that asks a question resumes on a fresh dispatch, and that dispatch
   // needs a phase attempt ordinal. Deriving it from the member's own ordinal
@@ -239,6 +286,90 @@ describe("running every member of a fan-out", () => {
     expect(resumed.dispatchId).not.toBe(first.dispatchId);
     expect(resumed.dispatchId).not.toBe(second.dispatchId);
   });
+
+  // A member that asks a question reports, but it does not report work. That
+  // report lands in the same outbox a finished member's does, so fan-in read it
+  // as "this member is done" and closed the phase around a member that was
+  // waiting to be told something. The answer then resumed that member into a
+  // phase that already had a candidate, its completion was refused for that, and
+  // the run waited for ever on an agent that had already done the work.
+  it("does not close a phase around a member that is waiting for an answer", async () => {
+    const scenario = await startScenario("fanout-asked", { fanOut: "complete" });
+    await agentTurn(
+      scenario,
+      scenario.dispatchId,
+      canonicalValue({ tasks: [{ id: "one" }, { id: "two" }] }),
+    );
+    await advance(scenario);
+    await advance(scenario);
+    const first = await advance(scenario);
+    if (first.kind !== "dispatched") throw new Error(`first member: ${first.kind}`);
+    const second = await advance(scenario);
+    if (second.kind !== "dispatched") throw new Error(`second member: ${second.kind}`);
+
+    await askThroughSink(scenario, first.dispatchId, "which board size?");
+    await agentTurn(scenario, second.dispatchId, canonicalValue({ verified: true }));
+
+    // Nobody has answered yet, so the phase is still owed a member's work and
+    // must not produce the candidate that would lock that member out.
+    const outcomes: string[] = [];
+    for (let cycle = 0; cycle < 3; cycle += 1) outcomes.push((await advance(scenario)).kind);
+    expect(outcomes, outcomes.join(",")).not.toContain("closed");
+    expect(outcomes, outcomes.join(",")).not.toContain("awaiting-approval");
+  }, 120_000);
+
+  // Fan-in counts members, and a member is a task, not a dispatch. A member that
+  // was resumed has two dispatches, and the abandoned one still carries the
+  // finished completion it handed in before it asked. Reading the phase as a
+  // list of dispatches therefore found that stale completion, decided the member
+  // was done, and closed the phase while the member's live dispatch was still
+  // working. The live dispatch then finished into a phase that already had a
+  // candidate, was refused for it, and the run waited for ever on an agent that
+  // had already done the work.
+  it("waits for a resumed member rather than its abandoned dispatch", async () => {
+    const scenario = await startScenario("fanout-resumed", { fanOut: "complete" });
+    await agentTurn(
+      scenario,
+      scenario.dispatchId,
+      canonicalValue({ tasks: [{ id: "one" }, { id: "two" }] }),
+    );
+    await advance(scenario);
+    await advance(scenario);
+    const first = await advance(scenario);
+    if (first.kind !== "dispatched") throw new Error(`first member: ${first.kind}`);
+    const second = await advance(scenario);
+    if (second.kind !== "dispatched") throw new Error(`second member: ${second.kind}`);
+
+    await askThroughSink(scenario, first.dispatchId, "which board size?");
+    expect(
+      answerQuestion({
+        ...scenario.paths,
+        answer: "three by three",
+        currentTime: NOW,
+        dependencies,
+        principal: runtimePrincipal,
+        repositoryId: scenario.repositoryId,
+        runId: scenario.runId,
+      }),
+    ).toMatchObject({ exitCode: 0 });
+    const resumed = await advance(scenario);
+    if (resumed.kind !== "dispatched") throw new Error(`resumed: ${resumed.kind}`);
+
+    // The sibling is done, so the only thing the phase is still owed is the
+    // resumed member, which has not reported on its live dispatch.
+    await agentTurn(scenario, second.dispatchId, canonicalValue({ verified: true }));
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      expect(await advance(scenario), `cycle ${String(cycle)}`).toMatchObject({
+        kind: "awaiting-agent",
+      });
+    }
+
+    // And once it does report, the phase is free to move.
+    await agentTurn(scenario, resumed.dispatchId, canonicalValue({ verified: true }));
+    const outcomes: string[] = [];
+    for (let cycle = 0; cycle < 3; cycle += 1) outcomes.push((await advance(scenario)).kind);
+    expect(outcomes, outcomes.join(",")).not.toContain("awaiting-agent");
+  }, 120_000);
 
   // The attempt ceiling is a count of a task's own tries. Measuring it by the
   // member's ordinal meant the second member of a fan-out had spent two of its

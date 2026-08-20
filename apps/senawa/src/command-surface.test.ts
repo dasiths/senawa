@@ -93,6 +93,12 @@ describe("the command surface end to end", () => {
     const approve = await senawa(project, stateRoot, "approve", repository, "run_cli");
     expect(approve.stdout).toContain("Nothing is waiting for a decision");
     expect(approve.stdout).toContain("senawa status");
+
+    // Raising a budget was reachable only from the portal, so a run left to a
+    // terminal stopped on a budget with nothing anyone there could do about it.
+    const grant = await senawa(project, stateRoot, "grant", repository, "run_cli");
+    expect(grant.stdout).toContain("No allowance has been asked for");
+    expect(grant.stdout).toContain("senawa status");
   }, 60_000);
 
   it("keeps the IPC credential out of status and diagnostics", async () => {
