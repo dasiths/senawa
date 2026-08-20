@@ -7047,10 +7047,18 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
           ...(row.requested_at === null ? {} : { cancellationRequestedAt: row.requested_at }),
         }),
       );
+    // Only requests still waiting. The planner refuses to plan a command that
+    // has escalated, which is right while nobody has answered and wrong the
+    // moment somebody has: a granted allowance exists precisely so the work that
+    // asked for it can run, and keeping the answered request here meant it never
+    // ran again. The run then sat with room in its budget, nothing waiting on a
+    // person, and no agent working.
     const escalations = this.#database
       .prepare<[string], { canonical_escalation: string }>(
-        `SELECT canonical_escalation FROM runner_escalations
-         WHERE run_key = ? ORDER BY command_id`,
+        `SELECT e.canonical_escalation FROM runner_escalations e
+         LEFT JOIN runner_allowance_resolutions r ON r.escalation_command_id = e.command_id
+         WHERE e.run_key = ? AND r.escalation_command_id IS NULL
+         ORDER BY e.command_id`,
       )
       .all(run.run_key)
       .map((row) => parseRunnerValue<RunnerEscalation>(row.canonical_escalation));

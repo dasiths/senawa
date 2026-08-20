@@ -76,8 +76,16 @@ produced several of the failures already recorded.
   `game.js`, `cli.js` and `test.js`, its own nine tests passed, and it was played
   to "Player X wins!".
 * [x] Record what the run showed, including which views finally have content.
-* [ ] Answer every question through the portal rather than the terminal.
+* [x] Answer every question through the portal rather than the terminal. A
+  question and two budget grants were done entirely from the browser, and the
+  receipts came back `answer-question completed` and `grant-allowance completed`.
 * [ ] One run, start to finish, with no fix applied in the middle.
+
+Two more defects stood in the way and are now fixed. F-059: a gate that refused
+left a candidate behind, so the retry it started could never hand its work in.
+F-060: a granted allowance never restarted the work that asked for it, because
+the planner excludes a command that has escalated and the answered request stayed
+in the runner's snapshot for ever.
 
 Done when the game exists, runs, and the run reached its end without a person
 using the CLI.

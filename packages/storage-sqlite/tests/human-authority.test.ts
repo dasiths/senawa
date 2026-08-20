@@ -14,6 +14,7 @@ import {
   FencedRunner,
   type PageQueryError,
   type RuntimeDependencies,
+  scheduleRunnerTransition,
 } from "@senawa/runtime";
 import {
   createRuntimeGraph,
@@ -405,6 +406,45 @@ describe("SQLite Phase 11A human authority", () => {
         .needs.filter(({ kind }) => kind === "escalation").length,
     ).toBe(0);
     after.close();
+    authority.close();
+    runner.close();
+    fixture.dispose();
+  });
+
+  // A granted allowance exists so the work that asked for it can run. The
+  // planner refuses to plan a command that has escalated, and the request stayed
+  // in the runner's snapshot after it was answered, so the work never ran again.
+  // The run sat with room in its budget, nothing waiting on a person, and no
+  // agent working, and no command could get it out of that.
+  it("plans the work again once the allowance it asked for is granted", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    const runner = configuredRunner(fixture);
+    const command = effectCommand();
+    runner.enqueue(command);
+    const result = runner.persistIntent(runInput(command));
+    if (result.type !== "escalated") throw new Error("Expected runner escalation");
+
+    const scope = { repositoryId: runtimeFixture.repositoryId, runId: runtimeFixture.runId };
+    expect(runner.load(scope).escalations).toHaveLength(1);
+    expect(scheduleRunnerTransition(runner.load(scope)).type).toBe("none");
+
+    expect(
+      authority.submit(
+        grantAllowanceCommand({
+          commandId: "command_grant-resumes-work",
+          escalationDigest: deterministicSha256.digest(canonicalBytes(result.escalation)),
+          expectedLimit: 1,
+          increaseBy: 4,
+        }),
+        admission(),
+      ),
+    ).toMatchObject({ status: "completed" });
+
+    expect(runner.load(scope).escalations).toHaveLength(0);
+    expect(scheduleRunnerTransition(runner.load(scope)).type).not.toBe("none");
+
     authority.close();
     runner.close();
     fixture.dispose();

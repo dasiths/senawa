@@ -4182,3 +4182,36 @@ more than reading the authored workflow would have: `gates` and `attempts` were
 both there in plain sight, and the missing `close-implement` said the gate had
 not accepted. The record said which branch ran; three guesses were made before
 anyone asked it.
+
+## F-060 A granted allowance that does not restart the work it was granted for
+
+The run stopped with ten dispatches, four files written, an empty human queue,
+and no agent working. `senawa advance` recorded nothing on every cycle. The
+portal agreed: nothing waiting, nothing running, mode `running`.
+
+The runner's own tables said what had happened. Ten queued commands, eight effect
+outcomes. The two commands with no outcome were the two that had escalated for
+`review-iteration`, each asking for one unit against an available zero. Both
+escalations had been granted from the portal, and the budget stood at a limit of
+56 against 8 spent — forty-eight units of room, and two pieces of work that
+would never ask for them again.
+
+The planner excludes any queued command that has escalated:
+
+```ts
+const escalatedCommandIds = new Set(snapshot.escalations.map(({ commandId }) => commandId));
+```
+
+That is right while nobody has answered, and wrong the moment somebody has. The
+snapshot carried every escalation ever raised, answered or not, so the exclusion
+was permanent. A granted allowance exists precisely so the work that asked for it
+can run, and granting it did everything except that.
+
+The runner's snapshot now carries only the requests still waiting. The test
+raises an escalation, checks the planner has nothing to do, grants the allowance,
+and checks the planner now plans the work. Breaking the filter fails it on the
+first assertion after the grant.
+
+This is the third defect in this run alone where something ordinary — a refused
+gate, a duplicate submission, a granted budget — left a permanent mark that
+nothing could clear.
