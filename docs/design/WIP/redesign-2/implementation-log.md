@@ -4143,30 +4143,42 @@ So the deadlock is the fan-in doing its job on a dispatch that should never have
 existed. A member was dispatched into a phase that had already produced its
 candidate.
 
-What is not yet established is how that member came to be dispatched. Three
-explanations were each tested and each is wrong:
+It was the retry. The implement phase is authored `gates: [tests]` with
+`attempts: 3`. The gate refused, the driver retried the phase, and the retry's
+work was refused because a candidate already existed.
+
+Recording a candidate is not conditional on the gate accepting. `evaluate-gate`
+builds the candidate, evaluates, and stores both, and nothing ever removes
+either. So a refused gate leaves behind a record that means "this phase is
+decided", and `submit-completion` refuses every later completion on the strength
+of it. Every gated phase with more than one attempt was therefore broken in the
+same way: the retry was dispatched, did the work, and could never hand it in.
+
+That is now a test. `lets the attempt after a refused gate hand its work in`
+drives a refused gate, takes the retry the driver offers, and has that attempt
+report. Before the fix it failed with the live refusal, word for word:
+`submit-completion was refused: candidate-exists: Completion cannot change after
+candidate creation`.
+
+A candidate the gate rejected is not the phase's decided content, so it no longer
+stands in the way of the attempt that follows. The first completion of a new
+attempt drops it, together with its evidence, and replaces only that task's own
+assessment: a fan-out retries the member that failed, and the members that passed
+keep the work they did. An accepted candidate is untouched, because that one is a
+decision.
+
+Three other explanations were tried first and each was wrong:
 
 * The outbox drains, so a member that has reported looks unreported again. It
-  does not drain — entries stay with `delivered: true`, and the live record still
-  holds all six.
-* A resumed member's abandoned dispatch carries the stale completion. Tested
-  directly; the phase waits for the resumed dispatch, not the abandoned one.
+  does not drain — entries stay with `delivered: true`.
+* A resumed member's abandoned dispatch carries a stale completion. The phase
+  waits for the resumed dispatch, not the abandoned one.
 * A member that asked a question reports a `blocked` completion, which counts as
-  handing in. Every completion in the live record has disposition `completed`;
-  none is blocked.
+  handing in. Every completion in the live record has disposition `completed`.
 
-All three are now regression tests, because each describes something the fan-in
-does have to get right, and each passing is worth keeping. None of them
-reproduces the live failure.
-
-Three dispatches in the record have no completion at all, and all three asked
-questions. Two of those are superseded attempts. That is the direction the next
-attempt should take: a question is answered, the member is resumed, and the
-resume is what has to be shown to be ordered after the gate rather than before
-it. Guessing has been tried three times and cost more than it returned; the next
-step is to make the driver say which member it selected and why, on a record
-that reproduces this, rather than to infer it from what was left behind.
-
-The fix is deliberately not being guessed at. Two changes were reverted earlier
-in this work for being unprovable, and a third would be worse than none: a run
-that hangs is at least visible, and a wrong fix for it would not be.
+All three are now regression tests, because each describes something fan-in does
+have to get right. None of them reproduced the failure, and writing them cost
+more than reading the authored workflow would have: `gates` and `attempts` were
+both there in plain sight, and the missing `close-implement` said the gate had
+not accepted. The record said which branch ran; three guesses were made before
+anyone asked it.

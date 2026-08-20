@@ -912,7 +912,15 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
   private submitCompletion(command: CommandEnvelope, run: RuntimeAuthorityRun): JsonValue {
     const records = requiredRecords(run);
     this.assertGraphRevision(command, records);
-    if (records.candidate !== undefined) {
+    // A candidate the gate rejected is not the phase's decided content. It is a
+    // failed attempt, and the attempt the run starts next is entitled to replace
+    // it. Holding it against that attempt meant a retried phase could never hand
+    // its work in: the authority refused every completion the retry produced, so
+    // the run waited for an agent that had already finished, on every cycle, for
+    // ever. An accepted candidate still stands, because that is a decision.
+    const rejectedCandidate =
+      records.candidate !== undefined && records.gateEvidence?.evaluation.decision === "rejected";
+    if (records.candidate !== undefined && !rejectedCandidate) {
       throw new RuntimeRefusal(
         "candidate-exists",
         "Completion cannot change after candidate creation",
@@ -933,6 +941,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       );
     }
     if (
+      !rejectedCandidate &&
       records.assessments.some(
         (accepted) => accepted.assessment.submission.task.taskId === task.taskId,
       )
@@ -950,8 +959,18 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       payload.submission as unknown as CompletionSubmission,
     );
     const assessmentDigest = digestAccountingAssessment(assessment, this.dependencies.sha256);
-    run.records = updateCurrentPhase(records, {
-      assessments: [...records.assessments, { assessmentDigest, assessment }],
+    // Only the retried task's own assessment is replaced. A fan-out retries the
+    // member that failed, and the members that passed keep the work they did.
+    // The rejected candidate and its evidence are dropped rather than set aside,
+    // because a record that is absent cannot be mistaken for a decision.
+    const kept = rejectedCandidate
+      ? records.assessments.filter(
+          (accepted) => accepted.assessment.submission.task.taskId !== task.taskId,
+        )
+      : records.assessments;
+    const base = rejectedCandidate ? withoutRejectedCandidate(records) : records;
+    run.records = updateCurrentPhase(base, {
+      assessments: [...kept, { assessmentDigest, assessment }],
     });
     return canonicalValue({ assessmentDigest, assessment }) as unknown as JsonValue;
   }
@@ -1895,6 +1914,13 @@ function phaseLifecycleRecords(records: RuntimeRunRecords): RuntimePhaseLifecycl
       : { authorityDecision: records.authorityDecision }),
     ...(records.closure === undefined ? {} : { closure: records.closure }),
   };
+}
+
+// Dropping the keys rather than setting them undefined keeps the records exactly
+// as they were before a gate ever ran, which is what a fresh attempt is owed.
+function withoutRejectedCandidate(records: RuntimeRunRecords): RuntimeRunRecords {
+  const { candidate: _candidate, gateEvidence: _gateEvidence, ...rest } = records;
+  return rest;
 }
 
 function updateCurrentPhase(

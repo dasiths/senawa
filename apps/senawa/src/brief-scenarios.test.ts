@@ -862,6 +862,26 @@ describe("one phase in sequence", () => {
     expect(pack).toContain("measure did not pass");
   });
 
+  // Retrying a refused gate is only half of a retry. The attempt it starts has
+  // to be able to hand its work in, and a candidate was already recorded for the
+  // attempt the gate refused, so the authority refused the new work for
+  // belonging to a task that already had a candidate. The run then waited for an
+  // agent that had already finished.
+  it("lets the attempt after a refused gate hand its work in", async () => {
+    const scenario = await startScenario("gate-retry-handin", {
+      sensorCommand: "false",
+      attempts: 3,
+    });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+    const retry = await advance(scenario);
+    if (retry.kind !== "retrying") throw new Error(`expected a retry, got ${retry.kind}`);
+
+    await agentTurn(scenario, retry.dispatchId, canonicalValue({ definition: "y" }));
+    const outcome = await advance(scenario);
+
+    expect(outcome.kind, JSON.stringify(outcome)).not.toBe("awaiting-agent");
+  }, 120_000);
+
   it("stops at the authored attempt ceiling rather than retrying forever", async () => {
     const scenario = await startScenario("ceiling", { sensorCommand: "false", attempts: 1 });
     await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
