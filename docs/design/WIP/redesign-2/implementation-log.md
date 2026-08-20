@@ -3974,7 +3974,7 @@ nothing else. The pattern is worth stating plainly. Every refusal in this system
 has two audiences, the person watching and the agent that must correct itself,
 and both need the same two things: what rule was broken, and where.
 
-## F-056: a fan-out phase that cannot wait for its own members (open)
+## F-056: a fan-out phase that cannot wait for its own members
 
 The run reached the implement phase, fanned out into four tasks, dispatched an
 implementor for each, and two of them finished. Then, on every cycle:
@@ -4011,3 +4011,42 @@ What the next attempt needs:
 Unlike every stall before it, this one reports itself on every cycle. That is the
 `drive-run-failed` logging earning its place: the difference between an afternoon
 and ten minutes.
+
+### F-056 resolved: the fan-in the fan-out never had
+
+The first attempt at this was a guard bolted onto the closing path, and it was
+reverted for being unproven. Looking at the shape properly gave a better answer.
+
+The driver was already member-aware in one direction. `pendingMember` finds a
+task with no dispatch and dispatches it, one per cycle, until every member has
+one. That is a fan-out, and it works.
+
+Then the phase reduced itself back to a single dispatch:
+
+```ts
+const dispatch = state.dispatches.filter(/* this phase */).sort(byOrdinal).at(-1);
+```
+
+One member, chosen for being newest, standing in for the whole phase. Everything
+after that — is it complete, has it published, can the phase close — asked about
+that one member and then demanded evidence from all of them. Members run at the
+same time and finish in any order, so as soon as the newest one handed in, the
+phase tried to close and refused its own candidate for the siblings still
+working. For ever, once per cycle.
+
+The fix is not a check before closing. It is that the phase picks the member that
+still needs attention, and only falls back to the newest when none does. The wait
+then falls out of the existing per-member handling rather than being bolted on,
+and it waits on exactly what closing requires: a completion fact for every
+current dispatch, the same set the candidate is built from. A member that asked a
+question or needs a retry still gets handled, because it is the member selected.
+
+The test is the part worth keeping. It dispatches three members and hands in the
+last, then the first, asserting a wait each time. Both orders are there because
+each catches a different wrong answer, which is not a guess: the first version of
+the test completed only the last member, and a deliberately broken version of the
+predicate passed it. Adding the other order made both breaks fail.
+
+That is the whole lesson from the reverted attempt, and it held: a test that
+cannot fail is not evidence, and the way to find out is to break the code and
+watch.

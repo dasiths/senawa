@@ -319,14 +319,21 @@ async function step(
 
   // The latest attempt is the live one. An earlier attempt's dispatch is still
   // stored, and treating it as current would gate work the retry replaced.
-  const dispatch = state.dispatches
-    .filter(
-      (candidate) =>
-        candidate.runId === input.runId &&
-        phaseKeyByTask(snapshot, candidate.task.taskId) === phaseKey,
-    )
-    .sort((left, right) => left.ordinal - right.ordinal)
-    .at(-1);
+  //
+  // A fan-out phase has one member per task and they run at the same time, so
+  // they finish in any order. Reasoning about the newest dispatch alone made the
+  // phase try to close as soon as that one member handed in: the candidate
+  // covers every task the phase owns, so it refused itself for the members still
+  // working, on every cycle, for ever. Whichever member has not handed work in is
+  // the phase's business until none is left. That is the fan-in the fan-out
+  // never had, and it waits on exactly what closing the phase needs.
+  const phaseMembers = [...currentPhaseDispatches(snapshot, state, input.runId, phaseKey)].sort(
+    (left, right) => left.ordinal - right.ordinal,
+  );
+  const handedIn = new Set(state.completionOutbox.map((entry) => String(entry.fact.dispatchId)));
+  const dispatch =
+    phaseMembers.find((candidate) => !handedIn.has(String(candidate.dispatchId))) ??
+    phaseMembers.at(-1);
 
   const dataflow = new RuntimeDataflowAuthority(
     input.dependencies.sha256,

@@ -169,6 +169,38 @@ describe("running every member of a fan-out", () => {
     expect(next.dispatchId).not.toBe(first.dispatchId);
   });
 
+  it("waits for the members still working whichever one finishes first", async () => {
+    const scenario = await startScenario("fanout-fan-in", { fanOut: "complete" });
+    await agentTurn(
+      scenario,
+      scenario.dispatchId,
+      canonicalValue({ tasks: [{ id: "one" }, { id: "two" }, { id: "three" }] }),
+    );
+    await advance(scenario);
+    await advance(scenario);
+    const dispatched: string[] = [];
+    for (let member = 0; member < 3; member += 1) {
+      const outcome = await advance(scenario);
+      if (outcome.kind !== "dispatched") throw new Error(`member ${member}: ${outcome.kind}`);
+      dispatched.push(outcome.dispatchId);
+    }
+    const [first, , last] = dispatched as [string, string, string];
+
+    // Members run at the same time and finish in any order, so neither the
+    // newest dispatch nor the oldest speaks for the phase. Closing needs every
+    // member's assessment: reasoning about one member alone made the phase try
+    // to close without the others and refuse its own candidate, on every cycle,
+    // for ever. Both orders are checked because each catches a different way of
+    // picking the wrong member.
+    await agentTurn(scenario, last, canonicalValue({ verified: true }));
+    expect(await advance(scenario)).toMatchObject({ kind: "awaiting-agent" });
+
+    await agentTurn(scenario, first, canonicalValue({ verified: true }));
+    expect(await advance(scenario)).toMatchObject({ kind: "awaiting-agent" });
+  });
+
+  it("closes the phase once every member has finished", async () => {});
+
   it("closes the phase once every member has finished", async () => {
     const scenario = await startScenario("fanout-close", { fanOut: "complete" });
     await agentTurn(
