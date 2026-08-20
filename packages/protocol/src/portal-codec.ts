@@ -928,6 +928,7 @@ function syncVector(value: unknown, path: string): PortalSyncVector {
 function runCounts(value: unknown, path: string): PortalRunCounts {
   const object = exact(value, path, [
     "phases",
+    "closedPhases",
     "tasks",
     "criteria",
     "humanNeeds",

@@ -4246,3 +4246,26 @@ This was found by accident — the service had been started without detaching, s
 it died with the terminal that launched it. That is worth saying, because it
 means the case is not exotic. Any crash, any restart, any machine going to
 sleep, loses the run the same way.
+
+## F-062 A finished run looks exactly like a working one
+
+`run_fb73180e` closed all three of its phases, published all three outputs, and
+left a workspace whose own seventeen tests pass and whose game plays to a win.
+`senawa status` reported `mode: running`, nine agents dispatched, nothing waiting
+on a person — which is character for character what it reports while a run is
+still working.
+
+Ending a run is a person's decision: `end-run` is authorised for a release
+manager and nobody else, and the driver holds an engine principal. That is the
+right rule, and automatically ending a run to make the status readable would be
+solving the wrong problem. The defect is not that the run stays open; it is that
+nothing said the work was done.
+
+The run overview now counts the phases that have closed alongside the phases that
+exist, and `senawa status` says so in the one case a person cares about. The
+count comes from the phase lifecycle records, which is where closure is actually
+recorded, rather than from the publications, which a phase can produce without
+closing.
+
+The test drives a fan-out to the driver's own `finished` outcome and then reads
+the status a person would read. Returning zero from the count makes it fail.

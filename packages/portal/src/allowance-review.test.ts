@@ -61,6 +61,7 @@ const overview = {
   },
   counts: {
     phases: 1,
+    closedPhases: 0,
     tasks: 1,
     criteria: 1,
     humanNeeds: 1,

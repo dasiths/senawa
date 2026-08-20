@@ -103,6 +103,7 @@ export interface PortalRunPage {
 
 export interface PortalRunCounts {
   readonly phases: number;
+  readonly closedPhases: number;
   readonly tasks: number;
   readonly criteria: number;
   readonly humanNeeds: number;

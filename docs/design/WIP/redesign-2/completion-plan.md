@@ -19,16 +19,21 @@ cannot show us whether the rest is right.
 
 ## Where this stands
 
-A run has produced a working game and its tests, and a run has driven three
-phases including a fan-out to four members with no driver failure at all. The
-remaining gap to the acceptance test is that questions are still answered from
-the terminal, and the agents ask several.
+The acceptance test passes. `run_fb73180e` went from a one-line request to a
+playable tic-tac-toe game without a person touching the CLI for any decision:
+four questions and one budget grant, all answered in the browser. Its three
+phases closed, its own seventeen tests pass, and it plays to `X wins`.
 
-Ten defects found by watching live runs were fixed after this plan was written,
-recorded as F-049 to F-058. Four of them stopped every run dead: a live clock
-made a command conflict with itself, a tool declaration named a schema it did
-not carry, a fan-out could not wait for its own members, and a retried member
-claimed a sibling's ordinal.
+It also says when it is done, which it did not before: `senawa status` now
+reports that every phase has closed. Ending a run stays a person's decision, so
+the mode is unchanged.
+
+Sixty-two defects found by watching live runs are recorded as F-001 to F-062.
+Six of them stopped every run dead: a live clock made a command conflict with
+itself, a tool declaration named a schema it did not carry, a fan-out could not
+wait for its own members, a retried member claimed a sibling's ordinal, a
+refused gate left a candidate that locked out its own retry, and a granted
+allowance never restarted the work that asked for it.
 
 ## Phase 1: make the attempt lifecycle real
 
@@ -79,13 +84,22 @@ produced several of the failures already recorded.
 * [x] Answer every question through the portal rather than the terminal. A
   question and two budget grants were done entirely from the browser, and the
   receipts came back `answer-question completed` and `grant-allowance completed`.
-* [ ] One run, start to finish, with no fix applied in the middle.
+* [x] One run, start to finish, with no fix applied in the middle.
+  `run_fb73180e` closed all three phases, four questions and one budget grant
+  were answered from the browser and nowhere else, and the workspace it left
+  behind runs: `node scripts/check.mjs` passes seventeen tests, and `play.mjs`
+  plays to `X wins`.
+* [x] Say when a run is done. F-062. The overview counts the phases that have
+  closed, and `senawa status` says `every phase has closed: this run has
+  finished its work`. Ending the run stays a person's decision.
 
 Two more defects stood in the way and are now fixed. F-059: a gate that refused
 left a candidate behind, so the retry it started could never hand its work in.
 F-060: a granted allowance never restarted the work that asked for it, because
 the planner excludes a command that has escalated and the answered request stayed
-in the runner's snapshot for ever.
+in the runner's snapshot for ever. Both were confirmed on the live run: the
+escalated operation restarted the moment the allowance was granted, and the
+implement phase gated, closed, and published.
 
 Done when the game exists, runs, and the run reached its end without a person
 using the CLI.

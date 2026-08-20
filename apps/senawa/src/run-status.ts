@@ -48,10 +48,18 @@ export function runStatus(options: RunStatusOptions): CliResult {
     }
     const needs = portal.listHumanNeeds(options.repositoryId, options.runId);
     const dispatches = broker.listWorkerDispatches(options.repositoryId, options.runId);
+    // A run whose phases have all closed keeps the mode it had, because ending a
+    // run is a person's decision. Saying only "running" left no way to tell a
+    // finished run from a working one.
+    const done =
+      overview.counts.phases > 0 && overview.counts.closedPhases >= overview.counts.phases;
     const lines = [
       `run: ${options.runId}`,
       `mode: ${overview.mode}`,
       `phases: ${overview.counts.phases}`,
+      ...(done
+        ? ["every phase has closed: this run has finished its work"]
+        : [`phases closed: ${overview.counts.closedPhases}`]),
       `agents dispatched: ${dispatches.length}`,
       `waiting on you: ${needs.needs.length}`,
     ];

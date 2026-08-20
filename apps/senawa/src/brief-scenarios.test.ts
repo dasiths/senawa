@@ -29,6 +29,7 @@ import {
 } from "./decide.js";
 import { listArtifacts } from "./inspect.js";
 import { runGates } from "./run-gates.js";
+import { runStatus } from "./run-status.js";
 
 interface SnapshotPhaseInput {
   readonly key: string;
@@ -429,6 +430,19 @@ describe("running every member of a fan-out", () => {
     // A fan-out that runs every member and then cannot close never finishes,
     // which is the same outcome for a person as never having started.
     expect(await advance(scenario)).toEqual({ kind: "finished" });
+
+    // Ending a run is a person's decision, so the mode stays as it was. Without
+    // this a run that had done everything asked of it reported exactly what a
+    // run still working reports, and nobody could tell them apart.
+    expect(
+      runStatus({
+        ...scenario.paths,
+        currentTime: NOW,
+        dependencies,
+        repositoryId: scenario.repositoryId,
+        runId: scenario.runId,
+      }).output,
+    ).toContain("every phase has closed");
   });
 
   async function driveMembers(options: { readonly failFast: boolean }) {

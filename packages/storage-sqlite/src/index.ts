@@ -3723,11 +3723,31 @@ export class SqlitePortalQueryAuthority {
       sync: this.#syncVector(repositoryId, runId, graph.revisionDigest),
       counts: {
         ...counts,
+        closedPhases: this.#closedPhases(repositoryId, runId),
         humanNeeds: this.#humanNeeds(repositoryId, runId).length,
         activeEffects: runnerCounts.active_effects,
         uncertainEffects: runnerCounts.uncertain_effects,
       },
     });
+  }
+
+  // A run that has closed every phase is done, and nothing else said so: the
+  // mode stays `running` until a person ends it, so this is the only way to tell
+  // a finished run from a working one.
+  #closedPhases(repositoryId: string, runId: string): number {
+    const row = this.#database
+      .prepare<[string, string], { closed: number }>(
+        `SELECT COUNT(*) AS closed
+         FROM authority_state s,
+              json_each(s.canonical_json, '$.runs') run,
+              json_each(run.value, '$.records.phaseLifecycles') lifecycle
+         WHERE s.singleton = 1
+           AND json_extract(run.value, '$.repositoryId') = ?
+           AND json_extract(run.value, '$.runId') = ?
+           AND json_extract(lifecycle.value, '$.closure') IS NOT NULL`,
+      )
+      .get(repositoryId, runId);
+    return row?.closed ?? 0;
   }
 
   getGraphSummary(repositoryId: string, runId: string): PortalGraphSummary | undefined {

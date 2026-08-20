@@ -96,6 +96,7 @@ describe("portal codecs", () => {
         sync: sync(),
         counts: {
           phases: 1,
+          closedPhases: 0,
           tasks: 2,
           criteria: 3,
           humanNeeds: 0,
