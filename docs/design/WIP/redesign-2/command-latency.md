@@ -149,3 +149,23 @@ separate records and reporting the wall time of the constructor alone.
 Repeating this needs the same instrumentation again. It was not kept, because a
 timing hook that nothing reads is a thing to maintain rather than a measurement,
 and the numbers above are the record.
+
+## What a drive cycle opens
+
+`senawa status` opens the record once. `advance` opens it three times: a
+supervisor authority and a context broker to read the run, and a runner
+authority inside `spentDispatch`, which asks the effect log whether a turn ended
+without handing anything in. That third one is on the ordinary path — it is
+consulted every cycle a phase is waiting for an agent, which is most cycles.
+
+Two more opens exist on paths that are not ordinary: a portal query authority
+when a phase needs approval, which is the cheap kind, and a full authority in
+`rejectionReasons`, which is the expensive kind but only runs after a person has
+rejected a candidate.
+
+This is worth saying plainly because the fix for it is not more measurement. The
+driver holds a record open for the length of a cycle and then opens it again
+from a helper. Passing what is already open into the helper costs nothing and
+removes a verification. `spentDispatch` is also the thing Phase 1 of the
+completion plan proposes to delete outright: if an attempt's opening and closing
+were recorded, no effect log would need to be read to guess at it.
