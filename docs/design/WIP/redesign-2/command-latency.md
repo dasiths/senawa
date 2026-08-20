@@ -169,3 +169,26 @@ from a helper. Passing what is already open into the helper costs nothing and
 removes a verification. `spentDispatch` is also the thing Phase 1 of the
 completion plan proposes to delete outright: if an attempt's opening and closing
 were recorded, no effect log would need to be read to guess at it.
+
+## The supervisor does not pay this
+
+Measured on the live record while a run was working: the median gap between one
+supervisor receipt and the next is 126 ms. The long gaps in the distribution
+(p90 89 s, max 114 s) are agents thinking, not the supervisor working.
+
+So the four seconds is a cost of *starting a command*, not a cost of running the
+system. The service opens the record once, verifies it once, and then drives
+cycles an eighth of a second apart. Every `senawa status` pays the whole opening
+again, from a cold process, to read something the running service already has
+open.
+
+That reframes the question the rest of this document was asking. Making
+verification faster helps a process that verifies; it does nothing for a service
+that already did. The change worth making is that a read-only command should ask
+the running service rather than open the record itself — the supervisor already
+serves a portal over exactly this data, and the CLI already knows how to talk to
+it, because that is how `senawa service status` works.
+
+Where no service is running, opening the record is the only option and the
+verification cost is real. That is the case the single-parse fix helped, and the
+case the remaining re-parses in `verifyAmendmentTables` still cost.
