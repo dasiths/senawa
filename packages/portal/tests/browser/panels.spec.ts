@@ -24,7 +24,7 @@ test("narrates one submitted command from submission through its receipt", async
     return route.continue();
   });
   // The portal opens on the graph. Run controls live on the overview.
-  await navigate(page, "Overview");
+  await navigate(page, "Record");
   await page.getByRole("button", { name: "Pause" }).click();
   await page.getByRole("button", { name: "Confirm pause" }).click();
   await expect(narrator).toHaveText("pause-run is submitting");
@@ -162,15 +162,15 @@ test("resizes, collapses, and persists both rails from the keyboard", async ({
   await expect(body).toHaveAttribute("data-rail-left", "collapsed");
   await expect(page.locator("#rail-collapse-left")).toHaveAttribute("aria-expanded", "false");
   expect(Math.round((await page.locator(".primary-nav").boundingBox())?.width ?? 0)).toBe(44);
-  await expect(page.getByRole("tab", { name: "Overview", exact: true })).toBeHidden();
+  await expect(page.getByRole("tab", { name: "Record", exact: true })).toBeHidden();
   await assertDocumentFits(page);
 
-  await page.goto(`${new URL(page.url()).origin}/portal/${portalHash(runs.journey, "overview")}`);
+  await page.goto(`${new URL(page.url()).origin}/portal/${portalHash(runs.journey, "record")}`);
   await expect(page.locator(".portal-body")).toHaveAttribute("data-rail-left", "collapsed");
   await expect(page.locator(".portal-body")).toHaveAttribute("data-rail-right", "352");
   await page.locator("#rail-collapse-left").click();
   await expect(page.locator(".portal-body")).toHaveAttribute("data-rail-left", "224");
-  await expect(page.getByRole("tab", { name: "Overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Record", exact: true })).toBeVisible();
 
   const grip = await page.locator("#rail-handle-left").boundingBox();
   const gripX = (grip?.x ?? 0) + (grip?.width ?? 0) / 2;

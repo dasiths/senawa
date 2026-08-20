@@ -518,17 +518,14 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
     return main;
   }
   switch (state.route.name) {
-    case "overview":
-      main.append(renderOverview(state, actions));
+    case "record":
+      main.append(renderRecord(state, actions));
       break;
     case "workflow":
       main.append(renderWorkflow(state, actions));
       break;
     case "delivery":
       main.append(renderDelivery(state));
-      break;
-    case "activity":
-      main.append(renderActivity(state, actions));
       break;
     case "artifacts":
       main.append(renderArtifacts(state, actions));
@@ -544,6 +541,15 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
       break;
   }
   return main;
+}
+
+// What the run is, and what has happened to it, are the same question asked at
+// two lengths. Separating them made the first tab seven revision counters and
+// the second an undifferentiated log.
+function renderRecord(state: PortalState, actions: PortalRenderActions): HTMLElement {
+  const section = element("section", "record-view");
+  section.append(renderOverview(state, actions), renderActivity(state, actions));
+  return section;
 }
 
 function renderOverview(state: PortalState, actions: PortalRenderActions): HTMLElement {
@@ -1771,10 +1777,9 @@ function needAllowedByCapabilities(need: PortalHumanNeed, state: PortalState): b
 
 function routeLabel(route: PortalRouteName): string {
   const labels: Readonly<Record<PortalRouteName, string>> = {
-    overview: "Overview",
     workflow: "Workflow",
+    record: "Record",
     delivery: "Delivery",
-    activity: "Activity",
     artifacts: "Artifacts",
     amendments: "Amendments",
     agents: "Agents",

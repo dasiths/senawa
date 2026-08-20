@@ -160,7 +160,10 @@ layout is judged on legible material, and structure last.
   run caught disagreeing with the first about whether a need was actionable.
 * [ ] Retire the Amendments tab, once an amendment's source, impact and diff are
   the detail panel of the need rather than a tab of their own.
-* [ ] Merge Overview and Activity into one `Record` tab.
+* [x] Merge Overview and Activity into one `Record` tab. What a run is and what
+  has happened to it are the same question asked at two lengths, and splitting
+  them made the first tab seven revision counters and the second an
+  undifferentiated log. Nine tabs are now seven, and `Workflow` leads.
 
 Two things the live runs added to this. The attention rail can hold a button
 that cannot be scrolled to, so the only copy of a control was unreachable. And

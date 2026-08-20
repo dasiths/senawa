@@ -296,14 +296,15 @@ export class PortalApplication {
       }
       this.#dispatch({ type: "overview", overview: overviewB });
       const freshness = { status: "fresh" as const, vector: overviewB.sync };
+      // Keyed off the routes deliberately: marking a route fresh is what lets a
+      // later visit skip its load, and the run authority is not any one route's
+      // data.
       this.#dispatch({
         type: "freshness",
-        resource: "overview",
+        resource: "authority",
         freshness,
       });
-      if (route !== "overview") {
-        this.#dispatch({ type: "freshness", resource: route, freshness });
-      }
+      this.#dispatch({ type: "freshness", resource: route, freshness });
       if (connectStream)
         this.#ensureStream(identity.repositoryId, identity.runId, overviewB.sync.workflowCursor);
       return true;
@@ -341,7 +342,7 @@ export class PortalApplication {
     // Needs drive the attention banner on every route. Events and receipts feed
     // only the activity route, so fetching them everywhere made three requests
     // where one was wanted and delayed the view a reader actually asked for.
-    if (route === "activity") {
+    if (route === "record") {
       const [events, receipts] = await Promise.all([
         this.#client.events(repositoryId, runId),
         this.#client.receipts(repositoryId, runId),
@@ -351,7 +352,7 @@ export class PortalApplication {
       this.#dispatch({ type: "cache", cache: "receipts", key, value: receipts });
     }
     switch (route) {
-      case "overview":
+      case "record":
         return true;
       case "workflow": {
         const summary = await this.#client.graph(repositoryId, runId);
@@ -397,8 +398,6 @@ export class PortalApplication {
         this.#dispatch({ type: "cache", cache: "delivery", key, value: delivery });
         return true;
       }
-      case "activity":
-        return true;
       case "artifacts": {
         const artifacts = await this.#client.artifacts(repositoryId, runId);
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;

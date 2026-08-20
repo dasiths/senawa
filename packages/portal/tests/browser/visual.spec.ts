@@ -103,7 +103,7 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   );
   const advance = await fetch(`${controlOrigin}/advance-session`, { method: "POST" });
   expect(advance.ok).toBe(true);
-  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await page.getByRole("tab", { name: "Record", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Session expired" })).toBeVisible();
   await expect(page.getByText(/Open a new portal bootstrap from the Senawa CLI/u)).toBeVisible();
   await expect(page.getByRole("region", { name: "Portal status" })).toContainText("Data loading");
@@ -131,9 +131,9 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
   const mobile = testInfo.project.name === "mobile-chromium";
   const diagnostics = await bootstrapPortal(page, runs.journey);
 
-  const overviewTab = page.getByRole("tab", { name: "Overview", exact: true });
+  const overviewTab = page.getByRole("tab", { name: "Record", exact: true });
   await overviewTab.focus();
-  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowLeft");
   await expect(page.getByRole("heading", { name: "Workflow", level: 1 })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Workflow", exact: true })).toBeFocused();
   const filter = page.getByRole("searchbox", { name: "Filter the workflow" });
@@ -166,7 +166,7 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
   const activeArtifact = page.locator(".artifact-row").filter({ hasText: "asset_active" });
   await expect(activeArtifact.getByRole("button", { name: /Preview|Download/u })).toHaveCount(0);
 
-  await navigate(page, "Activity");
+  await navigate(page, "Record");
   const receiptSummaries = page
     .locator(".activity-panel")
     .filter({ hasText: "Receipts" })

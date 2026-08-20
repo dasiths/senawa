@@ -20,7 +20,7 @@ const sync = Object.freeze({
 
 describe("portal state", () => {
   it("keeps authority caches revision keyed and locks actions through gaps", () => {
-    const original = initialPortalState(parsePortalHash("#/runs/repository_one/run_one/overview"));
+    const original = initialPortalState(parsePortalHash("#/runs/repository_one/run_one/record"));
     const selected = portalReducer(original, {
       type: "select-run",
       repositoryId: "repository_one",
@@ -50,7 +50,7 @@ describe("portal state", () => {
     const loaded = portalReducer(selected, { type: "overview", overview });
     const fresh = portalReducer(loaded, {
       type: "freshness",
-      resource: "overview",
+      resource: "record",
       freshness: { status: "fresh", vector: sync },
     });
     const writable = portalReducer(fresh, {
@@ -72,7 +72,7 @@ describe("portal state", () => {
   });
 
   it("deduplicates events and caps the visible ring at 500", () => {
-    let state = initialPortalState({ name: "activity" });
+    let state = initialPortalState({ name: "record" });
     for (let cursor = 1; cursor <= 510; cursor += 1) {
       const event: EventStreamFrame = {
         apiVersion: PROTOCOL_VERSION,
@@ -94,7 +94,7 @@ describe("portal state", () => {
   });
 
   it("closes reviewed authority when the selected run changes", () => {
-    const original = portalReducer(initialPortalState({ name: "overview" }), {
+    const original = portalReducer(initialPortalState({ name: "record" }), {
       type: "dialog-open",
       dialog: {
         kind: "end",
@@ -124,13 +124,13 @@ describe("portal state", () => {
       storedAt: "2026-08-14T12:00:00.000Z",
       exactRetryUsed: false,
     };
-    const withPending = portalReducer(initialPortalState({ name: "overview" }), {
+    const withPending = portalReducer(initialPortalState({ name: "record" }), {
       type: "pending-add",
       pending,
     });
     const fresh = portalReducer(withPending, {
       type: "freshness",
-      resource: "overview",
+      resource: "record",
       freshness: { status: "fresh", vector: sync },
     });
     const expired = portalReducer(fresh, {
@@ -183,7 +183,7 @@ describe("portal state", () => {
     expect(unpinned.ui.transcript.pinned).toBe(false);
     for (const action of [
       { type: "select-run", repositoryId: "repository_one", runId: "run_two" },
-      { type: "route", route: { name: "activity" } },
+      { type: "route", route: { name: "record" } },
       { type: "gap", message: "Stream gap" },
       { type: "session-expired", message: "Session expired" },
     ] as const) {
