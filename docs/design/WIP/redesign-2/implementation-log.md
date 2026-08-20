@@ -4215,3 +4215,34 @@ first assertion after the grant.
 This is the third defect in this run alone where something ordinary — a refused
 gate, a duplicate submission, a granted budget — left a permanent mark that
 nothing could clear.
+
+## F-061 A run does not survive its supervisor stopping
+
+The supervisor was stopped while a worker was mid-turn. Restarting it did not
+resume the run, and nothing said why: `senawa status` reported five agents
+dispatched, nothing waiting on a person, and the mode still running. It stayed
+that way indefinitely.
+
+The record says what is left behind. Five effect intents, four outcomes. The
+fifth — `operation_02-worker-9090858d` — has an intent, and a row in
+`runner_effect_claims` naming the owner that died and the fence it held, and no
+outcome at all. An intent with no outcome is read everywhere as active, so the
+work is in flight for ever, held by an owner that no longer exists.
+
+Claiming already handles this correctly: a claim at a different fence is deleted
+and taken. So the claim is not what blocks the recovery. What blocks it is that
+nothing ever writes a terminal outcome for the attempt that died, and the driver
+reads a dispatch as spent only from a terminal outcome that is not `completed`.
+With no outcome, the dispatch is neither finished nor spent, so the phase waits
+for an agent that stopped existing when the process did.
+
+Fencing exists precisely to say "the previous holder is gone". Taking a run
+lease at a higher fence is that statement, and it is the moment the abandoned
+attempt should be closed: the claim released, and the attempt recorded as ended
+without a result, so the phase retries it the way it retries any turn that ended
+without handing work in.
+
+This was found by accident — the service had been started without detaching, so
+it died with the terminal that launched it. That is worth saying, because it
+means the case is not exotic. Any crash, any restart, any machine going to
+sleep, loses the run the same way.

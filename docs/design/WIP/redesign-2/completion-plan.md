@@ -99,6 +99,10 @@ exhausts a budget can only be freed from the portal.
 These are recorded and unfixed. None blocks phase 2, and all of them cost a
 person something real.
 
+* [ ] A run does not survive its supervisor stopping. An effect in flight when
+  the process ends keeps its intent and its claim and never gets an outcome, so
+  the phase waits for an agent that no longer exists. Taking the run lease at a
+  higher fence is the moment to close the abandoned attempt. F-061.
 * [x] A question whose guards no longer bind stays queued as a human need
   forever, offers a button, and refuses every answer. Nothing prunes it. F-040.
 * [x] `/agents` returned 500 for a healthy run. F-039.
