@@ -2,20 +2,33 @@
 
 This sequences the work left after driving the example workflow against live
 agents. [The implementation log](implementation-log.md) records what that
-surfaced: twenty-seven findings, of which four remain open and one blocks
-everything else. [The redesign plan](plan.md) still carries the v1 checklist;
-this carries the order of what happens now and why that order.
+surfaced: fifty-eight findings. [The redesign plan](plan.md) still carries the v1
+checklist; this carries the order of what happens now and why that order.
+
+`[x]` is done and proven by a test that fails when the fix is removed. `[ ]` is
+not.
 
 ## What this is for
 
 The example must produce a working tic-tac-toe game, driven from the portal,
 without a person touching the CLI. That is the acceptance test for the whole
-branch. It has not passed once.
+branch.
 
 Everything below is sequenced against that, because a run that cannot finish
-cannot show us whether the rest is right. Four of the portal's nine tabs were
-empty every time they were measured, and it is still unknown which are empty by
-design and which were empty because the run died early.
+cannot show us whether the rest is right.
+
+## Where this stands
+
+A run has produced a working game and its tests, and a run has driven three
+phases including a fan-out to four members with no driver failure at all. The
+remaining gap to the acceptance test is that questions are still answered from
+the terminal, and the agents ask several.
+
+Ten defects found by watching live runs were fixed after this plan was written,
+recorded as F-049 to F-058. Four of them stopped every run dead: a live clock
+made a command conflict with itself, a tool declaration named a schema it did
+not carry, a fan-out could not wait for its own members, and a retried member
+claimed a sibling's ordinal.
 
 ## Phase 1: make the attempt lifecycle real
 
@@ -31,14 +44,15 @@ already declares `start-phase-attempt` and `record-phase-attempt-transition`,
 the daemon already authorises both, and nothing ever submits the second one: the
 authority decodes its payload and records nothing.
 
-* Record an attempt as opened when a task is dispatched and closed when the
+* [x] Stop a worker reporting it finished before it has. F-047.
+* [x] Report a stale submission as a refusal that says a later attempt owns the
+  work. F-046.
+* [ ] Record an attempt as opened when a task is dispatched and closed when the
   worker returns, not when its cancellation is requested.
-* Have the authority refuse to open a second attempt for a task while one is
+* [ ] Have the authority refuse to open a second attempt for a task while one is
   open, so the one-agent rule is enforced rather than merely respected.
-* Delete `spentDispatch`. The retry question becomes whether the attempt is
+* [ ] Delete `spentDispatch`. The retry question becomes whether the attempt is
   closed.
-* Report a stale submission as a refusal that says a later attempt owns the
-  work. Done already, but it belongs to this phase.
 
 Done when a second dispatch against an open attempt is refused, a closed attempt
 permits the next one, and both are proven by breaking them.
@@ -49,33 +63,47 @@ worked, the phase that waited forever for a turn already over. Each was the
 driver reconstructing state that should have been recorded. Fixing the
 mechanism is worth more than fixing the next instance.
 
+F-057 is the same lesson from another angle: the phase attempt ordinal carried
+both "which try" and "which member", and only came apart when a live fan-out
+retried one.
+
 ## Phase 2: drive the example to a finished game
 
 One clean run. No service restarts, because restarting mid-dispatch is what
 produced several of the failures already recorded.
 
-* Answer every question through the portal.
-* Reach a game in the example workspace and play it.
-* Record what the run showed, including which views finally have content.
+* [x] Reach a game in the example workspace and play it. A run produced
+  `game.js`, `cli.js` and `test.js`, its own nine tests passed, and it was played
+  to "Player X wins!".
+* [x] Record what the run showed, including which views finally have content.
+* [ ] Answer every question through the portal rather than the terminal.
+* [ ] One run, start to finish, with no fix applied in the middle.
 
 Done when the game exists, runs, and the run reached its end without a person
 using the CLI.
+
+What stands between here and that: the agents ask three or four questions a run,
+and the one thing with no command at all is `grant-allowance`, so a run that
+exhausts a budget can only be freed from the portal.
 
 ## Phase 3: clear the debts the run exposed
 
 These are recorded and unfixed. None blocks phase 2, and all of them cost a
 person something real.
 
-* A question whose guards no longer bind stays queued as a human need forever,
-  offers a button, and refuses every answer. Nothing prunes it. F-040.
-* `/agents` returned 500 for a healthy run. The coupling that made it fatal is
-  fixed; the 500 is neither fixed nor understood. F-039.
-* A kernel refusal message is part of the durable receipt, so changing the text
-  of one invalidates every database that recorded it. This is correct and is
-  written down nowhere. It belongs in the durability documentation. F-035.
-* A run that fails to verify takes the whole supervisor down with it, so one
-  corrupt run stops every other run on the machine. It should be quarantined and
-  reported. F-035.
+* [x] A question whose guards no longer bind stays queued as a human need
+  forever, offers a button, and refuses every answer. Nothing prunes it. F-040.
+* [x] `/agents` returned 500 for a healthy run. F-039.
+* [x] A kernel refusal message is part of the durable receipt, so changing the
+  text of one invalidates every database that recorded it. Now written down, in
+  the durability documentation. F-035.
+* [x] A run that fails to verify takes the whole supervisor down with it. Scoped
+  honestly: one record holds every run in a project, so there is no per-run unit
+  to quarantine. It now says which record it is and how to recover. F-035.
+* [ ] `grant-allowance` is authorised and has no command-line surface. F-050.
+* [ ] An escalation for a budget that now has room stays queued and ungrantable.
+  Three requests for one unit needed a single grant; the other two became
+  permanent entries with disabled buttons. F-050.
 
 ## Phase 4: simplify the portal
 
@@ -84,19 +112,39 @@ carries the per-tab and per-component detail. Three small fixes have shipped; th
 substance has not. The order there is already decided: content first, so the
 layout is judged on legible material, and structure last.
 
-* Names instead of identities, so the agent table stops reporting
+* [x] Names instead of identities, so the agent table stops reporting
   `task_e30bb4a5...` and `unknown (route 0)`.
-* Collapse the activity view, which is 23,903 characters and 168 raw digests
-  before a person has done anything.
-* Fold attempts into the agent that made them: six rows become two.
-* Then the structural change: the graph becomes the workflow and nests, and nine
-  tabs become two, with every kind of human need folded onto the node it blocks
-  rather than scattered across three tabs, two of which are empty on nearly
-  every run.
+* [x] Collapse the activity view, which was 23,903 characters and 168 raw
+  digests before a person had done anything. Measured at zero digests now.
+* [x] Fold attempts into the agent that made them: six rows become two.
+* [ ] Then the structural change: the graph becomes the workflow and nests, and
+  nine tabs become two, with every kind of human need folded onto the node it
+  blocks rather than scattered across three tabs, two of which are empty on
+  nearly every run.
 
 The structural step needs the thirty-four browser tests rewritten first. They
 are the safety net for it, and they are currently written against the shape
 being replaced.
+
+Two things the live runs added to this. The attention rail can hold a button
+that cannot be scrolled to, so the only copy of a control was unreachable. And
+the same need renders twice with the two copies disagreeing about whether it is
+actionable while data reloads.
+
+## Phase 5: find out why the commands are slow
+
+Every `senawa status` costs about a third of a second of process start before it
+reads anything, and driving a run from the terminal means running it repeatedly.
+Nothing has measured where that goes.
+
+* [ ] Measure the phases of a command: process start, module load, store open,
+  query, render.
+* [ ] Measure the supervisor cycle separately, since that is what a run's own
+  progress waits on.
+* [ ] Record the findings in `command-latency.md` beside this plan, with the
+  numbers and the method, so a later change can be compared against them.
+
+Done when the cost of a command is attributed rather than guessed at.
 
 ## What must not change
 
