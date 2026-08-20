@@ -98,12 +98,28 @@ subsequent command slower, because the state a run accumulates is the state each
 command re-reads and re-verifies from the beginning. The example run reached
 half a megabyte in three phases.
 
+## What was done about it
+
+The double parse is fixed. `verifyDatabase` now returns the authority it had to
+build in order to check it, and the constructor keeps that instead of building
+its own. Measured by opening the same record three times each way, with nothing
+else changed:
+
+```text
+before   2393, 2244, 2246 ms
+after    1679, 1518, 1344 ms
+```
+
+About seven hundred and thirty milliseconds an open, or thirty-two per cent,
+which is what the attribution predicted. `senawa status` went from 4.2 to 3.6
+seconds on a record that had grown in between.
+
+The whole test suite passes unchanged, which is the point: the two parses
+produced the same value, so removing one is not a behaviour change.
+
 ## What follows from this
 
 In the order the measurements justify:
-
-* Parse the canonical state once per open. The second parse is thirty-five per
-  cent of opening the record and produces a value identical to the first.
 * Decide deliberately whether reading requires verifying. A reader that never
   writes does not obviously need to re-verify the whole database first, and
   there is already a command whose job is to verify on request.

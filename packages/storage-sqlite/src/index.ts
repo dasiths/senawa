@@ -875,12 +875,9 @@ export class SqliteAuthority
     try {
       configureWriteConnection(this.#database, options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS);
       applyMigrations(this.#database, this.dependencies);
-      verifyDatabase(this.#database, this.dependencies, this.assetDirectory, true);
-      const state = this.#readAuthorityRow();
-      this.#cachedAuthority = InMemoryAuthority.fromCanonicalJson(
-        state.canonical_json,
-        this.dependencies,
-      );
+      const verified = verifyDatabase(this.#database, this.dependencies, this.assetDirectory, true);
+      const state = verified.state;
+      this.#cachedAuthority = verified.authority;
       this.#cachedCanonicalSnapshot = IncrementalCanonicalSnapshot.fromCanonicalJson(
         state.canonical_json,
       );
@@ -12792,12 +12789,20 @@ function verifyMigrationMetadata(
   }
 }
 
+/**
+ * Verifies the record and returns the authority it had to build to do so.
+ *
+ * Checking the canonical state means constructing it, and every caller that
+ * verifies before reading then constructed it again from the same bytes. That
+ * second pass was thirty-five per cent of opening a record and produced a value
+ * identical to the first. See `command-latency.md`.
+ */
 function verifyDatabase(
   database: Database.Database,
   dependencies: RuntimeDependencies,
   assetDirectory: string,
   verifyAssets: boolean,
-): void {
+): { readonly authority: InMemoryAuthority; readonly state: AuthorityRow } {
   const quickCheck = database.pragma("quick_check(1)") as { quick_check: string }[];
   if (quickCheck.length !== 1 || quickCheck[0]?.quick_check !== "ok") {
     throw new Error(`SQLite quick_check failed: ${canonicalStringify(quickCheck)}`);
@@ -12813,7 +12818,7 @@ function verifyDatabase(
     )
     .get();
   if (state === undefined) throw new Error("SQLite authority singleton is missing");
-  InMemoryAuthority.fromCanonicalJson(state.canonical_json, dependencies);
+  const authority = InMemoryAuthority.fromCanonicalJson(state.canonical_json, dependencies);
   verifyNormalizedSnapshot(database, parseSnapshot(state.canonical_json), dependencies);
   verifyContextTables(database, dependencies);
   verifyPhaseDataflowTables(database, dependencies);
@@ -12824,14 +12829,16 @@ function verifyDatabase(
   verifyPortalRevisionTables(database);
   verifySupervisorTables(database);
   verifyRemoteDeliveryTables(database, dependencies);
-  if (!verifyAssets) return;
-  for (const descriptor of readAssetDescriptors(database)) {
-    verifyAssetBytes(
-      resolveAssetPath(assetDirectory, descriptor.relativePath),
-      descriptor,
-      dependencies,
-    );
+  if (verifyAssets) {
+    for (const descriptor of readAssetDescriptors(database)) {
+      verifyAssetBytes(
+        resolveAssetPath(assetDirectory, descriptor.relativePath),
+        descriptor,
+        dependencies,
+      );
+    }
   }
+  return { authority, state };
 }
 
 function verifyPhaseDataflowTables(
