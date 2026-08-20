@@ -1311,6 +1311,75 @@ describe("SQLite Phase 11B portal query authority", () => {
     broker.close();
     fixture.dispose();
   });
+
+  it("stops listing a question once a later attempt takes its task scope over", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    const portal = new SqlitePortalQueryAuthority(fixture.options);
+    const broker = new SqliteContextBroker({
+      databasePath: fixture.databasePath,
+      dependencies: contextDependencies(),
+    });
+    const first = createWorkerExecutionFixture(createRuntimeGraph(), ["worker.submit.question"]);
+    broker.registerDispatch({
+      context: first.context,
+      dispatch: first.dispatch,
+      completionRequirements: first.completionRequirements,
+      taskScope: taskScope(first.context.contextDigest),
+    });
+    broker.admitSubmission({
+      submission: {
+        apiVersion: PROTOCOL_VERSION,
+        submissionId: "submission_abandoned-question",
+        repositoryId: first.dispatch.repositoryId,
+        runId: first.dispatch.runId,
+        dispatchId: first.dispatch.dispatchId,
+        task: first.dispatch.task,
+        contextId: first.dispatch.contextId,
+        contextDigest: first.dispatch.contextDigest,
+        principalId: first.dispatch.worker.principalId,
+        type: "question",
+        question: { prompt: "Which board size?", details: { exact: true } },
+      },
+    });
+    const listed = () =>
+      portal
+        .listHumanNeeds(runtimeFixture.repositoryId, runtimeFixture.runId)
+        .needs.map((need) => need.sourceId);
+    const taskNode = () => {
+      const graph = portal.getGraphSummary(runtimeFixture.repositoryId, runtimeFixture.runId);
+      return portal
+        .listGraphNodes(
+          runtimeFixture.repositoryId,
+          runtimeFixture.runId,
+          graph?.graphRevision ?? "missing",
+        )
+        .nodes.find((node) => node.nodeId === runtimeFixture.task.taskId);
+    };
+    expect(listed()).toEqual(["submission_abandoned-question"]);
+    expect(taskNode()).toMatchObject({ runState: "awaiting-human", humanNeedCount: 1 });
+
+    const second = createWorkerExecutionFixture(
+      createRuntimeGraph(),
+      ["worker.submit.question"],
+      2,
+      2,
+    );
+    expect(second.context.contextDigest).not.toEqual(first.context.contextDigest);
+    broker.registerDispatch({
+      context: second.context,
+      dispatch: second.dispatch,
+      completionRequirements: second.completionRequirements,
+      taskScope: taskScope(second.context.contextDigest),
+    });
+
+    expect(listed()).toEqual([]);
+    expect(taskNode()).toMatchObject({ runState: "running", humanNeedCount: 0 });
+    portal.close();
+    broker.close();
+    fixture.dispose();
+  });
 });
 
 function transcriptLine(overrides: Partial<AgentTranscriptLine>): AgentTranscriptLine {

@@ -3626,3 +3626,38 @@ Two lessons, both already in this log in other forms. A validator that is
 stricter than its producer is a fault waiting for real data. And an error that is
 swallowed is a defect nobody can find: this one was visible for hours as a bare
 500 and took minutes to diagnose once its message was read.
+
+## F-040 resolved: questions nobody could ever answer
+
+The portal listed four questions as human needs on a run where every attempt to
+answer one was refused. `stale-question: Question answer guards do not match
+current authority`. Seven such refusals, zero answers.
+
+The guard is right. A question can only be answered while its asking dispatch
+still holds the task scope; once a later attempt takes the scope over, the
+answer would be attached to work that no longer exists. What was wrong is that
+nothing told the queue. A question the authority would never accept an answer to
+sat in the list of things a person must do, with an enabled button, forever.
+
+The cost is worse than a wasted click. The queue is the portal's claim about what
+is blocked on a human. Filling it with entries that cannot be acted on makes the
+whole queue untrustworthy, and buries the needs that are real.
+
+Both places that count an unanswered question now apply the same rule the guard
+applies: the task's fence must still be accepting claims and must still name the
+context the question was asked from. The needs list and the graph node count were
+separate queries, and the second one is why a node stayed `awaiting-human` after
+its question had been abandoned.
+
+The rule now lives in three places rather than one, which is a duplication worth
+watching. Deriving the queue from the guard directly would be better, but the
+guard is inside a command handler and the queue is a read model, so for now they
+agree by construction of the same predicate rather than by sharing code.
+
+The test earns its place: it registers a question, sees it listed and its node
+awaiting a human, opens a second attempt on the same task, and sees both clear.
+Reverting the filter makes it fail.
+
+Still open on the same finding: the answer dialog closes when the command is
+refused, so the reason is lost. That belongs with the portal work, where a
+refusal should stay on screen beside the field that caused it.

@@ -1009,6 +1009,11 @@ function sendPortalAsset(
 
 function sendHttpError(response: ServerResponse, error: unknown): void {
   const mapped = mapHttpError(error);
+  if (mapped.code === "internal-error") {
+    // The generic 500 says nothing and used to record nothing, so a portal that
+    // had stopped working could only be diagnosed by calling its queries by hand.
+    console.error("portal-request-failed", error);
+  }
   const envelope: ErrorEnvelope = {
     apiVersion: PROTOCOL_VERSION,
     code: mapped.code,

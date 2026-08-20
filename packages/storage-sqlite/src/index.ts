@@ -4893,16 +4893,25 @@ export class SqlitePortalQueryAuthority {
     );
     const taskNeeds = generationCounts(
       this.#database
-        .prepare<[string, string], PortalGenerationCountRow>(
+        .prepare<[string, string, string], PortalGenerationCountRow>(
           `SELECT json_extract(q.canonical_question, '$.task.taskId') AS id,
                   json_extract(q.canonical_question, '$.task.definitionGeneration') AS generation,
                   COUNT(*) AS total
            FROM context_questions q
            LEFT JOIN context_question_answers a ON a.submission_id = q.submission_id
+           -- Only a question its task scope still recognises can be answered, so
+           -- only that one should hold its node in an awaiting-human state.
+           JOIN amendment_work_fences w
+             ON w.run_key = ?
+            AND w.task_id = json_extract(q.canonical_question, '$.task.taskId')
+            AND w.definition_generation =
+                json_extract(q.canonical_question, '$.task.definitionGeneration')
+            AND w.claims_accepted = 1
+            AND w.current_context_digest = json_extract(q.canonical_question, '$.contextDigest')
            WHERE q.repository_id = ? AND q.run_id = ? AND a.submission_id IS NULL
            GROUP BY id, generation`,
         )
-        .all(repositoryId, runId),
+        .all(runKey, repositoryId, runId),
     );
     const taskEvidence = generationCounts(
       this.#database
@@ -5390,6 +5399,33 @@ export class SqlitePortalQueryAuthority {
     );
   }
 
+  /**
+   * A question can only be answered while its asking dispatch still holds the
+   * task scope. Once a later attempt takes the scope over, the authority
+   * refuses every answer as `stale-question`, so listing the question offers a
+   * person work they cannot do and buries the needs they can act on.
+   */
+  #questionStillAnswerable(
+    repositoryId: string,
+    runId: string,
+    taskId: string,
+    definitionGeneration: number,
+    contextDigest: string,
+  ): boolean {
+    const currentness = this.#database
+      .prepare<
+        [string, string, number],
+        { claims_accepted: number; current_context_digest: string }
+      >(
+        `SELECT claims_accepted, current_context_digest FROM amendment_work_fences
+         WHERE run_key = ? AND task_id = ? AND definition_generation = ?`,
+      )
+      .get(canonicalStringify([repositoryId, runId]), taskId, definitionGeneration);
+    return (
+      currentness?.claims_accepted === 1 && currentness.current_context_digest === contextDigest
+    );
+  }
+
   #humanNeeds(repositoryId: string, runId: string): readonly PortalHumanNeed[] {
     const sourceRevision = this.#portalRevision(repositoryId, runId).human_revision;
     const needs: PortalHumanNeed[] = [];
@@ -5413,6 +5449,17 @@ export class SqlitePortalQueryAuthority {
       const task = requiredJsonRecord(submission.task, "Portal question need task");
       const question = requiredJsonRecord(submission.question, "Portal question need body");
       const questionDigest = this.dependencies.sha256.digest(canonicalBytes(question));
+      if (
+        !this.#questionStillAnswerable(
+          repositoryId,
+          runId,
+          requiredStringField(task.taskId, "question taskId"),
+          requiredPositiveIntegerField(task.definitionGeneration, "question definitionGeneration"),
+          requiredStringField(submission.contextDigest, "question contextDigest"),
+        )
+      ) {
+        continue;
+      }
       needs.push({
         needId: `need_question:${row.submission_id}`,
         kind: "question",

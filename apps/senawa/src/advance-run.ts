@@ -36,7 +36,6 @@ import {
 import { SqliteSupervisorAuthority } from "@senawa/supervisor";
 import {
   configurationRuntimeSchemaValidator,
-  phaseOutputAssetPort,
   runtimeSchemaContract,
 } from "./dataflow-composition.js";
 import { dispatchPhase } from "./dispatch-driver.js";
