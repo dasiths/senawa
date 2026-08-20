@@ -4495,7 +4495,7 @@ export class SqlitePortalQueryAuthority {
           ...(phaseName === undefined ? {} : { phaseName }),
           ...(taskName === undefined ? {} : { taskName }),
           attempt: row.attempt ?? 1,
-          model: route?.model ?? "unknown",
+          ...(route === undefined ? {} : { model: route.model }),
           routeIndex: route?.routeIndex ?? 0,
           state: row.finished === 1 ? "finished" : "working",
           ...(row.session_id === null ? {} : { sessionId: row.session_id }),
@@ -6949,7 +6949,6 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
       throw error;
     }
   }
-
   enqueueIdempotent(command: QueuedEffectCommand): boolean {
     validateRunnerCommand(command);
     const stored = snapshotRunnerValue(command);
@@ -6971,7 +6970,13 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
         if (
           existing.command_id !== stored.commandId ||
           existing.operation_id !== stored.operationId ||
-          existing.canonical_command !== canonical
+          // A command names one decision, and `queuedAt` records when somebody
+          // last asked for it rather than what it asks for. Comparing it made a
+          // caller with a live clock collide with itself: the supervisor
+          // re-offered the same stage on its next cycle, the identity matched,
+          // the timestamp did not, and the run died on an exception nothing
+          // surfaced. Everything that decides the work is still compared.
+          decidedRunnerContent(existing.canonical_command) !== decidedRunnerContent(canonical)
         ) {
           throw new TypeError("Runner stage identity is already bound to different content");
         }
@@ -9555,6 +9560,17 @@ function isFullLocalBranchRefForStorage(value: string): boolean {
 
 function isRunnerTerminal(status: EffectOutcome["status"]): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+/**
+ * A queued command without the moment it was queued. Two offers of the same
+ * command differ only in that field, and it decides nothing about the work, so
+ * it must not make one offer look like a conflicting command.
+ */
+function decidedRunnerContent(canonicalCommand: string): string {
+  const value = JSON.parse(canonicalCommand) as Record<string, unknown>;
+  const { queuedAt: _queuedAt, ...decided } = value;
+  return canonicalStringify(decided);
 }
 
 function snapshotRunnerValue<T>(value: T): T {

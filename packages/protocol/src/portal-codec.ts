@@ -1218,8 +1218,8 @@ function agentSummary(value: unknown, path: string): PortalAgentSummary {
   const object = exact(
     value,
     path,
-    ["dispatchId", "persona", "phaseId", "taskId", "attempt", "model", "routeIndex", "state"],
-    ["phaseName", "taskName", "sessionId", "latestRefusal"],
+    ["dispatchId", "persona", "phaseId", "taskId", "attempt", "routeIndex", "state"],
+    ["phaseName", "taskName", "model", "sessionId", "latestRefusal"],
   );
   identity(object.dispatchId, `${path}.dispatchId`);
   token(object.persona, `${path}.persona`);
@@ -1236,7 +1236,7 @@ function agentSummary(value: unknown, path: string): PortalAgentSummary {
   integer(object.attempt, `${path}.attempt`, 1);
   // A model name comes from a vendor and carries whatever they use, such as the
   // dot in `claude-haiku-4.5`. It is reported, never matched on.
-  boundedString(object.model, `${path}.model`, 1, 128);
+  if (object.model !== undefined) boundedString(object.model, `${path}.model`, 1, 128);
   integer(object.routeIndex, `${path}.routeIndex`, 0);
   oneOf(object.state, `${path}.state`, new Set(["working", "finished"]));
   optional(object, "sessionId", identity, path);

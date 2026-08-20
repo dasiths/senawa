@@ -75,6 +75,12 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   await expect(page.getByText("No phase delivery metadata has been recorded.")).toBeVisible();
   await captureState(page, "delivery", mobile);
 
+  // One entry per agent with its attempts under it, so the shape this view is
+  // meant to have is checked by eye and not only by locator.
+  await navigate(page, "Agents");
+  await expect(page.locator(".agent-entry")).not.toHaveCount(0);
+  await captureState(page, "agents", mobile);
+
   await selectRun(page, runs.workspace);
   await navigate(page, "Workspaces");
   await expect(
@@ -165,6 +171,18 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
     .filter({ hasText: "Receipts" })
     .locator(".activity-summary");
   await expect(receiptSummaries).toHaveCount(100);
+  // This view answers "what happened, and when". It used to render every
+  // record fully expanded, which put twenty-four thousand characters and a
+  // hundred and sixty-eight digests in front of a reader who had not asked a
+  // question yet. The record stays one disclosure away.
+  await expect(page.locator(".activity-item > details[open]")).toHaveCount(0);
+  // `textContent` reads through a closed disclosure, so this has to measure
+  // what is rendered rather than what is present. A hundred and thirty-seven
+  // digests were on this screen before the record moved behind a disclosure.
+  const activityText = await page
+    .locator(".activity-view")
+    .evaluate((node) => (node as HTMLElement).innerText);
+  expect((activityText.match(/\b[0-9a-f]{64}\b/gu) ?? []).length).toBe(0);
   const firstTail = await receiptSummaries.first().textContent();
   await page.getByRole("button", { name: "Earlier receipts" }).click();
   await expect(receiptSummaries.first()).not.toHaveText(firstTail ?? "");

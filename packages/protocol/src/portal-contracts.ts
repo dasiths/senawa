@@ -444,7 +444,12 @@ export interface PortalAgentSummary {
   readonly phaseName?: string;
   readonly taskName?: string;
   readonly attempt: number;
-  readonly model: string;
+  /**
+   * The model this agent was given, when the run chose one. A run of
+   * deterministic workers never does, and saying `unknown` there is a value
+   * pretending to be data.
+   */
+  readonly model?: string;
   readonly routeIndex: number;
   readonly state: "working" | "finished";
   /** The conversation this dispatch joined, when the persona keeps one. */

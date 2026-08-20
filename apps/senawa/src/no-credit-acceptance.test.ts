@@ -325,7 +325,7 @@ describe("Phase 14F no-credit acceptance", () => {
           // This journey runs deterministic writers and never chooses a model,
           // so having none to report is the correct answer here.
           model: agent.model,
-        }).toEqual({ namedTask: true, namedPhase: true, model: "unknown" });
+        }).toEqual({ namedTask: true, namedPhase: true, model: undefined });
       }
       const allowanceReview = required(
         allowancePortal.getAllowanceReview(

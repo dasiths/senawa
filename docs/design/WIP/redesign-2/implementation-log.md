@@ -3752,3 +3752,48 @@ The browser test that covered this asserted four column headers and that the bod
 had rows. Every one of those assertions passed while every cell underneath read
 as a digest, which is why the view survived this long. It checks what a person
 can actually read now, and that no digest is rendered as text anywhere in it.
+
+## F-049: the supervisor stopped driving, and said nothing
+
+A test that had been green all session started failing, and the instinct to call
+it flake was wrong. Bisecting put it at `6129029`, the commit in this session
+that moved driving from the command line into the supervisor. Every run driven by
+the supervisor stopped after its first phase.
+
+The chain took a while to see, because each link hid the next.
+
+A queued runner command is refused when its identity is already bound to
+different content. Sound rule. But the content it compares includes `queuedAt`,
+the moment somebody asked for the work, which decides nothing about the work.
+The command line passes one timestamp for a whole invocation, so it never
+noticed. The supervisor reads a live clock, so its second offer of the same
+stage carried a different timestamp, and the store told it the identity was
+bound to different content.
+
+That threw. The throw travelled up through the run cycle into the wake pump,
+which caught it and recorded it with `appendLog` — into a table. Not stderr, not
+the service log, nowhere anybody watching a run would look. The visible symptom
+was a run that stopped, a status that read `agents dispatched: 1` forever, and a
+service log containing one SQLite warning.
+
+Identity now covers everything that decides the work and not the moment it was
+asked for. Different input still conflicts, and there is a unit test for both
+halves; the sixty-second end-to-end timeout was a terrible way to learn this.
+
+Two things this cost, worth naming:
+
+The debugging itself introduced a bug. A trace line called `.slice` on
+`JSON.stringify(undefined)`, threw inside the cycle, and produced exactly the
+symptom being investigated. Two rounds went by before the real error appeared
+underneath. Instrumentation is code, and it fails like code.
+
+Two fixes were written before the real one, on plausible theories: driving in a
+loop like the command line does, and driving on cycles that processed a receipt.
+Both were reverted once the actual cause was found, because each was tested
+against the fixed system and neither was needed. A change that cannot be shown to
+matter does not get to stay.
+
+Left open: a background failure in the supervisor is recorded only in the
+authority log, reachable through `senawa diagnostics create` and nowhere else. A
+run that stops for an unreported reason is the hardest thing to diagnose, which
+is written in a comment eleven lines above the code that swallowed this one.

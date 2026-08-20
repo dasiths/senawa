@@ -945,7 +945,11 @@ function activityList<Value>(
     if (!summary.toLocaleLowerCase().includes(needle)) continue;
     const item = element("li", "activity-item");
     item.append(textElement("p", "mono activity-summary", summary));
-    item.append(renderJson(asJson(value), `${title} detail`));
+    // Every event rendered its whole record inline, which put twenty-four
+    // thousand characters and a hundred and sixty-eight digests on a view whose
+    // job is to say what happened and when. The record is the thing you open
+    // once you have a question.
+    item.append(disclosure("Exact record", renderJson(asJson(value), `${title} detail`)));
     list.append(item);
   }
   panel.append(list);
@@ -1560,17 +1564,19 @@ function agentRoster(agents: readonly PortalAgentSummary[]): HTMLElement {
     const work = textElement("span", "agent-work", current.taskName ?? current.taskId);
     work.title = current.taskId;
     heading.append(work);
-    heading.append(
-      textElement(
-        "span",
-        "agent-model",
-        // Route zero is the authored first choice and says nothing. A later
-        // route means this agent was moved, which is worth saying.
-        current.routeIndex === 0
-          ? current.model
-          : `${current.model} (fallback route ${String(current.routeIndex)})`,
-      ),
-    );
+    if (current.model !== undefined) {
+      heading.append(
+        textElement(
+          "span",
+          "agent-model",
+          // Route zero is the authored first choice and says nothing. A later
+          // route means this agent was moved, which is worth saying.
+          current.routeIndex === 0
+            ? current.model
+            : `${current.model} (fallback route ${String(current.routeIndex)})`,
+        ),
+      );
+    }
     heading.append(textElement("span", `agent-state ${current.state}`, current.state));
     entry.append(heading);
     const strip = element("ol", "agent-attempts");

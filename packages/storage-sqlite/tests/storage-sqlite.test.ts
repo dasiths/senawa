@@ -1718,6 +1718,29 @@ describe("SQLite runner durability and fencing", () => {
     }
   });
 
+  // A caller with a live clock offers the same stage again on its next cycle,
+  // and the only thing that differs is the moment it asked. Treating that as a
+  // conflicting command threw an exception the supervisor swallowed, and the
+  // run stopped advancing with nothing recorded to say why.
+  it("accepts the same queued command offered again at a later moment", () => {
+    const sandbox = createSandbox();
+    const authority = configuredSqliteRunner(new SqliteRunnerAuthority(sandbox.options));
+    try {
+      const command = runnerEffectCommand();
+      expect(authority.enqueueIdempotent(command)).toBe(true);
+      expect(
+        authority.enqueueIdempotent({ ...command, queuedAt: "2026-08-12T13:30:00.000Z" }),
+      ).toBe(false);
+      // What the command asks for is still compared exactly.
+      expect(() =>
+        authority.enqueueIdempotent({ ...command, input: { task: "something else" } }),
+      ).toThrow("already bound to different content");
+    } finally {
+      authority.close();
+      sandbox.dispose();
+    }
+  });
+
   it("refuses to commit another run's intent under the wrong fence", () => {
     const sandbox = createSandbox();
     const authority = configuredSqliteRunner(new SqliteRunnerAuthority(sandbox.options));

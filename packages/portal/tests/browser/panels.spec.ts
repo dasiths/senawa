@@ -335,7 +335,10 @@ test("shows who is working, on what, and on which model", async ({ page }) => {
   await expect(entries).not.toHaveCount(0);
   const first = entries.first();
   await expect(first.locator(".agent-persona")).not.toBeEmpty();
-  await expect(first.locator(".agent-model")).not.toBeEmpty();
+  // This fixture runs deterministic writers and chooses no model, so the model
+  // is absent rather than reading `unknown`. A run that picks one is covered
+  // where the picking happens.
+  await expect(first.locator(".agent-model")).toHaveCount(0);
   await expect(first.locator(".agent-attempt")).not.toHaveCount(0);
   // A digest identifies a row to a machine and nothing to a person, so none may
   // be read here. The identity it stands for is kept for hovering.
