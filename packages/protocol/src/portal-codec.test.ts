@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "./contracts.js";
 import {
+  decodePortalAgentPage,
   decodePortalAllowanceReview,
   decodePortalArtifactContent,
   decodePortalDeliveryPage,
@@ -543,5 +544,35 @@ describe("a question record built from values the store already decoded", () => 
     expect(decodePortalQuestionRecord(question({ candidates: ["a", "b"] }))).toMatchObject({
       details: { candidates: ["a", "b"] },
     });
+  });
+
+  // A refusal is written for a person. Validating it as a lowercase token made
+  // the whole agent list fail as soon as any agent had been refused once, and
+  // the run view fetches that list, so the portal went offline reporting a run
+  // whose only problem was that an agent had been told no.
+  it("keeps a refusal an agent was given in the words it was given", () => {
+    const refusal =
+      "Your previous turn ended without submitting a completion, so this is a fresh attempt.";
+    expect(
+      decodePortalAgentPage({
+        apiVersion: PROTOCOL_VERSION,
+        repositoryId: "repository_one",
+        runId: "run_one",
+        hasMore: false,
+        agents: [
+          {
+            dispatchId: "dispatch_one",
+            persona: "planner",
+            phaseId: "phase_one",
+            taskId: "task_one",
+            attempt: 2,
+            model: "claude-haiku-4.5",
+            routeIndex: 0,
+            state: "working",
+            latestRefusal: refusal,
+          },
+        ],
+      }),
+    ).toMatchObject({ agents: [{ latestRefusal: refusal }] });
   });
 });

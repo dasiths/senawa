@@ -70,6 +70,8 @@ const DIGEST = /^[0-9a-f]{64}$/;
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const MEDIA_TYPE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/;
 const TOKEN = /^[a-z0-9](?:[a-z0-9:-]{0,126}[a-z0-9])?$/;
+/** How much of a refusal the agent list carries, since a refusal is free text. */
+export const MAX_REFUSAL_LENGTH = 1_024;
 const CONSUMER_KEY = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const RUN_MODES = new Set<PortalRunMode>(["running", "paused", "ending", "ended"]);
 const NODE_KINDS = new Set<PortalGraphNodeKind>(["workflow", "phase", "task", "criterion"]);
@@ -1224,12 +1226,17 @@ function agentSummary(value: unknown, path: string): PortalAgentSummary {
   identity(object.phaseId, `${path}.phaseId`);
   identity(object.taskId, `${path}.taskId`);
   integer(object.attempt, `${path}.attempt`, 1);
-  token(object.model, `${path}.model`);
+  // A model name comes from a vendor and carries whatever they use, such as the
+  // dot in `claude-haiku-4.5`. It is reported, never matched on.
+  boundedString(object.model, `${path}.model`, 1, 128);
   integer(object.routeIndex, `${path}.routeIndex`, 0);
   oneOf(object.state, `${path}.state`, new Set(["working", "finished"]));
   optional(object, "sessionId", identity, path);
   if (object.latestRefusal !== undefined) {
-    token(object.latestRefusal, `${path}.latestRefusal`);
+    // A refusal is a sentence written for a person, not a token. Validating it
+    // as one made the whole agent list fail as soon as any agent had been
+    // refused, which took the portal offline for the run it was reporting on.
+    boundedString(object.latestRefusal, `${path}.latestRefusal`, 1, MAX_REFUSAL_LENGTH);
   }
   return Object.freeze(object) as unknown as PortalAgentSummary;
 }

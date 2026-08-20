@@ -111,6 +111,7 @@ import {
   type EventReplayPage,
   type EventStreamFrame,
   type JsonValue,
+  MAX_REFUSAL_LENGTH,
   PORTAL_LIMITS,
   type PortalAgentPage,
   type PortalAllowanceReview,
@@ -4491,7 +4492,7 @@ export class SqlitePortalQueryAuthority {
           routeIndex: row.route_index ?? 0,
           state: row.finished === 1 ? "finished" : "working",
           ...(row.session_id === null ? {} : { sessionId: row.session_id }),
-          ...(latest === undefined ? {} : { latestRefusal: latest }),
+          ...(latest === undefined ? {} : { latestRefusal: latest.slice(0, MAX_REFUSAL_LENGTH) }),
         };
       }),
     });

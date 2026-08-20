@@ -3595,3 +3595,34 @@ The remaining walls were about telling the truth. An agent that cannot see why
 it was refused retries blind, and it costs a model call every time. A run whose
 operator record says only "failure" cannot be diagnosed from outside. Both are
 fixed, and both were found by reading what a live agent said about them.
+
+## F-039 resolved: a refusal is prose, and the contract wanted a token
+
+The `/agents` 500 was not mysterious once the error was allowed out. The handler
+maps anything unrecognised to `Supervisor request failed` with nothing logged, so
+calling the query directly was the only way to see it:
+
+```
+ProtocolValidationError: $.agents[1].latestRefusal must contain 1-128 UTF-16 code units
+```
+
+`latestRefusal` was validated as `token` — lowercase, 1 to 128 characters,
+matching a token pattern. It holds a sentence written for a person. So the agent
+list failed as soon as any agent had been refused once, which is routine, and
+the run view fetches that list, so the portal went offline reporting a run whose
+only problem was that an agent had been told no.
+
+It is bounded free text now, truncated at the store rather than refused at the
+boundary.
+
+The same defect sat one line above it, unexploded. `model` was a token too, and
+the live runs record `unknown` for every agent — which is the identity problem
+the portal analysis complains about. Fixing that, which is the first item of the
+portal work, would have started recording `claude-haiku-4.5`, whose dot no token
+accepts, and the outage would have come straight back. A model name is a vendor's
+string, reported and never matched on, so it is bounded free text too.
+
+Two lessons, both already in this log in other forms. A validator that is
+stricter than its producer is a fault waiting for real data. And an error that is
+swallowed is a defect nobody can find: this one was visible for hours as a bare
+500 and took minutes to diagnose once its message was read.
