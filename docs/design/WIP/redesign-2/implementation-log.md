@@ -3550,3 +3550,48 @@ which the two cannot disagree.
 This is the second half of F-035, arriving on its own: an unopenable run is not
 merely unreadable, it takes the supervisor down with it. That half is still
 unfixed.
+
+## The example produced a working game
+
+Phase 2 of the completion plan passed. One clean run, no service restarts, every
+question answered from the portal, no CLI:
+
+```
+agents dispatched: 3
+waiting on you: 0
+drive-run-failed: 0
+```
+
+Three dispatches for three phases, which is what the workflow describes: one
+agent per sequential phase, no retries, no fences, no stalls. The agents wrote
+`game.js`, `cli.js`, and `test.js` into the example workspace. Their own tests
+pass:
+
+```
+# tests 9
+# pass 9
+# fail 0
+```
+
+And it plays:
+
+```
+Player X, enter position (0-8):  X | X | X
+-----------
+ O | O | 5
+-----------
+ 6 | 7 | 8
+
+Player X wins!
+```
+
+Twenty-two findings separated the first attempt at this from this run. The ones
+that mattered were all the same shape: something normal — a question, an empty
+turn, a restart, a retry, a duplicate submission — was treated as a failure, and
+a failure was permanent. The attempt ceiling is the only thing that should end a
+phase early, and now it is.
+
+The remaining walls were about telling the truth. An agent that cannot see why
+it was refused retries blind, and it costs a model call every time. A run whose
+operator record says only "failure" cannot be diagnosed from outside. Both are
+fixed, and both were found by reading what a live agent said about them.
