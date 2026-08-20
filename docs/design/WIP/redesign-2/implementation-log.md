@@ -3931,3 +3931,21 @@ accepted" is what caused this.
 That makes at least six findings this session with the same shape: something
 ordinary — a question, an empty turn, a restart, a retry, a duplicate submission,
 a republished output — treated as a failure, and the failure permanent.
+
+## F-054: naming the place, not just the rule
+
+The planner failed again on `output-arguments-invalid`, and asked a person for a
+worked example of a valid plan. The finding added in F-051 was reaching it, but
+the message it carried was `canonicalValue`'s own sentence: "Canonical values
+must contain only finite JSON values and plain objects". True, and useless to an
+agent holding a nested plan with thirty places that sentence could be about.
+
+A refusal has to name the place, not only the rule. The value is now walked to
+find where it stops being canonical JSON, and the finding reads
+`$.tasks[2].estimate: Infinity is not a finite number` rather than a statement of
+principle.
+
+The transcript had the same gap in the other direction: a refusal carrying
+findings printed only its code, so the person watching a stuck agent could not
+see what the agent was being told. It shows the first finding now, which is the
+one the agent has to act on. Both audiences read the same sentence.

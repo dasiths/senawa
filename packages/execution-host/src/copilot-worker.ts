@@ -966,7 +966,7 @@ function checkOutput(
   try {
     canonical = canonicalValue(value);
   } catch (error) {
-    return { reason: "output-arguments-invalid", findings: [argumentFinding(error)] };
+    return { reason: "output-arguments-invalid", findings: [argumentFinding(error, value)] };
   }
   if (canonicalBytes(canonical).byteLength > maxBytes) {
     return { reason: "output-too-large", findings: [] };
@@ -1178,7 +1178,7 @@ async function submitPhaseOutput(
     canonical = canonicalValue(output);
   } catch (error) {
     return recordRejected(input, state, sha256, identity, "output-arguments-invalid", [
-      argumentFinding(error),
+      argumentFinding(error, output),
     ]);
   }
   const bytes = canonicalBytes(canonical);
@@ -1613,6 +1613,38 @@ function refusalDetail(error: unknown): string | undefined {
 }
 
 /**
+ * Where a value stops being canonical JSON, as a pointer an agent can act on.
+ *
+ * `canonicalValue` refuses the whole value with one sentence about finite JSON
+ * and plain objects, which tells an agent holding a nested plan nothing at all.
+ * Walking it names the offending place instead.
+ */
+function firstNonCanonicalPath(value: unknown, path = "$", depth = 0): string | undefined {
+  if (depth > 64) return `${path}: nested too deeply to read`;
+  if (value === null || typeof value === "string" || typeof value === "boolean") return undefined;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? undefined : `${path}: ${String(value)} is not a finite number`;
+  }
+  if (typeof value !== "object") return `${path}: ${typeof value} is not a JSON value`;
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      const found = firstNonCanonicalPath(item, `${path}[${String(index)}]`, depth + 1);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return `${path}: only plain objects and arrays can be read`;
+  }
+  for (const [key, nested] of Object.entries(value as Readonly<Record<string, unknown>>)) {
+    const found = firstNonCanonicalPath(nested, `${path}.${key}`, depth + 1);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/**
  * Why the arguments were refused, in the shape schema findings already use.
  *
  * `output-arguments-invalid` used to arrive with no findings at all, so an agent
@@ -1620,11 +1652,12 @@ function refusalDetail(error: unknown): string | undefined {
  * planner tried every structure it could think of, failed identically each
  * time, and eventually stopped to ask a person what the tool wanted.
  */
-function argumentFinding(error: unknown): Readonly<Record<string, string>> {
+function argumentFinding(error: unknown, value?: unknown): Readonly<Record<string, string>> {
+  const located = value === undefined ? undefined : firstNonCanonicalPath(value);
   return {
     code: "invalid-arguments",
     pointer: "",
-    message: refusalDetail(error) ?? "Tool arguments could not be read",
+    message: located ?? refusalDetail(error) ?? "Tool arguments could not be read",
   };
 }
 
@@ -1635,9 +1668,21 @@ function resultDetail(result: CopilotSdkToolResult): string {
     const parsed = JSON.parse(result.textResultForLlm) as {
       readonly code?: unknown;
       readonly detail?: unknown;
+      readonly findings?: unknown;
     };
     const code = typeof parsed.code === "string" ? parsed.code : undefined;
-    const detail = typeof parsed.detail === "string" ? parsed.detail : undefined;
+    // A refusal carrying findings said only its code in the transcript, so the
+    // person watching a stuck agent could not see what the agent was being
+    // told. The first finding is the one it has to act on.
+    const finding = Array.isArray(parsed.findings)
+      ? (parsed.findings[0] as { readonly message?: unknown } | undefined)
+      : undefined;
+    const detail =
+      typeof parsed.detail === "string"
+        ? parsed.detail
+        : typeof finding?.message === "string"
+          ? finding.message
+          : undefined;
     if (code === undefined) return "";
     return detail === undefined ? `: ${code}` : `: ${code}: ${detail}`;
   } catch {

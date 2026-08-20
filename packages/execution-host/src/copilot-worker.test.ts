@@ -1219,7 +1219,9 @@ describe("CopilotSerialWorkerAdapter", () => {
       readonly findings?: readonly { readonly message: string }[];
     };
     expect(reported.code).not.toBe("");
-    expect(reported.findings ?? []).not.toHaveLength(0);
+    // Naming the place is the point. "must contain only finite JSON values"
+    // tells an agent holding a nested plan nothing it can act on.
+    expect(reported.findings?.[0]?.message).toContain("scale");
     expect(fixture.broker.installedOutputs).toHaveLength(0);
   });
 
