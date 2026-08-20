@@ -383,11 +383,28 @@ async function step(
   // already recorded, so the retry can carry it even though the abandoned turn
   // never reported anything.
   const attempt = dispatch.ordinal;
+  // One number was carrying two meanings. A fan-out spends an ordinal per
+  // member, so members sit at 1..N in the very space a retry increments into:
+  // retrying member one asked for ordinal two, which its sibling already held
+  // with different content, and the dataflow refused it. The same conflation
+  // measured the retry limit by a member's position, so the last member of a
+  // fan-out had spent its tries before taking one. A new dispatch takes the
+  // next ordinal free in the phase, and the limit counts the retrying task's
+  // own tries. The candidate keeps binding this dispatch's own ordinal.
+  const phaseDispatches = state.dispatches.filter(
+    (candidate) =>
+      candidate.runId === input.runId &&
+      phaseKeyByTask(snapshot, candidate.task.taskId) === phaseKey,
+  );
+  const nextAttempt = Math.max(...phaseDispatches.map((candidate) => candidate.ordinal)) + 1;
+  const taskAttempts = phaseDispatches.filter(
+    (candidate) => String(candidate.task.taskId) === String(dispatch.task.taskId),
+  ).length;
   const steerings = supervisor.commandAuthority.listAgentSteerings(dispatchId);
   const abort = steerings.filter((entry) => entry.delivery === "abort-retry");
   if (!completed && abort.length > 0) {
     const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
-    if (attempt < maximumAttempts) {
+    if (taskAttempts < maximumAttempts) {
       const instructions = abort.map((entry) => entry.instruction);
       const retried = dispatchPhase({
         snapshot,
@@ -402,13 +419,13 @@ async function step(
         upstream: upstreamOutputs(snapshot, phase, state, assets(supervisor, broker)),
         repositoryBase: input.repositoryBase,
         currentTime: input.currentTime,
-        attempt: attempt + 1,
+        attempt: nextAttempt,
         priorRefusals: instructions,
       });
       return {
         kind: "retrying",
         phaseKey,
-        attempt: attempt + 1,
+        attempt: nextAttempt,
         dispatchId: retried.dispatch.dispatchId,
         reasons: instructions,
       };
@@ -446,7 +463,7 @@ async function step(
       // A task scope is only taken over by a later attempt, which is what makes
       // the turn that asked unable to hand work in afterwards. So the answer
       // arrives on the next attempt rather than beside the question.
-      attempt: attempt + 1,
+      attempt: nextAttempt,
       memberIndex: member < 0 ? 0 : member,
       answeredQuestions: answered.map(({ question, answer }) => ({ question, answer })),
     });
@@ -473,7 +490,7 @@ async function step(
     // turn that is already over, which stalls the run until a person notices.
     if (!asked && spentDispatch(input, dispatchId)) {
       const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
-      if (attempt < maximumAttempts) {
+      if (taskAttempts < maximumAttempts) {
         const retried = dispatchPhase({
           snapshot,
           dataflow,
@@ -487,7 +504,7 @@ async function step(
           upstream: upstreamOutputs(snapshot, phase, state, assets(supervisor, broker)),
           repositoryBase: input.repositoryBase,
           currentTime: input.currentTime,
-          attempt: attempt + 1,
+          attempt: nextAttempt,
           priorRefusals: [
             "Your previous turn ended without submitting a completion, so this is a fresh attempt. This is not a refusal of anything you sent.",
           ],
@@ -495,7 +512,7 @@ async function step(
         return {
           kind: "retrying",
           phaseKey,
-          attempt: attempt + 1,
+          attempt: nextAttempt,
           dispatchId: retried.dispatch.dispatchId,
           reasons: [
             "Your previous turn ended without submitting a completion, so this is a fresh attempt. This is not a refusal of anything you sent.",
@@ -644,7 +661,7 @@ async function step(
   if (evaluation !== undefined && evaluation.decision !== "accepted") {
     const reasons = readings.map((reading) => `${String(reading.sensorKey)} did not pass`);
     const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
-    if (phase.iteration?.onGateRejected === "iterate" && attempt < maximumAttempts) {
+    if (phase.iteration?.onGateRejected === "iterate" && taskAttempts < maximumAttempts) {
       // The next attempt is told what the last one failed, because a retry that
       // is not told what to change only spends an attempt.
       const retried = dispatchPhase({
@@ -660,13 +677,13 @@ async function step(
         upstream: upstreamOutputs(snapshot, phase, state, assets(supervisor, broker)),
         repositoryBase: input.repositoryBase,
         currentTime: input.currentTime,
-        attempt: attempt + 1,
+        attempt: nextAttempt,
         priorRefusals: reasons,
       });
       return {
         kind: "retrying",
         phaseKey,
-        attempt: attempt + 1,
+        attempt: nextAttempt,
         dispatchId: retried.dispatch.dispatchId,
         reasons,
       };
@@ -699,7 +716,7 @@ async function step(
     // has to act on, so it is read back rather than paraphrased.
     const reasons = rejectionReasons(input) ?? ["a person rejected this phase"];
     const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
-    if (phase.iteration?.onApprovalRejected === "iterate" && attempt < maximumAttempts) {
+    if (phase.iteration?.onApprovalRejected === "iterate" && taskAttempts < maximumAttempts) {
       const retried = dispatchPhase({
         snapshot,
         dataflow,
@@ -713,13 +730,13 @@ async function step(
         upstream: upstreamOutputs(snapshot, phase, state, assets(supervisor, broker)),
         repositoryBase: input.repositoryBase,
         currentTime: input.currentTime,
-        attempt: attempt + 1,
+        attempt: nextAttempt,
         priorRefusals: reasons,
       });
       return {
         kind: "retrying",
         phaseKey,
-        attempt: attempt + 1,
+        attempt: nextAttempt,
         dispatchId: retried.dispatch.dispatchId,
         reasons,
       };

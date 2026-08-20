@@ -201,6 +201,85 @@ describe("running every member of a fan-out", () => {
 
   it("closes the phase once every member has finished", async () => {});
 
+  // A member that asks a question resumes on a fresh dispatch, and that dispatch
+  // needs a phase attempt ordinal. Deriving it from the member's own ordinal
+  // landed on a sibling's, which the dataflow refuses for holding different
+  // content, and the run stopped with `Phase attempt ordinal is already assigned
+  // to different content` on every cycle.
+  it("resumes a member that asked without taking a sibling's ordinal", async () => {
+    const scenario = await startScenario("fanout-ordinal", { fanOut: "complete" });
+    await agentTurn(
+      scenario,
+      scenario.dispatchId,
+      canonicalValue({ tasks: [{ id: "one" }, { id: "two" }] }),
+    );
+    await advance(scenario);
+    await advance(scenario);
+    const first = await advance(scenario);
+    if (first.kind !== "dispatched") throw new Error(`first member: ${first.kind}`);
+    const second = await advance(scenario);
+    if (second.kind !== "dispatched") throw new Error(`second member: ${second.kind}`);
+
+    await askThroughSink(scenario, first.dispatchId, "which board size?");
+    expect(
+      answerQuestion({
+        ...scenario.paths,
+        answer: "three by three",
+        currentTime: NOW,
+        dependencies,
+        principal: runtimePrincipal,
+        repositoryId: scenario.repositoryId,
+        runId: scenario.runId,
+      }),
+    ).toMatchObject({ exitCode: 0 });
+
+    const resumed = await advance(scenario);
+    expect(resumed).toMatchObject({ kind: "dispatched", phaseKey: "implement" });
+    if (resumed.kind !== "dispatched") throw new Error("expected a fresh dispatch");
+    expect(resumed.dispatchId).not.toBe(first.dispatchId);
+    expect(resumed.dispatchId).not.toBe(second.dispatchId);
+  });
+
+  // The attempt ceiling is a count of a task's own tries. Measuring it by the
+  // member's ordinal meant the second member of a fan-out had spent two of its
+  // two attempts before taking one, so it could never be retried at all.
+  it("counts a member's own tries against the attempt ceiling", async () => {
+    const scenario = await startScenario("fanout-ceiling", {
+      fanOut: "complete",
+      memberAttempts: 2,
+    });
+    await agentTurn(
+      scenario,
+      scenario.dispatchId,
+      canonicalValue({ tasks: [{ id: "one" }, { id: "two" }] }),
+    );
+    await advance(scenario);
+    await advance(scenario);
+    const first = await advance(scenario);
+    if (first.kind !== "dispatched") throw new Error(`first member: ${first.kind}`);
+    const second = await advance(scenario);
+    if (second.kind !== "dispatched") throw new Error(`second member: ${second.kind}`);
+
+    // The first member is done, so the second is the one the phase is waiting
+    // on, and the one a person redirecting the run reaches.
+    await agentTurn(scenario, first.dispatchId, canonicalValue({ verified: true }));
+    expect(
+      steerAgent({
+        assetDirectory: scenario.paths.assetDirectory,
+        currentTime: NOW,
+        databasePath: scenario.paths.databasePath,
+        delivery: "abort-retry",
+        dependencies,
+        instruction: "start over and read the schema first",
+        principal: runtimePrincipal,
+        repositoryId: scenario.repositoryId,
+        runId: scenario.runId,
+      }),
+    ).toMatchObject({ exitCode: 0 });
+
+    expect(await advance(scenario)).toMatchObject({ kind: "retrying", phaseKey: "implement" });
+  });
+
   it("closes the phase once every member has finished", async () => {
     const scenario = await startScenario("fanout-close", { fanOut: "complete" });
     await agentTurn(

@@ -71,6 +71,8 @@ export interface ScenarioOptions {
   readonly unanchored?: boolean;
   /** How many attempts the phase may take. */
   readonly attempts?: number;
+  /** How many attempts each fan-out member may take. */
+  readonly memberAttempts?: number;
   /** Adds a field the reader does not know, to check it is refused. */
   readonly unknownField?: boolean;
   /** Stops the run on the first failing member instead of continuing. */
@@ -543,7 +545,7 @@ function fanOutPhase(options: ScenarioOptions): string {
         : options.continueOnFailure === true
           ? "\n    onFailure: continue"
           : ""
-    }
+    }${options.memberAttempts === undefined ? "" : `\n    attempts: ${options.memberAttempts}`}
 `;
   if (options.nestedFanOut === true) {
     return `${first}

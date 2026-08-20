@@ -4050,3 +4050,36 @@ predicate passed it. Adding the other order made both breaks fail.
 That is the whole lesson from the reverted attempt, and it held: a test that
 cannot fail is not evidence, and the way to find out is to break the code and
 watch.
+
+## F-057: one number carrying two meanings
+
+With the fan-in in place the run got further and then stopped on:
+
+```
+drive-run-failed: RuntimeDataflowError: Phase attempt ordinal is already assigned to different content
+```
+
+The recorded dispatches say it plainly. For the planner, one task, the ordinals
+are 1 to 5: retries. For the implementor, four tasks, the ordinals are 1 to 4:
+members. The same field means "which try" in one phase and "which member" in the
+other, and a fan-out puts its members in the very space a retry increments into.
+
+So answering a member's question resumed it at its own ordinal plus one, which
+its sibling already held with different content, and the dataflow refused it —
+correctly. The run then retried that refusal for ever.
+
+The same conflation broke the attempt ceiling in the other direction. The check
+was `attempt < maximumAttempts` with `attempt` being the ordinal, so the fourth
+member of a fan-out had spent four of its attempts before taking one and could
+never be retried at all.
+
+They are two different quantities and are now two: a new dispatch takes the next
+ordinal free in its phase, and the ceiling counts the dispatches the retrying
+task has actually had. The candidate still binds the ordinal of the dispatch it
+is closing, which is the third meaning and the only one that was right.
+
+Both halves have a test, and both were confirmed by putting the old expression
+back and watching the test fail. The ceiling half needed a fan-out phase with an
+attempt ceiling, which the scenario builder could not express — worth noting on
+its own, because a behaviour the harness cannot describe is a behaviour nothing
+was ever going to catch.
