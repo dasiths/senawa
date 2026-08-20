@@ -3489,3 +3489,31 @@ Not fixed. The retry needs to be conditioned on the previous dispatch being
 genuinely finished with its task scope rather than on its effect having ended,
 and `admitCompletion` must report `stale` and `duplicate` as failures that say
 what they mean.
+
+## F-047 resolved: cancelling reported a turn over while it was still running
+
+The overlap in F-047 had one cause, and it is not where I first looked.
+`CopilotWorkerEffectHost.cancel` did this:
+
+```ts
+const active = this.#active.get(input.dispatchId);
+if (active !== undefined) {
+  active.abort();
+  return { status: "cancelled", ... };
+}
+```
+
+Aborting only asks the turn to stop. The observation was terminal immediately,
+while `dispatch` was still awaiting `adapter.run`, so the driver started the next
+attempt, the next attempt took the task scope over, and everything the still
+unwinding worker submitted was refused as stale.
+
+Everywhere else the outcome is written after `adapter.run` resolves, which is
+after `scope.active = false` and after `await Promise.allSettled(scope.pending)`.
+So a resolved run genuinely means no more submissions, and cancel now waits for
+the same promise `dispatch` returns before reporting the turn over.
+
+The completion plan still calls for the attempt lifecycle to be recorded rather
+than inferred, and it should be. This makes the signal the driver already reads
+mean what the driver assumes, which is the smaller half of that and the half
+that unblocks the run.

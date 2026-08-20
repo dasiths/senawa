@@ -68,7 +68,10 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
   readonly workspaceFiles: WorkspaceFilePort | undefined;
   readonly phaseOutputSchemas: PhaseOutputSchemaResolverPort | undefined;
   readonly transcript: AgentTranscriptPort | undefined;
-  readonly #active = new Map<string, AbortController>();
+  readonly #active = new Map<
+    string,
+    { readonly abort: AbortController; readonly settled: Promise<unknown> }
+  >();
 
   constructor(options: CopilotWorkerEffectHostOptions) {
     this.broker = options.broker;
@@ -111,28 +114,34 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
     }
 
     const localAbort = new AbortController();
-    this.#active.set(input.dispatchId, localAbort);
+    const run = this.adapter.run({
+      context: stored.context,
+      dispatch: stored.dispatch,
+      routeSelection: input.routeSelection,
+      broker: this.broker,
+      grantTokens,
+      workingDirectory: this.workingDirectory,
+      ...(this.sessionBaseDirectory === undefined
+        ? {}
+        : { sessionBaseDirectory: this.sessionBaseDirectory }),
+      ...(this.workspaceFiles === undefined ? {} : { workspaceFiles: this.workspaceFiles }),
+      ...(this.phaseOutputSchemas === undefined
+        ? {}
+        : { phaseOutputSchemas: this.phaseOutputSchemas.resolve(stored) }),
+      ...(this.transcript === undefined ? {} : { transcript: this.transcript }),
+      ...(input.sessionResume === undefined ? {} : { sessionResume: input.sessionResume }),
+      timeoutMs: input.timeoutMs,
+      signal: AbortSignal.any([context.signal, localAbort.signal]),
+    });
+    // Cancellation reports a terminal outcome, and the driver starts the next
+    // attempt on one. It must not be able to do that while this worker can still
+    // submit, so cancel waits on the same promise this returns.
+    this.#active.set(input.dispatchId, {
+      abort: localAbort,
+      settled: run.catch(() => undefined),
+    });
     try {
-      const result = await this.adapter.run({
-        context: stored.context,
-        dispatch: stored.dispatch,
-        routeSelection: input.routeSelection,
-        broker: this.broker,
-        grantTokens,
-        workingDirectory: this.workingDirectory,
-        ...(this.sessionBaseDirectory === undefined
-          ? {}
-          : { sessionBaseDirectory: this.sessionBaseDirectory }),
-        ...(this.workspaceFiles === undefined ? {} : { workspaceFiles: this.workspaceFiles }),
-        ...(this.phaseOutputSchemas === undefined
-          ? {}
-          : { phaseOutputSchemas: this.phaseOutputSchemas.resolve(stored) }),
-        ...(this.transcript === undefined ? {} : { transcript: this.transcript }),
-        ...(input.sessionResume === undefined ? {} : { sessionResume: input.sessionResume }),
-        timeoutMs: input.timeoutMs,
-        signal: AbortSignal.any([context.signal, localAbort.signal]),
-      });
-      return this.resultObservation(result);
+      return this.resultObservation(await run);
     } finally {
       this.#active.delete(input.dispatchId);
       grantTokens.clear();
@@ -165,7 +174,12 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
     const { input } = this.loadBoundWorker(intent);
     const active = this.#active.get(input.dispatchId);
     if (active !== undefined) {
-      active.abort();
+      active.abort.abort();
+      // Aborting only asks the turn to stop. Reporting it over before it is
+      // lets the next attempt take the task scope over while this worker still
+      // has tool calls in flight, and everything it then submits is refused as
+      // stale.
+      await active.settled;
       return {
         status: "cancelled",
         observedAt: this.broker.dependencies.currentTime(),

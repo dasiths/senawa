@@ -671,6 +671,95 @@ describe("production worker composition", () => {
     broker.close();
   });
 
+  it("reports a cancelled turn only once the worker has actually stopped", async () => {
+    const root = mkdtempSync(join(tmpdir(), "senawa-worker-cancel-"));
+    roots.add(root);
+    const broker = new SqliteContextBroker({
+      databasePath: join(root, "authority.db"),
+      dependencies: {
+        sha256: deterministicSha256,
+        currentTime: () => runtimeFixture.currentTime,
+        issueGrantToken: () => new Uint8Array(32).fill(7),
+      },
+    });
+    const worker = createWorkerExecutionFixture();
+    broker.registerDispatch({
+      context: worker.context,
+      dispatch: worker.dispatch,
+      completionRequirements: worker.completionRequirements,
+      taskScope: workerTaskScope(worker),
+    });
+    const input = decodeCanonicalJsonValue({
+      dispatchId: worker.dispatch.dispatchId,
+      routeSelection: worker.routeSelection,
+      timeoutMs: 5_000,
+      grantPolicy: {
+        expiresAfterMs: 60_000,
+        maxOperations: 4,
+        maxBytes: 4_096,
+        maxChunkBytes: 1_024,
+      },
+    });
+    const sdk = new LingeringSdkPort();
+    const host = new CopilotWorkerEffectHost({
+      broker,
+      sdk,
+      workingDirectory: "/tmp/senawa-production-work",
+      transcript: broker.transcript,
+    });
+    const intent = {
+      command: {
+        sequence: 1,
+        commandId: "command_lingering-worker",
+        repositoryId: worker.dispatch.repositoryId,
+        runId: worker.dispatch.runId,
+        operationId: "operation_lingering-worker",
+        kind: "worker" as const,
+        taskScope: workerTaskScope(worker),
+        contextDigest: worker.context.contextDigest,
+        inputDigest: deterministicSha256.digest(canonicalBytes(input)),
+        input,
+        budgetReservation: { unit: "model-millidollars", amount: 1 },
+        queuedAt: runtimeFixture.currentTime,
+        maxReconciliationAttempts: 2,
+      },
+      owner: "owner_lingering",
+      fence: 1,
+      attemptId: "attempt_lingering",
+      status: "intent" as const,
+      persistedAt: runtimeFixture.currentTime,
+    };
+    const context = {
+      lease: { owner: "owner_lingering", fence: 1, expiresAt: "2026-08-12T12:00:30.000Z" },
+      signal: new AbortController().signal,
+    };
+
+    let dispatchError: unknown;
+    const dispatched = host.dispatch(intent, context).catch((error: unknown) => {
+      dispatchError = error;
+      return undefined;
+    });
+    await Promise.race([sdk.started.promise, new Promise((resolve) => setTimeout(resolve, 3_000))]);
+    expect(dispatchError).toBeUndefined();
+
+    // Cancelling reports a terminal outcome, and the driver starts the next
+    // attempt on one. Reporting it while this worker is still unwinding lets the
+    // next attempt take the task scope over, and everything this one then
+    // submits is refused as stale, which is how a live run stopped finishing.
+    let cancelled = false;
+    const cancelling = host.cancel(intent, context).then((observation) => {
+      cancelled = true;
+      return observation;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(cancelled).toBe(false);
+
+    sdk.released.resolve();
+    await expect(cancelling).resolves.toMatchObject({ status: "cancelled" });
+    await dispatched;
+    broker.close();
+  });
+
   it("rejects cross-authority worker intents before broker or SDK mutation", async () => {
     const root = mkdtempSync(join(tmpdir(), "senawa-worker-binding-"));
     roots.add(root);
@@ -987,6 +1076,43 @@ class SilentSession implements CopilotSdkSessionPort {
   async abort(): Promise<void> {}
 
   async disconnect(): Promise<void> {}
+}
+
+function deferred(): { readonly promise: Promise<void>; resolve: () => void } {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((settle) => {
+    resolve = () => settle();
+  });
+  return { promise, resolve };
+}
+
+/** A turn that keeps running after it is asked to stop, as a real one does. */
+class LingeringSdkPort extends CompletingSdkPort {
+  readonly released = deferred();
+  readonly started = deferred();
+
+  override async createSession(config: CopilotSdkSessionConfig): Promise<CopilotSdkSessionPort> {
+    if (config.sessionId === undefined) throw new Error("Expected dispatch session identity");
+    return new LingeringSession(config.sessionId, this);
+  }
+}
+
+class LingeringSession implements CopilotSdkSessionPort {
+  constructor(
+    readonly sessionId: string,
+    readonly sdk: LingeringSdkPort,
+  ) {}
+
+  async sendAndWait(): Promise<void> {
+    this.sdk.started.resolve();
+    await new Promise<void>(() => {});
+  }
+
+  async abort(): Promise<void> {}
+
+  async disconnect(): Promise<void> {
+    await this.sdk.released.promise;
+  }
 }
 
 class AskingSession implements CopilotSdkSessionPort {
