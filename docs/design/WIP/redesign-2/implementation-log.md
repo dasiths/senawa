@@ -3661,3 +3661,29 @@ Reverting the filter makes it fail.
 Still open on the same finding: the answer dialog closes when the command is
 refused, so the reason is lost. That belongs with the portal work, where a
 refusal should stay on screen beside the field that caused it.
+
+## F-035 part two: an unopenable record, scoped honestly
+
+The plan called this "quarantine an unopenable run". Looking at it properly, that
+name promises something the storage cannot deliver. There is one record per
+project, holding every run in it, so there is no per-run unit to quarantine. Real
+isolation means splitting the store, which is an architecture change and not a
+debt-clearing item.
+
+What was actually wrong was smaller and worth fixing. A record that fails to
+verify killed the service with a bare invariant string — `file is not a
+database`, or one of forty similar sentences naming an invariant and no row. An
+operator reading that has no idea whether work has been lost, or what to try.
+
+The service now says which record it could not open, that nothing has been lost,
+and which two commands to reach for. Checked against a deliberately corrupted
+store: the guidance is not a dead end, because `senawa integrity check` runs
+against a record the service refuses to open and reports the failing category.
+
+The underlying cause still travels with it, so the invariant is one line further
+down rather than gone.
+
+Left undone deliberately: the forty verification messages still name an invariant
+without naming the row that broke it. F-048 cost an hour of grepping for exactly
+that reason. It is a mechanical change across a large surface, and it belongs
+with whoever next has a failing record in front of them to test against.

@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CopilotSdkSessionConfig, CopilotSdkSessionPort } from "@senawa/execution-host";
@@ -96,6 +96,23 @@ describe("daemon worker composition", () => {
     const started = await startSenawaService(environment);
     expect((await started.service.status()).remoteConnectors).toEqual([]);
     await started.service.stop();
+  });
+
+  // The store holds every run in the project, so a record it will not verify
+  // stops the whole service. The bare invariant message reads as a crash and
+  // tells an operator nothing about what is safe to do next.
+  it("says where the unopenable record is and how to recover it", async () => {
+    const { environment } = sandbox("senawa-daemon-bad-record-", false);
+    const stateDirectory = join(String(environment.XDG_STATE_HOME), "senawa");
+    mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+    const databasePath = join(stateDirectory, "authority.db");
+    writeFileSync(databasePath, "not a database", { mode: 0o600 });
+    await expect(startSenawaService(environment)).rejects.toThrow(
+      new RegExp(
+        `cannot open its record at ${databasePath.replaceAll(/[.\\]/gu, "\\$&")}[\\s\\S]*senawa integrity check`,
+        "u",
+      ),
+    );
   });
 
   it("starts, reports, and closes an injected remote connector", async () => {

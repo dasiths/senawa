@@ -158,6 +158,27 @@ export function resolveSenawaServicePaths(
   });
 }
 
+/**
+ * The store holds every run in the project, so a record it refuses to verify
+ * stops the service rather than one run. Nothing here can repair that, but the
+ * bare invariant message reads as a crash and says nothing about what an
+ * operator should do next, so the recovery path travels with it.
+ */
+function openSupervisorAuthority(
+  options: ConstructorParameters<typeof SqliteSupervisorAuthority>[0],
+): SqliteSupervisorAuthority {
+  try {
+    return new SqliteSupervisorAuthority(options);
+  } catch (error) {
+    throw new Error(
+      `Senawa cannot open its record at ${options.databasePath}. ` +
+        "The record is unchanged and no work has been lost. Run `senawa integrity check` " +
+        "to see the full report, and `senawa restore` to recover from a backup.",
+      { cause: error },
+    );
+  }
+}
+
 export async function startSenawaService(
   environment: NodeJS.ProcessEnv = process.env,
   composition: SenawaServiceCompositionOptions = {},
@@ -184,7 +205,7 @@ export async function startSenawaService(
   let ownedRemoteConnector: DaemonRemoteConnector | undefined;
   try {
     const notifier = new InMemoryRunEventNotifier(() => service?.wake(), true);
-    const authority = new SqliteSupervisorAuthority({
+    const authority = openSupervisorAuthority({
       databasePath: paths.databasePath,
       assetDirectory: paths.assetDirectory,
       dependencies,
