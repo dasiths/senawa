@@ -3973,3 +3973,41 @@ Three findings in a row now have had the same root: a code that named itself and
 nothing else. The pattern is worth stating plainly. Every refusal in this system
 has two audiences, the person watching and the agent that must correct itself,
 and both need the same two things: what rule was broken, and where.
+
+## F-056: a fan-out phase that cannot wait for its own members (open)
+
+The run reached the implement phase, fanned out into four tasks, dispatched an
+implementor for each, and two of them finished. Then, on every cycle:
+
+```
+drive-run-failed: CandidateError: Task task_01d535e4... has no accepted accounting assessment
+```
+
+The diagnosis is straightforward and, for once, the log said it out loud. The
+driver builds the phase candidate from the completion facts of the phase's
+current dispatches, and the candidate must cover every task the phase owns. With
+two members still working there are two assessments and four tasks, so the kernel
+refuses the candidate, correctly. What is wrong is that the driver treats that
+refusal as an error to retry forever rather than as what it plainly is: the phase
+is not finished yet.
+
+A guard was written — wait when any task has no assessment — and then reverted
+without shipping. It passed the whole suite, and it also passed with its central
+expression deliberately broken, which means nothing in the suite reaches it. An
+unproven condition sitting on the path every run takes is precisely the shape of
+F-049, which cost hours. It does not ship until a test proves both directions:
+that an unfinished member waits, and that a finished phase still closes.
+
+What the next attempt needs:
+
+* A fan-out fixture with two members where only one has completed. Nothing in
+  `advance-phase.test.ts` reaches the candidate-building path at all, which is
+  its own finding.
+* The predicate is `assessment.submission.task.taskId`, verified against the live
+  record rather than assumed.
+* Proof by breaking it: a wrong path must fail the test, or the test is not
+  watching the thing that matters.
+
+Unlike every stall before it, this one reports itself on every cycle. That is the
+`drive-run-failed` logging earning its place: the difference between an afternoon
+and ten minutes.
