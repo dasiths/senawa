@@ -1,0 +1,778 @@
+/* Static mock of the redesigned Senawa portal. No framework, no build step. */
+
+:root {
+  --ink: #16181d;
+  --ink-soft: #545a66;
+  --ink-faint: #878e9c;
+  --page: #f6f7f9;
+  --panel: #ffffff;
+  --rule: #e2e5ea;
+  --rule-strong: #cfd4dc;
+
+  --waiting: #8b93a1;
+  --working: #1f6feb;
+  --closed: #1a7f4b;
+  --refused: #9a6212;
+  --failed: #b3261e;
+
+  --term-bg: #14161a;
+  --term-ink: #d7dae0;
+  --term-dim: #8b93a1;
+  --term-accent: #6cb6ff;
+  --term-ask: #f0c674;
+
+  --radius: 8px;
+  --shadow: 0 1px 2px rgb(16 18 22 / 6%), 0 4px 12px rgb(16 18 22 / 5%);
+  --sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font: 14px/1.5 var(--sans);
+  color: var(--ink);
+  background: var(--page);
+}
+
+/* ---------------------------------------------------------------- chrome */
+
+.shell {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  grid-template-rows: auto auto 1fr;
+  min-height: 100vh;
+}
+
+.topbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.run-picker {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--page);
+}
+
+.run-picker b {
+  font-weight: 600;
+}
+
+.run-picker span {
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* One status element, silent when healthy. */
+.health {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.health::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--closed);
+}
+
+.health.is-degraded::before {
+  background: var(--refused);
+}
+
+.needs-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: #fdf3e2;
+  color: #7a4d0a;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.needs-pill.is-clear {
+  background: var(--page);
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+
+.tabs {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 2px;
+  padding: 0 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+}
+
+.tab {
+  padding: 10px 14px 11px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  font: inherit;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.tab[aria-selected="true"] {
+  color: var(--ink);
+  font-weight: 600;
+  border-bottom-color: var(--ink);
+}
+
+main {
+  padding: 20px;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------- run header */
+
+.run-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin: 0 0 16px;
+}
+
+.run-head h1 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -0.015em;
+}
+
+.run-head .request {
+  color: var(--ink-soft);
+}
+
+.run-head .elapsed {
+  margin-left: auto;
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+/* The proof layer, present and closed. */
+.proof {
+  font-size: 12px;
+}
+
+.proof summary {
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.proof dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 14px;
+  margin: 8px 0 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.proof dt {
+  color: var(--ink-faint);
+}
+
+.proof dd {
+  margin: 0;
+}
+
+/* -------------------------------------------------------------- workflow */
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(360px, 440px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.card > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.card > header h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.card > header .count {
+  margin-left: auto;
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.tree {
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+}
+
+.tree ul {
+  margin: 0;
+  padding: 0 0 0 18px;
+  list-style: none;
+}
+
+.node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.node:hover {
+  background: var(--page);
+}
+
+.node[aria-current="true"] {
+  background: #eaf1fd;
+  box-shadow: inset 2px 0 0 var(--working);
+}
+
+.node-mark {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.node-name {
+  font-weight: 550;
+}
+
+.node-sub {
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.node-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.state::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--waiting);
+}
+
+.state.is-working::before {
+  background: var(--working);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.state.is-closed::before {
+  background: var(--closed);
+}
+
+.state.is-refused::before {
+  background: var(--refused);
+}
+
+.state.is-failed::before {
+  background: var(--failed);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .state.is-working::before {
+    animation: none;
+  }
+}
+
+.asks {
+  flex: none;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: #fdf3e2;
+  color: #7a4d0a;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.who {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.who .model {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* --------------------------------------------------------- detail surface */
+
+.detail > header {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.detail-title {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.detail-title h2 {
+  font-size: 15px;
+}
+
+.detail-title .where {
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.detail-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+button.ghost,
+button.solid {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button.ghost {
+  border: 1px solid var(--rule-strong);
+  background: var(--panel);
+  color: var(--ink);
+}
+
+button.ghost:hover {
+  background: var(--page);
+}
+
+button.solid {
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+button.solid:disabled {
+  border-color: var(--rule-strong);
+  background: var(--rule);
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
+
+.detail-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.detail-tab {
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.detail-tab[aria-selected="true"] {
+  color: var(--ink);
+  font-weight: 600;
+  border-bottom-color: var(--working);
+}
+
+.pane {
+  padding: 14px;
+}
+
+.pane[hidden] {
+  display: none;
+}
+
+/* ------------------------------------------------------------- terminal */
+
+.terminal {
+  margin: 0;
+  padding: 14px 16px;
+  max-height: 380px;
+  overflow: auto;
+  background: var(--term-bg);
+  color: var(--term-ink);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.terminal .t-meta {
+  color: var(--term-dim);
+}
+
+.terminal .t-tool {
+  color: var(--term-accent);
+}
+
+.terminal .t-say {
+  color: var(--term-ink);
+}
+
+.terminal .t-ask {
+  display: block;
+  margin: 10px 0 2px;
+  padding-left: 10px;
+  border-left: 2px solid var(--term-ask);
+  color: var(--term-ask);
+}
+
+.terminal .t-you {
+  display: block;
+  margin: 2px 0 10px;
+  padding-left: 10px;
+  border-left: 2px solid var(--closed);
+  color: #b9e3c6;
+}
+
+.terminal .t-fail {
+  color: #ffb4ab;
+}
+
+/* The reply line reads as part of the terminal, not a form below it. */
+.reply {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  background: #1b1e24;
+  border-top: 1px solid #2a2e36;
+}
+
+.reply-caret {
+  color: var(--term-ask);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.reply textarea {
+  flex: 1;
+  min-height: 46px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--term-ink);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  resize: vertical;
+}
+
+.reply textarea:focus {
+  outline: none;
+}
+
+.reply textarea::placeholder {
+  color: #5c6470;
+}
+
+.reply-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.reply-note {
+  color: var(--term-dim);
+  font-size: 11px;
+}
+
+button.send {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--term-accent);
+  color: #06243f;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------- tables */
+
+table.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+table.grid th {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+table.grid td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+
+table.grid tbody tr {
+  cursor: pointer;
+}
+
+table.grid tbody tr:hover {
+  background: var(--page);
+}
+
+table.grid tbody tr[aria-expanded="true"] {
+  background: #eaf1fd;
+}
+
+td.num,
+th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+td.mono {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-soft);
+}
+
+tr.detail-row td {
+  background: var(--page);
+  padding: 0;
+}
+
+.lazy {
+  padding: 12px 16px;
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+pre.record {
+  margin: 0;
+  padding: 12px 16px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+/* ------------------------------------------------------------------ rail */
+
+.rail {
+  padding: 20px 20px 20px 0;
+}
+
+.rail .card + .card {
+  margin-top: 12px;
+}
+
+.queue {
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+}
+
+.queue li + li {
+  margin-top: 4px;
+}
+
+.queue button {
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.queue button:hover {
+  background: var(--page);
+}
+
+.queue .q-where {
+  display: block;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.queue .q-what {
+  display: block;
+  margin-top: 2px;
+}
+
+.empty {
+  padding: 14px;
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 14px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.kv dt {
+  color: var(--ink-faint);
+}
+
+.kv dd {
+  margin: 0;
+}
+
+.answered {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.answered li + li {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+}
+
+.answered .a-q {
+  color: var(--ink-soft);
+}
+
+.answered .a-a {
+  margin-top: 5px;
+  padding-left: 10px;
+  border-left: 2px solid var(--closed);
+}
+
+.answered .a-when {
+  margin-top: 4px;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+@media (max-width: 1080px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .rail {
+    padding: 0 20px 20px;
+  }
+
+  .split {
+    grid-template-columns: 1fr;
+  }
+}

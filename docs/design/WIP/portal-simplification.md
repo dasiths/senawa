@@ -445,12 +445,25 @@ decision will eventually appear.
 `Amendments` and `Workspaces` are not subjects. They are *renderings of two
 need kinds each*, plus a detail panel that belongs on the node.
 
-### The result: two tabs
+### The result: four tabs
 
 ```
   ◆ Workflow    the tree, its agents, its state, what it needs, what it produced
-  ▤ Record      events, receipts, revisions, exact records
+  ▤ Record      events and receipts, as a table, detail on click
+  ▦ Artifacts   what the run made, as a table, content on click
+  ● Agents      who is working, as a list, the same detail surface as a node
 ```
+
+An earlier draft of this document argued for two. That was wrong, and the reason
+is worth keeping: `Artifacts` and `Agents` are not renderings of the tree, they
+are the two ways a person arrives at the tree from the other direction. "Show me
+everything this run made" and "show me who is working right now" are questions
+you ask *before* you know which node you want, so they cannot be panels that only
+exist once you have selected one.
+
+What made the earlier draft look right is that the *detail* for all four is the
+same surface. Selecting an agent and selecting the node it is working are the
+same act, and must open the same thing. Four doors, one room.
 
 `Amendments` disappears as a tab: an amendment decision is a need, so it appears
 where every other need appears — on the node it concerns, and in the one queue.
@@ -569,3 +582,104 @@ structure first, then move the views under them.
 * The command-submission feedback path — `submitting` → `completed` → the need
   clearing — is the one interaction that already works well and reads clearly.
   It is the model for the rest.
+
+## What a second pass added
+
+The sections above were written from measuring the portal. This one is written
+from using it to drive a live run to completion, which surfaced things reading
+the screen did not.
+
+### A task with no name cannot be steered
+
+The workflow tree renders two rows both titled `phase-executor`. On a fan-out it
+renders four. The identity behind each is a 64-hex task id, so telling them apart
+means reading digests.
+
+This is not a cosmetic problem, because the primary destructive action on that
+row is `Steer`. Redirecting an agent is a decision about *one* piece of work, and
+the surface does not say which piece of work you have selected. The measured
+Agents table has the same fault from the other side: five buttons reading `Steer
+researcher`, `Steer researcher`, `Steer planner` and nothing to choose between
+them.
+
+A task needs a name drawn from what it does — `research the request`, `implement
+the CLI entry point` — with the identity available on hover and in the record. A
+fan-out member's name comes from the plan item it was materialised from, which is
+already in the record.
+
+### The escalation belongs to the node that raised it
+
+An allowance escalation is raised by an operation, which belongs to a dispatch,
+which belongs to a task. Rendering escalations as a flat queue loses all of that,
+so a person granting one cannot see what asked, what it was doing, or how much it
+has already spent.
+
+It is the same rule as every other need: the escalation appears on the node that
+raised it, and the queue in the rail is the cross-cutting view.
+
+### Revision, cursor and graph id are not a landing page
+
+Measured on the current home screen: `Mode`, `Graph`, `Cursor` are three of the
+first four facts, and two of them are digests. The header should carry what the
+run *is* and what it is *doing*. The proof layer is a disclosure.
+
+### Events and artifacts want tables, not expansions
+
+Activity renders every event fully expanded, which is how it reaches 23,903
+characters before a person has done anything. The fix is not shorter events; it
+is a table with one row per event, and the detail fetched when a row is opened.
+The same is true of artifacts: name, size, sensitivity and phase in the row, and
+the content loaded on click rather than previewed for all of them up front.
+
+This is a load-time property as much as a legibility one. A tab that renders
+everything it might need is a tab that is slow every time, for a detail that is
+read once in twenty.
+
+### Answering should feel like answering the agent
+
+The strongest signal from driving the example: answering a question through a
+modal form feels like filing a ticket about an agent, and answering it in a
+terminal feels like talking to one.
+
+What a person wants on screen when they answer is what the agent has been doing,
+in its own words, with the question at the bottom, and a place to type directly
+underneath it. The same is true of steering: you are interrupting something, and
+you should be able to see what you are interrupting.
+
+**This needs something we do not currently record.** `agent_transcript_lines`
+holds one stream, `system`, and its content is:
+
+```text
+session started
+tool senawa_output_schema success
+tool senawa_list_workspace failure: workspace-list-refused: ...
+tool submit_question success
+session paused: the agent asked a question and is waiting for an answer
+```
+
+Sixteen lines for a whole run, none of them the agent's own words. The agent's
+prose exists in exactly one place — the `prompt` field of a question — because
+that is the only thing it says that we keep.
+
+So the terminal is not a rendering change. It requires capturing an assistant
+stream alongside the system one: what the agent said as it worked, not only which
+tools it called. Without that, a terminal-styled pane is a system log in a
+monospace font, which is worse than the table it replaced because it implies a
+conversation that is not there.
+
+### The four-tab shape, and why the detail is shared
+
+`Workflow`, `Record`, `Artifacts`, `Agents`. Four ways in, one detail surface:
+
+* **Workflow** — the tree. Where you go when you know the shape of the work.
+* **Agents** — who is working right now. Where you go when you do not.
+* **Artifacts** — what the run made. Where you go when you want the output.
+* **Record** — what happened. Where you go to check.
+
+Selecting an agent in `Agents` and selecting its node in `Workflow` open the same
+panel, because they are the same subject approached from two directions. That
+panel carries, in order: what the agent is doing now, the question it is waiting
+on with a place to answer, the answers already given, what it produced, and the
+controls to steer or override it.
+
+[The mocks](portal-redesign-mocks/) render this concretely.
