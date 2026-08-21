@@ -127,11 +127,16 @@ person something real.
   recorded only the service starting and stopping. A failed drive is now an
   `error` log against the run, and a workflow that will not compile names the
   file, the pointer and the fault rather than counting diagnostics.
-* [ ] Tests that only hold when the machine is quiet. Two process-sensor cases
-  and `waits for the members still working whichever one finishes first` fail
-  under the parallel suite and pass alone, repeatedly. The fan-out one takes
-  seventeen seconds by itself, because every `advance` opens and verifies the
-  record; that is the latency of Phase 5 showing up as a flake.
+* [x] Tests that only hold when the machine is quiet. Three process-sensor cases
+  failed under the parallel suite and passed alone, repeatedly. Every one was an
+  instantaneous assertion about asynchronous cleanup, or a two-second budget that
+  killed the process tree before it had finished starting. Reaping is now waited
+  for rather than sampled, and the budgets in tests that are not about budgets
+  have headroom. Two full suites in a row are green.
+* [ ] `waits for the members still working whichever one finishes first` takes
+  seventeen seconds alone, because every `advance` opens and verifies the record.
+  That is the latency of Phase 5 showing up as a test that is one slow machine
+  away from timing out.
 * [x] A question whose guards no longer bind stays queued as a human need
   forever, offers a button, and refuses every answer. Nothing prunes it. F-040.
 * [x] `/agents` returned 500 for a healthy run. F-039.

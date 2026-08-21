@@ -233,8 +233,10 @@ describe("measureExecutableSensor", () => {
   it("forces a timed-out process group that ignores SIGTERM", async () => {
     const root = await temporaryRoot();
     const outcome = await measureExecutableSensor({
-      ...request(root, { ...command("ignore-term"), timeoutMs: 100 }),
-      terminationGraceMs: 50,
+      // Long enough that a loaded machine still reaches the grace period, short
+      // enough that the test is not waiting on it.
+      ...request(root, { ...command("ignore-term"), timeoutMs: 1_000 }),
+      terminationGraceMs: 250,
     });
 
     expect(outcome).toMatchObject({
@@ -470,15 +472,20 @@ describe("measureExecutableSensor", () => {
     const zombieBaseline = directZombieCount();
     for (let iteration = 0; iteration < 5; iteration += 1) {
       const root = await temporaryRoot();
+      // Generous, because this test is about what is left behind rather than
+      // about a budget: a tighter one kills the tree on a loaded machine before
+      // the grandchild has recorded itself, and then there is nothing to check.
       const outcome = await measureExecutableSensor(
-        request(root, { ...command("tree-exit", root), timeoutMs: 2_000 }),
+        request(root, { ...command("tree-exit", root), timeoutMs: 15_000 }),
       );
       expect(outcome).toMatchObject({ type: "measurement" });
       const processIds = await readTreeProcessIds(root);
       expect(await Promise.all(processIds.map(processIsAbsent))).toEqual([true, true]);
     }
-    expect(directZombieCount()).toBeLessThanOrEqual(zombieBaseline);
-    expect(directSupervisorProcessIds()).toEqual([]);
+    // Generous, because this asks about every child of the worker rather than
+    // about the processes this test started, and a loaded machine reaps late.
+    expect(await settles(() => directZombieCount() <= zombieBaseline, 30_000)).toBe(true);
+    expect(await settles(() => directSupervisorProcessIds().length === 0, 30_000)).toBe(true);
   });
 });
 
@@ -520,19 +527,52 @@ async function writeFakeSupervisor(root: string, statusText: string): Promise<st
   return path;
 }
 
+// The helper writes these as it starts, so a loaded machine can return from the
+// sensor before the grandchild has recorded itself. Reading them once made the
+// test fail on a missing file rather than on anything the sensor did.
 async function readTreeProcessIds(root: string): Promise<number[]> {
   const paths = ["child.pid", "grandchild.pid"];
-  return Promise.all(paths.map(async (path) => Number(await readFile(join(root, path), "utf8"))));
+  let recorded: number[] = [];
+  await settles(async () => {
+    try {
+      recorded = await Promise.all(
+        paths.map(async (path) => Number(await readFile(join(root, path), "utf8"))),
+      );
+    } catch {
+      return false;
+    }
+    return recorded.every((processId) => Number.isSafeInteger(processId) && processId > 0);
+  });
+  return recorded;
+}
+
+// Reaping is asynchronous, so "is it gone" is a question with a settling time.
+// Asked the instant the sensor returned, these assertions held on a quiet
+// machine and failed under a loaded one, which is a test that measures the
+// machine rather than the code. What the sensor promises is that nothing is left
+// behind, not that nothing is left behind within one event loop turn.
+async function settles(
+  holds: () => Promise<boolean> | boolean,
+  withinMs = 5_000,
+): Promise<boolean> {
+  const deadline = Date.now() + withinMs;
+  for (;;) {
+    if (await holds()) return true;
+    if (Date.now() > deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
 
 async function processIsAbsent(processId: number): Promise<boolean> {
-  try {
-    await access(`/proc/${processId}`);
-    return false;
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return true;
-    throw error;
-  }
+  return settles(async () => {
+    try {
+      await access(`/proc/${processId}`);
+      return false;
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return true;
+      throw error;
+    }
+  }, 30_000);
 }
 
 function directZombieCount(): number {
