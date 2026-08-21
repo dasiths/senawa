@@ -176,8 +176,10 @@ layout is judged on legible material, and structure last.
   its action inline, and the queue survives in the rail, so the tab was
   rendering the same needs a second time. That second copy is the one the live
   run caught disagreeing with the first about whether a need was actionable.
-* [ ] Retire the Amendments tab, once an amendment's source, impact and diff are
-  the detail panel of the need rather than a tab of their own.
+* [x] Retire the Amendments tab. An amendment's source, impact and diff are
+  already the detail panel of the need that carries it, which is where a person
+  meets one; the tab was a second rendering of the same records as raw JSON,
+  reachable only by knowing to look. Five tabs are now four.
 * [x] Merge Overview and Activity into one `Record` tab. What a run is and what
   has happened to it are the same question asked at two lengths, and splitting
   them made the first tab seven revision counters and the second an

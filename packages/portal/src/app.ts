@@ -407,17 +407,6 @@ export class PortalApplication {
         });
         return true;
       }
-      case "amendments": {
-        const amendments = await this.#client.amendment(repositoryId, runId);
-        if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
-        this.#dispatch({
-          type: "cache",
-          cache: "amendments",
-          key,
-          value: amendments,
-        });
-        return true;
-      }
       case "agents": {
         const agents = await this.#client.agents(repositoryId, runId);
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;

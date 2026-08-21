@@ -527,9 +527,6 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
     case "artifacts":
       main.append(renderArtifacts(state, actions));
       break;
-    case "amendments":
-      main.append(renderAmendments(state));
-      break;
     case "agents":
       main.append(renderAgents(state, actions));
       break;
@@ -1147,24 +1144,6 @@ function renderNeed(
     !needAllowedByCapabilities(need, state);
   item.append(button);
   return item;
-}
-
-function renderAmendments(state: PortalState): HTMLElement {
-  const ids = selectedIds(state);
-  if (ids === undefined) return emptySection("Loading amendments");
-  const value = state.caches.amendments[runKey(ids.repositoryId, ids.runId)];
-  const section = element("section", "amendment-view");
-  section.append(
-    textElement(
-      "p",
-      "scope-note",
-      "Worker source, reviewed result graph, affected scopes, and structural operations are shown as bounded inert data. Trusted application controls are not available in the portal.",
-    ),
-  );
-  if (value === undefined)
-    section.append(textElement("p", "empty-state", "No amendment records are loaded."));
-  else section.append(renderJson(asJson(value), "Amendment source, impact, and diff"));
-  return section;
 }
 
 /**
@@ -1803,7 +1782,6 @@ function routeLabel(route: PortalRouteName): string {
     workflow: "Workflow",
     record: "Record",
     artifacts: "Artifacts",
-    amendments: "Amendments",
     agents: "Agents",
   };
   return labels[route];
