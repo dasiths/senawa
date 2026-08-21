@@ -376,3 +376,19 @@ test("offers the action for a need on the node the need is about", async ({ page
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(diagnostics.severe()).toEqual([]);
 });
+
+// The workflow said which phases were open and the Agents tab said who was on
+// them, so answering "who is doing this, and how is it going" meant holding two
+// views in your head and matching a task identity between them.
+test("names who is on a piece of work inside the work itself", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await navigate(page, "Workflow");
+  const tree = page.getByRole("tree");
+  await expect(tree).toBeVisible();
+
+  const working = tree.locator(".workflow-agent").first();
+  await expect(working).toBeVisible();
+  await expect(working.locator(".agent-persona")).not.toBeEmpty();
+  await expect(working.locator(".agent-state")).not.toBeEmpty();
+  expect(diagnostics.severe()).toEqual([]);
+});

@@ -632,6 +632,15 @@ button:disabled {
   color: var(--positive, #2f6b34);
 }
 
+.workflow-agent {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  border-left: 2px solid var(--rule);
+  padding-left: 8px;
+  font-size: 12px;
+}
+
 .workflow-waiting {
   color: var(--attention, #8a5300);
   font-size: 12px;

@@ -750,6 +750,11 @@ function workflowTree(
 ): HTMLElement {
   const tree = element("ul", "graph-tree workflow-tree");
   tree.setAttribute("role", "tree");
+  const ids = selectedIds(state);
+  const agents =
+    ids === undefined
+      ? []
+      : (state.caches.agents[runKey(ids.repositoryId, ids.runId)]?.agents ?? []);
   const visible = new Set(nodes.map(({ nodeId }) => nodeId));
   const roots = nodes.filter(
     ({ parentNodeId }) => parentNodeId === undefined || !visible.has(parentNodeId),
@@ -767,6 +772,19 @@ function workflowTree(
       textElement("span", "workflow-title", node.title),
       textElement("span", `workflow-state state-${node.lifecycle}`, node.lifecycle),
     );
+    // An agent belongs inside the work it is doing. A column of "working on"
+    // pointing back at a row three tabs away is the same fact told twice.
+    const working = agents.filter((agent) => String(agent.taskId) === node.nodeId);
+    const latest = [...working].sort((left, right) => left.attempt - right.attempt).at(-1);
+    if (latest !== undefined) {
+      const who = element("span", "workflow-agent");
+      who.append(textElement("span", "agent-persona", latest.persona));
+      if (latest.model !== undefined) who.append(textElement("span", "agent-model", latest.model));
+      who.append(textElement("span", `agent-state ${latest.state}`, latest.state));
+      if (working.length > 1)
+        who.append(textElement("span", "agent-attempts", `attempt ${String(latest.attempt)}`));
+      line.append(who);
+    }
     // A need belongs on the thing it blocks. Scattering them across three tabs
     // meant reading a phase told you nothing about why it had stopped.
     const blocking = state.humanNeeds.filter((need) => needBlocks(need, node));
