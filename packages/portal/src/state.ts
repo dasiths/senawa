@@ -142,6 +142,9 @@ export const INITIAL_GRAPH_VIEWPORT: PortalGraphViewport = Object.freeze({
   panY: 0,
 });
 
+export const DETAIL_TABS = Object.freeze(["live", "answers", "produced", "about"] as const);
+export type DetailTab = (typeof DETAIL_TABS)[number];
+
 export interface PortalAssetOverlayState {
   readonly artifactId: string;
   readonly triggerId: string;
@@ -160,6 +163,8 @@ export interface PortalUiState {
   readonly unfoldedNodes: readonly string[];
   /** Activity rows a reader opened. Their detail is built only while they are. */
   readonly openedRecords: readonly string[];
+  /** Which face of the one detail surface is showing. */
+  readonly detailTab: DetailTab;
   readonly graphViewport: PortalGraphViewport;
   readonly transcript: TranscriptView;
   readonly transcriptScope: TranscriptScope;
@@ -224,6 +229,7 @@ export type PortalAction =
   | { readonly type: "right-rail"; readonly open: boolean }
   | { readonly type: "graph-mode"; readonly mode: GraphMode }
   | { readonly type: "graph-unfold"; readonly nodeId: string }
+  | { readonly type: "detail-tab"; readonly tab: DetailTab }
   | { readonly type: "record-disclosure"; readonly recordKey: string }
   | { readonly type: "graph-viewport"; readonly viewport: PortalGraphViewport }
   | { readonly type: "transcript-owner"; readonly owner: PortalTranscriptOwner | undefined }
@@ -275,6 +281,7 @@ export function initialPortalState(route: PortalRoute): PortalState {
       rightRailOpen: false,
       graphMode: "diagram",
       unfoldedNodes: Object.freeze([]),
+      detailTab: "live",
       openedRecords: Object.freeze([]),
       graphViewport: INITIAL_GRAPH_VIEWPORT,
       transcript: emptyTranscriptView(),
@@ -484,6 +491,11 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
           graphMode: action.mode,
           graphViewport: INITIAL_GRAPH_VIEWPORT,
         }),
+      });
+    case "detail-tab":
+      return Object.freeze({
+        ...state,
+        ui: Object.freeze({ ...state.ui, detailTab: action.tab }),
       });
     case "graph-unfold": {
       const open = new Set(state.ui.unfoldedNodes);

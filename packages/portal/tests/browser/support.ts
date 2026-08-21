@@ -43,8 +43,11 @@ export async function selectRun(page: Page, runId: string): Promise<void> {
 }
 
 export async function navigate(page: Page, name: string): Promise<void> {
-  await page.getByRole("tab", { name, exact: true }).click();
-  await expect(page.getByRole("heading", { name, level: 1 })).toBeVisible();
+  // The heading names the run, because that is what a reader arrived to read.
+  // Which view they are in is what the selected tab is for.
+  const tab = page.getByRole("tab", { name, exact: true });
+  await tab.click();
+  await expect(tab).toHaveAttribute("aria-selected", "true");
 }
 
 export function browserDiagnostics(page: Page) {
@@ -88,7 +91,7 @@ export async function assertDocumentFits(page: Page): Promise<void> {
 
 export async function assertNoMajorOverlap(page: Page): Promise<void> {
   const collisions = await page.evaluate(() => {
-    const selectors = [".app-header", ".global-strip", ".primary-nav", ".main-workspace"];
+    const selectors = [".app-header", ".primary-nav", ".main-workspace"];
     const values = selectors
       .map((selector) => {
         const element = document.querySelector<HTMLElement>(selector);

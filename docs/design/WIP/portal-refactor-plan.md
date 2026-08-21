@@ -115,9 +115,173 @@ The largest phase, and the only one that needs data we do not record.
 
 ## Phase 7: answering feels like answering the agent
 
-* [ ] The reply box attaches to the transcript it answers
+* [x] The reply box attaches to the transcript it answers
 * [ ] Steering uses the same surface, because it interrupts the same thing
 * [ ] An escalation is granted from the node that raised it
+
+## Phase 8: the portal looks like the mocks
+
+The phases above changed what the portal knows and how it behaves. They did not
+change how it looks, and a screenshot beside
+[the mocks](portal-redesign-mocks/) shows a different product: a rail of four
+destinations down the left, four competing status pills, digests where questions
+belong, and six-pixel type in the graph.
+
+This phase is measured against the mocks component by component. Every row names
+a mock class and the portal element that has to carry it, so "true to source" is
+checkable rather than a matter of taste.
+
+### What is actually different, beyond the styling
+
+Reading the mocks as a restyle was wrong. Four things about how the portal
+behaves are different, and each of them changes markup rather than css.
+
+**One detail surface, driven by selection.** Every tab is a list on the left and
+the same detail card on the right. Selecting a node in Workflow, an agent in
+Agents, or a row in Artifacts fills the same card, because they are the same
+subject approached from different directions. The portal today renders a
+different panel per tab and puts the transcript somewhere else again.
+
+**The detail card has its own tabs.** `Live`, `Answers`, `Produced`, `About`.
+What the agent is doing now leads; what it was told, what it made, and what it is
+are behind it. The portal today shows identity and normalized input first and has
+no notion of answers already given.
+
+**Input is given in the terminal, not in a modal.** The reply box is welded to
+the bottom of the transcript it answers, with the agent's words above it and the
+question last. Answering, steering and granting budget are all the same gesture
+on the same surface. The portal today opens a `dialog` that covers the thing the
+reader is deciding about, which is why the mocks argue it feels like filing a
+ticket rather than replying to an agent.
+
+**Detail is fetched when a row is opened, and says so.** The mock's tables show
+one row per thing and load the record on click, with a visible `Loading the exact
+record...` beat. That beat is the point: it makes the cost visible and paid once,
+on the row the reader asked about.
+
+### Chrome, on every tab
+
+| Mock | Portal | State |
+| --- | --- | --- |
+| `topbar` with `brand`, `run-picker`, `topbar-right` | `.app-header` | [x] |
+| `health` dot, silent when healthy | `.status-badge` in header | [x] |
+| `needs-pill`, emphasised only above zero | `.rail-toggle` | [x] |
+| `tabs` / `tab` across the top | `.primary-nav` / `.nav-item` | [x] |
+| `run-head`: request as the heading, state, elapsed | `.run-head` | [x] |
+| `elapsed` beside the state | `.run-progress` | [x] |
+| `split`: work beside one detail surface | `.portal-body` | [x] |
+| `card` with `header` carrying a heading and a `count` | `section` elements | [x] |
+| `state` pill: `is-working`, `is-closed`, `is-refused` | `.status-badge` | [x] |
+| `proof`: identities and revisions, folded | `.proof` | [x] |
+| Palette, type scale, radius and shadow | `styles.css` tokens | [x] |
+
+### Rail
+
+| Mock | Portal | State |
+| --- | --- | --- |
+| `queue` of things waiting on a person | `.pending-list`, needs list | [x] |
+| `q-where`: phase and task, named | `.q-where` | [x] |
+| `q-what`: the question itself, not a digest | `.q-what` | [x] |
+| Action named for the decision | `needChipLabel` | [x] |
+| `Recently answered` | absent | [ ] |
+
+### Workflow
+
+| Mock | Portal | State |
+| --- | --- | --- |
+| `seg` / `seg-btn`: Graph and Tree over one selection | `.segmented-control` | [x] |
+| `band` grouping a phase, `band-body` its members | `.diagram-container` | [x] |
+| `gnode`: name, who, model, state, `asks` | `.gnode` in `graph-flow.ts` | [x] |
+| `chip`: an artifact on the edge that carried it | `.chip` | [x] |
+| `finish`: what the run is waiting to finish | `.finish` | [x] |
+| `graph-legend` with carried and not yet | `.graph-legend` | [x] |
+| `legend-actions`: unfold all, follow the work | `.legend-actions` | [x] |
+| `tree` rows: `node-mark`, `node-name`, `who`, `model`, `asks` | `.node` | [x] |
+| `card detail` with `detail-title` and `where` | `.detail` | [x] |
+| `detail-actions` beside the title | `.node-toolbar` in the card header | [x] |
+| `detail-tabs`: Live, Answers, Produced, About | `.detail-tabs` | [x] |
+| `terminal` with `t-meta`, `t-say`, `t-tool`, `t-ask`, `t-fail` | `.agent-terminal-row` | [x] |
+| `reply` attached to the transcript | `.reply` under the terminal | [x] |
+| `answered`: `a-q`, `a-a`, `a-when` | `.answered` | [x] |
+| `kv`: what this work is, folded under About | `.kv` under About | [x] |
+
+### Agents
+
+| Mock | Portal | State |
+| --- | --- | --- |
+| `grid`: one row per agent, named work | `.agent-roster` of `.node` rows | [x] |
+| Selecting an agent opens the same detail surface | `graphDetail` | [x] |
+
+### Artifacts
+
+| Mock | Portal | State |
+| --- | --- | --- |
+| `grid`: one row per artifact | `.artifact-row` | [ ] |
+| Content fetched when a row is opened | `loadArtifact` | [x] |
+
+### Record
+
+| Mock | Portal | State |
+| --- | --- | --- |
+| `grid`: one row per event and receipt | `.activity-list` | [ ] |
+| Detail built when a row is opened | `recordDisclosure` | [x] |
+| `proof` at the bottom | `.proof` | [x] |
+
+### Starting the stylesheet again rather than steering it
+
+Patching the old stylesheet toward the mock was the wrong approach and it showed:
+every edit fought a rule written for a dark header, a sidebar, and a sixteen
+pixel base, and the result converged slowly while the tests kept breaking on
+assumptions nobody had stated.
+
+So the stylesheet was written again from the mock, and the component blocks that
+were still correct were carried across rather than retyped: the workflow diagram,
+the JSON viewer, the asset overlay, the confirmation dialog, and the rail width
+tokens. Eighteen hundred lines became fifteen hundred, and the parts that carry
+the redesign are now the parts that were written for it.
+
+What did not change: the state store, the transport, the event stream, the
+codecs, the graph layout, the transcript view model and the bounded JSON model.
+The functionality lives there and none of it is presentation.
+
+### Checking it against the mock rather than against memory
+
+Reading a mock and then writing markup from a description of it is how the last
+pass drifted. Every component table row above was ticked honestly and the result
+still did not look like the mock, because "carries the same facts" and "looks
+like the source" are different claims and only the first was being checked.
+
+So the check is a picture beside a picture. The mocks are static files with a
+file server already wired up, so both sides can be driven by the same browser at
+the same viewport, and the difference is looked at rather than recalled.
+
+* [x] `compare.spec.ts` serves the mocks, drives both surfaces at 1440x900 and
+  at Pixel 5, and writes `mock.png` beside `portal.png` per tab
+* [x] Workflow graph: bands, gnodes, chips, finish nodes, legend
+* [x] Workflow tree: marks, names, who, model, asks, state
+* [x] Agents: grid of agents, and the terminal the selection opens
+* [ ] Artifacts: grid, and the content a row opens
+* [ ] Record: grid, and the record a row opens
+
+A row is ticked when the two pictures are the same layout with the run's real
+words in it, not when the classes match.
+
+The first pair of pictures paid for the harness immediately. Beyond the graph and
+the terminal, which were known, it showed a skip link rendering visibly at the
+top of every page, the tabs in a different order from the mock, a run head
+titled with a run identity rather than with the request, a status strip and an
+attention banner the mock does not have at all, and an Agents tab whose roster
+had lost its layout entirely and read `implementerverifyworking`. None of those
+were on the component tables, because a table of components cannot fail the way
+a page can.
+
+### What this phase deliberately removes
+
+The left navigation rail, its resize handle, its collapse control and its
+`Mode / Graph / Cursor` facts. Four fixed destinations do not need a resizable
+rail, and the facts it carried are the ones the mocks argue should never have
+been a landing page. The right rail keeps its handle, because what it holds
+grows with the run.
 
 ## Log
 
@@ -281,3 +445,40 @@ Left undone deliberately: transcript lines still have no sensitivity
 classification, while assistant prose may quote repository contents. Artifacts
 have one and transcripts do not, and that gap should be closed before this is
 shown to anyone outside the machine that ran it.
+
+### Phase 8, what the pictures found
+
+Reading the mocks and writing markup from a description of them is how the first
+pass drifted, so the second pass drove both surfaces with one browser and looked
+at the two pictures side by side. Every defect below was invisible to the
+component tables and obvious in the first pair of screenshots.
+
+The skip link had no rule in the rewritten stylesheet, so it rendered as visible
+body text at the top of every page. The tabs were in a different order from the
+mock. The status band and the attention banner do not exist in the mock at all:
+health is a cluster of quiet dots beside the product name, and how long a
+question has been waiting belongs on the question in the queue, not on a band
+across the work. Agents had lost its layout entirely and read
+`implementerverifyworking`, because the rewrite dropped ninety-five class rules
+the portal still emitted; those are restored and the list was derived by
+differencing emitted class names against styled ones rather than by eye.
+
+Two defects were structural rather than cosmetic. A card in the graph was a
+`button` with need `button`s inside it, which is invalid, flattens in the
+browser, and was what the clipping check caught. The mock is right: the card is
+one control, what it waits for is a badge, and the control that acts on it lives
+on the detail surface beside it. And a tree row selected its outermost ancestor,
+because rows nest and every ancestor row heard the click; nothing had reached it
+while the tests selected from the diagram instead.
+
+The graph is now the mock's reading rather than a box-and-line drawing:
+`graph-flow.ts` renders phases as bands, members as cards, what a phase handed on
+as a chip on the line, and measures the lines from the laid-out flow after mount
+so the picture survives wrapping, renaming and folding. The zoom and pan toolbar
+went with the canvas, because a flow that wraps does not need a viewport.
+
+A full-page screenshot repaints sticky chrome over the content it covers, which
+looked at first like two portal defects that were not there. The comparison
+projects use a viewport tall enough that no resize happens. Neutralising the
+sticky rules from the test was tried first and the portal's own content security
+policy refused the inline stylesheet, which is the policy working.

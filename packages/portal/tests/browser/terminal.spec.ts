@@ -16,22 +16,23 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
   await page.getByRole("tab", { name: "Graph", exact: true }).click();
-  await expect(page.locator(".diagram-node")).not.toHaveCount(0);
+  await expect(page.locator(".gnode")).not.toHaveCount(0);
 
-  const pane = page.getByRole("log", { name: /Agent output/u });
-  await expect(pane).toContainText("Select a phase or task node");
-  await expect(page.locator(".agent-terminal-scope")).toHaveText("No node selected");
+  // Nothing is selected yet, so the one detail surface says what to do rather
+  // than showing an empty terminal.
+  await expect(page.locator(".detail")).toContainText("Select a piece of work");
 
   // Repository mode records no workspace row, so the node's own current dispatch
   // is the only owner the writer and the pane can agree on. It is labelled by the
   // persona that wrote the lines, because a dispatch identity says who to a
   // machine and nobody to a reader. The exported file still carries the
   // identity, since a file has to name exactly one thing.
-  await page.getByRole("button", { name: /^task verify,/u }).click();
+  await page.locator(".gnode", { hasText: "verify" }).first().click();
+  const pane = page.getByRole("log", { name: /Agent output/u });
   await expect(page.locator(".agent-terminal-scope")).toHaveText("implementer");
   await expect(pane).toHaveAttribute("aria-label", "Agent output for implementer");
   await expect(pane).toHaveAttribute("tabindex", "0");
-  await expect.poll(async () => (await snapshot(page)).lineCount).toBe(144);
+  await expect.poll(async () => (await snapshot(page)).lineCount).toBe(145);
 
   const first = page.locator(".agent-terminal-row").first();
   await expect(first.locator(".agent-terminal-time")).toHaveText(/^\d{1,2}:\d{2}:\d{2}$/u);
@@ -56,8 +57,15 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   await expect(hostile.locator(".agent-terminal-text")).toHaveText(
     "hostile line <script>blocked()</script></div> stays inert",
   );
+  // Assistant prose is the newest untrusted text to reach the browser, and it
+  // is the one a reader is most likely to be reading closely.
+  const said = page.locator(".agent-terminal-row.assistant");
+  await expect(said.locator(".agent-terminal-text")).toHaveText(
+    "Reading the plan item <script>blocked()</script> before I write anything",
+  );
+  await expect(said.locator(".agent-terminal-stream")).toHaveText("assistant");
   await expect(page.locator(".agent-terminal script, .agent-terminal div div div")).toHaveCount(0);
-  expect(await page.locator(".agent-terminal-row").count()).toBe(144);
+  expect(await page.locator(".agent-terminal-row").count()).toBe(145);
 
   await expect(page.locator(".agent-terminal-row").last()).toContainText("session ended completed");
   await expect.poll(() => tailOffset(page)).toBeLessThanOrEqual(12);
@@ -89,7 +97,7 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
     );
   const exported = (await snapshot(page)).plainText;
   expect(exported).toBe(displayed);
-  expect(exported.split("\n")).toHaveLength(144);
+  expect(exported.split("\n")).toHaveLength(145);
   expect(exported).toContain("hostile line <script>blocked()</script></div> stays inert");
 
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -104,7 +112,13 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
 
   // A durable append bumps only the transcript revision, so one poll delivers the
   // line while the bounded graph assembly stays fresh instead of going stale.
-  await page.getByRole("button", { name: /^phase delivery,/u }).press("Enter");
+  // A phase is a band in the graph, so it is selected from the tree reading.
+  await page.getByRole("tab", { name: "Tree", exact: true }).click();
+  await page
+    .locator(".workflow-node.kind-phase > .node")
+    .filter({ hasText: "delivery" })
+    .first()
+    .click();
   await expect(page.locator(".agent-terminal-scope")).toHaveText("phase phase_delivery");
   await expect.poll(async () => (await snapshot(page)).lineCount).toBeGreaterThanOrEqual(2);
   await expect(page.locator(".agent-terminal-log")).not.toContainText("journey task output");
@@ -124,13 +138,13 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   await expect.poll(() => tailOffset(page)).toBeLessThanOrEqual(12);
   await expect(status).toContainText("Data current");
   await expect(status).not.toContainText("Authority changed during bounded assembly");
-  await expect(page.locator(".diagram-node")).not.toHaveCount(0);
+  await expect(page.locator(".tree-item")).not.toHaveCount(0);
 
   // The explicit run-wide option merges every owner of the run in one scope and
   // still names the owner that produced each line.
   await page.getByRole("button", { name: "Scope to whole run", exact: true }).click();
   await expect(page.locator(".agent-terminal-scope")).toHaveText(`run ${runs.journey}`);
-  await expect.poll(async () => (await snapshot(page)).lineCount).toBe(144 + beforeAppend + 1);
+  await expect.poll(async () => (await snapshot(page)).lineCount).toBe(145 + beforeAppend + 1);
   await expect(page.locator(".agent-terminal-log")).toContainText("journey task output line 1");
   await expect(page.locator(".agent-terminal-log")).toContainText("phase attempt 1 opened");
   await expect(
@@ -157,8 +171,9 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   await selectRun(page, runs.workspace);
   await navigate(page, "Workflow");
   await page.getByRole("tab", { name: "Graph", exact: true }).click();
-  await expect(page.locator(".agent-terminal-scope")).toHaveText("No node selected");
-  await page.getByRole("button", { name: /^task verify,/u }).click();
+  // No selection means no terminal at all: the detail surface says what to do.
+  await expect(page.locator(".agent-terminal-scope")).toHaveCount(0);
+  await page.locator('.gnode[data-node="task_verify"]').click();
   await expect(page.locator(".agent-terminal-scope")).toHaveText("dispatch dispatch-browser");
   await expect(page.locator(".agent-terminal-log")).toContainText("workspace dispatch output");
   await expect(page.locator(".agent-terminal-log")).not.toContainText("task-owned line");

@@ -16,6 +16,8 @@ if (existsSync(localBrowserDependencies)) {
 
 export default defineConfig({
   testDir: "./packages/portal/tests/browser",
+  // A comparison capture is a tool for looking at the redesign, not a test.
+  testIgnore: process.env.SENAWA_MOCK_COMPARE === "1" ? [] : [/compare\.spec\.ts/u],
   globalSetup: "./packages/portal/tests/browser/global-setup.ts",
   outputDir: "./packages/portal/test-results",
   fullyParallel: false,
@@ -29,6 +31,18 @@ export default defineConfig({
     reducedMotion: "reduce",
   },
   projects: [
+    {
+      name: "compare-desktop",
+      testMatch: /compare\.spec\.ts/u,
+      // Tall enough that a full-page capture never resizes the viewport, which
+      // is what repaints sticky chrome over the content it covers.
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 1800 } },
+    },
+    {
+      name: "compare-mobile",
+      testMatch: /compare\.spec\.ts/u,
+      use: { ...devices["Pixel 5"], viewport: { width: 390, height: 1800 } },
+    },
     {
       name: "desktop-chromium",
       testMatch: /(?:diagram|panels|portal|terminal|visual)\.spec\.ts/u,

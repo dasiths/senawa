@@ -2,79 +2,69 @@ import { expect, type Page, test } from "@playwright/test";
 import { PHASE_EXECUTION_ORDER } from "./global-setup.js";
 import { assertDocumentFits, bootstrapPortal, navigate, runs, selectRun } from "./support.js";
 
-test("renders, selects, traverses, and zooms the workflow diagram", async ({ page }, testInfo) => {
+test("reads the workflow as bands of phases carrying cards of work", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
   await page.getByRole("tab", { name: "Graph", exact: true }).click();
-  await expect(page.locator(".diagram-node")).not.toHaveCount(0);
 
-  const summary = await page.locator(".result-count").textContent();
-  const total = Number(/of (\d+) nodes/u.exec(summary ?? "")?.[1] ?? "0");
-  expect(total).toBeGreaterThan(0);
-  const rendered = await snapshot(page);
-  expect(rendered.nodeIds).toHaveLength(total);
-  await expect(page.locator(".diagram-node")).toHaveCount(total);
-  for (const title of ["portal", "delivery", "verify", "verified"]) {
-    await expect(page.getByRole("button", { name: new RegExp(`\\b${title}\\b`, "u") })).toHaveCount(
-      1,
-    );
+  // A phase is a band; what it holds are cards inside it.
+  await expect(page.locator(".band")).not.toHaveCount(0);
+  await expect(page.locator(".graph-flow > .finish")).toHaveCount(2);
+  await expect(page.locator(".graph-legend")).toBeVisible();
+
+  for (const title of PHASE_EXECUTION_ORDER) {
+    await expect(page.locator(".band > summary", { hasText: title })).not.toHaveCount(0);
   }
-  await expect(page.locator(".diagram-state-awaiting-human")).not.toHaveCount(0);
-  await expect(page.locator(".diagram-state-accepted")).not.toHaveCount(0);
-  await expect(page.locator(".diagram-canvas text")).not.toHaveCount(0);
+
+  // The lines are measured from the laid-out flow, not authored as coordinates.
+  await expect.poll(async () => page.locator(".graph-edges .edge").count()).toBeGreaterThan(0);
   await expect(
-    page.locator(".diagram-canvas script, .diagram-canvas img, .diagram-canvas iframe"),
+    page.locator(".graph-edges script, .graph-edges image, .graph-edges foreignObject"),
   ).toHaveCount(0);
-  await expect(page.locator(".diagram-canvas foreignObject, .diagram-canvas a")).toHaveCount(0);
-
-  const first = page.locator(".diagram-node").first();
-  await first.click();
-  await expect(page.locator(".diagram-selected")).toHaveCount(1);
-  const selected = (await snapshot(page)).selectedNodeId;
-  expect(selected).toBe(rendered.nodeIds[0]);
-  await expect(page.locator(".detail-panel")).toBeVisible();
-
-  await first.focus();
-  await page.keyboard.press("ArrowDown");
-  await expect
-    .poll(() => page.evaluate(() => document.activeElement?.getAttribute("data-node-id") ?? ""))
-    .toBe(rendered.rows[1]?.[0] ?? "");
-  await page.keyboard.press("Enter");
-  await expect
-    .poll(async () => (await snapshot(page)).selectedNodeId)
-    .toBe(rendered.rows[1]?.[0] ?? "");
-
-  await page.getByRole("button", { name: "Zoom in", exact: true }).click();
-  const zoomed = await snapshot(page);
-  expect(zoomed.scale).toBe(1.5);
-  expect(zoomed.viewBox).not.toBe(rendered.viewBox);
-  await expect(page.getByText("150%", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Focus selected", exact: true }).click();
-  await page.getByRole("button", { name: "Fit", exact: true }).click();
-  await expect.poll(async () => (await snapshot(page)).viewBox).toBe(rendered.viewBox);
-
-  if (testInfo.project.name === "desktop-chromium") {
-    await page.getByRole("button", { name: "Zoom in", exact: true }).click();
-    await page.getByRole("button", { name: "Zoom in", exact: true }).click();
-    const before = await snapshot(page);
-    const box = await page.locator(".diagram-canvas").boundingBox();
-    expect(box).not.toBeNull();
-    const originX = (box?.x ?? 0) + 8;
-    const originY = (box?.y ?? 0) + (box?.height ?? 0) - 8;
-    await page.mouse.move(originX, originY);
-    await page.mouse.down();
-    await page.mouse.move(originX - 120, originY - 90, { steps: 6 });
-    await page.mouse.up();
-    await expect.poll(async () => (await snapshot(page)).viewBox).not.toBe(before.viewBox);
-  }
 
   await assertDocumentFits(page);
+  expect(diagnostics.severe()).toEqual([]);
+});
 
-  await selectRun(page, runs.workspace);
+test("selects a card, opens one detail surface, and keeps the selection across readings", async ({
+  page,
+}) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
   await page.getByRole("tab", { name: "Graph", exact: true }).click();
-  await expect(page.locator(".diagram-state-running")).not.toHaveCount(0);
-  await expect(page.locator(".diagram-state-not-started")).not.toHaveCount(0);
+  await expect(page.locator(".gnode")).not.toHaveCount(0);
+
+  const card = page.locator(".gnode").first();
+  const name = ((await card.locator(".g-name").textContent()) ?? "").trim();
+  await card.click();
+  await expect(page.locator(".gnode[aria-current='true']")).toHaveCount(1);
+  const detail = page.locator(".detail");
+  await expect(detail.locator("h2").first()).toHaveText(name);
+  await expect(detail.getByRole("tab", { name: "Live", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  // The tree is the same work read another way, so the selection survives.
+  await page.getByRole("tab", { name: "Tree", exact: true }).click();
+  await expect(page.locator(".tree-item[aria-selected='true'] > .node > .node-name")).toHaveText(
+    name,
+  );
+  expect(diagnostics.severe()).toEqual([]);
+});
+
+test("carries a need as a badge on the card and its named action on the detail surface", async ({
+  page,
+}) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await navigate(page, "Workflow");
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
+
+  const waiting = page.locator(".gnode:has(.asks)").first();
+  await waiting.click();
+  // The badge counts; the control that acts on it is named for the decision.
+  const toolbar = page.locator(".detail .node-toolbar");
+  await expect(toolbar.getByRole("button", { name: "Answer this question" })).toBeEnabled();
   expect(diagnostics.severe()).toEqual([]);
 });
 
@@ -85,75 +75,35 @@ test("orders phases by execution order in every graph view", async ({ page }) =>
   // The authority pages nodes in digest order, so a view that echoes arrival
   // order renders the workflow in an order unrelated to how it runs.
   await page.getByRole("tab", { name: "Graph", exact: true }).click();
-  await expect(page.locator(".diagram-node")).not.toHaveCount(0);
-  expect(await phaseOrder(page, ".diagram-node")).toEqual(PHASE_EXECUTION_ORDER);
+  await expect(page.locator(".band")).not.toHaveCount(0);
+  expect(await bandOrder(page)).toEqual(PHASE_EXECUTION_ORDER);
 
   await page.getByRole("tab", { name: "Tree", exact: true }).click();
   await expect(page.locator(".tree-item")).not.toHaveCount(0);
-  expect(await phaseOrder(page, ".tree-item")).toEqual(PHASE_EXECUTION_ORDER);
+  expect(await treePhaseOrder(page)).toEqual(PHASE_EXECUTION_ORDER);
   expect(diagnostics.severe()).toEqual([]);
 });
 
-/** Reads the phase titles a view renders, in the order it renders them. */
-async function phaseOrder(page: Page, selector: string): Promise<readonly string[]> {
-  const texts = await page.locator(selector).evaluateAll((elements) =>
-    elements.map((element) => {
-      const label = element.getAttribute("aria-label");
-      if (label !== null) return label.replace(/\s+/gu, " ");
-      // Tree items nest their children, so descendant text would report an
-      // ancestor once per descendant.
-      const own = [...element.childNodes]
-        .filter((node) => node.nodeType === 3)
-        .map((node) => node.textContent ?? "")
-        .join(" ")
-        .trim();
-      if (own.length > 0) return own.replace(/\s+/gu, " ");
-      // A workflow row carries its role, title and state in spans of their own,
-      // and its children in a nested list. Only the row's own line describes it,
-      // and its spans are adjacent, so joining without a separator would run the
-      // words together.
-      const line = element.querySelector(":scope > .workflow-line");
-      if (line !== null)
-        return [...line.children]
-          .map((child) => child.textContent ?? "")
-          .join(" ")
-          .replace(/\s+/gu, " ")
-          .trim();
-      // Table cells carry no separator of their own, so join them.
-      return [...element.children]
-        .map((child) => child.textContent ?? "")
-        .join(" ")
-        .replace(/\s+/gu, " ")
-        .trim();
-    }),
-  );
-  return texts
-    .filter((text) => /\bphase\b/u.test(text))
-    .map((text) => PHASE_EXECUTION_ORDER.find((key) => new RegExp(`\\b${key}\\b`, "u").test(text)))
-    .filter((key): key is string => key !== undefined);
+test("reads a run whose work has not started as the same flow", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await selectRun(page, runs.workspace);
+  await navigate(page, "Workflow");
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
+  await expect(page.locator(".gnode")).not.toHaveCount(0);
+  await assertDocumentFits(page);
+  expect(diagnostics.severe()).toEqual([]);
+});
+
+/** The phase names the graph renders, in the order it renders them. */
+async function bandOrder(page: Page): Promise<readonly string[]> {
+  return page
+    .locator(".band > summary > .band-name")
+    .evaluateAll((elements) => elements.map((element) => (element.textContent ?? "").trim()));
 }
 
-async function snapshot(page: Page) {
-  return await page.evaluate(
-    () =>
-      window.__senawaGraphDiagram ?? {
-        nodeIds: [],
-        rows: [],
-        viewBox: "",
-        scale: 0,
-        selectedNodeId: undefined,
-      },
-  );
-}
-
-declare global {
-  interface Window {
-    __senawaGraphDiagram?: {
-      readonly nodeIds: readonly string[];
-      readonly rows: readonly (readonly string[])[];
-      readonly viewBox: string;
-      readonly scale: number;
-      readonly selectedNodeId: string | undefined;
-    };
-  }
+/** The phase names the tree renders, in the order it renders them. */
+async function treePhaseOrder(page: Page): Promise<readonly string[]> {
+  return page
+    .locator(".tree-item.kind-phase > .node > .node-name")
+    .evaluateAll((elements) => elements.map((element) => (element.textContent ?? "").trim()));
 }

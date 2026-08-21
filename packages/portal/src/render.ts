@@ -12,7 +12,8 @@ import {
 import { allowanceResult, allowanceReviewFromSource } from "./allowance-review.js";
 import { type BoundedJsonNode, boundedJsonModel } from "./bounded-json.js";
 import { narrationBusy, narrationText } from "./command-narrator.js";
-import { focusGraphViewport, graphDiagramView } from "./graph-diagram.js";
+import { focusGraphViewport } from "./graph-diagram.js";
+import { drawGraphFlowEdges, graphFlowView } from "./graph-flow.js";
 import { executionOrdered, foldFinishedPhases, graphLayout } from "./graph-layout.js";
 import { type NodeToolbarAction, nodeToolbarView } from "./node-toolbar.js";
 import {
@@ -44,6 +45,8 @@ import {
 } from "./selectors.js";
 import {
   artifactContentKey,
+  DETAIL_TABS,
+  type DetailTab,
   type DialogKind,
   type GraphMode,
   INITIAL_GRAPH_VIEWPORT,
@@ -86,6 +89,7 @@ export interface PortalRenderActions {
   readonly toggleRightRail: (open: boolean) => void;
   readonly setTranscriptPinned: (pinned: boolean) => void;
   readonly setTranscriptScope: (scope: TranscriptScope) => void;
+  readonly setDetailTab: (tab: DetailTab) => void;
   readonly setRailLayout: (layout: RailLayout) => void;
   readonly setRailCollapsed: (side: RailSide, collapsed: boolean) => void;
   readonly openAssetOverlay: (artifactId: string, triggerId: string) => void;
@@ -116,23 +120,21 @@ export function renderPortal(
   const dialogValues =
     renderedDialogs.get(root) === state.ui.dialog ? captureDialogValues(root) : undefined;
   const narrator = root.querySelector<HTMLParagraphElement>(".command-narrator") ?? undefined;
-  const banner = root.querySelector<HTMLElement>(".question-attention") ?? undefined;
   const attention = questionAttention(pendingQuestionNeed(state.humanNeeds), Date.now());
   const shell = element("div", "portal-shell");
-  shell.append(renderHeader(state, actions), renderStatusStrip(state, narrator));
-  const attentionBanner = renderQuestionAttention(state, actions, attention, banner);
-  if (attentionBanner !== undefined) shell.append(attentionBanner);
+  shell.append(renderHeader(state, actions, narrator), renderNavigation(state, actions));
   const body = element("div", "portal-body");
   applyRailGeometry(body, state.ui.railLayout);
   body.append(
-    renderNavigation(state, actions),
-    railDivider("left", state, actions),
     renderMain(state, actions),
     railDivider("right", state, actions),
-    renderRightRail(state, actions),
+    renderRightRail(state, actions, attention),
   );
   shell.append(body);
   root.replaceChildren(shell);
+  // Lines between the phases are measured from the laid-out flow, so they can
+  // only be drawn once the flow is in the document.
+  requestAnimationFrame(() => drawGraphFlowEdges(root));
   document.title = attentionTitle(attention !== undefined);
   if (state.ui.dialog !== undefined) {
     renderDialog(root, state.ui.dialog, actions);
@@ -234,7 +236,11 @@ function restoreFocus(identity: FocusIdentity | undefined): void {
   target?.focus();
 }
 
-function renderHeader(state: PortalState, actions: PortalRenderActions): HTMLElement {
+function renderHeader(
+  state: PortalState,
+  actions: PortalRenderActions,
+  narrator: HTMLParagraphElement | undefined,
+): HTMLElement {
   const header = element("header", "app-header");
   const identity = element("div", "product-identity");
   identity.append(
@@ -242,7 +248,7 @@ function renderHeader(state: PortalState, actions: PortalRenderActions): HTMLEle
     textElement("strong", "product-name", "Senawa"),
   );
   const runSwitch = element("label", "run-switcher");
-  runSwitch.append(textElement("span", "field-label", "Repository / run"));
+  runSwitch.append(textElement("span", "visually-hidden", "Repository / run"));
   const select = document.createElement("select");
   select.id = "run-switcher";
   select.setAttribute("aria-label", "Select repository and run");
@@ -267,16 +273,20 @@ function renderHeader(state: PortalState, actions: PortalRenderActions): HTMLEle
   // Opening a rail that is already open looks like a dead control, which is what
   // this was whenever the rail was left open. A badge that counts what needs you
   // should take you to it, and every need lives on the node it blocks.
-  const needsButton = commandButton(`Needs ${state.humanNeeds.length}`, () => {
+  const needsButton = commandButton(`${String(state.humanNeeds.length)} waiting on you`, () => {
     if (state.humanNeeds.length > 0) actions.navigate("workflow");
     actions.toggleRightRail(true);
   });
-  needsButton.className = "rail-toggle";
-  tools.append(needsButton, statusBadge(state.session.status, state.session.status));
+  needsButton.className = state.humanNeeds.length > 0 ? "rail-toggle has-needs" : "rail-toggle";
+  tools.append(renderStatusStrip(state, narrator), needsButton);
   header.append(identity, runSwitch, tools);
   return header;
 }
 
+/**
+ * How the portal is doing sits beside the product name as one quiet cluster of
+ * dots. It used to be a full-width band of four competing pills above the work.
+ */
 function renderStatusStrip(
   state: PortalState,
   narrator: HTMLParagraphElement | undefined,
@@ -287,16 +297,17 @@ function renderStatusStrip(
   connection.setAttribute("role", "status");
   connection.setAttribute("aria-live", "polite");
   const freshness = currentFreshness(state);
+  const pending = Object.keys(state.pending).length;
+  // Healthy is the common case and deserves the quietest rendering it can have
+  // while still saying so. Only a count that is not zero earns emphasis.
   strip.append(
+    statusBadge(state.session.status, state.session.status),
     connection,
     statusBadge(freshness, `Data ${freshness}`),
-    statusBadge(
-      Object.keys(state.pending).length > 0 ? "pending" : "clear",
-      `${Object.keys(state.pending).length} pending commands`,
-    ),
+    statusBadge(pending > 0 ? "pending" : "clear", `${String(pending)} pending commands`),
     statusBadge(
       state.humanNeeds.length > 0 ? "needs" : "clear",
-      `${state.humanNeeds.length} human needs`,
+      `${String(state.humanNeeds.length)} human needs`,
     ),
     renderCommandNarrator(state, narrator),
   );
@@ -329,37 +340,6 @@ function renderCommandNarrator(
  * The banner element persists while one question identity persists so its
  * `role="alert"` announces on arrival instead of on every rerender.
  */
-function renderQuestionAttention(
-  state: PortalState,
-  actions: PortalRenderActions,
-  attention: QuestionAttention | undefined,
-  previous: HTMLElement | undefined,
-): HTMLElement | undefined {
-  if (attention === undefined) return undefined;
-  const need = attention.need;
-  const reused = previous !== undefined && previous.dataset.needId === need.needId;
-  const banner =
-    reused && previous !== undefined ? previous : element("section", "question-attention");
-  banner.className = attention.overdue ? "question-attention overdue" : "question-attention";
-  banner.setAttribute("role", "alert");
-  banner.dataset.needId = need.needId;
-  const heading = textElement("p", "question-attention-title", need.title);
-  const facts = element("p", "question-attention-facts");
-  facts.append(textElement("span", "question-attention-elapsed", attention.label));
-  const overdue = textElement("span", "question-attention-overdue", "Overdue");
-  overdue.hidden = !attention.overdue;
-  facts.append(overdue);
-  const triggerId = `question-attention-${safeDomId(need.needId)}`;
-  const review = commandButton("Answer this question", () => actions.openNeed(need, triggerId));
-  review.id = triggerId;
-  review.disabled =
-    actionsLocked(state) ||
-    need.allowedCommands.length === 0 ||
-    !needAllowedByCapabilities(need, state);
-  banner.replaceChildren(heading, facts, review);
-  return banner;
-}
-
 function applyRailGeometry(body: HTMLElement, layout: RailLayout): void {
   body.dataset.railLeft = railTrackToken(layout, "left");
   body.dataset.railRight = railTrackToken(layout, "right");
@@ -457,18 +437,15 @@ function railToggle(
   return button;
 }
 
+/**
+ * Four doors across the top rather than a rail down the side. A rail that holds
+ * four fixed destinations spends width on furniture, and the width belongs to
+ * the work.
+ */
 function renderNavigation(state: PortalState, actions: PortalRenderActions): HTMLElement {
   const nav = element("nav", "primary-nav");
   nav.id = "primary-nav";
   nav.setAttribute("aria-label", "Run views");
-  nav.dataset.collapsed = String(railCollapsed(state.ui.railLayout, "left"));
-  const heading = element("div", "rail-heading");
-  heading.append(
-    textElement("p", "nav-label", "Run workspace"),
-    railToggle("left", state, actions),
-  );
-  const spine = textElement("span", "rail-spine", "Views");
-  spine.setAttribute("aria-hidden", "true");
   const list = element("div", "nav-list");
   list.setAttribute("role", "tablist");
   for (const route of PORTAL_ROUTES) {
@@ -480,23 +457,54 @@ function renderNavigation(state: PortalState, actions: PortalRenderActions): HTM
     button.addEventListener("keydown", (event) => navigateTabs(event, button, list));
     list.append(button);
   }
+  nav.append(list);
+  return nav;
+}
+
+/**
+ * What the run is and what it is doing. A revision and a cursor are how a reader
+ * checks a claim, not how they form one, so they sit under a disclosure.
+ */
+function renderRunHead(state: PortalState): HTMLElement {
+  const head = element("div", "run-head");
+  const overview = selectedOverview(state);
+  const title = textElement(
+    "h1",
+    "run-title",
+    overview?.displayName ?? routeLabel(state.route.name),
+  );
+  title.id = "route-heading";
+  title.tabIndex = -1;
+  head.append(title);
+  if (overview !== undefined) {
+    head.append(
+      textElement("span", `state is-${overview.mode}`, overview.mode),
+      textElement(
+        "span",
+        "run-progress",
+        `${String(overview.counts.closedPhases)} of ${String(overview.counts.phases)} phases closed`,
+      ),
+    );
+  }
+  return head;
+}
+
+function renderIdentities(state: PortalState): HTMLElement {
   const overview = selectedOverview(state);
   const facts = element("dl", "nav-facts");
   appendFact(facts, "Mode", overview?.mode ?? "Unavailable");
   appendFact(facts, "Graph", overview?.sync.graphRevision.slice(0, 12) ?? "Unavailable");
   appendFact(facts, "Cursor", String(state.cursor));
-  nav.append(heading, spine, list, facts);
-  return nav;
+  const proof = element("details", "proof");
+  proof.append(textElement("summary", "disclosure-summary", "Identities and revisions"), facts);
+  return proof;
 }
 
 function renderMain(state: PortalState, actions: PortalRenderActions): HTMLElement {
   const main = element("main", "main-workspace");
   main.id = "main";
   main.tabIndex = -1;
-  const heading = textElement("h1", "route-heading", routeLabel(state.route.name));
-  heading.id = "route-heading";
-  heading.tabIndex = -1;
-  main.append(heading);
+  main.append(renderRunHead(state));
   if (state.session.status === "expired" || state.session.status === "invalid") {
     const failure = element("section", "terminal-state");
     failure.setAttribute("role", "alert");
@@ -533,6 +541,7 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
       main.append(renderAgents(state, actions));
       break;
   }
+  main.append(renderIdentities(state));
   return main;
 }
 
@@ -556,10 +565,7 @@ function renderOverview(state: PortalState, actions: PortalRenderActions): HTMLE
   if (overview === undefined) return emptySection("Loading run authority");
   const modeBand = element("div", "mode-band");
   const title = element("div", "mode-title");
-  title.append(
-    textElement("h2", "section-heading", overview.displayName),
-    textElement("p", "subtle", overview.workflowName),
-  );
+  title.append(textElement("h2", "section-heading", overview.workflowName));
   const controls = element("div", "run-controls");
   const locked = actionsLocked(state) || !hasCapability(state, "portal-write-run-control");
   if (overview.mode === "running")
@@ -656,7 +662,7 @@ function deliveryMetadata(record: PortalDeliveryRecord): string {
 }
 
 function renderWorkflow(state: PortalState, actions: PortalRenderActions): HTMLElement {
-  const section = element("section", "graph-view");
+  const section = element("section", "card graph-view");
   const ids = selectedIds(state);
   if (ids === undefined || state.vector === undefined)
     return emptySection("Loading graph revision");
@@ -664,8 +670,8 @@ function renderWorkflow(state: PortalState, actions: PortalRenderActions): HTMLE
   const summary = state.caches.graphSummaries[runKey(ids.repositoryId, ids.runId)];
   const nodes = state.caches.graphNodes[key]?.nodes ?? [];
   const edges = state.caches.graphEdges[key]?.edges ?? [];
-  const toolbar = element("div", "view-toolbar");
-  toolbar.append(filterInput(state, actions, "Filter the workflow"));
+  const toolbar = element("header", "view-toolbar");
+  toolbar.append(textElement("h2", "card-heading", "Workflow"));
   const modes = element("div", "segmented-control");
   modes.setAttribute("role", "tablist");
   for (const mode of GRAPH_MODES) {
@@ -674,29 +680,41 @@ function renderWorkflow(state: PortalState, actions: PortalRenderActions): HTMLE
     button.setAttribute("aria-selected", String(state.ui.graphMode === mode));
     modes.append(button);
   }
+  const phases = nodes.filter((node) => node.kind === "phase").length;
+  const work = nodes.filter((node) => node.kind === "task").length;
   toolbar.append(
     modes,
+    textElement(
+      "span",
+      "count",
+      `${String(phases)} ${phases === 1 ? "phase" : "phases"} \u00b7 ${String(work)} ${work === 1 ? "piece" : "pieces"} of work`,
+    ),
     textElement("span", "result-count", `${nodes.length} of ${summary?.nodeCount ?? 0} nodes`),
+    filterInput(state, actions, "Filter the workflow"),
   );
   section.append(toolbar);
   const filtered = nodes.filter((node) =>
     graphText(node).includes(state.ui.filter.toLocaleLowerCase()),
   );
   section.append(graphBody(state, actions, nodes, edges, filtered));
+  // The graph wants the width, so it takes the column and detail sits under it.
+  const split = element("div", state.ui.graphMode === "diagram" ? "split is-wide" : "split");
+  split.append(section);
   const focused = nodes.find(({ nodeId }) => nodeId === state.ui.focusedRecord);
-  if (focused !== undefined) section.append(graphDetail(focused, state, actions, nodes, edges));
-  section.append(
-    transcriptPaneView({
-      view: state.ui.transcript,
-      scope: state.ui.transcriptScope,
-      names: transcriptNames(state.caches.agents[runKey(ids.repositoryId, ids.runId)]?.agents),
-      actions: {
-        setTranscriptPinned: (pinned) => actions.setTranscriptPinned(pinned),
-        setTranscriptScope: (scope) => actions.setTranscriptScope(scope),
-      },
-    }),
+  split.append(
+    focused === undefined
+      ? emptyDetail("Select a piece of work to read what it is doing.")
+      : graphDetail(focused, state, actions, nodes, edges),
   );
-  return section;
+  return split;
+}
+
+function emptyDetail(message: string): HTMLElement {
+  const detail = element("section", "card detail detail-panel");
+  const pane = element("div", "pane");
+  pane.append(textElement("p", "empty-state", message));
+  detail.append(pane);
+  return detail;
 }
 
 function graphBody(
@@ -707,22 +725,56 @@ function graphBody(
   filtered: readonly PortalGraphNode[],
 ): HTMLElement {
   switch (state.ui.graphMode) {
-    case "diagram": {
-      const folded = foldFinishedPhases(nodes, edges, state.ui.unfoldedNodes);
-      return graphDiagramView({
-        nodes: folded.nodes,
-        edges: folded.edges,
-        selectedNodeId: state.ui.focusedRecord,
-        viewport: state.ui.graphViewport,
-        actions: {
-          select: (nodeId) => actions.focusRecord(nodeId),
-          setViewport: (viewport) => actions.setGraphViewport(viewport),
-        },
-      });
-    }
+    case "diagram":
+      return graphFlow(state, actions, executionOrdered(filtered, edges), edges);
     case "tree":
       return workflowTree(executionOrdered(filtered, edges), state, actions);
   }
+}
+
+/** The mock's reading: phases as bands, their members as cards, artifacts on the line. */
+function graphFlow(
+  state: PortalState,
+  actions: PortalRenderActions,
+  nodes: readonly PortalGraphNode[],
+  edges: readonly PortalGraphEdge[],
+): HTMLElement {
+  const ids = selectedIds(state);
+  const key = ids === undefined ? undefined : runKey(ids.repositoryId, ids.runId);
+  const agents = key === undefined ? [] : (state.caches.agents[key]?.agents ?? []);
+  const artifacts = key === undefined ? [] : (state.caches.artifacts[key]?.artifacts ?? []);
+  const handedOn = new Map<string, string>();
+  for (const artifact of artifacts) {
+    if (artifact.taskId === undefined) continue;
+    const id = String(artifact.taskId);
+    if (!handedOn.has(id)) handedOn.set(id, formatBytes(artifact.byteLength));
+  }
+  return graphFlowView({
+    nodes,
+    edges,
+    selectedNodeId: state.ui.focusedRecord,
+    unfolded: state.ui.unfoldedNodes,
+    handedOn,
+    decorate: (node: PortalGraphNode) => {
+      const working = agents.filter((agent) => String(agent.taskId) === node.nodeId);
+      const latest = [...working].sort((left, right) => left.attempt - right.attempt).at(-1);
+      // A card is one control. What it is waiting for is a badge on the card;
+      // the control that acts on it lives on the detail surface beside it.
+      const foot: HTMLElement[] = [];
+      const blocking = state.humanNeeds.filter((need) => needBlocks(need, node));
+      for (const need of blocking) foot.push(textElement("span", "asks", needBadgeLabel(need)));
+      if (blocking.length === 0 && node.humanNeedCount > 0)
+        foot.push(textElement("span", "asks", "asks"));
+      return { who: latest === undefined ? undefined : agentWho(latest), foot };
+    },
+    actions: {
+      select: (nodeId: string) => actions.focusRecord(nodeId),
+      toggleFold: (nodeId: string) => actions.unfoldNode(nodeId),
+      unfoldAll: () => {
+        for (const node of nodes) if (node.kind === "phase") actions.unfoldNode(node.nodeId);
+      },
+    },
+  });
 }
 
 function graphModeLabel(mode: GraphMode): string {
@@ -742,6 +794,50 @@ const NODE_KIND_ROLE: Readonly<Record<string, string>> = {
   task: "work",
   criterion: "exit condition",
 };
+
+const NODE_MARKS: Readonly<Record<string, string>> = {
+  workflow: "\u25c7",
+  phase: "\u25c6",
+  task: "\u25cf",
+  criterion: "\u25cb",
+};
+
+const STATE_LABELS: Readonly<Record<string, string>> = {
+  defined: "not started",
+  "not-started": "not started",
+  running: "working",
+  "awaiting-human": "waiting on you",
+  accepted: "done",
+  failed: "failed",
+  superseded: "superseded",
+};
+
+const STATE_TONES: Readonly<Record<string, string>> = {
+  defined: "is-idle",
+  "not-started": "is-idle",
+  running: "is-working",
+  "awaiting-human": "is-waiting",
+  accepted: "is-closed",
+  failed: "is-failed",
+  superseded: "is-idle",
+};
+
+/** The mock's state pill: one dot, one word, the same in the tree and the graph. */
+function statePill(lifecycle: string): HTMLElement {
+  return textElement(
+    "span",
+    `state ${STATE_TONES[lifecycle] ?? "is-waiting"}`,
+    STATE_LABELS[lifecycle] ?? lifecycle,
+  );
+}
+
+/** Who is doing the work, and on what model. */
+function agentWho(agent: PortalAgentSummary): HTMLElement {
+  const who = element("span", "who");
+  who.append(textElement("span", "who-persona", agent.persona));
+  if (agent.model !== undefined) who.append(textElement("span", "model", agent.model));
+  return who;
+}
 
 function workflowTree(
   nodes: readonly PortalGraphNode[],
@@ -769,62 +865,65 @@ function workflowTree(
     item.setAttribute("aria-level", String(level));
     item.dataset.focusKey = node.nodeId;
     item.dataset.kind = node.kind;
+    if (state.ui.focusedRecord === node.nodeId) item.setAttribute("aria-selected", "true");
     item.tabIndex = parent.querySelector("[role=treeitem]") === null && level === 1 ? 0 : -1;
-    const line = element("span", "workflow-line");
+    const line = element("span", "node");
     line.append(
-      textElement("span", "workflow-role", NODE_KIND_ROLE[node.kind] ?? node.kind),
-      textElement("span", "workflow-title", node.title),
-      textElement("span", `workflow-state state-${node.lifecycle}`, node.lifecycle),
+      textElement("span", "node-mark", NODE_MARKS[node.kind] ?? "\u25cb"),
+      textElement("span", "node-name", node.title),
     );
+    const right = element("span", "node-right");
+    line.append(right);
+    if (node.kind !== "task")
+      right.append(textElement("span", "node-sub", NODE_KIND_ROLE[node.kind] ?? node.kind));
     // An agent belongs inside the work it is doing. A column of "working on"
     // pointing back at a row three tabs away is the same fact told twice.
     const working = agents.filter((agent) => String(agent.taskId) === node.nodeId);
-    const latest = [...working].sort((left, right) => left.attempt - right.attempt).at(-1);
+    const latest = [...working].sort((left, right_) => left.attempt - right_.attempt).at(-1);
     if (latest !== undefined) {
-      const who = element("span", "workflow-agent");
-      who.append(textElement("span", "agent-persona", latest.persona));
-      if (latest.model !== undefined) who.append(textElement("span", "agent-model", latest.model));
-      who.append(textElement("span", `agent-state ${latest.state}`, latest.state));
+      right.append(agentWho(latest));
       if (working.length > 1)
-        who.append(textElement("span", "agent-attempts", `attempt ${String(latest.attempt)}`));
+        right.append(textElement("span", "node-sub", `attempt ${String(latest.attempt)}`));
       // Redirecting an agent, or accepting work it could not finish, is done
       // while looking at the work. Both controls lived on a list of agents that
       // named the work by identity, so acting on the right one meant matching a
       // digest by eye against this tree.
       if (latest.state === "working" && hasCapability(state, "portal-write-steer-agent"))
-        who.append(agentActionButton("steer", "Steer", latest, actions));
+        right.append(agentActionButton("steer", "Steer", latest, actions));
       if (
         latest.state === "finished" &&
         latest.latestRefusal !== undefined &&
         hasCapability(state, "portal-write-override-member")
       )
-        who.append(agentActionButton("override", "Accept anyway", latest, actions));
-      line.append(who);
+        right.append(agentActionButton("override", "Accept anyway", latest, actions));
     }
     // A need belongs on the thing it blocks. Scattering them across three tabs
     // meant reading a phase told you nothing about why it had stopped.
     const blocking = state.humanNeeds.filter((need) => needBlocks(need, node));
-    for (const need of blocking) line.append(needChip(need, state, actions, node.nodeId));
+    for (const need of blocking) right.append(needChip(need, state, actions, node.nodeId));
     if (blocking.length === 0 && node.humanNeedCount > 0)
-      line.append(
-        textElement("span", "workflow-waiting", `${String(node.humanNeedCount)} waiting on you`),
-      );
+      right.append(textElement("span", "asks", `${String(node.humanNeedCount)} waiting on you`));
     // Where a task's work is happening, and whether that work can be accepted,
     // is a fact about the task. It was a table of its own keyed by an identity
     // a reader had to match by eye against this tree.
     const workspace = workspaces.find((candidate) => String(candidate.taskId) === node.nodeId);
     if (workspace !== undefined) {
-      const where = element("span", "workflow-workspace");
+      const where = element("span", "workspace");
       where.append(
-        textElement("span", "workspace-mode", workspace.mode),
-        textElement("span", `workspace-state state-${workspace.state}`, workspace.state),
+        textElement("span", "workspace-mode node-sub", workspace.mode),
+        textElement("span", `workspace-state node-sub`, workspace.state),
       );
       if (!workspace.completionEligible)
-        where.append(textElement("span", "workspace-blocked", "cannot be accepted yet"));
-      line.append(where);
+        where.append(textElement("span", "node-sub", "cannot be accepted yet"));
+      right.append(where);
     }
+    right.append(statePill(node.lifecycle));
     item.append(line);
-    item.addEventListener("click", () => actions.focusRecord(node.nodeId));
+    item.addEventListener("click", (event) => {
+      // Rows nest, so without this every ancestor row also claims the click.
+      event.stopPropagation();
+      actions.focusRecord(node.nodeId);
+    });
     item.addEventListener("keydown", treeKeydown);
     const children = nodes.filter(({ parentNodeId }) => parentNodeId === node.nodeId);
     if (children.length > 0) {
@@ -884,6 +983,14 @@ function needChip(
   return button;
 }
 
+/** The short word a card wears while it waits. */
+function needBadgeLabel(need: PortalHumanNeed): string {
+  if (need.kind === "question") return "asks";
+  if (need.kind === "escalation") return "needs budget";
+  if (need.kind === "candidate-approval") return "needs approval";
+  return need.kind;
+}
+
 function needChipLabel(need: PortalHumanNeed): string {
   if (need.kind === "question") return "Answer this question";
   if (need.kind === "escalation") return "Review the budget it asked for";
@@ -891,6 +998,10 @@ function needChipLabel(need: PortalHumanNeed): string {
   return `Review this ${need.kind}`;
 }
 
+/**
+ * One detail surface, whatever the reader arrived from. What the agent is doing
+ * now leads; what it was told, what it made, and what it is sit behind it.
+ */
 function graphDetail(
   node: PortalGraphNode,
   state: PortalState,
@@ -898,24 +1009,190 @@ function graphDetail(
   nodes: readonly PortalGraphNode[],
   edges: readonly PortalGraphEdge[],
 ): HTMLElement {
-  const detail = element("section", "detail-panel");
-  detail.append(textElement("h2", "compact-heading", node.title));
-  detail.append(
-    nodeToolbarView({
-      nodeId: node.nodeId,
-      actions: nodeActions(node, state, actions, nodes, edges),
+  const ids = selectedIds(state);
+  const key = ids === undefined ? undefined : runKey(ids.repositoryId, ids.runId);
+  const agents = key === undefined ? [] : (state.caches.agents[key]?.agents ?? []);
+  const working = agents.filter((agent) => String(agent.taskId) === node.nodeId);
+  const latest = [...working].sort((left, right) => left.attempt - right.attempt).at(-1);
+  const detail = element("section", "card detail detail-panel");
+  const header = element("header", "");
+  const title = element("div", "detail-title");
+  title.append(textElement("h2", "compact-heading", node.title));
+  const parent = nodes.find(({ nodeId }) => nodeId === node.parentNodeId);
+  const where = [
+    parent?.title,
+    latest === undefined
+      ? (NODE_KIND_ROLE[node.kind] ?? node.kind)
+      : `${latest.persona}${latest.model === undefined ? "" : ` on ${latest.model}`}`,
+    latest === undefined ? undefined : `attempt ${String(latest.attempt)}`,
+  ].filter((part): part is string => part !== undefined);
+  title.append(textElement("span", "where", where.join(" \u00b7 ")));
+  header.append(title);
+  const toolbar = nodeToolbarView({
+    nodeId: node.nodeId,
+    actions: nodeActions(node, state, actions, nodes, edges),
+  });
+  // Redirecting an agent is the card's action, not another node control.
+  const agentActions = element("div", "detail-actions");
+  if (
+    latest !== undefined &&
+    latest.state === "working" &&
+    hasCapability(state, "portal-write-steer-agent")
+  )
+    agentActions.append(agentActionButton("steer", "Steer", latest, actions));
+  if (
+    latest !== undefined &&
+    latest.state === "finished" &&
+    latest.latestRefusal !== undefined &&
+    hasCapability(state, "portal-write-override-member")
+  )
+    agentActions.append(agentActionButton("override", "Accept anyway", latest, actions));
+  header.append(toolbar);
+  if (agentActions.childElementCount > 0) header.append(agentActions);
+  detail.append(header);
+  const tabs = element("div", "detail-tabs");
+  tabs.setAttribute("role", "tablist");
+  for (const tab of DETAIL_TABS) {
+    const button = commandButton(DETAIL_TAB_LABELS[tab], () => actions.setDetailTab(tab));
+    button.className = "detail-tab";
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(state.ui.detailTab === tab));
+    tabs.append(button);
+  }
+  detail.append(tabs);
+  const pane = element("div", "pane");
+  switch (state.ui.detailTab) {
+    case "live":
+      pane.append(livePane(state, actions, node));
+      break;
+    case "answers":
+      pane.append(answersPane(state, node));
+      break;
+    case "produced":
+      pane.append(producedPane(state, node));
+      break;
+    case "about": {
+      const facts = element("dl", "kv dense-facts");
+      appendFact(facts, "Identity", node.nodeId);
+      appendFact(facts, "Source", node.sourcePointer ?? "Not supplied");
+      appendFact(facts, "Superseded by", node.supersededBy ?? "No successor");
+      pane.append(facts);
+      if (node.normalizedInput !== undefined)
+        pane.append(renderJson(node.normalizedInput, "Normalized input"));
+      if (node.completionPolicy !== undefined)
+        pane.append(renderJson(node.completionPolicy, "Completion policy"));
+      break;
+    }
+  }
+  detail.append(pane);
+  return detail;
+}
+
+const DETAIL_TAB_LABELS: Readonly<Record<DetailTab, string>> = {
+  live: "Live",
+  answers: "Answers",
+  produced: "Produced",
+  about: "About",
+};
+
+/** What the agent is saying, and the line a reader answers it on. */
+function livePane(
+  state: PortalState,
+  actions: PortalRenderActions,
+  node: PortalGraphNode,
+): HTMLElement {
+  const ids = selectedIds(state);
+  const holder = element("div", "live-pane");
+  holder.append(
+    transcriptPaneView({
+      view: state.ui.transcript,
+      scope: state.ui.transcriptScope,
+      names:
+        ids === undefined
+          ? {}
+          : transcriptNames(state.caches.agents[runKey(ids.repositoryId, ids.runId)]?.agents),
+      actions: {
+        setTranscriptPinned: (pinned) => actions.setTranscriptPinned(pinned),
+        setTranscriptScope: (scope) => actions.setTranscriptScope(scope),
+      },
     }),
   );
-  const facts = element("dl", "dense-facts");
-  appendFact(facts, "Identity", node.nodeId);
-  appendFact(facts, "Source", node.sourcePointer ?? "Not supplied");
-  appendFact(facts, "Superseded by", node.supersededBy ?? "No successor");
-  detail.append(facts);
-  if (node.normalizedInput !== undefined)
-    detail.append(renderJson(node.normalizedInput, "Normalized input"));
-  if (node.completionPolicy !== undefined)
-    detail.append(renderJson(node.completionPolicy, "Completion policy"));
-  return detail;
+  holder.append(replyBox(state, actions, node));
+  return holder;
+}
+
+/** Questions this work has already been answered on. */
+function answersPane(state: PortalState, node: PortalGraphNode): HTMLElement {
+  const list = element("ul", "answered");
+  const ids = selectedIds(state);
+  const key = ids === undefined ? undefined : runKey(ids.repositoryId, ids.runId);
+  const events = key === undefined ? [] : (state.caches.events[key]?.events ?? []);
+  for (const event of events) {
+    if (!event.eventType.includes("answer") && !event.eventType.includes("decision")) continue;
+    const item = element("li", "");
+    item.append(
+      textElement("p", "a-q", event.eventType),
+      textElement("p", "a-when", event.occurredAt),
+    );
+    list.append(item);
+  }
+  if (list.childElementCount === 0)
+    list.append(
+      textElement("li", "empty-state", `Nothing has been answered on ${node.title} yet.`),
+    );
+  return list;
+}
+
+/** What this work handed on. */
+function producedPane(state: PortalState, node: PortalGraphNode): HTMLElement {
+  const ids = selectedIds(state);
+  const key = ids === undefined ? undefined : runKey(ids.repositoryId, ids.runId);
+  const artifacts = key === undefined ? [] : (state.caches.artifacts[key]?.artifacts ?? []);
+  const mine = artifacts.filter((artifact) => String(artifact.taskId) === node.nodeId);
+  if (mine.length === 0)
+    return textElement("p", "empty-state", `${node.title} has produced nothing yet.`);
+  return summaryTable(
+    ["What", "Size", "Where it is"],
+    mine.map((artifact) => [
+      artifact.summary,
+      formatBytes(artifact.byteLength),
+      artifact.availability,
+    ]),
+    `What ${node.title} produced`,
+  );
+}
+
+/**
+ * A reply is given on the line under the words it answers. The same box carries
+ * an answer, a steer and a grant, because they interrupt the same thing.
+ */
+function replyBox(
+  state: PortalState,
+  actions: PortalRenderActions,
+  node: PortalGraphNode,
+): HTMLElement {
+  const reply = element("div", "reply");
+  const needs = state.humanNeeds.filter((need) => needBlocks(need, node));
+  const need = needs[0];
+  reply.append(textElement("span", "reply-caret", "\u203a"));
+  const box = document.createElement("textarea");
+  box.className = "reply-input";
+  box.rows = 2;
+  const label = need === undefined ? "Steer this agent" : needChipLabel(need);
+  box.setAttribute("aria-label", label);
+  box.placeholder = need === undefined ? "Redirect the agent\u2026" : `${label}\u2026`;
+  reply.append(box);
+  const side = element("div", "reply-side");
+  const triggerId = `reply-${safeDomId(node.nodeId)}`;
+  const send = commandButton("Send", () => {
+    if (need !== undefined) actions.openNeed(need, triggerId);
+  });
+  send.className = "send";
+  send.id = triggerId;
+  send.disabled = need === undefined || actionsLocked(state);
+  side.append(send, textElement("span", "reply-note", "read as written \u00b7 cannot be changed"));
+  reply.append(side);
+  return reply;
 }
 
 /**
@@ -1212,22 +1489,54 @@ function renderNeed(
   state: PortalState,
   actions: PortalRenderActions,
   scope: string,
+  attention?: QuestionAttention,
 ): HTMLElement {
   const item = element("article", "need-row");
-  item.append(textElement("h3", "row-title", need.title), statusBadge(need.kind, need.kind));
-  const facts = element("dl", "inline-facts");
-  appendFact(facts, "Created", need.createdAt);
-  appendFact(facts, "Revision", String(need.sourceRevision));
-  item.append(facts);
+  // A queue entry says where the decision lives and what is being asked. It used
+  // to lead with a sixty-four character digest and a revision counter, which
+  // told a reader nothing they could act on.
+  // Where it is, then what is being asked, then what kind of decision it is.
+  // The kind is how a reader tells two integration needs apart, so it stays,
+  // quietly, rather than leading as a badge.
+  const where = needLocation(need, state);
+  item.append(textElement("p", "q-where", where ?? need.kind));
+  item.append(textElement("h3", "q-what", need.title));
+  if (where !== undefined) item.append(textElement("p", "q-kind", need.kind));
   const triggerId = `review-${scope}-${safeDomId(need.needId)}`;
-  const button = commandButton("Review exact record", () => actions.openNeed(need, triggerId));
+  const button = commandButton(needChipLabel(need), () => actions.openNeed(need, triggerId));
   button.id = triggerId;
   button.disabled =
     actionsLocked(state) ||
     need.allowedCommands.length === 0 ||
     !needAllowedByCapabilities(need, state);
   item.append(button);
+  // How long a question has been waiting belongs on the question, not on a band
+  // across the top of a page the reader is trying to read.
+  if (attention !== undefined && attention.need.needId === need.needId) {
+    item.classList.add("question-attention");
+    item.classList.toggle("overdue", attention.overdue);
+    item.dataset.needId = need.needId;
+    const facts = element("p", "question-attention-facts");
+    facts.append(textElement("span", "question-attention-elapsed", attention.label));
+    const overdue = textElement("span", "question-attention-overdue", "Overdue");
+    overdue.hidden = !attention.overdue;
+    facts.append(overdue);
+    item.append(facts);
+  }
   return item;
+}
+
+/** The phase and task a need belongs to, named rather than identified. */
+function needLocation(need: PortalHumanNeed, state: PortalState): string | undefined {
+  if (need.taskId === undefined) return undefined;
+  const ids = selectedIds(state);
+  if (ids === undefined || state.vector === undefined) return undefined;
+  const key = revisionKey(ids.repositoryId, ids.runId, state.vector.graphRevision);
+  const nodes = state.caches.graphNodes[key]?.nodes ?? [];
+  const node = nodes.find(({ nodeId }) => nodeId === need.taskId);
+  if (node === undefined) return undefined;
+  const parent = nodes.find(({ nodeId }) => nodeId === node.parentNodeId);
+  return parent === undefined ? node.title : `${parent.title} \u00b7 ${node.title}`;
 }
 
 /**
@@ -1237,65 +1546,89 @@ function renderNeed(
  * third attempt, which one was moved to a smaller model, or what the last thing
  * refused was, and those are the questions somebody watching a run actually has.
  */
+/**
+ * Who is working, and on what. Selecting an agent opens the same detail surface
+ * the workflow opens, because it is the same subject reached another way.
+ */
 function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLElement {
   const ids = selectedIds(state);
-  if (ids === undefined) return emptySection("Loading agents");
-  const agents = state.caches.agents[runKey(ids.repositoryId, ids.runId)]?.agents ?? [];
-  const section = element("section", "agent-view");
-  section.append(textElement("h2", "section-heading", "Agent pool"));
+  if (ids === undefined || state.vector === undefined) return emptySection("Loading agents");
+  const key = runKey(ids.repositoryId, ids.runId);
+  const agents = state.caches.agents[key]?.agents ?? [];
+  const revision = revisionKey(ids.repositoryId, ids.runId, state.vector.graphRevision);
+  const nodes = state.caches.graphNodes[revision]?.nodes ?? [];
+  const edges = state.caches.graphEdges[revision]?.edges ?? [];
+  const split = element("div", "split");
+  const card = element("section", "card agent-view");
+  const header = element("header", "view-toolbar");
+  header.append(textElement("h2", "card-heading", "This run"));
+  const working = agents.filter((agent) => agent.state === "working").length;
+  const done = agents.length - working;
+  header.append(
+    textElement("span", "count", `${String(working)} working \u00b7 ${String(done)} done`),
+  );
+  card.append(header);
   if (agents.length === 0) {
-    section.append(textElement("p", "empty-note", "No agent has been dispatched yet."));
-    return section;
+    card.append(textElement("p", "empty-note", "No agent has been dispatched yet."));
+    split.append(card, emptyDetail("Nothing is working yet."));
+    return split;
   }
-  section.append(
-    agentRoster(agents),
-    textElement(
-      "p",
-      "visually-hidden",
-      "Every agent this run has dispatched, with its attempts listed under it",
-    ),
+  const list = element("ul", "workflow-tree agent-roster");
+  // One row per piece of work an agent holds, latest attempt first in the row.
+  const byWork = new Map<string, PortalAgentSummary[]>();
+  for (const agent of agents) {
+    const groupKey = `${agent.persona}\u0000${String(agent.taskId)}`;
+    const existing = byWork.get(groupKey);
+    if (existing === undefined) byWork.set(groupKey, [agent]);
+    else existing.push(agent);
+  }
+  for (const group of byWork.values()) {
+    const attempts = [...group].sort((left, right) => left.attempt - right.attempt);
+    const current = attempts[attempts.length - 1];
+    if (current === undefined) continue;
+    const nodeId = String(current.taskId);
+    const item = element("li", "workflow-node agent-entry");
+    if (state.ui.focusedRecord === nodeId) item.setAttribute("aria-selected", "true");
+    const row = element("span", "node");
+    row.dataset.focusKey = nodeId;
+    row.append(
+      textElement("span", "node-mark", "\u25cf"),
+      textElement("span", "node-name", current.persona),
+    );
+    const right = element("span", "node-right");
+    const work = textElement("span", "node-sub agent-work", current.taskName ?? nodeId);
+    // The identity is kept for hovering, because a digest names nothing to a reader.
+    work.title = nodeId;
+    right.append(work);
+    if (current.model !== undefined) right.append(textElement("span", "model", current.model));
+    if (attempts.length > 1)
+      right.append(textElement("span", "node-sub", `${String(attempts.length)} attempts`));
+    if (current.latestRefusal !== undefined)
+      right.append(textElement("span", "asks", "could not finish"));
+    right.append(
+      textElement("span", `state ${AGENT_TONES[current.state] ?? "is-waiting"}`, current.state),
+    );
+    row.append(right);
+    item.append(row);
+    item.addEventListener("click", () => actions.focusRecord(nodeId));
+    list.append(item);
+  }
+  card.append(list);
+  split.append(card);
+  const focused = nodes.find(({ nodeId }) => nodeId === state.ui.focusedRecord);
+  split.append(
+    focused === undefined
+      ? emptyDetail("Select an agent to read what it is doing.")
+      : graphDetail(focused, state, actions, nodes, edges),
   );
-
-  const working = agents.filter((agent) => agent.state === "working");
-  if (working.length > 0 && hasCapability(state, "portal-write-steer-agent")) {
-    const list = element("div", "agent-actions");
-    for (const agent of working) {
-      const triggerId = `steer-${agent.dispatchId}`;
-      const button = document.createElement("button");
-      button.type = "button";
-      button.id = triggerId;
-      // Several agents share a persona, so a button naming only the persona
-      // appears three times over with nothing to choose between them.
-      button.textContent =
-        agent.taskName === undefined
-          ? `Steer ${agent.persona}`
-          : `Steer ${agent.persona} on ${agent.taskName}`;
-      button.addEventListener("click", () => actions.openAgentAction("steer", agent, triggerId));
-      list.append(button);
-    }
-    section.append(list);
-  }
-
-  // Only work that reported it could not finish can be accepted over, so the
-  // control appears against that work rather than beside every agent.
-  const stuck = agents.filter(
-    (agent) => agent.state === "finished" && agent.latestRefusal !== undefined,
-  );
-  if (stuck.length > 0 && hasCapability(state, "portal-write-override-member")) {
-    const list = element("div", "agent-actions");
-    for (const agent of stuck) {
-      const triggerId = `override-${agent.dispatchId}`;
-      const button = document.createElement("button");
-      button.type = "button";
-      button.id = triggerId;
-      button.textContent = `Accept ${agent.persona}'s work`;
-      button.addEventListener("click", () => actions.openAgentAction("override", agent, triggerId));
-      list.append(button);
-    }
-    section.append(list);
-  }
-  return section;
+  return split;
 }
+
+const AGENT_TONES: Readonly<Record<string, string>> = {
+  working: "is-working",
+  finished: "is-closed",
+  failed: "is-failed",
+};
 
 // Integration is about a cohort rather than a task, so it has no node to sit on
 // and belongs with the rest of the run's record.
@@ -1325,7 +1658,11 @@ function renderIntegrations(state: PortalState): HTMLElement {
   return section;
 }
 
-function renderRightRail(state: PortalState, actions: PortalRenderActions): HTMLElement {
+function renderRightRail(
+  state: PortalState,
+  actions: PortalRenderActions,
+  attention: QuestionAttention | undefined,
+): HTMLElement {
   const aside = element("aside", state.ui.rightRailOpen ? "right-rail open" : "right-rail");
   aside.id = "right-rail";
   aside.setAttribute("aria-label", "Human needs and pending commands");
@@ -1336,13 +1673,19 @@ function renderRightRail(state: PortalState, actions: PortalRenderActions): HTML
   }
   const heading = element("div", "rail-heading");
   heading.append(railToggle("right", state, actions));
-  heading.append(textElement("h2", "compact-heading", "Attention"));
+  heading.append(textElement("h2", "compact-heading", "Waiting on you"));
+  heading.append(textElement("span", "count", String(state.humanNeeds.length)));
   const close = commandButton("Close", () => actions.toggleRightRail(false));
   close.className = "rail-close";
   heading.append(close);
   const spine = textElement("span", "rail-spine", "Attention");
   spine.setAttribute("aria-hidden", "true");
   aside.append(heading, spine);
+  const needsSection = element("section", "rail-section");
+  for (const need of state.humanNeeds.slice(0, 20))
+    needsSection.append(renderNeed(need, state, actions, "rail", attention));
+  if (state.humanNeeds.length === 0)
+    needsSection.append(textElement("p", "empty-state", "Nothing is waiting on you."));
   const pendingSection = element("section", "rail-section");
   pendingSection.append(textElement("h3", "rail-section-heading", "Pending receipts"));
   const pendingList = element("ul", "pending-list");
@@ -1361,11 +1704,7 @@ function renderRightRail(state: PortalState, actions: PortalRenderActions): HTML
   if (pendingList.childElementCount === 0)
     pendingList.append(textElement("li", "empty-state", "No uncertain commands."));
   pendingSection.append(pendingList);
-  const needsSection = element("section", "rail-section");
-  needsSection.append(textElement("h3", "rail-section-heading", "Human queue"));
-  for (const need of state.humanNeeds.slice(0, 20))
-    needsSection.append(renderNeed(need, state, actions, "rail"));
-  aside.append(pendingSection, needsSection);
+  aside.append(needsSection, pendingSection);
   return aside;
 }
 

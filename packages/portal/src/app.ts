@@ -770,7 +770,10 @@ export class PortalApplication {
    */
   #transcriptOwner(): PortalTranscriptOwner | undefined {
     const identity = this.#selectedIdentity();
-    if (identity === undefined || this.#state.route.name !== "workflow") return undefined;
+    // Agents reaches the same detail surface, so it reads the same transcript.
+    if (identity === undefined) return undefined;
+    if (this.#state.route.name !== "workflow" && this.#state.route.name !== "agents")
+      return undefined;
     if (this.#state.ui.transcriptScope === "run")
       return Object.freeze({ kind: "run", id: identity.runId });
     const revision = this.#state.vector?.graphRevision;
@@ -861,6 +864,7 @@ export class PortalApplication {
       setGraphMode: (mode) => this.#dispatch({ type: "graph-mode", mode }),
       setGraphViewport: (viewport) => this.#dispatch({ type: "graph-viewport", viewport }),
       unfoldNode: (nodeId) => this.#dispatch({ type: "graph-unfold", nodeId }),
+      setDetailTab: (tab) => this.#dispatch({ type: "detail-tab", tab }),
       toggleRecord: (recordKey) => this.#dispatch({ type: "record-disclosure", recordKey }),
       focusRecord: (recordId) => {
         this.#dispatch({ type: "focus-record", recordId });

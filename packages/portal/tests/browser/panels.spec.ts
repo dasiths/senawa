@@ -46,7 +46,7 @@ test("narrates one submitted command from submission through its receipt", async
 test("marks an unanswered question overdue, titles the tab, and clears both", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   const banner = page.locator(".question-attention");
-  await expect(banner).toHaveAttribute("role", "alert");
+  await expect(banner).toHaveClass(/need-row/u);
   await expect(banner).toContainText("Choose the exact deployment target");
   await expect(banner.locator(".question-attention-elapsed")).toHaveText(/^Waiting \d+s$/u);
   await expect(banner.locator(".question-attention-overdue")).toBeHidden();
@@ -87,7 +87,10 @@ test("restores an in-progress answer draft across a reload and clears it per que
 
   await page.goto(`${new URL(page.url()).origin}/portal/${portalHash(runs.journey, "workflow")}`);
   await expect(page.getByText("read-write", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Workflow", level: 1 })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Workflow", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await openQuestion(page);
   await expect(page.getByRole("dialog").getByLabel("Answer")).toHaveValue(
     "staging, with a bounded rationale",
@@ -119,31 +122,21 @@ test("restores an in-progress answer draft across a reload and clears it per que
   expect(diagnostics.severe()).toEqual([]);
 });
 
-test("resizes, collapses, and persists both rails from the keyboard", async ({
+// Four fixed destinations do not need a resizable rail, so navigation moved to
+// tabs across the top and the left rail went with it. What the right rail holds
+// grows with the run, so it keeps its handle.
+test("resizes, collapses, and persists the attention rail from the keyboard", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "Rails render in the desktop layout");
   const diagnostics = await bootstrapPortal(page, runs.journey);
   const body = page.locator(".portal-body");
-  const left = page.locator("#rail-handle-left");
   const right = page.locator("#rail-handle-right");
-  await expect(left).toHaveAttribute("aria-valuemin", "192");
-  await expect(left).toHaveAttribute("aria-valuemax", "576");
-  await expect(left).toHaveAttribute("aria-valuenow", "224");
-  await expect(left).toHaveAttribute("aria-orientation", "vertical");
-  expect(Math.round((await page.locator(".primary-nav").boundingBox())?.width ?? 0)).toBe(224);
-
-  await left.focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(left).toHaveAttribute("aria-valuenow", "256");
-  await expect(body).toHaveAttribute("data-rail-left", "256");
-  expect(Math.round((await page.locator(".primary-nav").boundingBox())?.width ?? 0)).toBe(256);
-  await page.keyboard.press("End");
-  await expect(left).toHaveAttribute("aria-valuenow", "576");
-  await page.keyboard.press("Home");
-  await expect(left).toHaveAttribute("aria-valuenow", "192");
-  await page.keyboard.press("ArrowRight");
-  await expect(left).toHaveAttribute("aria-valuenow", "224");
+  await expect(page.locator("#rail-handle-left")).toHaveCount(0);
+  await expect(right).toHaveAttribute("aria-valuemin", "192");
+  await expect(right).toHaveAttribute("aria-valuemax", "576");
+  await expect(right).toHaveAttribute("aria-valuenow", "320");
+  await expect(right).toHaveAttribute("aria-orientation", "vertical");
 
   await right.focus();
   await page.keyboard.press("ArrowLeft");
@@ -156,32 +149,30 @@ test("resizes, collapses, and persists both rails from the keyboard", async ({
     rightCollapsed: false,
   });
 
-  const collapse = page.locator("#rail-collapse-left");
+  const collapse = page.locator("#rail-collapse-right");
   await expect(collapse).toHaveAttribute("aria-expanded", "true");
   await collapse.click();
-  await expect(body).toHaveAttribute("data-rail-left", "collapsed");
-  await expect(page.locator("#rail-collapse-left")).toHaveAttribute("aria-expanded", "false");
-  expect(Math.round((await page.locator(".primary-nav").boundingBox())?.width ?? 0)).toBe(44);
-  await expect(page.getByRole("tab", { name: "Record", exact: true })).toBeHidden();
+  await expect(body).toHaveAttribute("data-rail-right", "collapsed");
+  await expect(page.locator("#rail-collapse-right")).toHaveAttribute("aria-expanded", "false");
   await assertDocumentFits(page);
 
   await page.goto(`${new URL(page.url()).origin}/portal/${portalHash(runs.journey, "record")}`);
-  await expect(page.locator(".portal-body")).toHaveAttribute("data-rail-left", "collapsed");
+  await expect(page.locator(".portal-body")).toHaveAttribute("data-rail-right", "collapsed");
+  await page.locator("#rail-collapse-right").click();
   await expect(page.locator(".portal-body")).toHaveAttribute("data-rail-right", "352");
-  await page.locator("#rail-collapse-left").click();
-  await expect(page.locator(".portal-body")).toHaveAttribute("data-rail-left", "224");
+
+  // Navigation is always reachable now, because it is not in a rail that folds.
   await expect(page.getByRole("tab", { name: "Record", exact: true })).toBeVisible();
 
-  const grip = await page.locator("#rail-handle-left").boundingBox();
+  const grip = await page.locator("#rail-handle-right").boundingBox();
   const gripX = (grip?.x ?? 0) + (grip?.width ?? 0) / 2;
   const gripY = (grip?.y ?? 0) + 40;
   await page.mouse.move(gripX, gripY);
   await page.mouse.down();
-  await page.mouse.move(gripX + 100, gripY, { steps: 5 });
+  await page.mouse.move(gripX - 100, gripY, { steps: 5 });
   await page.mouse.up();
-  await expect(page.locator(".portal-body")).toHaveAttribute("data-rail-left", "320");
-  await expect(page.locator("#rail-handle-left")).toHaveAttribute("aria-valuenow", "320");
-  expect((await railLayout(page))?.left).toBe(320);
+  await expect(page.locator("#rail-handle-right")).toHaveAttribute("aria-valuenow", "448");
+  expect((await railLayout(page))?.right).toBe(448);
   expect(diagnostics.severe()).toEqual([]);
 });
 
@@ -191,7 +182,7 @@ test("offers one node toolbar tab stop with arrow movement and bounded actions",
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
   await page.getByRole("tab", { name: "Graph", exact: true }).click();
-  await page.getByRole("button", { name: /^task verify,/u }).click();
+  await page.locator('.gnode[data-node="task_verify"]').click();
 
   const toolbar = page.getByRole("toolbar", { name: "Selected node actions" });
   const buttons = toolbar.getByRole("button");
@@ -227,13 +218,19 @@ test("offers one node toolbar tab stop with arrow movement and bounded actions",
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("task_verify");
 
   await page.getByRole("tab", { name: "Tree", exact: true }).click();
-  await expect(page.locator(".diagram-canvas")).toHaveCount(0);
+  await expect(page.locator(".graph-flow")).toHaveCount(0);
   await expect(toolbar).toHaveCount(1);
   await buttons.nth(1).click();
-  await expect(page.locator(".diagram-canvas")).toHaveCount(1);
+  await expect(page.locator(".graph-flow")).toHaveCount(1);
   await expect.poll(() => selectedNode(page)).toBe("task_verify");
 
-  await page.getByRole("button", { name: /^phase delivery,/u }).press("Enter");
+  await page.getByRole("tab", { name: "Tree", exact: true }).click();
+  // A row's own line, not its box: a phase's box is mostly its children.
+  await page
+    .locator(".workflow-node.kind-phase > .node")
+    .filter({ hasText: "delivery" })
+    .first()
+    .click();
   await expect(page.getByRole("toolbar", { name: "Selected node actions" })).toHaveCount(1);
   await expect(
     page.getByRole("toolbar").getByRole("button", { name: "Review linked human need" }),
@@ -286,8 +283,11 @@ async function openQuestion(page: Page): Promise<void> {
   if ((await onNode.count()) > 0) {
     await onNode.click();
   } else {
+    // The rail is closed on a narrow viewport, so it has to be opened first.
+    await page.getByRole("button", { name: /waiting on you/u }).click();
     const need = page.locator(".need-row").filter({ hasText: "question" }).first();
-    await need.getByRole("button", { name: "Review exact record" }).click();
+    // The control is named for the decision now, not for the machinery.
+    await need.getByRole("button").first().click();
   }
   await expect(page.getByRole("dialog").getByLabel("Answer")).toBeEnabled();
 }
@@ -314,8 +314,11 @@ function focusDescriptor(page: Page): Promise<string> {
   });
 }
 
+/** The graph marks its selection on the card, so the DOM is the source. */
 function selectedNode(page: Page): Promise<string> {
-  return page.evaluate(() => window.__senawaGraphDiagram?.selectedNodeId ?? "");
+  return page.evaluate(
+    () => document.querySelector(".gnode[aria-current='true']")?.getAttribute("data-node") ?? "",
+  );
 }
 
 function railLayout(page: Page) {
@@ -348,12 +351,12 @@ test("shows who is working, on what, and on which model", async ({ page }) => {
   const entries = roster.locator(".agent-entry");
   await expect(entries).not.toHaveCount(0);
   const first = entries.first();
-  await expect(first.locator(".agent-persona")).not.toBeEmpty();
+  await expect(first.locator(".node-name")).not.toBeEmpty();
   // This fixture runs deterministic writers and chooses no model, so the model
   // is absent rather than reading `unknown`. A run that picks one is covered
   // where the picking happens.
-  await expect(first.locator(".agent-model")).toHaveCount(0);
-  await expect(first.locator(".agent-attempt")).not.toHaveCount(0);
+  await expect(first.locator(".model")).toHaveCount(0);
+  await expect(first.locator(".state")).not.toBeEmpty();
   // A digest identifies a row to a machine and nothing to a person, so none may
   // be read here. The identity it stands for is kept for hovering.
   const shown = await roster.allTextContents();
@@ -376,7 +379,7 @@ test("offers the action for a need on the node the need is about", async ({ page
   await expect(action).toBeVisible();
   const owner = tree.locator(".workflow-node", { has: page.locator(".workflow-need") }).first();
   // The action sits inside the row it belongs to, not in a list beside it.
-  await expect(owner.locator("> .workflow-line > .workflow-title")).not.toHaveText("");
+  await expect(owner.locator("> .node > .node-name")).not.toHaveText("");
 
   await action.click();
   await expect(page.getByRole("dialog")).toBeVisible();
@@ -391,9 +394,9 @@ test("offers the action for a need on the node the need is about", async ({ page
 test("names and offers a node's need from the graph, not only a count", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
-  await expect(page.locator(".diagram-canvas")).toHaveCount(1);
+  await expect(page.locator(".graph-flow")).toHaveCount(1);
 
-  await page.locator('[data-node-id="task_verify"]').click();
+  await page.locator('[data-node="task_verify"]').click();
   const toolbar = page.getByRole("toolbar", { name: "Selected node actions" });
   await expect(toolbar).toHaveCount(1);
   // Named for the decision, so the graph reads without opening the need first.
@@ -433,7 +436,7 @@ test("says where a task's work is happening inside the task", async ({ page }) =
   const tree = page.getByRole("tree");
   await expect(tree).toBeVisible();
 
-  const where = tree.locator(".workflow-workspace").first();
+  const where = tree.locator(".workspace").first();
   await expect(where).toBeVisible();
   await expect(where.locator(".workspace-mode")).not.toBeEmpty();
   await expect(where.locator(".workspace-state")).not.toBeEmpty();
@@ -450,9 +453,10 @@ test("names who is on a piece of work inside the work itself", async ({ page }) 
   const tree = page.getByRole("tree");
   await expect(tree).toBeVisible();
 
-  const working = tree.locator(".workflow-agent").first();
+  // Who is on it, and how the work itself is going, read as one line.
+  const working = tree.locator(".node", { has: page.locator(".who") }).first();
   await expect(working).toBeVisible();
-  await expect(working.locator(".agent-persona")).not.toBeEmpty();
-  await expect(working.locator(".agent-state")).not.toBeEmpty();
+  await expect(working.locator(".who-persona")).not.toBeEmpty();
+  await expect(working.locator(".state")).not.toBeEmpty();
   expect(diagnostics.severe()).toEqual([]);
 });

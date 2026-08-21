@@ -168,7 +168,10 @@ function seedTranscripts(options: AuthorityOptions, journeyDispatchId: string): 
   const append = (
     runId: string,
     owner: { readonly kind: "dispatch" | "task" | "phase"; readonly id: string },
-    lines: readonly { readonly stream: "stdout" | "stderr" | "system"; readonly text: string }[],
+    lines: readonly {
+      readonly stream: "stdout" | "stderr" | "system" | "assistant";
+      readonly text: string;
+    }[],
   ) => {
     for (const [index, line] of lines.entries()) {
       broker.appendTranscript({
@@ -186,6 +189,10 @@ function seedTranscripts(options: AuthorityOptions, journeyDispatchId: string): 
   // writer and the portal can agree on because no workspace row ever exists.
   append(RUNS.journey, { kind: "dispatch", id: journeyDispatchId }, [
     { stream: "system", text: "session started" },
+    {
+      stream: "assistant",
+      text: "Reading the plan item <script>blocked()</script> before I write anything",
+    },
     { stream: "stdout", text: "hostile line <script>blocked()</script></div> stays inert" },
     { stream: "stderr", text: "tool call refused: capability worker.write is absent" },
     ...Array.from({ length: 140 }, (_, index) => ({

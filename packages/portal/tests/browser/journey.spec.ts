@@ -242,7 +242,10 @@ test("publishes only the selected run when authority loads overlap", async ({ br
   await expect(page.locator(".nav-facts dd").first()).toHaveText("running");
   await expect(page.getByRole("region", { name: "Portal status" })).toContainText("Data current");
   await expect(page.getByRole("region", { name: "Portal status" })).toContainText("2 human needs");
-  await expect(page.getByRole("heading", { name: "Workflow", level: 1 })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Workflow", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await page.getByRole("tab", { name: "Tree", exact: true }).click();
   await expect(page.locator(".workflow-tree .tree-item")).not.toHaveCount(0);
   expect(await visibleCursor(page)).toBeLessThan(999_999);
@@ -413,7 +416,8 @@ test("reviews pause, resume, and permanent end, then exposes ending and ended mo
 async function reviewNeed(page: Page, kind: string): Promise<void> {
   const need = page.locator(".need-row").filter({ hasText: kind }).first();
   await expect(need).toBeVisible();
-  await need.getByRole("button", { name: "Review exact record" }).click();
+  // The control is named for the decision now, not for the machinery.
+  await need.getByRole("button").first().click();
   await expect(page.getByRole("dialog")).toBeVisible();
 }
 

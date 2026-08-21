@@ -29,7 +29,7 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
     });
     await expect(rail).toHaveAttribute("aria-hidden", "true");
     expect(await rail.evaluate((element) => element.inert)).toBe(true);
-    await page.getByRole("button", { name: /Needs/u }).click();
+    await page.getByRole("button", { name: /waiting on you/u }).click();
     await expect(rail).not.toHaveAttribute("aria-hidden", "true");
     expect(await rail.evaluate((element) => element.inert)).toBe(false);
     await rail.getByRole("button", { name: "Close" }).click();
@@ -132,10 +132,14 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
   const mobile = testInfo.project.name === "mobile-chromium";
   const diagnostics = await bootstrapPortal(page, runs.journey);
 
-  const overviewTab = page.getByRole("tab", { name: "Record", exact: true });
+  // Workflow leads the tabs, so the tab to its right is the one to arrow from.
+  const overviewTab = page.getByRole("tab", { name: "Agents", exact: true });
   await overviewTab.focus();
   await page.keyboard.press("ArrowLeft");
-  await expect(page.getByRole("heading", { name: "Workflow", level: 1 })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Workflow", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await expect(page.getByRole("tab", { name: "Workflow", exact: true })).toBeFocused();
   await page.getByRole("tab", { name: "Tree", exact: true }).click();
   const filter = page.getByRole("searchbox", { name: "Filter the workflow" });
@@ -144,6 +148,8 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
   await row.focus();
   await page.keyboard.press("Enter");
   const detail = page.locator(".detail-panel");
+  // What a piece of work is sits under About; what it is doing leads.
+  await detail.getByRole("tab", { name: "About", exact: true }).click();
   await expect(detail).toContainText("<script>blocked()</script>");
   await expect(detail).toContainText("prefix shown");
   await expect(detail.locator("script, style, svg, a, iframe, object, embed")).toHaveCount(0);
@@ -224,7 +230,10 @@ test("serves strict static assets, hash reloads, and remains usable at 200 perce
   expect(new Set(resources)).toEqual(new Set([origin]));
 
   await page.goto(`${origin}/portal/${portalHash(runs.journey, "artifacts")}`);
-  await expect(page.getByRole("heading", { name: "Artifacts", level: 1 })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Artifacts", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await page.reload();
   await expect(page.getByRole("heading", { name: "Artifacts", level: 1 })).toBeVisible();
 
