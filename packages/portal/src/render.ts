@@ -13,7 +13,7 @@ import { allowanceResult, allowanceReviewFromSource } from "./allowance-review.j
 import { type BoundedJsonNode, boundedJsonModel } from "./bounded-json.js";
 import { narrationBusy, narrationText } from "./command-narrator.js";
 import { focusGraphViewport, graphDiagramView } from "./graph-diagram.js";
-import { executionOrdered, graphLayout } from "./graph-layout.js";
+import { executionOrdered, foldFinishedPhases, graphLayout } from "./graph-layout.js";
 import { type NodeToolbarAction, nodeToolbarView } from "./node-toolbar.js";
 import {
   attentionTitle,
@@ -69,6 +69,7 @@ export interface PortalRenderActions {
   readonly setFilter: (value: string) => void;
   readonly setGraphMode: (mode: GraphMode) => void;
   readonly setGraphViewport: (viewport: PortalGraphViewport) => void;
+  readonly unfoldNode: (nodeId: string) => void;
   readonly focusRecord: (recordId: string) => void;
   readonly openNeed: (need: PortalHumanNeed, triggerId: string) => void;
   readonly openRunControl: (kind: "pause" | "resume" | "end", triggerId: string) => void;
@@ -705,10 +706,11 @@ function graphBody(
   filtered: readonly PortalGraphNode[],
 ): HTMLElement {
   switch (state.ui.graphMode) {
-    case "diagram":
+    case "diagram": {
+      const folded = foldFinishedPhases(nodes, edges, state.ui.unfoldedNodes);
       return graphDiagramView({
-        nodes,
-        edges,
+        nodes: folded.nodes,
+        edges: folded.edges,
         selectedNodeId: state.ui.focusedRecord,
         viewport: state.ui.graphViewport,
         actions: {
@@ -716,6 +718,7 @@ function graphBody(
           setViewport: (viewport) => actions.setGraphViewport(viewport),
         },
       });
+    }
     case "tree":
       return workflowTree(executionOrdered(filtered, edges), state, actions);
   }
@@ -934,6 +937,7 @@ function nodeActions(
         candidate.definitionGeneration === node.definitionGeneration),
   );
   const reviewId = `node-review-${safeDomId(node.nodeId)}`;
+  const unfolded = state.ui.unfoldedNodes.includes(node.nodeId);
   return Object.freeze([
     Object.freeze({
       key: "copy",
@@ -953,6 +957,14 @@ function nodeActions(
           focusGraphViewport(graphLayout(nodes, edges), viewport, node.nodeId),
         );
       },
+    }),
+    Object.freeze({
+      key: "fold",
+      // A phase folds itself once its work is done. This is only how a reader
+      // disagrees, and the disagreement outlives the next poll.
+      label: unfolded ? "Fold this phase" : "Unfold this phase",
+      disabled: node.kind !== "phase",
+      run: () => actions.unfoldNode(node.nodeId),
     }),
     Object.freeze({
       key: "review",

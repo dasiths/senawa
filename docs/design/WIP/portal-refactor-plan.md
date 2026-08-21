@@ -55,8 +55,8 @@ both into one:
 
 * [x] A decision lives in `PortalUiState`, and rendering reads it
 * [x] Selection survives a poll and a mode change, because it already did
-* [ ] Fold state joins the decisions rather than becoming a fifth capture pair
-* [ ] DOM-owned measurements stay captured, and are named as such
+* [x] Fold state joins the decisions rather than becoming a fifth capture pair
+* [x] DOM-owned measurements stay captured, and are named as such
 
 ## Phase 3: the workflow reads as a graph
 
@@ -72,9 +72,9 @@ browser tests.
 * [x] `Workflow` carries `Graph` and `Tree` over one selection, graph first
 * [x] A carried edge is distinguishable from one not yet carried
 * [x] The graph carries a need's action, not only its count
+* [x] A phase folds when its last member lands, and unfolds while work remains
+* [x] An edge whose endpoint is folded away attaches to the group instead
 * [ ] An artifact renders on the edge leaving the node that produced it
-* [ ] A phase folds when its last member lands, and unfolds while work remains
-* [ ] An edge whose endpoint is folded away attaches to the group instead
 
 ## Phase 4: tables that load their detail on click
 
@@ -184,3 +184,25 @@ owned a need with `candidate.taskId === node.nodeId`, while the tree used
 need was counted by a badge the controls beside it refused to act on, and the two
 readings of the same workflow disagreed about who was blocked. Both now use
 `needBlocks`.
+
+### Phase 3, folding
+
+The fold is a transformation applied to the graph before layout rather than a
+change to the layout itself, which kept `graphLayout` untouched and
+deterministic. `foldFinishedPhases` drops the members of a phase whose work is
+done and reattaches their edges to the phase that swallowed them, deduplicating
+the lines that then coincide. Nothing about a fold is stored.
+
+What is stored is disagreement. `unfoldedNodes` records only the phases a reader
+opened by hand, which is the one part that has to outlive a poll, and it lives in
+`PortalUiState` beside the other decisions rather than becoming a fifth capture
+pair around the DOM replacement. That settles the Phase 2 question in practice:
+decisions go in state, measurements stay captured.
+
+Both halves of the rule were proven by breaking them. Removing the guard that
+keeps a phase open while it carries a need fails the test that says so; removing
+the edge deduplication fails the test that says four members feeding one
+successor become one line.
+
+The fold control sits after `Focus in graph` and is disabled on anything that is
+not a phase, because folding is a decision about a group.

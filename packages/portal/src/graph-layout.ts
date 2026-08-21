@@ -78,6 +78,90 @@ interface Extent {
   readonly height: number;
 }
 
+export interface FoldedGraph {
+  readonly nodes: readonly PortalGraphNode[];
+  readonly edges: readonly PortalGraphEdge[];
+  readonly foldedNodeIds: readonly string[];
+}
+
+/**
+ * A phase is open while anything in it is still running, and folds itself once
+ * the last member lands. Nothing is stored: the fold is a function of run state,
+ * so it follows the work without being told to. A phase carrying something a
+ * person has to decide stays open whatever else is true, because moving a need
+ * onto the node that raised it achieves nothing if that node is folded shut.
+ *
+ * Folding hides detail and never deletes structure: an edge whose endpoint is
+ * folded away reattaches to the phase that swallowed it.
+ */
+export function foldFinishedPhases(
+  nodes: readonly PortalGraphNode[],
+  edges: readonly PortalGraphEdge[],
+  unfolded: readonly string[] = [],
+): FoldedGraph {
+  const open = new Set(unfolded);
+  const childrenOf = new Map<string, PortalGraphNode[]>();
+  for (const node of nodes) {
+    if (node.parentNodeId === undefined) continue;
+    const siblings = childrenOf.get(node.parentNodeId);
+    if (siblings === undefined) childrenOf.set(node.parentNodeId, [node]);
+    else siblings.push(node);
+  }
+
+  const swallowedBy = new Map<string, string>();
+  const folded: string[] = [];
+  for (const node of nodes) {
+    if (node.kind !== "phase" || open.has(node.nodeId)) continue;
+    const members = childrenOf.get(node.nodeId) ?? [];
+    const finished =
+      members.length > 0 &&
+      members.every((member) => member.runState === "accepted" && member.humanNeedCount === 0);
+    if (!finished || node.humanNeedCount > 0) continue;
+    folded.push(node.nodeId);
+    for (const member of descendants(node.nodeId, childrenOf)) {
+      swallowedBy.set(member, node.nodeId);
+    }
+  }
+
+  const anchor = (nodeId: string): string => swallowedBy.get(nodeId) ?? nodeId;
+  const seen = new Set<string>();
+  const keptEdges: PortalGraphEdge[] = [];
+  for (const edge of edges) {
+    const from = anchor(edge.fromNodeId);
+    const to = anchor(edge.toNodeId);
+    if (from === to) continue;
+    const key = `${from}\u0000${to}\u0000${edge.kind}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    keptEdges.push(
+      from === edge.fromNodeId && to === edge.toNodeId
+        ? edge
+        : { ...edge, fromNodeId: from, toNodeId: to },
+    );
+  }
+
+  return Object.freeze({
+    nodes: Object.freeze(nodes.filter((node) => !swallowedBy.has(node.nodeId))),
+    edges: Object.freeze(keptEdges),
+    foldedNodeIds: Object.freeze(folded),
+  });
+}
+
+function descendants(
+  rootId: string,
+  childrenOf: ReadonlyMap<string, readonly PortalGraphNode[]>,
+): readonly string[] {
+  const collected: string[] = [];
+  const pending = [...(childrenOf.get(rootId) ?? [])];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (node === undefined) continue;
+    collected.push(node.nodeId);
+    pending.push(...(childrenOf.get(node.nodeId) ?? []));
+  }
+  return collected;
+}
+
 /**
  * Deterministic layered layout. The same records always produce the same
  * coordinates regardless of the order they arrive in.

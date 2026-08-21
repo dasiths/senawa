@@ -1,6 +1,11 @@
 import type { PortalGraphEdge, PortalGraphNode, PortalGraphNodeRunState } from "@senawa/protocol";
 import { describe, expect, it } from "vitest";
-import { executionOrdered, type GraphLayout, graphLayout } from "./graph-layout.js";
+import {
+  executionOrdered,
+  foldFinishedPhases,
+  type GraphLayout,
+  graphLayout,
+} from "./graph-layout.js";
 
 describe("execution ordering", () => {
   it("orders prerequisites before the nodes that depend on them", () => {
@@ -204,6 +209,78 @@ function polylines(layout: GraphLayout): readonly string[] {
 
 function rotate<Value>(values: readonly Value[], offset: number): readonly Value[] {
   return [...values.slice(offset), ...values.slice(0, offset)];
+}
+
+describe("folding a phase whose work is done", () => {
+  it("folds a phase once its last member lands, and keeps one with work left open", () => {
+    const graph = foldFinishedPhases(
+      [
+        phase("phase_research"),
+        member("phase_research", "task_read", "accepted"),
+        phase("phase_implement"),
+        member("phase_implement", "task_rules", "accepted"),
+        member("phase_implement", "task_cli", "running"),
+      ],
+      [],
+    );
+
+    expect(graph.foldedNodeIds).toEqual(["phase_research"]);
+    expect(graph.nodes.map(({ nodeId }) => nodeId)).toEqual([
+      "phase_research",
+      "phase_implement",
+      "task_rules",
+      "task_cli",
+    ]);
+  });
+
+  it("keeps a finished phase open while it carries something a person must decide", () => {
+    const waiting = { ...member("phase_research", "task_read", "accepted"), humanNeedCount: 1 };
+    expect(foldFinishedPhases([phase("phase_research"), waiting], []).foldedNodeIds).toEqual([]);
+
+    const blocked = { ...phase("phase_research"), humanNeedCount: 1 };
+    const done = member("phase_research", "task_read", "accepted");
+    expect(foldFinishedPhases([blocked, done], []).foldedNodeIds).toEqual([]);
+  });
+
+  it("reattaches an edge whose endpoint folded away, and collapses the duplicates", () => {
+    const graph = foldFinishedPhases(
+      [
+        phase("phase_research"),
+        member("phase_research", "task_read", "accepted"),
+        member("phase_research", "task_check", "accepted"),
+        task("task_plan"),
+      ],
+      [
+        dependency("edge_1", "task_read", "task_plan"),
+        dependency("edge_2", "task_check", "task_plan"),
+        containment("edge_3", "phase_research", "task_read"),
+      ],
+    );
+
+    // Two members feeding the same successor become one line from the phase that
+    // swallowed them, and the containment edge inside it disappears with them.
+    expect(graph.edges).toEqual([
+      { edgeId: "edge_1", fromNodeId: "task_plan", toNodeId: "phase_research", kind: "dependency" },
+    ]);
+  });
+
+  it("obeys a reader who opened a folded phase by hand", () => {
+    const nodes = [phase("phase_research"), member("phase_research", "task_read", "accepted")];
+    expect(foldFinishedPhases(nodes, [], ["phase_research"]).foldedNodeIds).toEqual([]);
+    expect(foldFinishedPhases(nodes, [], ["phase_research"]).nodes).toHaveLength(2);
+  });
+
+  it("leaves a phase with no members alone, having nothing to fold", () => {
+    expect(foldFinishedPhases([phase("phase_empty")], []).foldedNodeIds).toEqual([]);
+  });
+});
+
+function member(
+  parentNodeId: string,
+  nodeId: string,
+  runState: PortalGraphNodeRunState,
+): PortalGraphNode {
+  return { ...task(nodeId, runState), parentNodeId };
 }
 
 function task(nodeId: string, runState: PortalGraphNodeRunState = "not-started"): PortalGraphNode {

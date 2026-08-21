@@ -153,6 +153,11 @@ export interface PortalUiState {
   readonly focusedRecord: string | undefined;
   readonly rightRailOpen: boolean;
   readonly graphMode: GraphMode;
+  /**
+   * Phases a reader opened by hand. A phase folds itself once its work is done,
+   * so this records only the decision to disagree, which must outlive a poll.
+   */
+  readonly unfoldedNodes: readonly string[];
   readonly graphViewport: PortalGraphViewport;
   readonly transcript: TranscriptView;
   readonly transcriptScope: TranscriptScope;
@@ -216,6 +221,7 @@ export type PortalAction =
   | { readonly type: "focus-record"; readonly recordId?: string }
   | { readonly type: "right-rail"; readonly open: boolean }
   | { readonly type: "graph-mode"; readonly mode: GraphMode }
+  | { readonly type: "graph-unfold"; readonly nodeId: string }
   | { readonly type: "graph-viewport"; readonly viewport: PortalGraphViewport }
   | { readonly type: "transcript-owner"; readonly owner: PortalTranscriptOwner | undefined }
   | { readonly type: "transcript-page"; readonly page: PortalTranscriptPage }
@@ -265,6 +271,7 @@ export function initialPortalState(route: PortalRoute): PortalState {
       focusedRecord: undefined,
       rightRailOpen: false,
       graphMode: "diagram",
+      unfoldedNodes: Object.freeze([]),
       graphViewport: INITIAL_GRAPH_VIEWPORT,
       transcript: emptyTranscriptView(),
       transcriptScope: "node",
@@ -474,6 +481,13 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
           graphViewport: INITIAL_GRAPH_VIEWPORT,
         }),
       });
+    case "graph-unfold": {
+      const open = new Set(state.ui.unfoldedNodes);
+      if (!open.delete(action.nodeId)) open.add(action.nodeId);
+      return next(state, {
+        ui: Object.freeze({ ...state.ui, unfoldedNodes: Object.freeze([...open].sort()) }),
+      });
+    }
     case "graph-viewport":
       return next(state, { ui: Object.freeze({ ...state.ui, graphViewport: action.viewport }) });
     case "transcript-owner":

@@ -195,10 +195,12 @@ test("offers one node toolbar tab stop with arrow movement and bounded actions",
 
   const toolbar = page.getByRole("toolbar", { name: "Selected node actions" });
   const buttons = toolbar.getByRole("button");
-  await expect(buttons).toHaveCount(3);
+  await expect(buttons).toHaveCount(4);
   await expect(toolbar.locator('button[tabindex="0"]')).toHaveCount(1);
   await expect(buttons.nth(0)).toHaveText("Copy identity");
-  await expect(buttons.nth(2)).toBeEnabled();
+  await expect(buttons.nth(3)).toBeEnabled();
+  // Folding is a decision about a phase, so a task cannot make it.
+  await expect(buttons.nth(2)).toBeDisabled();
 
   await buttons.nth(0).focus();
   await page.keyboard.press("ArrowRight");
@@ -206,7 +208,7 @@ test("offers one node toolbar tab stop with arrow movement and bounded actions",
   await expect(toolbar.locator('button[tabindex="0"]')).toHaveCount(1);
   await expect(buttons.nth(1)).toHaveAttribute("tabindex", "0");
   await page.keyboard.press("End");
-  await expect(buttons.nth(2)).toBeFocused();
+  await expect(buttons.nth(3)).toBeFocused();
   await page.keyboard.press("ArrowRight");
   await expect(buttons.nth(0)).toBeFocused();
   await page.keyboard.press("Home");
