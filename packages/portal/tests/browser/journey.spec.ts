@@ -25,7 +25,7 @@ test("reconnects from the last cursor, deduplicates replay, and resynchronizes a
   await expect.poll(() => visibleCursor(page)).toBeGreaterThan(before);
   await page.getByRole("button", { name: "Resume" }).click();
   await page.getByRole("button", { name: "Confirm resume" }).click();
-  await expect(page.getByText("Run running", { exact: true })).toBeVisible();
+  await expect(page.locator(".run-head .state", { hasText: /^running$/u })).toBeVisible();
   const event = await latestEvent(page, runs.journey);
 
   const simulated = await simulatedEventPortal(browser);
@@ -126,22 +126,24 @@ test("reloads authority after an event races the final overview read", async ({ 
   await navigate(controller.page, "Record");
   await controller.page.getByRole("button", { name: "Pause" }).click();
   await controller.page.getByRole("button", { name: "Confirm pause" }).click();
-  await expect(controller.page.getByText("Run paused", { exact: true })).toBeVisible();
+  await expect(controller.page.locator(".run-head .state", { hasText: /^paused$/u })).toBeVisible();
   const pauseEvent = await latestEvent(controller.page, runs.workspace);
   await page.evaluate((frame) => {
     window.__senawaEventSources?.at(-1)?.emit("message", JSON.stringify(frame));
   }, pauseEvent);
   releaseStaleOverview?.();
-  await expect(page.getByText("Run paused", { exact: true })).toBeVisible();
+  await expect(page.locator(".run-head .state", { hasText: /^paused$/u })).toBeVisible();
 
   await controller.page.getByRole("button", { name: "Resume" }).click();
   await controller.page.getByRole("button", { name: "Confirm resume" }).click();
-  await expect(controller.page.getByText("Run running", { exact: true })).toBeVisible();
+  await expect(
+    controller.page.locator(".run-head .state", { hasText: /^running$/u }),
+  ).toBeVisible();
   const resumeEvent = await latestEvent(controller.page, runs.workspace);
   await page.evaluate((frame) => {
     window.__senawaEventSources?.at(-1)?.emit("message", JSON.stringify(frame));
   }, resumeEvent);
-  await expect(page.getByText("Run running", { exact: true })).toBeVisible();
+  await expect(page.locator(".run-head .state", { hasText: /^running$/u })).toBeVisible();
   expect(diagnostics.severe()).toEqual([]);
   await page.unroute("**/overview");
   await controller.context.close();
@@ -376,7 +378,7 @@ test("reviews pause, resume, and permanent end, then exposes ending and ended mo
   const main = await simulatedEventPortal(browser, runs.workspace);
   const { page, diagnostics } = main;
   await navigate(page, "Record");
-  await expect(page.getByText("Run running", { exact: true })).toBeVisible();
+  await expect(page.locator(".run-head .state", { hasText: /^running$/u })).toBeVisible();
 
   await page.getByRole("button", { name: "Pause" }).click();
   const stalePause = page.getByRole("dialog");
@@ -385,7 +387,7 @@ test("reviews pause, resume, and permanent end, then exposes ending and ended mo
   await navigate(controller.page, "Record");
   await controller.page.getByRole("button", { name: "Pause" }).click();
   await controller.page.getByRole("button", { name: "Confirm pause" }).click();
-  await expect(controller.page.getByText("Run paused", { exact: true })).toBeVisible();
+  await expect(controller.page.locator(".run-head .state", { hasText: /^paused$/u })).toBeVisible();
   const pauseEvent = await latestEvent(controller.page, runs.workspace);
   await page.evaluate((frame) => {
     window.__senawaEventSources?.at(-1)?.emit("message", JSON.stringify(frame));
@@ -393,21 +395,21 @@ test("reviews pause, resume, and permanent end, then exposes ending and ended mo
   await expect(page.locator(".nav-facts dd").first()).toHaveText("paused");
   await stalePause.getByRole("button", { name: "Confirm pause" }).click();
   await expectPendingClear(page);
-  await expect(page.getByText("Run paused", { exact: true })).toBeVisible();
+  await expect(page.locator(".run-head .state", { hasText: /^paused$/u })).toBeVisible();
   await controller.context.close();
 
   await page.getByRole("button", { name: "Resume" }).click();
   const resumeDialog = page.getByRole("dialog");
   await expect(resumeDialog).toContainText("displayed run mode revision");
   await resumeDialog.getByRole("button", { name: "Confirm resume" }).click();
-  await expect(page.getByText("Run running", { exact: true })).toBeVisible();
+  await expect(page.locator(".run-head .state", { hasText: /^running$/u })).toBeVisible();
 
   await page.getByRole("button", { name: "End run" }).click();
   const endDialog = page.getByRole("dialog");
   await expect(endDialog).toContainText("fences current task scopes");
   await endDialog.getByRole("checkbox").check();
   await endDialog.getByRole("button", { name: "Confirm permanent end" }).click();
-  await expect(page.getByText("Run ended", { exact: true })).toBeVisible();
+  await expect(page.locator(".run-head .state", { hasText: /^ended$/u })).toBeVisible();
   await expect(page.locator(".run-controls button")).toHaveCount(0);
   expect(diagnostics.severe()).toEqual([]);
   await main.context.close();

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 const packageRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const sourceRoot = resolve(packageRoot, "src");
 const svgNamespace = ["ht", "tp://www.w3.org/2000/svg"].join("");
-const svgNamespaceFiles = ["graph-diagram.ts", "graph-flow.ts"];
+const svgNamespaceFiles = ["graph-diagram.ts", "graph-flow.ts", "marks.ts"];
 const forbidden = [
   "inner" + "HTML",
   "outer" + "HTML",

@@ -238,7 +238,7 @@ export class CopilotSerialWorkerAdapter {
         // fences its own task, which is what made its question unanswerable.
         status = "awaiting-answer";
       }
-    } catch (error) {
+    } catch {
       status = "crashed";
     } finally {
       scope.active = false;

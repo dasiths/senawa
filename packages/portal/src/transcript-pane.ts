@@ -71,7 +71,6 @@ function bar(
   names: TranscriptNames,
 ): HTMLElement {
   const header = element("div", "agent-terminal-bar");
-  header.append(textElement("h2", "compact-heading", "Agent output"));
   header.append(
     textElement(
       "span",
@@ -80,19 +79,18 @@ function bar(
     ),
   );
   const controls = element("div", "agent-terminal-controls");
-  const runWide = commandButton(
-    scope === "run" ? "Scope to selected node" : "Scope to whole run",
-    () => actions.setTranscriptScope(scope === "run" ? "node" : "run"),
+  const runWide = commandButton(scope === "run" ? "This agent" : "All agents", () =>
+    actions.setTranscriptScope(scope === "run" ? "node" : "run"),
   );
   runWide.className = "command agent-terminal-run-scope";
   runWide.setAttribute("aria-pressed", scope === "run" ? "true" : "false");
   controls.append(runWide);
-  const copy = commandButton("Copy output", () => {
+  const copy = commandButton("Copy", () => {
     const clipboard = navigator.clipboard as Clipboard | undefined;
     if (clipboard !== undefined) void clipboard.writeText(plainText).catch(() => undefined);
   });
   copy.disabled = lineCount === 0;
-  const download = commandButton("Download output", () => {
+  const download = commandButton("Download", () => {
     if (view.owner !== undefined) downloadText(plainText, transcriptDownloadName(view.owner));
   });
   download.disabled = lineCount === 0 || view.owner === undefined;
@@ -104,7 +102,7 @@ function bar(
     jump.className = "command agent-terminal-jump";
     controls.append(jump);
   }
-  controls.append(textElement("span", "agent-terminal-count", `${lineCount} retained lines`));
+  controls.append(textElement("span", "agent-terminal-count", `${lineCount} lines`));
   header.append(controls);
   return header;
 }

@@ -1,4 +1,5 @@
 import type { PortalGraphEdge, PortalGraphNode } from "@senawa/protocol";
+import { nodeMark, statePill, stateTone } from "./node-vocabulary.js";
 
 /**
  * The workflow read as a flow of phases rather than as a box-and-line drawing.
@@ -33,26 +34,6 @@ export interface GraphFlowOptions {
   readonly actions: GraphFlowActions;
 }
 
-const STATE_TONES: Readonly<Record<string, string>> = {
-  defined: "is-idle",
-  "not-started": "is-idle",
-  running: "is-working",
-  "awaiting-human": "is-waiting",
-  accepted: "is-closed",
-  failed: "is-failed",
-  superseded: "is-idle",
-};
-
-const STATE_LABELS: Readonly<Record<string, string>> = {
-  defined: "not started",
-  "not-started": "not started",
-  running: "working",
-  "awaiting-human": "waiting on you",
-  accepted: "done",
-  failed: "failed",
-  superseded: "superseded",
-};
-
 const SVG = "http://www.w3.org/2000/svg";
 
 function element(tag: string, className: string): HTMLElement {
@@ -65,14 +46,6 @@ function textElement(tag: string, className: string, text: string): HTMLElement 
   const node = element(tag, className);
   node.textContent = text;
   return node;
-}
-
-function statePill(lifecycle: string): HTMLElement {
-  return textElement(
-    "span",
-    `state ${STATE_TONES[lifecycle] ?? "is-waiting"}`,
-    STATE_LABELS[lifecycle] ?? lifecycle,
-  );
 }
 
 /** A phase stays open while anything in it is still running or asking. */
@@ -104,7 +77,7 @@ function memberCard(
 ): HTMLElement {
   const card = document.createElement("button");
   card.type = "button";
-  card.className = `gnode ${STATE_TONES[node.lifecycle] ?? "is-waiting"}`;
+  card.className = `gnode ${stateTone(node.lifecycle)}`;
   card.dataset.node = node.nodeId;
   card.dataset.focusKey = node.nodeId;
   if (selected) card.setAttribute("aria-current", "true");
@@ -157,7 +130,7 @@ export function graphFlowView(options: GraphFlowOptions): HTMLElement {
     band.open = phaseIsOpen(phase, members, unfolded);
     const summary = document.createElement("summary");
     summary.append(
-      textElement("span", "node-mark", "\u25c6"),
+      textElement("span", "node-mark", nodeMark("phase")),
       textElement("span", "band-name", phase.title),
       statePill(phase.lifecycle),
       textElement("span", "fold-sub", foldSummary(members)),

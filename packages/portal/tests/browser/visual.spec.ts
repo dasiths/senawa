@@ -67,14 +67,13 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
   await navigate(page, "Record");
-  await expect(page.getByRole("heading", { name: "Standard delivery authority" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What happened" })).toBeVisible();
   // Depth is one action away and absent until asked for, which is what
   // progressive disclosure has to mean to be worth anything.
-  await expect(page.getByText("Dataflow revision", { exact: true })).toBeHidden();
-  await page.getByText("Revisions", { exact: true }).click();
-  await expect(page.getByText("Dataflow revision", { exact: true })).toBeVisible();
-  await expect(page.getByText("Task frontier revision", { exact: true })).toBeVisible();
-  await expect(page.getByText("No phase delivery metadata has been recorded.")).toBeVisible();
+  await expect(page.getByText("Active effects", { exact: true })).toBeHidden();
+  await page.getByText("Effects and authority vector", { exact: true }).click();
+  await expect(page.getByText("Active effects", { exact: true })).toBeVisible();
+  await expect(page.getByText("Uncertain effects", { exact: true })).toBeVisible();
   await captureState(page, "delivery", mobile);
 
   // One entry per agent with its attempts under it, so the shape this view is
@@ -104,8 +103,12 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   );
   const advance = await fetch(`${controlOrigin}/advance-session`, { method: "POST" });
   expect(advance.ok).toBe(true);
+  // Noticing an expired session takes a request, so the route has to change.
+  await page.getByRole("tab", { name: "Workflow", exact: true }).click();
   await page.getByRole("tab", { name: "Record", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Session expired" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Session expired" })).toBeVisible({
+    timeout: 15_000,
+  });
   await expect(page.getByText(/Open a new portal bootstrap from the Senawa CLI/u)).toBeVisible();
   await expect(page.getByRole("region", { name: "Portal status" })).toContainText("Data loading");
   await expect(page.getByRole("region", { name: "Portal status" })).toContainText("0 human needs");
@@ -152,7 +155,11 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
   await detail.getByRole("tab", { name: "About", exact: true }).click();
   await expect(detail).toContainText("<script>blocked()</script>");
   await expect(detail).toContainText("prefix shown");
-  await expect(detail.locator("script, style, svg, a, iframe, object, embed")).toHaveCount(0);
+  // The only drawn things on this surface are the portal's own control marks.
+  await expect(detail.locator("script, style, a, iframe, object, embed")).toHaveCount(0);
+  expect(await detail.locator("svg").count()).toBe(
+    await detail.locator(".mark-button svg").count(),
+  );
   await filter.fill("");
   await page.getByRole("tab", { name: "Tree", exact: true }).click();
   const tree = page.getByRole("tree");
@@ -164,13 +171,12 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
 
   await navigate(page, "Artifacts");
   await expect(page.getByText("Verified bytes unavailable", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText("Active preview prohibited for this media type", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("No preview for this kind of file", { exact: true })).toBeVisible();
   const jsonArtifact = page.locator(".artifact-row").filter({ hasText: "asset_json" });
-  await jsonArtifact.getByRole("button", { name: "Preview bounded content" }).click();
-  await expect(jsonArtifact.getByText(/Display bounded at 500 nodes/u)).toBeVisible();
-  await expect(jsonArtifact.locator("script, style, svg, a, iframe, object, embed")).toHaveCount(0);
+  await jsonArtifact.click();
+  const jsonDetail = page.locator(".detail-row");
+  await expect(jsonDetail.getByText(/Display bounded at 500 nodes/u)).toBeVisible();
+  await expect(jsonDetail.locator("script, style, svg, a, iframe, object, embed")).toHaveCount(0);
   const activeArtifact = page.locator(".artifact-row").filter({ hasText: "asset_active" });
   await expect(activeArtifact.getByRole("button", { name: /Preview|Download/u })).toHaveCount(0);
 

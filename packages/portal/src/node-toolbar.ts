@@ -1,6 +1,9 @@
 export interface NodeToolbarAction {
   readonly key: string;
   readonly label: string;
+  /** A drawn mark used instead of the label, and what it means. */
+  readonly mark?: () => SVGSVGElement;
+  readonly name?: string;
   readonly disabled: boolean;
   readonly run: () => void;
 }
@@ -35,7 +38,13 @@ export function nodeToolbarView(input: NodeToolbarInput): HTMLElement {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "command toolbar-button";
-    button.textContent = action.label;
+    if (action.mark === undefined) button.textContent = action.label;
+    else button.append(action.mark());
+    if (action.name !== undefined) {
+      button.setAttribute("aria-label", action.name);
+      button.title = action.name;
+      button.classList.add("mark-button");
+    }
     button.disabled = action.disabled;
     button.tabIndex = -1;
     button.dataset.focusKey = `node-toolbar:${input.nodeId}:${action.key}`;

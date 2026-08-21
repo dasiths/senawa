@@ -39,7 +39,7 @@ test("narrates one submitted command from submission through its receipt", async
   await page.getByRole("button", { name: "Resume" }).click();
   await page.getByRole("button", { name: "Confirm resume" }).click();
   await expect(narrator).toHaveText("resume-run completed", { timeout: 15_000 });
-  await expect(page.getByText("Run running", { exact: true })).toBeVisible();
+  await expect(page.locator(".run-head .state", { hasText: /^running$/u })).toBeVisible();
   expect(diagnostics.severe()).toEqual([]);
 });
 
@@ -189,7 +189,8 @@ test("offers one node toolbar tab stop with arrow movement and bounded actions",
   // Copy, focus, fold, and one control per need this node is waiting on.
   await expect(buttons).toHaveCount(5);
   await expect(toolbar.locator('button[tabindex="0"]')).toHaveCount(1);
-  await expect(buttons.nth(0)).toHaveText("Copy identity");
+  // The three constant actions are marks; what they mean is their name.
+  await expect(buttons.nth(0)).toHaveAttribute("aria-label", "Copy identity");
   await expect(buttons.nth(3)).toBeEnabled();
   // A node waiting on an answer and stopped for budget is two decisions, and
   // offering only the first hides the second behind a badge that counts both.
@@ -243,9 +244,11 @@ test("expands a bounded artifact into a full-screen overlay that traps and resto
 }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Artifacts");
+  // Opening the row is what fetches the content; there is no separate control.
   const row = page.locator(".artifact-row").filter({ hasText: "asset_json" });
-  await row.getByRole("button", { name: "Preview bounded content" }).click();
-  const expand = row.getByRole("button", { name: "Expand full screen" });
+  await row.click();
+  const detail = page.locator(".detail-row");
+  const expand = detail.getByRole("button", { name: "Expand full screen" });
   await expand.click();
 
   const overlay = page.locator(".asset-overlay");
@@ -416,8 +419,17 @@ test("offers to redirect an agent from the work it is doing", async ({ page }) =
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
   await page.getByRole("tab", { name: "Tree", exact: true }).click();
-  const steer = page.getByRole("tree").locator(".agent-action-steer").first();
+  // The row says who is on it; the control that redirects them is on the one
+  // detail surface, so a reader acts where they are already reading.
+  // The row's name, not its box: the box also holds the controls for its needs.
+  await page
+    .locator(".node", { has: page.locator(".who") })
+    .first()
+    .locator(".node-name")
+    .click();
+  const steer = page.locator(".detail .agent-action-steer").first();
   await expect(steer).toBeVisible();
+  await steer.scrollIntoViewIfNeeded();
 
   await steer.click();
   await expect(page.getByRole("dialog")).toBeVisible();

@@ -92,7 +92,7 @@ needs fetching, and it already does.
 
 * [x] A record's detail is built only while it is open
 * [x] Opening a record survives the next render, because it is a decision
-* [ ] Artifacts render as one row per artifact
+* [x] Artifacts render as one row per artifact
 
 ## Phase 5: a need always names its node
 
@@ -216,14 +216,14 @@ on the row the reader asked about.
 
 | Mock | Portal | State |
 | --- | --- | --- |
-| `grid`: one row per artifact | `.artifact-row` | [ ] |
+| `grid`: one row per artifact | `.grid` rows | [x] |
 | Content fetched when a row is opened | `loadArtifact` | [x] |
 
 ### Record
 
 | Mock | Portal | State |
 | --- | --- | --- |
-| `grid`: one row per event and receipt | `.activity-list` | [ ] |
+| `grid`: one row per event and receipt | `.activity-list` rows | [x] |
 | Detail built when a row is opened | `recordDisclosure` | [x] |
 | `proof` at the bottom | `.proof` | [x] |
 
@@ -260,8 +260,8 @@ the same viewport, and the difference is looked at rather than recalled.
 * [x] Workflow graph: bands, gnodes, chips, finish nodes, legend
 * [x] Workflow tree: marks, names, who, model, asks, state
 * [x] Agents: grid of agents, and the terminal the selection opens
-* [ ] Artifacts: grid, and the content a row opens
-* [ ] Record: grid, and the record a row opens
+* [x] Artifacts: grid, and the content a row opens
+* [x] Record: grid, and the record a row opens
 
 A row is ticked when the two pictures are the same layout with the run's real
 words in it, not when the classes match.
@@ -282,6 +282,149 @@ The left navigation rail, its resize handle, its collapse control and its
 rail, and the facts it carried are the ones the mocks argue should never have
 been a landing page. The right rail keeps its handle, because what it holds
 grows with the run.
+
+## Phase 9: fewer words, and each fact in one place
+
+Phase 8 made the portal look like the mocks. Reading it screen by screen after
+that shows the next problem: it says too much, says several things twice, and
+says a good deal of it in the machinery's words rather than the reader's. Two
+audits, one per pair of screens, produced the list below; every item names what
+is wrong rather than describing a preference.
+
+### One vocabulary for state
+
+`STATE_LABELS`, `STATE_TONES` and the `statePill` that reads them exist twice,
+once in `render.ts` and once in `graph-flow.ts`. Two copies of the same mapping
+is how the tree and the graph start disagreeing about what a lifecycle is called.
+
+* [ ] One module owns the marks, the labels and the tones; both readings import it
+
+### Say a thing once
+
+| Fact | Said in | And again in | Keep |
+| --- | --- | --- | --- |
+| The run's mode | run head pill | `mode-band` badge, `Run running` | run head |
+| Steer, Accept anyway | tree row | detail card header | detail card |
+| The word `Workflow` | the tab | the card heading under it | the tab |
+| How much workflow there is | `3 phases · 6 pieces of work` | `8 of 8 nodes` | the first |
+| Whose output this is | detail card title | `Agent output` heading in the pane | the title |
+
+* [ ] Each row above says its fact once
+
+### Name the decision, or draw a mark
+
+A control that describes what it does to the machine makes a reader translate.
+A control used constantly and understood instantly can be a mark with a name
+only assistive technology reads.
+
+| Now | Becomes |
+| --- | --- |
+| `Copy identity` | a clipboard mark, named `Copy identity` |
+| `Focus in graph` | a target mark, named `Show this in the graph` |
+| `Fold this phase` / `Unfold this phase` | a chevron, named `Collapse` / `Expand` |
+| `Scope to whole run` / `Scope to selected node` | `All agents` / `This agent` |
+| `145 retained lines` | `145 lines` |
+| `Normalized input` | `Input as given` |
+| `Bounded utf8 preview` | `Preview` |
+| `Active preview prohibited for this media type` | `No preview for this kind of file` |
+| `read as written · cannot be changed` | `sent as written` |
+| `outputName`, `schemaKey`, `contentDigest` in delivery | the words for those things |
+
+* [ ] Every control above reads as the decision or carries a mark
+
+### One baseline per row
+
+A row that mixes fourteen and twelve pixel text with a pill and a bare span has
+no baseline, and that is what reads as misalignment.
+
+* [ ] Everything in a `node-right`, a `g-foot` and a band summary is 12px on one
+  baseline
+* [ ] `where` under a detail title is 12px and quiet, not body text
+* [ ] Every control in a toolbar is the same height, and toolbars share one gap
+
+### Reading the pictures for what the code cannot show
+
+A stylesheet cannot be read for alignment. Two rules can be individually correct
+and still produce a row whose baseline wanders, a gutter that is eleven pixels on
+one card and fourteen on the next, or an icon that renders as an empty box
+because the machine has no glyph for it. Those are found by looking.
+
+So the comparison captures are read as evidence, not kept as a record: every tab
+at both viewports, looked at against the mock beside it, with a list of what is
+wrong written down before anything is changed. Three defects already came from
+this and from nowhere else: a mark rendered as tofu because the chosen code point
+is absent from the container's fonts, a filter placeholder that said `Filter
+loaded records` on a screen with no records, and a status line whose prose ran the
+header off a narrow screen.
+
+* [ ] Every tab captured at 1440 and at 390, and read for spacing rather than for
+  content
+* [ ] Gutters and card padding come from one scale, and the same scale on both
+  viewports
+* [ ] No control renders as a missing glyph on a machine with only default fonts
+* [ ] Nothing overflows, and nothing is clipped, at either viewport
+* [ ] What is written down here is the defect, not the preference
+
+### Delivery reads as a timeline
+
+The weakest screen. It is meant to answer *what happened, in what order*, and it
+answers with a table of delivery records that carry no time at all.
+
+The audit found why: `PortalDeliveryRecord` has no timestamp and no defined
+order, while `EventStreamFrame` carries both `occurredAt` and `cursor`. So the
+timeline has to be built from the event stream, which is the only thing in the
+portal that knows when anything happened, and delivery records attach to it
+rather than standing beside it.
+
+* [ ] One chronological column: time, what happened in the reader's words, where
+* [ ] Events grouped under the phase they belong to, newest last
+* [ ] A delivery record hangs off the event that published it
+* [ ] What cannot be dated says so rather than pretending to an order
+
+## Phase 10: one design language, proven by looking
+
+Phase 9 removed words and duplication. What it cannot prove is that the result
+is *one* thing: a card on Record and a card on Workflow can each be defensible
+and still not look like siblings, and no amount of reading the stylesheet
+settles it. That is a question about pictures.
+
+So this phase is adversarial and visual. An independent reader is given every
+captured state at both viewports and asked to find what is wrong, with no
+knowledge of why any of it was written and no obligation to be kind about it.
+The corpus is the eighteen images the browser suite already writes
+(`packages/portal/tests/screenshots/`) plus the eight comparison captures, which
+between them cover every tab, every dialog, the mobile rail, and the terminal
+states.
+
+### The motif, stated so it can be checked
+
+A rule nobody wrote down cannot be broken. So:
+
+* One surface: white cards on a paper background, one rule colour, one radius,
+  one shadow, and nothing else framed.
+* One type scale: 14px body, 13px controls and card headings, 12px row
+  furniture, 11.5px quiet metadata, monospace only for machine text.
+* One spacing scale: 4, 6, 8, 10, 14, 16, 20. Nothing between and nothing else.
+* One control: the same height, border, radius and hover for every button; a
+  mark button is the same height and square.
+* One state vocabulary: a dot and a word, coloured by tone, everywhere.
+* Colour carries state and nothing else. Nothing is coloured for decoration.
+
+### What the adversarial pass has to answer
+
+* [ ] Does every card have the same padding, radius, border and shadow?
+* [ ] Does every card header have the same height and the same internal gaps?
+* [ ] Is any text at a size not in the scale?
+* [ ] Do two adjacent controls differ in height, radius or weight?
+* [ ] Does any row's baseline wander?
+* [ ] Is any gutter off the spacing scale?
+* [ ] Does anything read as a different product from the tab beside it?
+* [ ] Is anything clipped, overlapping, or touching an edge it should not?
+* [ ] Does the mobile capture use the same language as the desktop one, or a
+  different one that merely fits?
+
+Every finding is recorded with the image it came from and the rule it breaks,
+then fixed, then re-captured and looked at again.
 
 ## Log
 
@@ -482,3 +625,54 @@ looked at first like two portal defects that were not there. The comparison
 projects use a viewport tall enough that no resize happens. Neutralising the
 sticky rules from the test was tried first and the portal's own content security
 policy refused the inline stylesheet, which is the policy working.
+
+### Phase 9
+
+Two audits, one per pair of screens, found more duplication than the component
+tables had. The run's mode was stated twice, `Steer` was offered from two places
+on one screen, `Workflow` was the tab and the card heading under it, and the
+event stream was listed twice: once as a timeline and once as a column of
+`cursor eventType occurredAt`. Each now has one home.
+
+The state vocabulary existed twice in source, once in `render.ts` and once in
+`graph-flow.ts`, which is how a tree and a graph begin disagreeing about what a
+lifecycle is called. One module owns the marks, the words and the tones now.
+
+Delivery was the weakest screen and the audit found why: `PortalDeliveryRecord`
+carries neither a timestamp nor an order, while `EventStreamFrame` carries both.
+So the timeline is built from the event stream and the delivery records hang off
+it under a disclosure, rather than standing beside it pretending to a sequence
+they do not have. `timeline.ts` turns an event type into words, names where it
+happened from the graph rather than by identity, and is covered by a unit test
+proven by breaking the ordering.
+
+Three controls became marks with accessible names. The first attempt used code
+points borrowed from the text font and two of them rendered as empty boxes in
+the container, which is a defect a stylesheet cannot show; they are drawn now.
+
+The header lost its band. Health is a quiet cluster beside the product name, the
+narrator is a live region that announces rather than a sentence of machinery
+prose across the top, and the counts a reader checks rather than forms a view
+from are still in the region for assistive technology without taking the eye.
+
+### Phase 10
+
+An adversarial reader was given the eighteen captured states and the four mocks
+and asked to find what was wrong, with no knowledge of why any of it was written.
+Some of what it returned was a matter of taste and was rejected: the terminal is
+dark because the mock is, selection is a border because the mock's is, and blue
+carries the working state rather than being chrome.
+
+The rest was right and is fixed. The dialog was a second design system inside the
+first: its own radius, its own padding, its own background, its own title size,
+its own button metrics. It is a card that floats now. Controls came in four
+heights across the toolbar, the header, the dialog and the terminal; there are
+two now, a standard and a small, and both are tokens. `Phases 5 Tasks 1` was
+four bordered boxes for four numbers, which is furniture; it is one line of
+facts. And Record framed a card inside a card inside a card, which the picture
+showed at a glance and the stylesheet did not.
+
+The touch-target rule taught the lesson twice. Raising `min-height` on `button`
+lost to `.rail-toggle` on specificity, so the control never grew. Raising the
+token inside the media query raises every control at once and cannot lose,
+because there is nothing to lose to.

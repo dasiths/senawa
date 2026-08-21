@@ -29,8 +29,9 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   // identity, since a file has to name exactly one thing.
   await page.locator(".gnode", { hasText: "verify" }).first().click();
   const pane = page.getByRole("log", { name: /Agent output/u });
-  await expect(page.locator(".agent-terminal-scope")).toHaveText("implementer");
-  await expect(pane).toHaveAttribute("aria-label", "Agent output for implementer");
+  // A line says who wrote it and what they were working on.
+  await expect(page.locator(".agent-terminal-scope")).toHaveText("implementer \u00b7 verify");
+  await expect(pane).toHaveAttribute("aria-label", "Agent output for implementer \u00b7 verify");
   await expect(pane).toHaveAttribute("tabindex", "0");
   await expect.poll(async () => (await snapshot(page)).lineCount).toBe(145);
 
@@ -101,11 +102,11 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   expect(exported).toContain("hostile line <script>blocked()</script></div> stays inert");
 
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.getByRole("button", { name: "Copy output", exact: true }).click();
+  await page.getByRole("button", { name: "Copy", exact: true }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(exported);
 
   const download = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Download output", exact: true }).click();
+  await page.getByRole("button", { name: "Download", exact: true }).click();
   const saved = await download;
   expect(saved.suggestedFilename()).toBe(`senawa-transcript-dispatch-${journeyDispatchId}.txt`);
   expect(await readDownload(saved)).toBe(exported);
@@ -142,14 +143,14 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
 
   // The explicit run-wide option merges every owner of the run in one scope and
   // still names the owner that produced each line.
-  await page.getByRole("button", { name: "Scope to whole run", exact: true }).click();
+  await page.getByRole("button", { name: "All agents", exact: true }).click();
   await expect(page.locator(".agent-terminal-scope")).toHaveText(`run ${runs.journey}`);
   await expect.poll(async () => (await snapshot(page)).lineCount).toBe(145 + beforeAppend + 1);
   await expect(page.locator(".agent-terminal-log")).toContainText("journey task output line 1");
   await expect(page.locator(".agent-terminal-log")).toContainText("phase attempt 1 opened");
   await expect(
     page.locator(".agent-terminal-row").first().locator(".agent-terminal-owner"),
-  ).toHaveText("implementer");
+  ).toHaveText("implementer \u00b7 verify");
   await expect(
     page.locator(".agent-terminal-row").last().locator(".agent-terminal-owner"),
   ).toHaveText("phase phase_delivery");
@@ -161,7 +162,7 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
     ).size,
   ).toBe(2);
   expect((await snapshot(page)).plainText).toContain(`\tphase phase_delivery\t`);
-  await page.getByRole("button", { name: "Scope to selected node", exact: true }).click();
+  await page.getByRole("button", { name: "This agent", exact: true }).click();
   await expect(page.locator(".agent-terminal-scope")).toHaveText("phase phase_delivery");
   await expect(page.locator(".agent-terminal-owner")).toHaveCount(0);
   await expect.poll(async () => (await snapshot(page)).lineCount).toBe(beforeAppend + 1);

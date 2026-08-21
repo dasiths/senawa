@@ -36,13 +36,19 @@ export type TranscriptNames = Readonly<Record<string, string>>;
 
 const NO_NAMES: TranscriptNames = Object.freeze({});
 
-/** Builds the owner naming from whatever agent rows the run has loaded. */
+/**
+ * Builds the owner naming from whatever agent rows the run has loaded. A line
+ * says who wrote it and what they were working on, because a persona alone
+ * repeats four times over in a run that fanned out.
+ */
 export function transcriptNames(
-  agents: readonly Pick<PortalAgentSummary, "dispatchId" | "persona">[] | undefined,
+  agents: readonly Pick<PortalAgentSummary, "dispatchId" | "persona" | "taskName">[] | undefined,
 ): TranscriptNames {
   if (agents === undefined || agents.length === 0) return NO_NAMES;
   const names: Record<string, string> = {};
-  for (const agent of agents) names[agent.dispatchId] = agent.persona;
+  for (const agent of agents)
+    names[agent.dispatchId] =
+      agent.taskName === undefined ? agent.persona : `${agent.persona} \u00b7 ${agent.taskName}`;
   return Object.freeze(names);
 }
 

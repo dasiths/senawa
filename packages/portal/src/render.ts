@@ -14,8 +14,10 @@ import { type BoundedJsonNode, boundedJsonModel } from "./bounded-json.js";
 import { narrationBusy, narrationText } from "./command-narrator.js";
 import { focusGraphViewport } from "./graph-diagram.js";
 import { drawGraphFlowEdges, graphFlowView } from "./graph-flow.js";
-import { executionOrdered, foldFinishedPhases, graphLayout } from "./graph-layout.js";
+import { executionOrdered, graphLayout } from "./graph-layout.js";
+import { chevronMark, copyMark, locateMark } from "./marks.js";
 import { type NodeToolbarAction, nodeToolbarView } from "./node-toolbar.js";
+import { nodeMark, statePill } from "./node-vocabulary.js";
 import {
   attentionTitle,
   pendingQuestionNeed,
@@ -56,6 +58,7 @@ import {
   revisionKey,
   runKey,
 } from "./state.js";
+import { timelineMoments } from "./timeline.js";
 import {
   captureTranscriptScroll,
   restoreTranscriptScroll,
@@ -300,15 +303,21 @@ function renderStatusStrip(
   const pending = Object.keys(state.pending).length;
   // Healthy is the common case and deserves the quietest rendering it can have
   // while still saying so. Only a count that is not zero earns emphasis.
+  const dataBadge = statusBadge(freshness, `Data ${freshness}`);
+  if (freshness === "current") dataBadge.classList.add("visually-hidden");
+  // The needs pill beside this says the same number, in words a reader can act
+  // on, so this one stays for assistive technology and leaves the eye alone.
+  const needsBadge = statusBadge(
+    state.humanNeeds.length > 0 ? "needs" : "clear",
+    `${String(state.humanNeeds.length)} human needs`,
+  );
+  needsBadge.classList.add("visually-hidden");
   strip.append(
     statusBadge(state.session.status, state.session.status),
     connection,
-    statusBadge(freshness, `Data ${freshness}`),
+    dataBadge,
     statusBadge(pending > 0 ? "pending" : "clear", `${String(pending)} pending commands`),
-    statusBadge(
-      state.humanNeeds.length > 0 ? "needs" : "clear",
-      `${String(state.humanNeeds.length)} human needs`,
-    ),
+    needsBadge,
     renderCommandNarrator(state, narrator),
   );
   const summary = textElement("span", "visually-hidden", globalStatus(state));
@@ -574,13 +583,12 @@ function renderOverview(state: PortalState, actions: PortalRenderActions): HTMLE
     controls.append(runControlButton("Resume", "resume", locked, actions));
   if (!overview.terminal)
     controls.append(runControlButton("End run", "end", locked, actions, true));
-  modeBand.append(title, statusBadge(overview.mode, `Run ${overview.mode}`), controls);
+  modeBand.append(title, controls);
   const counts = element("dl", "count-grid");
   for (const [label, value] of [
     ["Phases", overview.counts.phases],
     ["Tasks", overview.counts.tasks],
     ["Criteria", overview.counts.criteria],
-    ["Human needs", overview.counts.humanNeeds],
   ] as const)
     appendMetric(counts, label, value);
   // Effect counters answer "why is nothing moving", which is a question a
@@ -602,42 +610,76 @@ function renderOverview(state: PortalState, actions: PortalRenderActions): HTMLE
   return section;
 }
 
+/**
+ * What happened, in order. A table of delivery records answered "what exists"
+ * when the question this view is asked is "what happened, and when"; delivery
+ * records carry neither a time nor an order, and the event stream carries both.
+ */
 function renderDelivery(state: PortalState): HTMLElement {
-  const section = element("section", "delivery-view");
   const ids = selectedIds(state);
-  if (ids === undefined) return emptySection("Loading delivery metadata");
-  const page = state.caches.delivery[runKey(ids.repositoryId, ids.runId)];
-  if (page === undefined) return emptySection("Loading delivery metadata");
-  const stale = currentFreshness(state) === "stale";
-  const summary = element("div", "mode-band");
-  summary.append(
-    textElement("h2", "section-heading", "Standard delivery authority"),
-    statusBadge(stale ? "stale" : "fresh", stale ? "Projection stale" : "Projection current"),
-  );
-  const facts = element("dl", "inline-facts");
-  appendFact(facts, "Dataflow revision", String(page.dataflowRevision));
-  appendFact(facts, "Task frontier revision", String(page.taskFrontierRevision));
-  appendFact(facts, "Loaded records", String(page.records.length));
-  section.append(summary, disclosure("Revisions", facts));
-  if (page.records.length === 0) {
-    section.append(
-      textElement("p", "empty-state", "No phase delivery metadata has been recorded."),
-    );
-    return section;
-  }
-  section.append(
-    summaryTable(
-      ["Kind", "Phase or task", "Attempt", "State", "Metadata"],
-      page.records.map((record) => [
-        record.kind,
-        record.phaseId ?? record.taskId ?? "-",
-        record.attempt === undefined ? "-" : String(record.attempt),
-        deliveryState(record),
-        deliveryMetadata(record),
-      ]),
-      "Standard delivery metadata records",
+  if (ids === undefined) return emptySection("Loading what happened");
+  const key = runKey(ids.repositoryId, ids.runId);
+  const events = state.caches.events[key]?.events ?? [];
+  const revision = state.vector?.graphRevision;
+  const nodes =
+    revision === undefined
+      ? []
+      : (state.caches.graphNodes[revisionKey(ids.repositoryId, ids.runId, revision)]?.nodes ?? []);
+  const moments = timelineMoments(events, nodes);
+  const section = element("section", "card timeline-view");
+  const header = element("header", "view-toolbar");
+  header.append(
+    textElement("h2", "card-heading", "What happened"),
+    textElement(
+      "span",
+      "count",
+      moments.length === 0 ? "nothing yet" : `${String(moments.length)} moments \u00b7 newest last`,
     ),
   );
+  section.append(header);
+  if (moments.length === 0) {
+    section.append(textElement("p", "empty-state", "This run has not done anything yet."));
+    return section;
+  }
+  const list = element("ol", "timeline");
+  let previous: string | undefined;
+  for (const moment of moments) {
+    // A run reads as phases, so the phase is stated when it changes and assumed
+    // until it does.
+    if (moment.where !== undefined && moment.where !== previous) {
+      list.append(textElement("li", "timeline-where", moment.where));
+      previous = moment.where;
+    }
+    const item = element("li", `moment tone-${moment.tone}`);
+    item.append(textElement("span", "moment-time", moment.time));
+    const body = element("div", "moment-body");
+    body.append(textElement("p", "moment-what", moment.what));
+    if (moment.detail !== undefined) body.append(textElement("p", "moment-detail", moment.detail));
+    item.append(body);
+    list.append(item);
+  }
+  section.append(list);
+  const page = state.caches.delivery[key];
+  // What a phase produced has no time of its own, so it is stated apart from
+  // the order rather than folded into it as though it had one.
+  if (page !== undefined && page.records.length > 0) {
+    section.append(
+      disclosure(
+        `What the run produced (${String(page.records.length)})`,
+        summaryTable(
+          ["Kind", "Phase or task", "Attempt", "State", "Detail"],
+          page.records.map((record) => [
+            record.kind.replaceAll("-", " "),
+            record.phaseId ?? record.taskId ?? "-",
+            record.attempt === undefined ? "-" : String(record.attempt),
+            deliveryState(record),
+            deliveryMetadata(record),
+          ]),
+          "What the run produced",
+        ),
+      ),
+    );
+  }
   return section;
 }
 
@@ -667,11 +709,9 @@ function renderWorkflow(state: PortalState, actions: PortalRenderActions): HTMLE
   if (ids === undefined || state.vector === undefined)
     return emptySection("Loading graph revision");
   const key = revisionKey(ids.repositoryId, ids.runId, state.vector.graphRevision);
-  const summary = state.caches.graphSummaries[runKey(ids.repositoryId, ids.runId)];
   const nodes = state.caches.graphNodes[key]?.nodes ?? [];
   const edges = state.caches.graphEdges[key]?.edges ?? [];
   const toolbar = element("header", "view-toolbar");
-  toolbar.append(textElement("h2", "card-heading", "Workflow"));
   const modes = element("div", "segmented-control");
   modes.setAttribute("role", "tablist");
   for (const mode of GRAPH_MODES) {
@@ -689,14 +729,13 @@ function renderWorkflow(state: PortalState, actions: PortalRenderActions): HTMLE
       "count",
       `${String(phases)} ${phases === 1 ? "phase" : "phases"} \u00b7 ${String(work)} ${work === 1 ? "piece" : "pieces"} of work`,
     ),
-    textElement("span", "result-count", `${nodes.length} of ${summary?.nodeCount ?? 0} nodes`),
     filterInput(state, actions, "Filter the workflow"),
   );
   section.append(toolbar);
   const filtered = nodes.filter((node) =>
     graphText(node).includes(state.ui.filter.toLocaleLowerCase()),
   );
-  section.append(graphBody(state, actions, nodes, edges, filtered));
+  section.append(graphBody(state, actions, edges, filtered));
   // The graph wants the width, so it takes the column and detail sits under it.
   const split = element("div", state.ui.graphMode === "diagram" ? "split is-wide" : "split");
   split.append(section);
@@ -720,7 +759,6 @@ function emptyDetail(message: string): HTMLElement {
 function graphBody(
   state: PortalState,
   actions: PortalRenderActions,
-  nodes: readonly PortalGraphNode[],
   edges: readonly PortalGraphEdge[],
   filtered: readonly PortalGraphNode[],
 ): HTMLElement {
@@ -795,42 +833,6 @@ const NODE_KIND_ROLE: Readonly<Record<string, string>> = {
   criterion: "exit condition",
 };
 
-const NODE_MARKS: Readonly<Record<string, string>> = {
-  workflow: "\u25c7",
-  phase: "\u25c6",
-  task: "\u25cf",
-  criterion: "\u25cb",
-};
-
-const STATE_LABELS: Readonly<Record<string, string>> = {
-  defined: "not started",
-  "not-started": "not started",
-  running: "working",
-  "awaiting-human": "waiting on you",
-  accepted: "done",
-  failed: "failed",
-  superseded: "superseded",
-};
-
-const STATE_TONES: Readonly<Record<string, string>> = {
-  defined: "is-idle",
-  "not-started": "is-idle",
-  running: "is-working",
-  "awaiting-human": "is-waiting",
-  accepted: "is-closed",
-  failed: "is-failed",
-  superseded: "is-idle",
-};
-
-/** The mock's state pill: one dot, one word, the same in the tree and the graph. */
-function statePill(lifecycle: string): HTMLElement {
-  return textElement(
-    "span",
-    `state ${STATE_TONES[lifecycle] ?? "is-waiting"}`,
-    STATE_LABELS[lifecycle] ?? lifecycle,
-  );
-}
-
 /** Who is doing the work, and on what model. */
 function agentWho(agent: PortalAgentSummary): HTMLElement {
   const who = element("span", "who");
@@ -869,7 +871,7 @@ function workflowTree(
     item.tabIndex = parent.querySelector("[role=treeitem]") === null && level === 1 ? 0 : -1;
     const line = element("span", "node");
     line.append(
-      textElement("span", "node-mark", NODE_MARKS[node.kind] ?? "\u25cb"),
+      textElement("span", "node-mark", nodeMark(node.kind)),
       textElement("span", "node-name", node.title),
     );
     const right = element("span", "node-right");
@@ -888,14 +890,6 @@ function workflowTree(
       // while looking at the work. Both controls lived on a list of agents that
       // named the work by identity, so acting on the right one meant matching a
       // digest by eye against this tree.
-      if (latest.state === "working" && hasCapability(state, "portal-write-steer-agent"))
-        right.append(agentActionButton("steer", "Steer", latest, actions));
-      if (
-        latest.state === "finished" &&
-        latest.latestRefusal !== undefined &&
-        hasCapability(state, "portal-write-override-member")
-      )
-        right.append(agentActionButton("override", "Accept anyway", latest, actions));
     }
     // A need belongs on the thing it blocks. Scattering them across three tabs
     // meant reading a phase told you nothing about why it had stopped.
@@ -949,7 +943,7 @@ function agentActionButton(
   const button = document.createElement("button");
   button.type = "button";
   button.id = triggerId;
-  button.className = `agent-action agent-action-${kind}`;
+  button.className = `command agent-action agent-action-${kind}`;
   button.textContent = label;
   button.addEventListener("click", (event) => {
     // The node is clickable, and this button sits inside it.
@@ -1078,7 +1072,7 @@ function graphDetail(
       appendFact(facts, "Superseded by", node.supersededBy ?? "No successor");
       pane.append(facts);
       if (node.normalizedInput !== undefined)
-        pane.append(renderJson(node.normalizedInput, "Normalized input"));
+        pane.append(renderJson(node.normalizedInput, "Input as given"));
       if (node.completionPolicy !== undefined)
         pane.append(renderJson(node.completionPolicy, "Completion policy"));
       break;
@@ -1190,7 +1184,7 @@ function replyBox(
   send.className = "send";
   send.id = triggerId;
   send.disabled = need === undefined || actionsLocked(state);
-  side.append(send, textElement("span", "reply-note", "read as written \u00b7 cannot be changed"));
+  side.append(send, textElement("span", "reply-note", "sent as written"));
   reply.append(side);
   return reply;
 }
@@ -1217,15 +1211,20 @@ function nodeActions(
   const reviewId = `node-review-${safeDomId(node.nodeId)}`;
   const unfolded = state.ui.unfoldedNodes.includes(node.nodeId);
   return Object.freeze([
+    // A mark for the actions used constantly and understood instantly.
     Object.freeze({
       key: "copy",
       label: "Copy identity",
+      mark: copyMark,
+      name: "Copy identity",
       disabled: false,
       run: () => copyText(node.nodeId),
     }),
     Object.freeze({
       key: "focus",
-      label: "Focus in graph",
+      label: "Show this in the graph",
+      mark: locateMark,
+      name: "Show this in the graph",
       disabled: false,
       run: () => {
         const viewport =
@@ -1240,7 +1239,9 @@ function nodeActions(
       key: "fold",
       // A phase folds itself once its work is done. This is only how a reader
       // disagrees, and the disagreement outlives the next poll.
-      label: unfolded ? "Fold this phase" : "Unfold this phase",
+      label: unfolded ? "Collapse this phase" : "Expand this phase",
+      mark: () => chevronMark(unfolded),
+      name: unfolded ? "Collapse this phase" : "Expand this phase",
       disabled: node.kind !== "phase",
       run: () => actions.unfoldNode(node.nodeId),
     }),
@@ -1286,13 +1287,6 @@ function renderActivity(state: PortalState, actions: PortalRenderActions): HTMLE
   const columns = element("div", "activity-columns");
   columns.append(
     activityList(
-      "Events",
-      events?.events ?? state.visibleEvents,
-      state,
-      actions,
-      (entry) => `${entry.cursor} ${entry.eventType} ${entry.occurredAt}`,
-    ),
-    activityList(
       "Receipts",
       receipts?.receipts ?? [],
       state,
@@ -1325,8 +1319,13 @@ function activityList<Value>(
   actions: PortalRenderActions,
   label: (value: Value) => string,
 ): HTMLElement {
-  const panel = element("section", "activity-panel");
-  panel.append(textElement("h2", "compact-heading", title));
+  const panel = element("section", "card activity-panel");
+  const header = element("header", "view-toolbar");
+  header.append(
+    textElement("h2", "card-heading", title),
+    textElement("span", "count", "open one to load its exact record"),
+  );
+  panel.append(header);
   const list = element("ol", "activity-list");
   const needle = state.ui.filter.toLocaleLowerCase();
   const opened = new Set(state.ui.openedRecords);
@@ -1348,6 +1347,8 @@ function activityList<Value>(
     );
     list.append(item);
   }
+  if (list.childElementCount === 0)
+    list.append(textElement("li", "empty-state", "Nothing has been recorded here yet."));
   panel.append(list);
   return panel;
 }
@@ -1368,58 +1369,116 @@ function recordDisclosure(
   return wrapper;
 }
 
+/**
+ * What the run made, one row per thing. Content is fetched when a row is opened,
+ * never up front, and the row says so while it loads.
+ */
 function renderArtifacts(state: PortalState, actions: PortalRenderActions): HTMLElement {
-  const section = element("section", "artifact-view");
   const ids = selectedIds(state);
   if (ids === undefined) return emptySection("Loading artifacts");
   const key = runKey(ids.repositoryId, ids.runId);
   const artifacts = state.caches.artifacts[key]?.artifacts ?? [];
-  section.append(filterInput(state, actions, "Filter loaded artifacts"));
-  const list = element("div", "artifact-list");
-  for (const artifact of artifacts) {
-    if (
-      !`${artifact.summary} ${artifact.mediaType} ${artifact.artifactId}`
-        .toLocaleLowerCase()
-        .includes(state.ui.filter.toLocaleLowerCase())
-    )
-      continue;
-    const row = element("article", "artifact-row");
-    const facts = element("dl", "artifact-facts");
-    appendFact(facts, "Artifact", artifact.summary);
-    appendFact(facts, "Type", artifact.mediaType);
-    appendFact(facts, "Size", formatBytes(artifact.byteLength));
-    appendFact(facts, "Sensitivity", artifact.sensitivity);
-    appendFact(facts, "Digest", artifact.contentDigest);
-    row.append(facts, statusBadge(artifact.availability, artifact.availability));
+  const section = element("section", "card artifact-view");
+  const header = element("header", "view-toolbar");
+  header.append(
+    textElement("h2", "card-heading", "Files in the workspace"),
+    textElement("span", "count", "open one to load its content"),
+    textElement(
+      "span",
+      "result-count",
+      `${String(artifacts.length)} ${artifacts.length === 1 ? "file" : "files"}`,
+    ),
+    filterInput(state, actions, "Filter loaded artifacts"),
+  );
+  section.append(header);
+  const matching = artifacts.filter((artifact) =>
+    `${artifact.summary} ${artifact.mediaType} ${artifact.artifactId}`
+      .toLocaleLowerCase()
+      .includes(state.ui.filter.toLocaleLowerCase()),
+  );
+  if (matching.length === 0) {
+    section.append(textElement("p", "empty-state", "This run has made nothing yet."));
+    return section;
+  }
+  const table = document.createElement("table");
+  table.className = "grid";
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["File", "Type", "Size", "Sensitivity", "Where it is"]) {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = label;
+    headRow.append(cell);
+  }
+  head.append(headRow);
+  const body = document.createElement("tbody");
+  for (const artifact of matching) {
+    const row = document.createElement("tr");
+    row.className = "artifact-row";
+    const openable =
+      artifact.availability === "verified-stored" && previewAllowed(artifact.mediaType);
     const preview =
       state.caches.artifactContent[
         artifactContentKey(ids.repositoryId, ids.runId, artifact.artifactId)
       ];
-    if (artifact.availability === "verified-stored" && previewAllowed(artifact.mediaType)) {
-      row.append(commandButton("Preview bounded content", () => actions.loadArtifact(artifact)));
-    } else {
-      row.append(
-        textElement(
-          "p",
-          "subtle",
-          artifact.availability === "metadata-only"
-            ? "Verified bytes unavailable"
-            : "Active preview prohibited for this media type",
-        ),
-      );
+    const open = state.ui.openedRecords.includes(artifact.artifactId);
+    if (openable) {
+      row.tabIndex = 0;
+      row.setAttribute("aria-expanded", String(open));
+      const reveal = () => {
+        actions.toggleRecord(artifact.artifactId);
+        if (preview === undefined) actions.loadArtifact(artifact);
+      };
+      row.addEventListener("click", reveal);
+      row.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        reveal();
+      });
     }
-    if (preview !== undefined) {
+    // Why a row cannot be opened is the fact a reader needs when it cannot.
+    const where = openable
+      ? artifact.availability
+      : artifact.availability === "metadata-only"
+        ? "Verified bytes unavailable"
+        : "No preview for this kind of file";
+    for (const value of [
+      artifact.summary,
+      artifact.mediaType,
+      formatBytes(artifact.byteLength),
+      artifact.sensitivity,
+      where,
+    ]) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.append(cell);
+    }
+    body.append(row);
+    if (!open) continue;
+    const detail = document.createElement("tr");
+    detail.className = "detail-row";
+    detail.dataset.artifact = artifact.artifactId;
+    const cell = document.createElement("td");
+    cell.colSpan = 5;
+    if (preview === undefined) {
+      // The cost is visible, paid once, on the row the reader asked about.
+      cell.append(textElement("p", "lazy", "Loading the exact record\u2026"));
+    } else {
       const expandId = `artifact-expand-${safeDomId(artifact.artifactId)}`;
       const expand = commandButton("Expand full screen", () =>
         actions.openAssetOverlay(artifact.artifactId, expandId),
       );
       expand.id = expandId;
-      row.append(expand);
-      row.append(renderArtifactPreview(preview.content, preview.encoding, artifact.mediaType));
+      cell.append(expand);
+      cell.append(renderArtifactPreview(preview.content, preview.encoding, artifact.mediaType));
     }
-    list.append(row);
+    detail.append(cell);
+    body.append(detail);
   }
-  section.append(list);
+  table.append(head, body);
+  const scroll = element("div", "table-scroll");
+  scroll.append(table);
+  section.append(scroll);
   return section;
 }
 
@@ -1498,10 +1557,12 @@ function renderNeed(
   // Where it is, then what is being asked, then what kind of decision it is.
   // The kind is how a reader tells two integration needs apart, so it stays,
   // quietly, rather than leading as a badge.
+  // A need that names no node is about the run, which is where it belongs;
+  // saying its kind twice told a reader nothing either time.
   const where = needLocation(need, state);
-  item.append(textElement("p", "q-where", where ?? need.kind));
-  item.append(textElement("h3", "q-what", need.title));
-  if (where !== undefined) item.append(textElement("p", "q-kind", need.kind));
+  item.append(textElement("p", "q-where", where ?? "this run"));
+  item.append(textElement("h3", "q-what", readableTitle(need.title)));
+  item.append(textElement("p", "q-kind", need.kind));
   const triggerId = `review-${scope}-${safeDomId(need.needId)}`;
   const button = commandButton(needChipLabel(need), () => actions.openNeed(need, triggerId));
   button.id = triggerId;
@@ -1524,6 +1585,17 @@ function renderNeed(
     item.append(facts);
   }
   return item;
+}
+
+/**
+ * A sixty-four character digest in a heading pushes the words out of view. It is
+ * elided for reading; the exact value is in the record the control opens.
+ */
+function readableTitle(title: string): string {
+  return title.replace(
+    /([a-z][a-z-]*_)([0-9a-f]{16,})/gu,
+    (_, prefix: string, digest: string) => `${prefix}${digest.slice(0, 12)}\u2026`,
+  );
 }
 
 /** The phase and task a need belongs to, named rather than identified. */
@@ -1962,71 +2034,6 @@ function jsonNode(node: BoundedJsonNode): HTMLElement {
   return details;
 }
 
-/**
- * One row per agent, with its attempts listed under it.
- *
- * A table of dispatches showed the same persona four times over, and two of
- * those rows differed only in a `State` cell, so the view read as though it were
- * repeating itself. An agent is the unit a person reasons about: the attempts
- * are how it got here, not four separate things to compare.
- */
-function agentRoster(agents: readonly PortalAgentSummary[]): HTMLElement {
-  const byWork = new Map<string, PortalAgentSummary[]>();
-  for (const agent of agents) {
-    const key = `${agent.persona}\u0000${agent.taskId}`;
-    const existing = byWork.get(key);
-    if (existing === undefined) byWork.set(key, [agent]);
-    else existing.push(agent);
-  }
-  const roster = element("ul", "agent-roster");
-  for (const group of byWork.values()) {
-    const attempts = [...group].sort((left, right) => left.attempt - right.attempt);
-    const current = attempts[attempts.length - 1];
-    if (current === undefined) continue;
-    const entry = element("li", "agent-entry");
-    const heading = element("p", "agent-heading");
-    heading.append(textElement("span", "agent-persona", current.persona));
-    const work = textElement("span", "agent-work", current.taskName ?? current.taskId);
-    work.title = current.taskId;
-    heading.append(work);
-    if (current.model !== undefined) {
-      heading.append(
-        textElement(
-          "span",
-          "agent-model",
-          // Route zero is the authored first choice and says nothing. A later
-          // route means this agent was moved, which is worth saying.
-          current.routeIndex === 0
-            ? current.model
-            : `${current.model} (fallback route ${String(current.routeIndex)})`,
-        ),
-      );
-    }
-    heading.append(textElement("span", `agent-state ${current.state}`, current.state));
-    entry.append(heading);
-    const strip = element("ol", "agent-attempts");
-    for (const attempt of attempts) {
-      const item = element("li", "agent-attempt");
-      item.append(
-        textElement("span", "agent-attempt-ordinal", `Attempt ${String(attempt.attempt)}`),
-      );
-      item.append(textElement("span", "agent-attempt-state", attempt.state));
-      if (attempt.latestRefusal !== undefined) {
-        item.append(textElement("span", "agent-attempt-refusal", attempt.latestRefusal));
-      }
-      if (attempt.sessionId !== undefined) {
-        const session = textElement("span", "agent-attempt-session", "continued");
-        session.title = attempt.sessionId;
-        item.append(session);
-      }
-      strip.append(item);
-    }
-    entry.append(strip);
-    roster.append(entry);
-  }
-  return roster;
-}
-
 function summaryTable(
   headers: readonly string[],
   rows: readonly (readonly string[])[],
@@ -2061,7 +2068,7 @@ function filterInput(state: PortalState, actions: PortalRenderActions, label: st
   const input = document.createElement("input");
   input.type = "search";
   input.value = state.ui.filter;
-  input.placeholder = "Filter loaded records";
+  input.placeholder = label;
   input.addEventListener("input", () => actions.setFilter(input.value));
   field.append(input);
   return field;
