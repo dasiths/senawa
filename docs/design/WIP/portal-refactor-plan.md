@@ -96,11 +96,11 @@ needs fetching, and it already does.
 
 ## Phase 5: a need always names its node
 
-Questions already carry a task and a dispatch. Allowance escalations reach their
-task only indirectly.
+Questions already carry a task and a dispatch. An escalation carried neither, so
+the whole point of moving escalations onto their node was unreachable.
 
-* [ ] Decide whether an escalation guarantees a task, or carries its dispatch
-* [ ] A need that cannot name a node has a defined rendering
+* [x] An escalation carries the work that ran out of budget
+* [x] A need that cannot name a node has a defined rendering
 
 ## Phase 6: capture what the agent says
 
@@ -215,3 +215,19 @@ successor become one line.
 
 The fold control sits after `Focus in graph` and is disabled on anything that is
 not a phase, because folding is a decision about a group.
+
+### Phase 5
+
+The answer to the open question was neither of the two the gap analysis offered.
+An escalation did not reach its task indirectly: it did not reach it at all. The
+stored `RunnerEscalation` carried a command, an operation, a unit and an amount,
+and `operationId` is a runner idempotency key rather than a pointer to work.
+
+But the task is right there when the escalation is written. Two lines above the
+insert, the same code fences `command.taskScope`, which carries `taskId` and
+`definitionGeneration`. So the escalation now records what ran out of budget, and
+the need projects it.
+
+Old escalations stay readable: the fields are optional, the digest is computed
+from the stored body, and a need with no task still has a defined home at the run
+root where both readings agree.

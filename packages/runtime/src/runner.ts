@@ -104,6 +104,9 @@ export interface EffectOutcome {
 export interface RunnerEscalation {
   readonly commandId: string;
   readonly operationId: string;
+  /** The work that ran out of budget, so a reader can be shown what asked. */
+  readonly taskId?: string;
+  readonly definitionGeneration?: number;
   readonly unit: string;
   readonly requested: number;
   readonly available: number;

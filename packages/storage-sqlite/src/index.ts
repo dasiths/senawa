@@ -5666,6 +5666,11 @@ export class SqlitePortalQueryAuthority {
       );
       const escalationDigest = this.dependencies.sha256.digest(canonicalBytes(body));
       const allowance = this.getAllowanceReview(repositoryId, runId, escalation.command_id);
+      // An escalation is raised by one piece of work. Rendering it as a run-level
+      // need loses what asked, what it was doing, and how much it had spent.
+      const escalatedTaskId = typeof body.taskId === "string" ? body.taskId : undefined;
+      const escalatedGeneration =
+        typeof body.definitionGeneration === "number" ? body.definitionGeneration : undefined;
       needs.push({
         needId: `need_escalation:${escalation.command_id}`,
         kind: "escalation",
@@ -5674,6 +5679,8 @@ export class SqlitePortalQueryAuthority {
         sourceRevision,
         title: `Budget allowance requested for ${requiredStringField(body.unit, "escalation unit")}`,
         createdAt: requiredStringField(body.createdAt, "escalation createdAt"),
+        ...(escalatedTaskId === undefined ? {} : { taskId: escalatedTaskId }),
+        ...(escalatedGeneration === undefined ? {} : { definitionGeneration: escalatedGeneration }),
         exactObjectDigest: escalationDigest,
         allowedCommands:
           allowance?.escalationDigest === escalationDigest ? ["grant-allowance"] : [],
@@ -7338,6 +7345,8 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
         const escalation = deepFreezeRunnerValue<RunnerEscalation>({
           commandId: command.commandId,
           operationId: command.operationId,
+          taskId: command.taskScope.taskId,
+          definitionGeneration: command.taskScope.definitionGeneration,
           unit: budget.unit,
           requested: command.budgetReservation.amount,
           available,

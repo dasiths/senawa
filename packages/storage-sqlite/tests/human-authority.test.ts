@@ -557,6 +557,13 @@ describe("SQLite Phase 11A human authority", () => {
         .listHumanNeeds(runtimeFixture.repositoryId, runtimeFixture.runId)
         .needs.find(({ sourceId }) => sourceId === result.escalation.commandId)?.allowedCommands,
     ).toEqual(["grant-allowance"]);
+    // An escalation is raised by one piece of work, so it names that work. A
+    // run-level need loses what asked and what it was doing when it stopped.
+    expect(
+      portal
+        .listHumanNeeds(runtimeFixture.repositoryId, runtimeFixture.runId)
+        .needs.find(({ sourceId }) => sourceId === result.escalation.commandId)?.taskId,
+    ).toBe(runtimeFixture.task.taskId);
 
     const corrupt = new Database(fixture.databasePath);
     corrupt
