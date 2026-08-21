@@ -178,7 +178,13 @@ export async function advanceRun(input: AdvanceRunInput): Promise<AdvanceOutcome
     input.configurationDirectory,
   );
   if (loaded.snapshot === undefined) {
-    throw new Error(`Workflow does not compile: ${loaded.diagnostics.length} diagnostics`);
+    // A count is not a reason. This is the message a person reads when a run
+    // stops advancing, so it has to name what to fix and where.
+    throw new Error(
+      `Workflow does not compile: ${loaded.diagnostics
+        .map(({ locator, pointer, message }) => `${locator}${pointer} ${message}`)
+        .join("; ")}`,
+    );
   }
   const supervisor = new SqliteSupervisorAuthority({
     databasePath: input.databasePath,

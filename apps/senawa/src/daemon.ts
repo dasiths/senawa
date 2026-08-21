@@ -547,7 +547,17 @@ export async function startSenawaService(
           return productionScheduler.schedule({ repositoryId, runId, lease, currentTime });
         }),
       listSchedulableRuns: () => productionScheduler.listRuns(),
-      driveRunOnce: composition.driveRunOnce ?? driveRun(projectDirectory, paths, dependencies),
+      driveRunOnce:
+        composition.driveRunOnce ??
+        driveRun(projectDirectory, paths, dependencies, (repositoryId, runId, reason) => {
+          authority.appendLog({
+            recordedAt: new Date().toISOString(),
+            level: "error",
+            event: "run.drive-failed",
+            message: reason,
+            fields: { repositoryId, runId },
+          });
+        }),
       deliverCompletionOutboxOnce: () => contextBroker.deliverCompletionOutboxOnce(),
       deliverAmendmentProposalOutboxOnce: () => amendmentBridge.deliverOnce(),
       ...(remoteConnector === undefined ? {} : { remoteConnectorStatuses: [remoteConnector] }),
@@ -707,6 +717,7 @@ function driveRun(
   projectRoot: string,
   paths: ReturnType<typeof resolveSenawaServicePaths>,
   dependencies: RuntimeDependencies,
+  report: (repositoryId: string, runId: string, reason: string) => void,
 ): (input: {
   readonly repositoryId: string;
   readonly runId: string;
@@ -734,7 +745,11 @@ function driveRun(
       // A workflow that no longer compiles, or a run this service was not
       // started alongside, must not take the supervisor down. It must not
       // disappear either: a run that stops advancing for an unreported reason
-      // is the hardest possible thing to diagnose.
+      // is the hardest possible thing to diagnose. Stderr is not a place a
+      // person looks, and on this service it is not kept at all, so the reason
+      // goes where the rest of the run's history is.
+      const reason = error instanceof Error ? error.message : String(error);
+      report(repositoryId, runId, reason);
       process.stderr.write(
         `drive-run-failed ${repositoryId} ${runId}: ${
           error instanceof Error ? (error.stack ?? error.message) : String(error)

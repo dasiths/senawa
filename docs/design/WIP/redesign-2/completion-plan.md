@@ -122,9 +122,14 @@ person something real.
   closed, so every cycle ended in `command-id-conflict`. F-063. Proven on the
   live record rather than in the harness, which does not reach the conflict;
   reproducing it there is still owed.
-* [ ] Say nothing where a person can read it when a run stops being driven. The
+* [x] Say nothing where a person can read it when a run stops being driven. The
   throw that ended F-063 reached stderr and nowhere else, and `supervisor_logs`
-  records only the service starting and stopping.
+  recorded only the service starting and stopping. A failed drive is now an
+  `error` log against the run, and a workflow that will not compile names the
+  file, the pointer and the fault rather than counting diagnostics.
+* [ ] `forces a timed-out process group that ignores SIGTERM` fails under the
+  parallel suite and passes alone, three runs in a row. A test that only holds
+  when the machine is quiet is not holding anything.
 * [x] A question whose guards no longer bind stays queued as a human need
   forever, offers a button, and refuses every answer. Nothing prunes it. F-040.
 * [x] `/agents` returned 500 for a healthy run. F-039.

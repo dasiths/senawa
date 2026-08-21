@@ -1,3 +1,5 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { loadAuthoredWorkflow } from "@senawa/execution-host";
 import { type CanonicalValue, canonicalBytes, canonicalValue, sha256Digest } from "@senawa/kernel";
@@ -1108,6 +1110,17 @@ describe("one phase in sequence", () => {
     expect(await advance(scenario)).toEqual({ kind: "finished" });
     expect(await advance(scenario)).toEqual({ kind: "finished" });
     expect(submitted()).toBe(settled);
+  }, 120_000);
+
+  // This is the message a person reads when a run has stopped advancing, and it
+  // said "1 diagnostics". A count names neither what is wrong nor where.
+  it("names what stops a workflow compiling, not how many things do", async () => {
+    const scenario = await startScenario("broken-workflow", {});
+    const workflow = join(scenario.project, ".senawa", "workflow.yaml");
+    const authored = await readFile(workflow, "utf8");
+    await writeFile(workflow, authored.replace("phases:", "phases:\n  - name: 9"), "utf8");
+
+    await expect(advance(scenario)).rejects.toThrow(/workflow\.yaml.*[a-z]/u);
   }, 120_000);
 
   it("lets an agent measure the gate without spending an attempt", async () => {
