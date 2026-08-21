@@ -15,11 +15,33 @@ make open           # the same, and opens a browser at it
 | Page | The claim it is making |
 | --- | --- |
 | `index.html` | The workflow is a tree of named work, and selecting anything opens one detail surface |
+| `index.html` → Graph | The same workflow read as dependencies, because a tree cannot show a fan-out |
 | `agents.html` | Arriving from "who is working" opens the *same* surface as arriving from the tree |
 | `artifacts.html` | What the run made is a table; content loads when a row is opened |
 | `record.html` | What happened is a table; the exact record loads when a row is opened |
 
 ## The decisions worth arguing about
+
+**Tree and graph are two readings, not two pages.** The segmented control in the
+Workflow card header swaps between them and the selection survives the swap,
+because they are the same six pieces of work. The tree answers *what contains
+what*; the graph answers *what waited for what*. A tree renders the four
+implement members as a flat list of siblings, which is exactly the fact the
+graph exists to show: they are four parallel branches off one plan.
+
+**The artifact is the edge.** `plan · 4 tasks · fans out` sits on the line
+between the phase that produced it and the four tasks it produced, so the fan-out
+has a visible cause. Edges are dashed until the thing upstream has actually been
+carried, so an unfinished run reads as unfinished at a glance.
+
+**Closed phases fold.** A finished phase collapses to its label, and an edge
+whose endpoint is folded away reattaches to the group that swallowed it. Live
+work gets the space; history stays one click from view. This is what keeps a
+three-phase run on one screen.
+
+**Layout is measured, not authored.** Edges are drawn from the laid-out boxes
+after render, so nothing needs coordinates and the picture survives wrapping,
+resizing, folding and renaming.
 
 **Every task has a name.** `write the game rules module`, not `phase-executor`
 and not `task_9adb8a1d…`. Steering is a decision about one piece of work, and
@@ -66,3 +88,7 @@ there.
 The task names are also aspirational in the same way: today the compiler emits
 `phase-executor` for every phase task, and fan-out members are named by digest.
 The names here come from the plan items, which the record already holds.
+
+The graph is honest by comparison. Every edge it draws is a dependency the
+record already knows: phase succession, and the fan-out from a plan output to
+its members. It needs no new data, only a second way of drawing what is there.

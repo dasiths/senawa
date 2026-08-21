@@ -682,4 +682,38 @@ panel carries, in order: what the agent is doing now, the question it is waiting
 on with a place to answer, the answers already given, what it produced, and the
 controls to steer or override it.
 
+### The tree cannot show a fan-out, so Workflow needs both readings
+
+A tree renders the four `implement` members as four sibling rows. That is a true
+statement about containment and a misleading one about execution: it looks like a
+sequence when it is four parallel branches off one plan, and it says nothing
+about why there are four rather than three.
+
+The fact the tree loses is the one a person most often wants when a run stalls —
+*what is this waiting for?* Nesting cannot express it, because the dependency is
+not a parent-child relationship. `write the command-line entry point` is waiting
+on a sibling's output, and the tree draws sibling as "unrelated".
+
+So `Workflow` carries a segmented control, `Tree` and `Graph`, over one selection:
+
+* **Tree** — what contains what. Compact, scannable, good for a long run.
+* **Graph** — what waited for what. Shows the fan-out, the join, and how far the
+  work has actually travelled.
+
+Three properties make the graph affordable rather than a second thing to
+maintain:
+
+* **The artifact is the edge.** `plan · 4 tasks · fans out` sits on the line
+  between producer and consumers, so the fan-out has a visible cause rather than
+  appearing as unexplained branching.
+* **Carried edges are solid, uncarried ones dashed.** Progress is legible without
+  reading a single node.
+* **Closed phases fold**, and an edge whose endpoint is folded away reattaches to
+  the group that swallowed it. Live work gets the space. This is what keeps a
+  whole run on one screen instead of turning the graph into a scrolling map.
+
+The graph needs no data the record does not already hold: phase succession and
+plan-to-member fan-out are both already there. Unlike the terminal, it is a
+rendering change and nothing more.
+
 [The mocks](portal-redesign-mocks/) render this concretely.

@@ -38,8 +38,13 @@
           <section class="card">
             <header>
               <h2>Workflow</h2>
+              <div class="seg">
+                <button class="seg-btn" type="button" data-group="w" data-pane="w-tree" aria-selected="true">Tree</button>
+                <button class="seg-btn" type="button" data-group="w" data-pane="w-graph">Graph</button>
+              </div>
               <span class="count">3 phases · 6 pieces of work</span>
             </header>
+            <div id="w-tree">
             <ul class="tree">
               <li>
                 <button class="node" type="button" data-selects="research">
@@ -140,6 +145,93 @@
                 </ul>
               </li>
             </ul>
+            </div>
+
+            <div class="pane" id="w-graph" hidden>
+              <div class="graph" id="graph">
+                <svg class="graph-edges" aria-hidden="true"></svg>
+                <div class="graph-flow">
+                  <span class="finish" data-node="start">what you asked for</span>
+
+                  <details class="band" data-node="p-research">
+                    <summary>
+                      <span class="node-mark">◆</span> research
+                      <span class="state is-closed">closed</span>
+                      <span class="fold-sub">1 piece of work</span>
+                    </summary>
+                    <div class="band-body">
+                      <button class="gnode is-closed" type="button" data-node="t-research" data-from="start done" data-selects="research">
+                        <span class="g-name">understand the request</span>
+                        <span class="g-meta">researcher · <span class="model">haiku-4.5</span></span>
+                        <span class="g-foot"><span class="state is-closed">done</span></span>
+                      </button>
+                    </div>
+                  </details>
+
+                  <button class="chip" type="button" data-node="a-research" data-from="t-research done" data-selects="research">
+                    <b>research</b> <span class="fan">3.3 KiB</span>
+                  </button>
+
+                  <details class="band" data-node="p-plan">
+                    <summary>
+                      <span class="node-mark">◆</span> plan
+                      <span class="state is-closed">closed</span>
+                      <span class="fold-sub">1 piece of work</span>
+                    </summary>
+                    <div class="band-body">
+                      <button class="gnode is-closed" type="button" data-node="t-plan" data-from="a-research done" data-selects="plan">
+                        <span class="g-name">break the work into tasks</span>
+                        <span class="g-meta">planner · <span class="model">haiku-4.5</span></span>
+                        <span class="g-foot"><span class="state is-closed">done</span></span>
+                      </button>
+                    </div>
+                  </details>
+
+                  <button class="chip" type="button" data-node="a-plan" data-from="t-plan done" data-selects="plan">
+                    <b>plan</b> <span class="fan">4 tasks · fans out</span>
+                  </button>
+
+                  <details class="band" data-node="p-implement" open>
+                    <summary>
+                      <span class="node-mark">◆</span> implement
+                      <span class="state is-working">working</span>
+                      <span class="fold-sub">4 members · 1 asks · 1 needs budget</span>
+                    </summary>
+                    <div class="band-body">
+                      <button class="gnode is-working" type="button" data-node="t-game" data-from="a-plan done" data-selects="game" aria-current="true">
+                        <span class="g-name">write the game rules module</span>
+                        <span class="g-meta">implementor · <span class="model">sonnet-4.5</span></span>
+                        <span class="g-foot"><span class="state is-working">working</span><span class="asks">asks</span></span>
+                      </button>
+                      <button class="gnode is-working" type="button" data-node="t-cli" data-from="a-plan done" data-selects="cli">
+                        <span class="g-name">write the command-line entry point</span>
+                        <span class="g-meta">implementor · <span class="model">haiku-4.5</span></span>
+                        <span class="g-foot"><span class="state is-working">working</span></span>
+                      </button>
+                      <button class="gnode is-closed" type="button" data-node="t-tests" data-from="a-plan done" data-selects="tests">
+                        <span class="g-name">write the test suite</span>
+                        <span class="g-meta">implementor · <span class="model">haiku-4.5</span></span>
+                        <span class="g-foot"><span class="state is-closed">done</span></span>
+                      </button>
+                      <button class="gnode is-refused" type="button" data-node="t-check" data-from="a-plan done" data-selects="check">
+                        <span class="g-name">write the check script</span>
+                        <span class="g-meta">implementor · <span class="model">haiku-4.5</span></span>
+                        <span class="g-foot"><span class="state is-refused">needs budget</span></span>
+                      </button>
+                    </div>
+                  </details>
+
+                  <span class="finish" data-node="end" data-from="t-game, t-cli, t-tests done, t-check">
+                    the run finishes when all four are accepted
+                  </span>
+                </div>
+              </div>
+              <div class="graph-legend">
+                <span><i class="solid"></i> carried</span>
+                <span><i class="dashed"></i> not yet</span>
+                <span>flows downward · click any node</span>
+              </div>
+            </div>
           </section>
 
           <section class="card detail" id="selection"></section>
