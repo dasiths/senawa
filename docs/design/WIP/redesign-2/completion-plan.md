@@ -216,14 +216,25 @@ Every `senawa status` costs about a third of a second of process start before it
 reads anything, and driving a run from the terminal means running it repeatedly.
 Nothing has measured where that goes.
 
-* [ ] Measure the phases of a command: process start, module load, store open,
-  query, render.
-* [ ] Measure the supervisor cycle separately, since that is what a run's own
-  progress waits on.
-* [ ] Record the findings in `command-latency.md` beside this plan, with the
-  numbers and the method, so a later change can be compared against them.
+* [x] Measure the phases of a command: process start, module load, store open,
+  query, render. `senawa status` was 4166 ms, of which opening the record was
+  2470 ms and verifying it 1539 ms.
+* [x] Measure the supervisor cycle separately, since that is what a run's own
+  progress waits on. The median gap between supervisor receipts on a working run
+  is 126 ms; the long gaps are agents thinking. The four seconds is the cost of
+  starting a command, not of running the system.
+* [x] Record the findings in `command-latency.md` beside this plan, with the
+  numbers and the method, so a later change can be compared against them. One
+  fix shipped from it: opening a record parsed its canonical state twice, which
+  was 32% of the cost, measured A/B on the same record.
 
 Done when the cost of a command is attributed rather than guessed at.
+
+The measurement changed what the answer should be. Making verification faster
+helps a process that verifies and does nothing for a service that already did,
+so the change worth making is that a read-only command asks the running service
+rather than opening the record itself. That is written up in `command-latency.md`
+and is not done.
 
 ## What must not change
 
