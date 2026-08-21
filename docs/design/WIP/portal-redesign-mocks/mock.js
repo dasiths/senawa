@@ -28,8 +28,22 @@ document.addEventListener("click", (event) => {
   }
 
   const row = event.target.closest("tr[data-record]");
-  if (row !== null) expandRow(row);
+  if (row !== null) {
+    expandRow(row);
+    return;
+  }
+
+  const fold = event.target.closest("[data-fold]");
+  if (fold !== null) foldBands(fold.dataset.fold === "open");
 });
+
+// "Finished" is only a proxy for "not where the attention is", so the control
+// says which of the two a reader wants rather than pretending they are one rule.
+function foldBands(open) {
+  for (const band of document.querySelectorAll(".band")) {
+    band.open = open || band.dataset.frontier === "true";
+  }
+}
 
 // Detail is fetched when a row is opened, never up front. The delay is here so
 // the mock shows what that costs a reader: one beat, once, on the row they
@@ -118,8 +132,13 @@ function anchor(node) {
   return at;
 }
 
-document.addEventListener("toggle", (event) => {
-  if (event.target.classList.contains("band")) drawEdges();
-}, true);
+document.addEventListener(
+  "toggle",
+  (event) => {
+    if (event.target.classList.contains("band")) drawEdges();
+  },
+  true,
+);
 
 new ResizeObserver(() => drawEdges()).observe(document.body);
+drawEdges();

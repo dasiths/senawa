@@ -14,30 +14,37 @@ make open           # the same, and opens a browser at it
 
 | Page | The claim it is making |
 | --- | --- |
-| `index.html` | The workflow is a tree of named work, and selecting anything opens one detail surface |
-| `index.html` → Graph | The same workflow read as dependencies, because a tree cannot show a fan-out |
+| `index.html` | The workflow is a graph of named work, and selecting anything opens one detail surface |
+| `index.html` → Tree | The same work read as containment, for scanning a long run |
 | `agents.html` | Arriving from "who is working" opens the *same* surface as arriving from the tree |
 | `artifacts.html` | What the run made is a table; content loads when a row is opened |
 | `record.html` | What happened is a table; the exact record loads when a row is opened |
 
 ## The decisions worth arguing about
 
-**Tree and graph are two readings, not two pages.** The segmented control in the
-Workflow card header swaps between them and the selection survives the swap,
-because they are the same six pieces of work. The tree answers *what contains
-what*; the graph answers *what waited for what*. A tree renders the four
-implement members as a flat list of siblings, which is exactly the fact the
-graph exists to show: they are four parallel branches off one plan.
+**The graph is the default reading; the tree is the alternate.** The segmented
+control in the Workflow card header swaps between them and the selection survives
+the swap, because they are the same six pieces of work. The graph leads because
+the question a person arrives with is *what is happening and what is it waiting
+for*, and only the graph answers the second half. The tree stays for scanning a
+long run, where compactness beats structure.
 
 **The artifact is the edge.** `plan · 4 tasks · fans out` sits on the line
 between the phase that produced it and the four tasks it produced, so the fan-out
 has a visible cause. Edges are dashed until the thing upstream has actually been
 carried, so an unfinished run reads as unfinished at a glance.
 
-**Closed phases fold.** A finished phase collapses to its label, and an edge
-whose endpoint is folded away reattaches to the group that swallowed it. Live
-work gets the space; history stays one click from view. This is what keeps a
-three-phase run on one screen.
+**Phases stay as groups.** The dashed lane around `implement` is what makes the
+four members read as one fan-out rather than four unrelated branches, and it is
+where the phase's own state and counts live.
+
+**Folding follows the frontier, not the state.** "Closed" is only a proxy for
+"not where the attention is", and it is the wrong proxy for a finished run, where
+it would fold everything. The rule is to open the frontier — whatever is working,
+asking, or stopped — and fold the rest; a run with no frontier opens its last
+phase. Both directions are one click in the legend, and an edge whose endpoint is
+folded away reattaches to the group that swallowed it, so folding never deletes
+structure. Press `Unfold all` to see why the rule exists: the run stops fitting.
 
 **Layout is measured, not authored.** Edges are drawn from the laid-out boxes
 after render, so nothing needs coordinates and the picture survives wrapping,

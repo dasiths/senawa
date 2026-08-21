@@ -34,17 +34,17 @@
           <span class="elapsed">23m · 2 of 3 phases closed</span>
         </div>
 
-        <div class="split">
+        <div class="split is-wide">
           <section class="card">
             <header>
               <h2>Workflow</h2>
               <div class="seg">
-                <button class="seg-btn" type="button" data-group="w" data-pane="w-tree" aria-selected="true">Tree</button>
-                <button class="seg-btn" type="button" data-group="w" data-pane="w-graph">Graph</button>
+                <button class="seg-btn" type="button" data-group="w" data-pane="w-graph" aria-selected="true">Graph</button>
+                <button class="seg-btn" type="button" data-group="w" data-pane="w-tree">Tree</button>
               </div>
               <span class="count">3 phases · 6 pieces of work</span>
             </header>
-            <div id="w-tree">
+            <div class="pane" id="w-tree" hidden>
             <ul class="tree">
               <li>
                 <button class="node" type="button" data-selects="research">
@@ -147,7 +147,7 @@
             </ul>
             </div>
 
-            <div class="pane" id="w-graph" hidden>
+            <div class="pane" id="w-graph">
               <div class="graph" id="graph">
                 <svg class="graph-edges" aria-hidden="true"></svg>
                 <div class="graph-flow">
@@ -191,7 +191,7 @@
                     <b>plan</b> <span class="fan">4 tasks · fans out</span>
                   </button>
 
-                  <details class="band" data-node="p-implement" open>
+                  <details class="band" data-node="p-implement" data-frontier="true" open>
                     <summary>
                       <span class="node-mark">◆</span> implement
                       <span class="state is-working">working</span>
@@ -229,7 +229,11 @@
               <div class="graph-legend">
                 <span><i class="solid"></i> carried</span>
                 <span><i class="dashed"></i> not yet</span>
-                <span>flows downward · click any node</span>
+                <span>folded to the frontier</span>
+                <span class="legend-actions">
+                  <button type="button" data-fold="open">Unfold all</button>
+                  <button type="button" data-fold="close">Fold what is finished</button>
+                </span>
               </div>
             </div>
           </section>

@@ -694,11 +694,14 @@ The fact the tree loses is the one a person most often wants when a run stalls �
 not a parent-child relationship. `write the command-line entry point` is waiting
 on a sibling's output, and the tree draws sibling as "unrelated".
 
-So `Workflow` carries a segmented control, `Tree` and `Graph`, over one selection:
+So `Workflow` carries a segmented control over one selection. The graph leads,
+because the question a person arrives with is *what is happening and what is it
+waiting for*, and only the graph answers the second half:
 
-* **Tree** — what contains what. Compact, scannable, good for a long run.
 * **Graph** — what waited for what. Shows the fan-out, the join, and how far the
-  work has actually travelled.
+  work has actually travelled. The default.
+* **Tree** — what contains what. Compact and scannable, for a long run where
+  compactness beats structure.
 
 Three properties make the graph affordable rather than a second thing to
 maintain:
@@ -708,9 +711,32 @@ maintain:
   appearing as unexplained branching.
 * **Carried edges are solid, uncarried ones dashed.** Progress is legible without
   reading a single node.
-* **Closed phases fold**, and an edge whose endpoint is folded away reattaches to
-  the group that swallowed it. Live work gets the space. This is what keeps a
-  whole run on one screen instead of turning the graph into a scrolling map.
+* **Phases stay as groups.** The lane around a fan-out is what makes four members
+  read as one branching rather than four unrelated ones, and it carries the
+  phase's own state and counts.
+
+### Folding follows the frontier, not the state
+
+Folding is what keeps a whole run on one screen: unfolded, a three-phase run
+already overflows, and the cost grows with every phase.
+
+The obvious rule — fold what is closed — is wrong in the case that matters most.
+A *finished* run is entirely closed, so that rule folds everything and greets a
+person checking the outcome with a column of labels.
+
+"Closed" was only ever a proxy for "not where the attention is". The rule should
+say that directly: **open the frontier, fold the rest**, where the frontier is
+whatever is working, asking, or stopped. A run with no frontier has finished, so
+its last phase opens. A phase carrying a need opens regardless of state, because
+the whole point of moving escalations onto their node is lost if the node they
+moved to is folded shut.
+
+Two consequences make it safe:
+
+* An edge whose endpoint is folded away reattaches to the group that swallowed
+  it, so folding hides detail and never deletes structure.
+* An explicit fold survives the next poll. A person who opened something did so
+  deliberately, and a refresh must not undo it.
 
 The graph needs no data the record does not already hold: phase succession and
 plan-to-member fan-out are both already there. Unlike the terminal, it is a

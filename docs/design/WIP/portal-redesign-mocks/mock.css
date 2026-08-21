@@ -1031,6 +1031,27 @@ pre.record {
   border-top-style: dashed;
 }
 
+.legend-actions {
+  margin-left: auto;
+  gap: 4px;
+}
+
+.legend-actions button {
+  padding: 2px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.legend-actions button:hover {
+  border-color: var(--rule-strong);
+  color: var(--ink);
+}
+
 /* Graph wants width, so it takes the column and pushes detail underneath. */
 .split.is-wide {
   grid-template-columns: 1fr;
