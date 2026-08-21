@@ -28,12 +28,23 @@ It also says when it is done, which it did not before: `senawa status` now
 reports that every phase has closed. Ending a run stays a person's decision, so
 the mode is unchanged.
 
-Sixty-two defects found by watching live runs are recorded as F-001 to F-062.
-Six of them stopped every run dead: a live clock made a command conflict with
+Sixty-three defects found by watching live runs are recorded as F-001 to F-063.
+Seven of them stopped every run dead: a live clock made a command conflict with
 itself, a tool declaration named a schema it did not carry, a fan-out could not
 wait for its own members, a retried member claimed a sibling's ordinal, a
-refused gate left a candidate that locked out its own retry, and a granted
-allowance never restarted the work that asked for it.
+refused gate left a candidate that locked out its own retry, a granted allowance
+never restarted the work that asked for it, and a finished run re-ran a phase it
+had already closed until every command conflicted with its own history.
+
+The portal is done. Nine tabs are four: `Workflow`, `Record`, `Artifacts` and
+`Agents`. The workflow reads as a workflow — nested, named, with every need, the
+agent on the work, where that work is happening, and the controls for redirecting
+it rendered on the node they belong to. Forty-two browser tests hold that shape.
+
+What is left is two deliberate decisions rather than two omissions: the attempt
+lifecycle in Phase 1, whose declared protocol payload cannot say which task an
+attempt belongs to, and the scheduled retry in F-061, which changes how the
+service decides when to wake.
 
 ## Phase 1: make the attempt lifecycle real
 
