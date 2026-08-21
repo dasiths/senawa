@@ -4332,3 +4332,29 @@ when the successor started, and nothing revisits a run once its lease has
 expired unless something asks for it. That is where the next attempt should look
 — at what puts a run in front of the runner, not at what the runner does when it
 gets there.
+
+### F-061 root cause
+
+The run was offered. `listRunnableRuns` already counts a run with an intent that
+has no terminal outcome, which is exactly what an abandoned attempt looks like,
+so the successor's cycle did pick it up. What it could not do was take the lease:
+the dead owner's lease had not expired yet, `acquireRunLease` raised
+`LeaseUnavailableError`, and the cycle caught it and reported that it had done no
+work.
+
+That is the whole failure. The supervisor is wake-driven and has no timer. A
+cycle that reports no work stops the pump, and nothing revisits a run whose only
+obstacle was a lease that has since expired. So the run is permanently reachable
+in principle and never reached in practice: runnable, unblocked a minute later,
+and asked about by nobody.
+
+The remedy is a deliberate choice rather than an obvious patch. Enqueuing a wake
+on `LeaseUnavailableError` would retry immediately and spin until the lease
+expired. What is wanted is a retry *after* the lease expiry the authority already
+knows, which means the supervisor gains a scheduled retry it does not currently
+have. That is a change to how the service decides when to wake, and it should be
+made on purpose rather than at the end of a long session.
+
+The narrower statement, for whoever takes it: everything under the supervisor
+recovers correctly, and there is a test for it. What is missing is that nothing
+tries again.

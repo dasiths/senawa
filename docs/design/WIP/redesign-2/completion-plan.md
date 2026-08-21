@@ -113,12 +113,13 @@ exhausts a budget can only be freed from the portal.
 These are recorded and unfixed. None blocks phase 2, and all of them cost a
 person something real.
 
-* [ ] A run does not survive its supervisor stopping. An effect in flight when
-  the process ends keeps its intent and its claim and never gets an outcome, so
-  the phase waits for an agent that no longer exists. F-061. Narrowed: the runner
-  authority recovers correctly once asked — a test proves the successor is
-  offered a `reconcile` plan and may take the abandoned claim. What is missing is
-  above it, in whatever puts a run in front of the runner after a restart.
+* [ ] A run does not survive its supervisor stopping. F-061, now diagnosed to
+  the end: everything under the supervisor recovers, and there is a test for it.
+  The supervisor is wake-driven with no timer, so a cycle blocked by a lease the
+  dead owner still held reports no work, stops the pump, and nothing revisits the
+  run when that lease expires a minute later. The remedy is a scheduled retry at
+  the expiry the authority already knows, which is a change to how the service
+  decides when to wake and should be made on purpose.
 * [x] A finished run drove itself into a conflict with its own history. The
   driver re-offered delivered completions and re-ran a phase it had already
   closed, so every cycle ended in `command-id-conflict`. F-063. Proven on the
