@@ -48,6 +48,8 @@ service decides when to wake.
 
 [Open decisions](open-decisions.md) states every remaining item as the question
 it actually is, with what the evidence says and what each answer costs.
+[Limits](limits.md) records every bound the system enforces, who feels it, and
+which handful of them cost an agent a turn.
 
 ## Phase 1: make the attempt lifecycle real
 
