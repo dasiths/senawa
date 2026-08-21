@@ -15,6 +15,7 @@ import {
   type PageQueryError,
   type RuntimeDependencies,
   scheduleRunnerTransition,
+  scheduleRunnerTransitions,
 } from "@senawa/runtime";
 import {
   createRuntimeGraph,
@@ -354,6 +355,63 @@ describe("SQLite Phase 11A human authority", () => {
   // One grant gives every request for that unit the room it asked for, but only
   // the granted one is resolved. The rest stayed listed for ever, each offering
   // a button that could do nothing, because what they asked for had happened.
+  // A supervisor that stops mid-turn leaves an intent with no outcome and a
+  // claim naming an owner that no longer exists. An intent with no outcome reads
+  // as active everywhere, so the phase waits for an agent that stopped existing
+  // when the process did. Taking the lease at a higher fence is the statement
+  // that the previous holder is gone, and the work has to become reachable again.
+  it("offers work again after the owner that claimed it went away", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    const runner = configuredRunner(fixture, 100);
+    const command = effectCommand();
+    runner.enqueue(command);
+    const persisted = runner.persistIntent(runInput(command));
+    if (persisted.type !== "persisted") throw new Error(`intent: ${persisted.type}`);
+    expect(
+      runner.claimEffectAttempt({
+        ...runInput(command),
+        intent: persisted.intent,
+        taskScope: command.taskScope,
+      }),
+    ).toMatchObject({ type: "claimed" });
+
+    // The process ends here: no outcome is ever committed for that attempt, and
+    // a successor takes the run lease, which is the statement that it is gone.
+    const successor = runner.acquireRunLease(
+      runtimeFixture.repositoryId,
+      runtimeFixture.runId,
+      "runner-owner-successor",
+      // After the dead owner's lease has expired, which is how a successor
+      // learns it is gone.
+      "2026-08-14T14:00:00.000Z",
+      "2026-08-14T15:00:00.000Z",
+    );
+    const snapshot = runner.load({
+      repositoryId: runtimeFixture.repositoryId,
+      runId: runtimeFixture.runId,
+    });
+    const plans = scheduleRunnerTransitions(snapshot, {
+      currentTime: "2026-08-14T14:00:00.000Z",
+      maxTransitions: 4,
+    });
+    expect(plans.map(({ type }) => type)).toContain("reconcile");
+
+    // And the successor is entitled to take the abandoned attempt over.
+    expect(
+      runner.claimEffectAttempt({
+        ...runInput(command),
+        lease: successor,
+        intent: persisted.intent,
+        taskScope: command.taskScope,
+      }),
+    ).toMatchObject({ type: "claimed" });
+    runner.close();
+    authority.close();
+    fixture.dispose();
+  });
+
   it("stops listing a request once the budget has the room it asked for", () => {
     const fixture = createFixture();
     const authority = new SqliteAuthority(fixture.options);

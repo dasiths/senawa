@@ -4317,3 +4317,18 @@ The other half of this is that none of it was visible. The throw reached stderr,
 where it was seen only because a browser test run happened to capture the
 supervisor's output. `supervisor_logs` records the service starting and stopping
 and nothing about a run that has stopped being driven.
+
+### F-061 narrowed
+
+The runner authority is not the problem. A test now claims an effect attempt,
+never commits an outcome for it, lets the owner's lease expire, and has a
+successor take the run lease: the transition scheduler offers a `reconcile` plan
+for the abandoned intent, and the successor is allowed to claim it. Both halves
+of the recovery the design intends are there and work.
+
+So what failed on the live record is above that: the run was never offered to the
+runner at all after the restart. The lease the dead service held was still live
+when the successor started, and nothing revisits a run once its lease has
+expired unless something asks for it. That is where the next attempt should look
+— at what puts a run in front of the runner, not at what the runner does when it
+gets there.
