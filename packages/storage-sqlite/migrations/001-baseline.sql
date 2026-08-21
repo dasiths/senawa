@@ -34,7 +34,7 @@ CREATE TABLE agent_transcript_lines (
   run_sequence INTEGER NOT NULL CHECK (run_sequence > 0),
   line_id TEXT NOT NULL CHECK (length(line_id) > 0 AND length(line_id) <= 128),
   occurred_at TEXT NOT NULL CHECK (length(occurred_at) = 24),
-  stream TEXT NOT NULL CHECK (stream IN ('stdout', 'stderr', 'system')),
+  stream TEXT NOT NULL CHECK (stream IN ('stdout', 'stderr', 'system', 'assistant')),
   text TEXT NOT NULL CHECK (
     length(text) > 0
     AND octet_length(text) <= 4096

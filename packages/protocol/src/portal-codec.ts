@@ -127,7 +127,12 @@ const TRANSCRIPT_OWNER_KINDS = new Set<PortalTranscriptOwnerKind>([
   "phase",
   "run",
 ]);
-const TRANSCRIPT_STREAMS = new Set<PortalTranscriptStream>(["stdout", "stderr", "system"]);
+const TRANSCRIPT_STREAMS = new Set<PortalTranscriptStream>([
+  "stdout",
+  "stderr",
+  "system",
+  "assistant",
+]);
 const TRANSCRIPT_TAB = 0x09;
 const TRANSCRIPT_SPACE = 0x20;
 const TRANSCRIPT_DELETE = 0x7f;

@@ -51,7 +51,7 @@ export interface CopilotSdkSessionConfig {
   readonly toolSearch: Readonly<{ readonly enabled: false }>;
   readonly infiniteSessions: Readonly<{ readonly enabled: false }>;
   readonly largeOutput: Readonly<{ readonly enabled: false }>;
-  readonly streaming: false;
+  readonly streaming: boolean;
   readonly includeSubAgentStreamingEvents: false;
   readonly enableConfigDiscovery: false;
   readonly skipCustomInstructions: true;
@@ -88,9 +88,24 @@ export interface CopilotSdkMessageOptions {
   readonly mode: "interrupt" | "enqueue";
 }
 
+/** What the agent said, as one complete message rather than a stream of deltas. */
+export interface CopilotSdkAssistantMessage {
+  readonly content: string;
+}
+
 export interface CopilotSdkSessionPort {
   readonly sessionId: string;
   sendAndWait(prompt: string, timeoutMs: number): Promise<void>;
+  /**
+   * Observes the agent's own words.
+   *
+   * Optional because a port that cannot report them is still usable: the
+   * transcript falls back to the tool calls it already records, rather than
+   * inventing narration it never heard. Only complete messages are offered,
+   * because delta events are not replayed when a session resumes and a record
+   * assembled from them would have holes wherever a worker restarted.
+   */
+  onAssistantMessage?(listener: (message: CopilotSdkAssistantMessage) => void): void;
   /**
    * Delivers a message to a session that is already working.
    *

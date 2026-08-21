@@ -48,6 +48,12 @@ none. The baseline was produced by applying the chain and dumping the result, so
 it is the schema the chain built rather than a transcription of it, and it
 carries the seed rows the runtime requires at startup.
 
+The same reasoning governs a schema change before v1 ships: the baseline is
+edited rather than followed by a second file, because a chain carries an
+installed base forward and there is still none to carry. The cost is that an
+existing development database no longer matches the packaged checksums and has
+to be reinitialised, which is the intended signal rather than a fault.
+
 Application is checked, not assumed. `loadMigrations` reads every file matching
 `^\d{3}-[a-z0-9-]+\.sql$` in sorted order, computes its SHA-256 checksum, and
 refuses a non-digest result. Each migration runs in its own immediate

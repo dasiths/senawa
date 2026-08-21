@@ -1,15 +1,23 @@
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative } from "node:path";
 import type {
+  CopilotSdkAssistantMessage,
   CopilotSdkPort,
   CopilotSdkResumeSessionConfig,
   CopilotSdkSessionConfig,
   CopilotSdkSessionPort,
 } from "./copilot-sdk-port.js";
 
+interface RuntimeSessionEvent {
+  readonly type: string;
+  readonly agentId?: string;
+  readonly data?: Readonly<Record<string, unknown>>;
+}
+
 interface RuntimeCopilotSession {
   readonly sessionId: string;
   sendAndWait(message: { readonly prompt: string }, timeoutMs: number): Promise<unknown>;
+  on?(listener: (event: RuntimeSessionEvent) => void): unknown;
   abort(): Promise<void>;
   disconnect(): Promise<void>;
 }
@@ -202,6 +210,21 @@ class ProductionCopilotSdkSession implements CopilotSdkSessionPort {
 
   async sendAndWait(prompt: string, timeoutMs: number): Promise<void> {
     await this.session.sendAndWait({ prompt }, timeoutMs);
+  }
+
+  /**
+   * Only `assistant.message` is taken. Deltas are not replayed when a session
+   * resumes, so a record assembled from them would have holes wherever a worker
+   * restarted, and a sub-agent's words are not the agent's: an event carrying an
+   * `agentId` belongs to something this transcript does not name.
+   */
+  onAssistantMessage(listener: (message: CopilotSdkAssistantMessage) => void): void {
+    this.session.on?.((event) => {
+      if (event.type !== "assistant.message" || event.agentId !== undefined) return;
+      const content = event.data?.content;
+      if (typeof content !== "string" || content.length === 0) return;
+      listener({ content });
+    });
   }
 
   async abort(): Promise<void> {

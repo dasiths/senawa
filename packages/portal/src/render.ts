@@ -931,7 +931,7 @@ function nodeActions(
 ): readonly NodeToolbarAction[] {
   // The graph and the tree must agree about which node a need belongs to, or a
   // badge counts something the controls beside it refuse to act on.
-  const need = state.humanNeeds.find(
+  const needs = state.humanNeeds.filter(
     (candidate) =>
       needBlocks(candidate, node) &&
       (candidate.definitionGeneration === undefined ||
@@ -967,20 +967,29 @@ function nodeActions(
       disabled: node.kind !== "phase",
       run: () => actions.unfoldNode(node.nodeId),
     }),
-    Object.freeze({
-      key: "review",
-      // Named for the decision it is, so the graph can be read without first
-      // opening the need to find out what kind it is.
-      label: need === undefined ? "Review linked human need" : needChipLabel(need),
-      disabled:
-        need === undefined ||
-        actionsLocked(state) ||
-        need.allowedCommands.length === 0 ||
-        !needAllowedByCapabilities(need, state),
-      run: () => {
-        if (need !== undefined) actions.openNeed(need, reviewId);
-      },
-    }),
+    // One control per need, named for the decision it is. A node waiting on an
+    // answer and stopped for budget is two decisions, and offering only the
+    // first hides the second behind a badge that counts both.
+    ...(needs.length === 0
+      ? [
+          Object.freeze({
+            key: "review",
+            label: "Review linked human need",
+            disabled: true,
+            run: () => undefined,
+          }),
+        ]
+      : needs.map((need, index) =>
+          Object.freeze({
+            key: `review-${String(index)}`,
+            label: needChipLabel(need),
+            disabled:
+              actionsLocked(state) ||
+              need.allowedCommands.length === 0 ||
+              !needAllowedByCapabilities(need, state),
+            run: () => actions.openNeed(need, `${reviewId}-${String(index)}`),
+          }),
+        )),
   ]);
 }
 

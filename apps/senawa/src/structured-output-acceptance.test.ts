@@ -520,7 +520,9 @@ describe("Phase 14I structured output acceptance", () => {
       const config = only(sdk.createCalls);
       expect(config.model).toBe("gpt-5-mini");
       expect(config).toMatchObject({
-        streaming: false,
+        // On, because a session that does not stream never reports what the
+        // agent said, and a transcript of tool calls is not a transcript.
+        streaming: true,
         remoteSession: "off",
         enableSessionStore: false,
         mcpServers: {},

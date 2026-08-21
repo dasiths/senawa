@@ -106,12 +106,12 @@ the whole point of moving escalations onto their node was unreachable.
 
 The largest phase, and the only one that needs data we do not record.
 
-* [ ] Decide the storage shape for prose, given lines cannot hold newlines
-* [ ] Turn streaming on and subscribe to the persisted events
-* [ ] Build the durable transcript from persisted events, never from deltas
-* [ ] Use deltas for live tailing only
-* [ ] Decide whether sub-agent events enter the transcript, and how they read
+* [x] Decide the storage shape for prose, given lines cannot hold newlines
+* [x] Turn streaming on and subscribe to the persisted events
+* [x] Build the durable transcript from persisted events, never from deltas
+* [x] Decide whether sub-agent events enter the transcript, and how they read
 * [ ] Classify transcript sensitivity the way artifacts are classified
+* [ ] Use deltas for live tailing
 
 ## Phase 7: answering feels like answering the agent
 
@@ -231,3 +231,53 @@ the need projects it.
 Old escalations stay readable: the fields are optional, the digest is computed
 from the stored body, and a need with no task still has a defined home at the run
 root where both readings agree.
+
+### A node can be waiting on more than one thing
+
+Giving an escalation a task exposed a defect nothing had reached before. A node
+offered exactly one need control, chosen with `find`, so the first match won and
+every other need on that node was invisible. While escalations had no task they
+never collided with a question, and the bug could not happen.
+
+The browser test that had just been written for the graph failed the moment the
+escalation landed on `task_verify` beside its question: the control was there,
+named for the escalation, and the question had vanished.
+
+A node waiting on an answer and stopped for budget is two decisions. The toolbar
+now offers one control per need, each named for what it is, so a badge that
+counts two things is backed by two controls rather than one.
+
+### Phase 6
+
+The storage question answered itself once the constraint was read properly. A
+transcript line may not contain a newline, which sounded like a reason to give
+prose its own table. It is the opposite: the sink already splits on newlines,
+because one captured record is one displayed row. A terminal is lines. So prose
+needs a stream of its own, not a table of its own, and `assistant` joins
+`stdout`, `stderr` and `system` on the existing column.
+
+That reuses the whole path: the same write, the same replay and conflict rules,
+the same retention, the same paging, the same codec, and the same pane, which now
+colours the agent's voice apart from the machinery reporting on it.
+
+The schema change edits the baseline rather than adding a second migration. The
+durability document already says why: a chain exists to carry an installed base
+forward, and v1 has none. The cost is that an existing development database no
+longer matches the packaged checksums and must be reinitialised, which is now
+written down beside the policy.
+
+Only `assistant.message` is taken. Delta events are marked ephemeral by the SDK
+and are not replayed when a session resumes, so a record assembled from them
+would have holes wherever a worker restarted, and one insert per token would
+turn a synchronous append into a firehose. An event carrying an `agentId` is a
+sub-agent, whose words are not the agent's, so it is dropped:
+`includeSubAgentStreamingEvents` stays off and the filter says so in the code.
+
+The subscription is optional on the port. A port that cannot report the agent's
+words is still usable, and the transcript falls back to the tool calls it already
+records rather than inventing narration it never heard.
+
+Left undone deliberately: transcript lines still have no sensitivity
+classification, while assistant prose may quote repository contents. Artifacts
+have one and transcripts do not, and that gap should be closed before this is
+shown to anyone outside the machine that ran it.

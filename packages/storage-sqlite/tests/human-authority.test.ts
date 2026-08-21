@@ -1085,6 +1085,19 @@ describe("SQLite Phase 11B portal query authority", () => {
       ),
     ).toEqual({ sequence: 1, retained: 1, replayed: false });
 
+    // The agent's own words are a stream of their own. Without one, a transcript
+    // is a log of what happened to an agent and never a word it said.
+    expect(
+      broker.appendTranscript(
+        transcriptLine({
+          owner: { kind: "dispatch", id: "dispatch_said" },
+          lineId: "capture:said",
+          stream: "assistant",
+          text: "Reading the plan item before I write anything.",
+        }),
+      ),
+    ).toEqual({ sequence: 1, retained: 1, replayed: false });
+
     for (const invalid of [
       { text: "" },
       { text: "a".repeat(TRANSCRIPT_LIMITS.maxLineBytes + 1) },

@@ -1008,6 +1008,15 @@ button:disabled {
   color: #ffb4a8;
 }
 
+/* The agent speaking, kept apart from the machinery reporting on it. */
+.agent-terminal-row.assistant .agent-terminal-stream {
+  color: #86d68f;
+}
+
+.agent-terminal-row.assistant .agent-terminal-text {
+  color: #f2f5ee;
+}
+
 .agent-terminal-row.system .agent-terminal-stream,
 .agent-terminal-row.system .agent-terminal-text {
   color: #9fd0ff;

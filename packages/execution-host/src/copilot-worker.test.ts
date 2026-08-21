@@ -205,7 +205,9 @@ describe("CopilotSerialWorkerAdapter", () => {
       toolSearch: { enabled: false },
       infiniteSessions: { enabled: false },
       largeOutput: { enabled: false },
-      streaming: false,
+      // On, because a session that does not stream never reports what the
+      // agent said, and a transcript of tool calls is not a transcript.
+      streaming: true,
       enableConfigDiscovery: false,
       skipCustomInstructions: true,
       enableOnDemandInstructionDiscovery: false,

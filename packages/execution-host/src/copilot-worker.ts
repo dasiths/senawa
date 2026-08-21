@@ -161,7 +161,8 @@ export class CopilotSerialWorkerAdapter {
       dispatchId: validated.dispatch.dispatchId,
       sessionId: validated.dispatch.dispatchId,
       pending: new Set(),
-      note: transcriptNoteSink(input, validated.dispatch, this.sha256, state),
+      note: transcriptNoteSink(input, validated.dispatch, this.sha256, state, "system"),
+      say: transcriptNoteSink(input, validated.dispatch, this.sha256, state, "assistant"),
     };
     scope.note("session started");
     let session: CopilotSdkSessionPort | undefined;
@@ -217,6 +218,7 @@ export class CopilotSerialWorkerAdapter {
       }
       scope.sessionId = session.sessionId;
       this.#activeSession = session;
+      session.onAssistantMessage?.((message) => scope.say(message.content));
       const outcome = await sendWithCancellation(
         session,
         validated.prompt,
@@ -344,6 +346,8 @@ interface RunScope {
   sessionId: string;
   readonly pending: Set<Promise<void>>;
   readonly note: (text: string) => void;
+  /** What the agent said, kept apart from what happened to it. */
+  readonly say: (text: string) => void;
 }
 
 /**
@@ -379,6 +383,7 @@ function transcriptNoteSink(
   dispatch: WorkerDispatch,
   sha256: Sha256,
   state: RunState,
+  stream: "system" | "assistant",
 ): (text: string) => void {
   const port = input.transcript;
   if (port === undefined) return () => undefined;
@@ -400,13 +405,13 @@ function transcriptNoteSink(
                 dispatchId: dispatch.dispatchId,
                 occurredAt,
                 ordinal,
-                stream: "system",
+                stream,
                 text: line,
               }),
             ),
           ),
           occurredAt,
-          stream: "system",
+          stream,
           text: line,
         });
       } catch {
@@ -438,7 +443,9 @@ function sessionConfig(
     toolSearch: Object.freeze({ enabled: false }),
     infiniteSessions: Object.freeze({ enabled: false }),
     largeOutput: Object.freeze({ enabled: false }),
-    streaming: false,
+    // On so the session reports what the agent said. Only complete messages
+    // are kept, so this buys the agent a voice rather than a token firehose.
+    streaming: true,
     includeSubAgentStreamingEvents: false,
     enableConfigDiscovery: false,
     skipCustomInstructions: true,

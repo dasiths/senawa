@@ -195,10 +195,15 @@ test("offers one node toolbar tab stop with arrow movement and bounded actions",
 
   const toolbar = page.getByRole("toolbar", { name: "Selected node actions" });
   const buttons = toolbar.getByRole("button");
-  await expect(buttons).toHaveCount(4);
+  // Copy, focus, fold, and one control per need this node is waiting on.
+  await expect(buttons).toHaveCount(5);
   await expect(toolbar.locator('button[tabindex="0"]')).toHaveCount(1);
   await expect(buttons.nth(0)).toHaveText("Copy identity");
   await expect(buttons.nth(3)).toBeEnabled();
+  // A node waiting on an answer and stopped for budget is two decisions, and
+  // offering only the first hides the second behind a badge that counts both.
+  await expect(buttons.nth(4)).toBeEnabled();
+  await expect(buttons.nth(3)).not.toHaveText(await buttons.nth(4).innerText());
   // Folding is a decision about a phase, so a task cannot make it.
   await expect(buttons.nth(2)).toBeDisabled();
 
@@ -208,7 +213,7 @@ test("offers one node toolbar tab stop with arrow movement and bounded actions",
   await expect(toolbar.locator('button[tabindex="0"]')).toHaveCount(1);
   await expect(buttons.nth(1)).toHaveAttribute("tabindex", "0");
   await page.keyboard.press("End");
-  await expect(buttons.nth(3)).toBeFocused();
+  await expect(buttons.nth(4)).toBeFocused();
   await page.keyboard.press("ArrowRight");
   await expect(buttons.nth(0)).toBeFocused();
   await page.keyboard.press("Home");

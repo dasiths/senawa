@@ -127,7 +127,7 @@ export interface AgentTranscriptLine {
   /** Owner-scoped capture identity that makes an exact replay recognisable. */
   readonly lineId: string;
   readonly occurredAt: string;
-  readonly stream: "stdout" | "stderr" | "system";
+  readonly stream: "stdout" | "stderr" | "system" | "assistant";
   readonly text: string;
 }
 

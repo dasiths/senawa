@@ -538,7 +538,11 @@ export interface PortalTranscriptOwner {
   readonly id: OpaqueIdentity;
 }
 
-export type PortalTranscriptStream = "stdout" | "stderr" | "system";
+/**
+ * `assistant` is the agent speaking. The others are the machinery around it, so
+ * a reader can tell what the agent said from what happened to it.
+ */
+export type PortalTranscriptStream = "stdout" | "stderr" | "system" | "assistant";
 
 export interface PortalTranscriptRecord {
   readonly apiVersion: ProtocolVersion;
