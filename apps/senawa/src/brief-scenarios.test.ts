@@ -1039,6 +1039,77 @@ describe("one phase in sequence", () => {
     }
   });
 
+  // The outbox keeps a fact after it has been delivered, and the driver read the
+  // whole outbox every cycle, so it offered the authority the same completion
+  // again on every pass. That is a command identity being re-submitted for as
+  // long as the run lives, and the moment anything about the envelope moved the
+  // authority refused it for conflicting with itself. The run then stopped
+  // driving entirely, with the reason recorded nowhere a person could read it.
+  it("offers a completion to the authority once, not on every cycle", async () => {
+    const scenario = await startScenario("deliver-once", { secondPhase: true });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+
+    const submissions = () => {
+      const authority = new SqliteAuthority({ ...scenario.paths, dependencies });
+      try {
+        return authority
+          .queryReceiptHistory(scenario.repositoryId, scenario.runId)
+          .filter(({ commandId }) => commandId.startsWith("command_completion-")).length;
+      } finally {
+        authority.close();
+      }
+    };
+
+    await advance(scenario);
+    const once = submissions();
+    expect(once).toBeGreaterThan(0);
+
+    // Nothing has finished since, so nothing new should be offered.
+    await advance(scenario);
+    await advance(scenario);
+    expect(submissions()).toBe(once);
+  }, 120_000);
+
+  // A run whose last phase has closed has nothing left to drive. The driver ran
+  // it again anyway, rebuilding the same commands against a graph that had moved
+  // under them, and the authority refused each one for conflicting with the
+  // identical command it had already recorded. The run stopped for good and said
+  // so nowhere a person could read it.
+  it("stops driving a run whose last phase has closed", async () => {
+    const scenario = await startScenario("finished-again", { fanOut: "complete" });
+    await agentTurn(
+      scenario,
+      scenario.dispatchId,
+      canonicalValue({ tasks: [{ id: "one" }, { id: "two" }] }),
+    );
+    await advance(scenario);
+    await advance(scenario);
+    for (let member = 0; member < 2; member += 1) {
+      const dispatched = await advance(scenario);
+      if (dispatched.kind !== "dispatched") throw new Error(`member ${member}: ${dispatched.kind}`);
+      await agentTurn(scenario, dispatched.dispatchId, canonicalValue({ verified: true }));
+    }
+    expect(await advance(scenario)).toEqual({ kind: "finished" });
+
+    const submitted = () => {
+      const authority = new SqliteAuthority({ ...scenario.paths, dependencies });
+      try {
+        return authority.queryReceiptHistory(scenario.repositoryId, scenario.runId).length;
+      } finally {
+        authority.close();
+      }
+    };
+    const settled = submitted();
+
+    // Asked again, and again, it has to keep giving the same answer without
+    // touching the authority. Re-running a phase it already closed rebuilds the
+    // same commands against a graph the fan-out moved, and the authority refuses
+    // each one for conflicting with the identical command it recorded first.
+    expect(await advance(scenario)).toEqual({ kind: "finished" });
+    expect(await advance(scenario)).toEqual({ kind: "finished" });
+    expect(submitted()).toBe(settled);
+  }, 120_000);
+
   it("lets an agent measure the gate without spending an attempt", async () => {
     const scenario = await startScenario("selfcheck", { sensorCommand: "false" });
 

@@ -235,6 +235,15 @@ async function step(
   const phaseKey = phaseKeyById(snapshot, scheduling.phase.phaseId);
   if (phaseKey === undefined)
     throw new Error("Run points at a phase the workflow does not declare");
+  // A closed last phase is a finished run, and there is nothing left to drive.
+  // Without this the driver re-ran the phase it had already closed on every
+  // cycle, rebuilding the same commands against a graph that had moved under
+  // them, and the authority refused each one for conflicting with the identical
+  // command it had recorded the first time. The run stopped for good, and said
+  // so nowhere a person could read it.
+  if (scheduling.closed && nextPhase(snapshot, phaseKey) === undefined) {
+    return { kind: "finished" };
+  }
   const phase = phaseValue(snapshot, phaseKey);
 
   const state = broker.authority.snapshot();
@@ -909,6 +918,15 @@ function deliverFacts(
 ): void {
   for (const entry of state.completionOutbox) {
     if (!dispatchIds.has(String(entry.fact.dispatchId))) continue;
+    // A fact the outbox has already handed over needs no second offer. The
+    // outbox keeps entries after delivery, so reading all of it every cycle
+    // re-submitted every completion the phase had ever accepted, for as long as
+    // the run lived. That is harmless only while the envelope stays identical:
+    // the identity is derived from the payload, and the expected graph revision
+    // is read fresh, so the moment an amendment moved the graph the same
+    // identity carried different content and the authority refused it for
+    // conflicting with itself. The run then stopped driving for good.
+    if (entry.delivered) continue;
     const stored = broker.loadWorkerDispatch(entry.fact.dispatchId);
     if (stored === undefined) continue;
     try {

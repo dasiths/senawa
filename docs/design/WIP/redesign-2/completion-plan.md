@@ -117,6 +117,14 @@ person something real.
   the process ends keeps its intent and its claim and never gets an outcome, so
   the phase waits for an agent that no longer exists. Taking the run lease at a
   higher fence is the moment to close the abandoned attempt. F-061.
+* [x] A finished run drove itself into a conflict with its own history. The
+  driver re-offered delivered completions and re-ran a phase it had already
+  closed, so every cycle ended in `command-id-conflict`. F-063. Proven on the
+  live record rather than in the harness, which does not reach the conflict;
+  reproducing it there is still owed.
+* [ ] Say nothing where a person can read it when a run stops being driven. The
+  throw that ended F-063 reached stderr and nowhere else, and `supervisor_logs`
+  records only the service starting and stopping.
 * [x] A question whose guards no longer bind stays queued as a human need
   forever, offers a button, and refuses every answer. Nothing prunes it. F-040.
 * [x] `/agents` returned 500 for a healthy run. F-039.

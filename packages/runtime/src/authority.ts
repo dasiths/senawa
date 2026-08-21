@@ -152,6 +152,8 @@ interface RuntimeRunRecords {
 export interface RuntimeSchedulingSnapshot {
   readonly graph: WorkflowGraph;
   readonly phase: PhaseGenerationReference;
+  /** Whether the current phase has already recorded its closure. */
+  readonly closed: boolean;
   readonly acceptedTasks: readonly {
     readonly task: TaskGenerationReference;
     readonly accountingAssessmentDigest: Sha256Digest;
@@ -521,6 +523,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     return Object.freeze({
       graph: currentGraph(records, this.dependencies.sha256),
       phase: records.phase,
+      closed: records.closure !== undefined,
       acceptedTasks: Object.freeze(
         records.assessments
           .map(({ assessment, assessmentDigest }) =>

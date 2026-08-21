@@ -4269,3 +4269,51 @@ closing.
 
 The test drives a fan-out to the driver's own `finished` outcome and then reads
 the status a person would read. Returning zero from the count makes it fail.
+
+## F-063 A finished run drove itself into a conflict with its own history
+
+The example run had closed all three phases and produced a working game. The
+supervisor kept driving it anyway, and every cycle ended in a throw:
+
+```
+submit-completion was refused: command-id-conflict:
+Command identity is already bound to a different canonical envelope
+```
+
+Two things were wrong, one behind the other.
+
+The driver hands the authority every completion sitting in the context broker's
+outbox. The outbox keeps entries after they are delivered — `delivered` is a flag
+on the entry, not a removal — so the driver re-offered every completion the phase
+had ever accepted, on every cycle, for as long as the run lived. That is harmless
+only while the envelope is byte-identical, because a command identity derived
+from the payload replays cleanly. It stops being harmless the moment anything
+outside the payload moves, and a fan-out moves the graph revision underneath it.
+A fact that has been delivered is now skipped.
+
+With that fixed the same refusal moved to `close-phase`, which is the real
+problem: the driver was re-running a phase it had already closed. There was
+nowhere for that to go. `close-implement-4` had been recorded once against the
+candidate the phase closed on, and re-running the phase built a candidate from an
+accepted-task set the redelivery had since changed, so the same identity carried
+a different digest. The run stopped for good.
+
+A closed last phase is a finished run. The scheduling snapshot now says whether
+the current phase has recorded its closure, and the driver answers `finished`
+before it rebuilds anything.
+
+What is worth recording is how this was proven, because it was not proven the way
+everything else in this log was. Neither fix is discriminated by the scenario
+harness: with both removed, the fan-out scenario still reports `finished` on every
+later cycle and submits nothing new. The harness never reaches the conflict
+because it never gets the accepted-task set to move after a close. The evidence is
+the live record instead — `senawa advance` against it threw deterministically
+before each change and returns `every phase is done` after. That is a real
+reproduction and a real repair, but it is one record rather than a test, and the
+next person to touch this has no net under them. Reproducing it in the harness is
+worth doing and is not done.
+
+The other half of this is that none of it was visible. The throw reached stderr,
+where it was seen only because a browser test run happened to capture the
+supervisor's output. `supervisor_logs` records the service starting and stopping
+and nothing about a run that has stopped being driven.
