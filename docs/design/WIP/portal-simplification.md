@@ -752,3 +752,13 @@ rendering change and nothing more.
 [The mocks](portal-redesign-mocks/) render this concretely, and their `Finish
 next` control advances the next unfinished piece of work so the rule can be
 watched rather than described.
+
+### What the redesign needs underneath
+
+[The gap analysis](portal-gap-analysis.md) separates the seven promises the mocks
+make into work we can do now and work that needs data we never capture. The short
+version: only the terminal needs new capture. Naming needs a title carried beside
+an identity that cannot change. Folding and selection need somewhere for view
+state to live, because rendering currently replaces the whole tree on every poll.
+The graph, the tables and the commands all work against contracts that already
+ship.
