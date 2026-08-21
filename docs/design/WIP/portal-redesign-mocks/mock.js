@@ -34,15 +34,109 @@ document.addEventListener("click", (event) => {
   }
 
   const fold = event.target.closest("[data-fold]");
-  if (fold !== null) foldBands(fold.dataset.fold === "open");
+  if (fold !== null) {
+    const held = heldAnywhere();
+    for (const band of document.querySelectorAll(".band")) {
+      if (held) delete band.dataset.held;
+      else {
+        band.open = true;
+        band.dataset.held = "true";
+      }
+    }
+    refold();
+    return;
+  }
+
+  // Opening or folding by hand is a decision, so the automatic rule stops
+  // arguing with it for that phase.
+  const summary = event.target.closest(".band > summary");
+  if (summary !== null) {
+    summary.parentElement.dataset.held = "true";
+    syncFoldButton();
+    return;
+  }
+
+  if (event.target.closest("[data-demo]") !== null) finishNext();
 });
 
-// "Finished" is only a proxy for "not where the attention is", so the control
-// says which of the two a reader wants rather than pretending they are one rule.
-function foldBands(open) {
+// A phase is open while it still has work in it, and folds itself when the last
+// member lands. State drives the fold; the fold is never stored.
+function refold() {
   for (const band of document.querySelectorAll(".band")) {
-    band.open = open || band.dataset.frontier === "true";
+    summarise(band);
+    if (band.dataset.held !== "true") {
+      band.open = band.querySelector(".gnode:not(.is-closed), .asks") !== null;
+    }
   }
+  summariseRun();
+  syncFoldButton();
+  drawEdges();
+}
+
+// A folded phase is the only thing left to read, so its label has to be derived
+// from its members rather than written once.
+function summarise(band) {
+  const members = [...band.querySelectorAll(".gnode")];
+  if (members.length === 0) return;
+  const closed = members.every((member) => member.classList.contains("is-closed"));
+  const state = band.querySelector("summary > .state");
+  state.className = `state is-${closed ? "closed" : "working"}`;
+  state.textContent = closed ? "closed" : "working";
+
+  const counts = [members.length === 1 ? "1 piece of work" : `${members.length} members`];
+  const asks = band.querySelectorAll(".asks").length;
+  const stuck = band.querySelectorAll(".gnode.is-refused").length;
+  if (asks > 0) counts.push(`${asks} asks`);
+  if (stuck > 0) counts.push(`${stuck} needs budget`);
+  band.querySelector(".fold-sub").textContent = counts.join(" · ");
+}
+
+function summariseRun() {
+  const bands = [...document.querySelectorAll(".band")];
+  const closed = bands.filter((band) => band.querySelector(".gnode:not(.is-closed)") === null);
+  const done = closed.length === bands.length;
+  const state = document.querySelector(".run-head > .state");
+  state.className = `state is-${done ? "closed" : "working"}`;
+  state.textContent = done ? "finished" : "running";
+  document.querySelector(".elapsed").textContent = done
+    ? "23m · every phase closed"
+    : `23m · ${closed.length} of ${bands.length} phases closed`;
+
+  let waiting = 0;
+  for (const item of document.querySelectorAll("#needs li")) {
+    const key = item.querySelector("[data-selects]")?.dataset.selects;
+    const asking = document.querySelector(`#graph [data-selects="${key}"] .asks`) !== null;
+    item.hidden = !asking;
+    if (asking) waiting += 1;
+  }
+  const pill = document.querySelector(".needs-pill");
+  pill.hidden = waiting === 0;
+  pill.textContent = `${waiting} waiting on you`;
+  document.querySelector("#needs").previousElementSibling.querySelector(".count").textContent =
+    String(waiting);
+}
+
+function heldAnywhere() {
+  return document.querySelector(".band[data-held='true']") !== null;
+}
+
+function syncFoldButton() {
+  const button = document.querySelector("[data-fold]");
+  if (button !== null) button.textContent = heldAnywhere() ? "Follow the work" : "Unfold all";
+}
+
+// Mock-only: advances the next unfinished piece of work so the fold rule can be
+// watched rather than described.
+function finishNext() {
+  const node = document.querySelector("#graph .gnode:not(.is-closed)");
+  if (node === null) return;
+  node.classList.remove("is-working", "is-refused");
+  node.classList.add("is-closed");
+  node.querySelector(".asks")?.remove();
+  const chip = node.querySelector(".state");
+  chip.className = "state is-closed";
+  chip.textContent = "done";
+  refold();
 }
 
 // Detail is fetched when a row is opened, never up front. The delay is here so
@@ -96,26 +190,27 @@ function drawEdges() {
   if (svg == null || graph.offsetParent === null) return;
 
   const box = graph.getBoundingClientRect();
-  const paths = [];
+  const paths = new Set();
   for (const target of graph.querySelectorAll("[data-from]")) {
-    const to = target.getBoundingClientRect();
-    for (const entry of target.dataset.from.split(",")) {
-      const [id, flow] = entry.trim().split(/\s+/);
-      const source = graph.querySelector(`[data-node="${id}"]`);
+    const to = anchor(target).getBoundingClientRect();
+    for (const id of target.dataset.from.split(",")) {
+      const source = graph.querySelector(`[data-node="${id.trim()}"]`);
       if (source === null) continue;
       const from = anchor(source).getBoundingClientRect();
       const x1 = from.left - box.left + from.width / 2;
       const y1 = from.bottom - box.top;
       const x2 = to.left - box.left + to.width / 2;
       const y2 = to.top - box.top;
+      if (y2 <= y1) continue;
       const bend = Math.max(14, (y2 - y1) * 0.55);
-      paths.push(
-        `<path class="edge${flow === "done" ? " is-done" : ""}" marker-end="url(#tip${flow === "done" ? "-done" : ""})" d="M${x1} ${y1} C${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2 - 5}" />`,
+      const carried = !source.classList.contains("gnode") || source.classList.contains("is-closed");
+      paths.add(
+        `<path class="edge${carried ? " is-done" : ""}" marker-end="url(#tip${carried ? "-done" : ""})" d="M${x1} ${y1} C${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2 - 5}" />`,
       );
     }
   }
   svg.setAttribute("viewBox", `0 0 ${box.width} ${box.height}`);
-  svg.innerHTML = `<defs>${arrow("tip", "#cfd4dc")}${arrow("tip-done", "#b6c2d2")}</defs>${paths.join("")}`;
+  svg.innerHTML = `<defs>${arrow("tip", "#cfd4dc")}${arrow("tip-done", "#b6c2d2")}</defs>${[...paths].join("")}`;
 }
 
 function arrow(id, fill) {
@@ -141,4 +236,4 @@ document.addEventListener(
 );
 
 new ResizeObserver(() => drawEdges()).observe(document.body);
-drawEdges();
+refold();

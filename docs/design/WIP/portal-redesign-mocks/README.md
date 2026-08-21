@@ -38,13 +38,22 @@ carried, so an unfinished run reads as unfinished at a glance.
 four members read as one fan-out rather than four unrelated branches, and it is
 where the phase's own state and counts live.
 
-**Folding follows the frontier, not the state.** "Closed" is only a proxy for
-"not where the attention is", and it is the wrong proxy for a finished run, where
-it would fold everything. The rule is to open the frontier — whatever is working,
-asking, or stopped — and fold the rest; a run with no frontier opens its last
-phase. Both directions are one click in the legend, and an edge whose endpoint is
-folded away reattaches to the group that swallowed it, so folding never deletes
-structure. Press `Unfold all` to see why the rule exists: the run stops fitting.
+**Folding follows the work.** A phase is open while anything in it is still
+running, and folds itself when the last member lands — plus it stays open while
+something is waiting on a person, because moving a need onto its node achieves
+nothing if that node is folded shut. Nothing is stored: the fold is a function of
+state. Press `Finish next (mock)` four times to watch `implement` fold itself,
+and `Unfold all` to see why the rule exists at all — the run stops fitting.
+
+**A folded label is all that is left to read, so it is derived too.** A band
+still reading `working · 1 asks · 1 needs budget` after its last member landed is
+worse than no label. The state chip, the counts, the run header and the waiting
+queue all recompute from the members.
+
+**An explicit fold wins.** Opening or folding by hand is a decision, so the
+automatic rule stops arguing with that phase; `Follow the work` hands control
+back. Edges whose endpoints are folded away reattach to the group that swallowed
+them, and duplicates collapse into one, so folding never deletes structure.
 
 **Layout is measured, not authored.** Edges are drawn from the laid-out boxes
 after render, so nothing needs coordinates and the picture survives wrapping,

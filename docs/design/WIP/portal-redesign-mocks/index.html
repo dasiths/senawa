@@ -160,7 +160,7 @@
                       <span class="fold-sub">1 piece of work</span>
                     </summary>
                     <div class="band-body">
-                      <button class="gnode is-closed" type="button" data-node="t-research" data-from="start done" data-selects="research">
+                      <button class="gnode is-closed" type="button" data-node="t-research" data-from="start" data-selects="research">
                         <span class="g-name">understand the request</span>
                         <span class="g-meta">researcher · <span class="model">haiku-4.5</span></span>
                         <span class="g-foot"><span class="state is-closed">done</span></span>
@@ -168,7 +168,7 @@
                     </div>
                   </details>
 
-                  <button class="chip" type="button" data-node="a-research" data-from="t-research done" data-selects="research">
+                  <button class="chip" type="button" data-node="a-research" data-from="t-research" data-selects="research">
                     <b>research</b> <span class="fan">3.3 KiB</span>
                   </button>
 
@@ -179,7 +179,7 @@
                       <span class="fold-sub">1 piece of work</span>
                     </summary>
                     <div class="band-body">
-                      <button class="gnode is-closed" type="button" data-node="t-plan" data-from="a-research done" data-selects="plan">
+                      <button class="gnode is-closed" type="button" data-node="t-plan" data-from="a-research" data-selects="plan">
                         <span class="g-name">break the work into tasks</span>
                         <span class="g-meta">planner · <span class="model">haiku-4.5</span></span>
                         <span class="g-foot"><span class="state is-closed">done</span></span>
@@ -187,33 +187,33 @@
                     </div>
                   </details>
 
-                  <button class="chip" type="button" data-node="a-plan" data-from="t-plan done" data-selects="plan">
+                  <button class="chip" type="button" data-node="a-plan" data-from="t-plan" data-selects="plan">
                     <b>plan</b> <span class="fan">4 tasks · fans out</span>
                   </button>
 
-                  <details class="band" data-node="p-implement" data-frontier="true" open>
+                  <details class="band" data-node="p-implement" open>
                     <summary>
                       <span class="node-mark">◆</span> implement
                       <span class="state is-working">working</span>
                       <span class="fold-sub">4 members · 1 asks · 1 needs budget</span>
                     </summary>
                     <div class="band-body">
-                      <button class="gnode is-working" type="button" data-node="t-game" data-from="a-plan done" data-selects="game" aria-current="true">
+                      <button class="gnode is-working" type="button" data-node="t-game" data-from="a-plan" data-selects="game" aria-current="true">
                         <span class="g-name">write the game rules module</span>
                         <span class="g-meta">implementor · <span class="model">sonnet-4.5</span></span>
                         <span class="g-foot"><span class="state is-working">working</span><span class="asks">asks</span></span>
                       </button>
-                      <button class="gnode is-working" type="button" data-node="t-cli" data-from="a-plan done" data-selects="cli">
+                      <button class="gnode is-working" type="button" data-node="t-cli" data-from="a-plan" data-selects="cli">
                         <span class="g-name">write the command-line entry point</span>
                         <span class="g-meta">implementor · <span class="model">haiku-4.5</span></span>
                         <span class="g-foot"><span class="state is-working">working</span></span>
                       </button>
-                      <button class="gnode is-closed" type="button" data-node="t-tests" data-from="a-plan done" data-selects="tests">
+                      <button class="gnode is-closed" type="button" data-node="t-tests" data-from="a-plan" data-selects="tests">
                         <span class="g-name">write the test suite</span>
                         <span class="g-meta">implementor · <span class="model">haiku-4.5</span></span>
                         <span class="g-foot"><span class="state is-closed">done</span></span>
                       </button>
-                      <button class="gnode is-refused" type="button" data-node="t-check" data-from="a-plan done" data-selects="check">
+                      <button class="gnode is-refused" type="button" data-node="t-check" data-from="a-plan" data-selects="check">
                         <span class="g-name">write the check script</span>
                         <span class="g-meta">implementor · <span class="model">haiku-4.5</span></span>
                         <span class="g-foot"><span class="state is-refused">needs budget</span></span>
@@ -221,7 +221,7 @@
                     </div>
                   </details>
 
-                  <span class="finish" data-node="end" data-from="t-game, t-cli, t-tests done, t-check">
+                  <span class="finish" data-node="end" data-from="t-game, t-cli, t-tests, t-check">
                     the run finishes when all four are accepted
                   </span>
                 </div>
@@ -229,10 +229,10 @@
               <div class="graph-legend">
                 <span><i class="solid"></i> carried</span>
                 <span><i class="dashed"></i> not yet</span>
-                <span>folded to the frontier</span>
+                <span>a phase stays open while anything in it is running</span>
                 <span class="legend-actions">
                   <button type="button" data-fold="open">Unfold all</button>
-                  <button type="button" data-fold="close">Fold what is finished</button>
+                  <button type="button" data-demo="finish">Finish next (mock)</button>
                 </span>
               </div>
             </div>
@@ -259,7 +259,7 @@
       <aside class="rail">
         <section class="card">
           <header><h2>Waiting on you</h2><span class="count">1</span></header>
-          <ul class="queue">
+          <ul class="queue" id="needs">
             <li>
               <button type="button" data-selects="game">
                 <span class="q-where">implement · write the game rules module</span>

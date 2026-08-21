@@ -715,31 +715,40 @@ maintain:
   read as one branching rather than four unrelated ones, and it carries the
   phase's own state and counts.
 
-### Folding follows the frontier, not the state
+### A phase is open while it has work in it
 
 Folding is what keeps a whole run on one screen: unfolded, a three-phase run
 already overflows, and the cost grows with every phase.
 
-The obvious rule — fold what is closed — is wrong in the case that matters most.
-A *finished* run is entirely closed, so that rule folds everything and greets a
-person checking the outcome with a column of labels.
+The rule is the simplest one that is also true: **a phase is open while anything
+in it is still running, and folds itself when the last member lands.** Nothing is
+stored. The fold is a function of the run's state, so it follows the work without
+being told to, and a finished run collapses to a compact chain of phases — which
+is the right summary of a finished run, not a loss.
 
-"Closed" was only ever a proxy for "not where the attention is". The rule should
-say that directly: **open the frontier, fold the rest**, where the frontier is
-whatever is working, asking, or stopped. A run with no frontier has finished, so
-its last phase opens. A phase carrying a need opens regardless of state, because
-the whole point of moving escalations onto their node is lost if the node they
-moved to is folded shut.
+One addition, for the same reason escalations moved onto their node: **a phase
+with something waiting on a person stays open regardless.** Moving a need onto
+the node that raised it achieves nothing if that node is folded shut.
 
-Two consequences make it safe:
+Three consequences make it safe:
 
-* An edge whose endpoint is folded away reattaches to the group that swallowed
-  it, so folding hides detail and never deletes structure.
-* An explicit fold survives the next poll. A person who opened something did so
-  deliberately, and a refresh must not undo it.
+* **A folded phase's label is all that is left to read, so it has to be derived
+  too.** A band still reading `working · 1 asks · 1 needs budget` after its last
+  member landed is worse than no label, because it is the only thing visible. The
+  state chip and the counts come from the members every time the fold is
+  recomputed.
+* **An edge whose endpoint is folded away reattaches to the group that swallowed
+  it**, and duplicate edges collapse into one. Folding hides detail; it never
+  deletes structure.
+* **An explicit fold wins.** Opening or folding by hand is a decision, so the
+  automatic rule stops arguing with that phase until the reader asks it to
+  resume. One control offers both directions: `Unfold all`, then `Follow the
+  work` to hand control back.
 
 The graph needs no data the record does not already hold: phase succession and
 plan-to-member fan-out are both already there. Unlike the terminal, it is a
 rendering change and nothing more.
 
-[The mocks](portal-redesign-mocks/) render this concretely.
+[The mocks](portal-redesign-mocks/) render this concretely, and their `Finish
+next` control advances the next unfinished piece of work so the rule can be
+watched rather than described.
