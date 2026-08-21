@@ -76,14 +76,23 @@ browser tests.
 * [x] An edge whose endpoint is folded away attaches to the group instead
 * [ ] An artifact renders on the edge leaving the node that produced it
 
-## Phase 4: tables that load their detail on click
+## Phase 4: a record is built when it is opened
 
-Activity renders every event fully expanded. Every collection it needs is already
-paginated.
+Reading the code corrected this phase twice.
 
-* [ ] Record and Artifacts render one row per thing
-* [ ] Row detail is fetched when the row is opened, never up front
-* [ ] Opening a row shows that it is loading
+Activity does not render every event expanded any more: the record already sits
+behind a closed disclosure. But hiding is not the same as not building, and the
+JSON tree for every row was still constructed on first render, so a hundred
+closed disclosures cost a hundred JSON trees.
+
+And fetching on open would be wrong here. Events and receipts arrive over the
+event stream and are already in memory, so a round trip would buy nothing. What
+costs is the DOM, not the network. Artifact content is the case that genuinely
+needs fetching, and it already does.
+
+* [x] A record's detail is built only while it is open
+* [x] Opening a record survives the next render, because it is a decision
+* [ ] Artifacts render as one row per artifact
 
 ## Phase 5: a need always names its node
 

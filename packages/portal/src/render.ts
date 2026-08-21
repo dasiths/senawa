@@ -70,6 +70,7 @@ export interface PortalRenderActions {
   readonly setGraphMode: (mode: GraphMode) => void;
   readonly setGraphViewport: (viewport: PortalGraphViewport) => void;
   readonly unfoldNode: (nodeId: string) => void;
+  readonly toggleRecord: (recordKey: string) => void;
   readonly focusRecord: (recordId: string) => void;
   readonly openNeed: (need: PortalHumanNeed, triggerId: string) => void;
   readonly openRunControl: (kind: "pause" | "resume" | "end", triggerId: string) => void;
@@ -1001,13 +1002,15 @@ function renderActivity(state: PortalState, actions: PortalRenderActions): HTMLE
     activityList(
       "Events",
       events?.events ?? state.visibleEvents,
-      state.ui.filter,
+      state,
+      actions,
       (entry) => `${entry.cursor} ${entry.eventType} ${entry.occurredAt}`,
     ),
     activityList(
       "Receipts",
       receipts?.receipts ?? [],
-      state.ui.filter,
+      state,
+      actions,
       (entry) => `${entry.cursor} ${entry.status} ${entry.commandId}`,
     ),
   );
@@ -1032,13 +1035,15 @@ function renderActivity(state: PortalState, actions: PortalRenderActions): HTMLE
 function activityList<Value>(
   title: string,
   values: readonly Value[],
-  filter: string,
+  state: PortalState,
+  actions: PortalRenderActions,
   label: (value: Value) => string,
 ): HTMLElement {
   const panel = element("section", "activity-panel");
   panel.append(textElement("h2", "compact-heading", title));
   const list = element("ol", "activity-list");
-  const needle = filter.toLocaleLowerCase();
+  const needle = state.ui.filter.toLocaleLowerCase();
+  const opened = new Set(state.ui.openedRecords);
   for (const value of values) {
     const summary = label(value);
     if (!summary.toLocaleLowerCase().includes(needle)) continue;
@@ -1047,12 +1052,34 @@ function activityList<Value>(
     // Every event rendered its whole record inline, which put twenty-four
     // thousand characters and a hundred and sixty-eight digests on a view whose
     // job is to say what happened and when. The record is the thing you open
-    // once you have a question.
-    item.append(disclosure("Exact record", renderJson(asJson(value), `${title} detail`)));
+    // once you have a question, so it is built only while it is open, and the
+    // decision to open it outlives the next poll.
+    const recordKey = `${title}:${summary}`;
+    item.append(
+      recordDisclosure(recordKey, opened.has(recordKey), actions, () =>
+        renderJson(asJson(value), `${title} detail`),
+      ),
+    );
     list.append(item);
   }
   panel.append(list);
   return panel;
+}
+
+function recordDisclosure(
+  recordKey: string,
+  open: boolean,
+  actions: PortalRenderActions,
+  build: () => Node,
+): HTMLElement {
+  const wrapper = element("details", "disclosure");
+  wrapper.append(textElement("summary", "disclosure-summary", "Exact record"));
+  wrapper.open = open;
+  if (open) wrapper.append(build());
+  wrapper.addEventListener("toggle", () => {
+    if (wrapper.open !== open) actions.toggleRecord(recordKey);
+  });
+  return wrapper;
 }
 
 function renderArtifacts(state: PortalState, actions: PortalRenderActions): HTMLElement {

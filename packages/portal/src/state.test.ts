@@ -19,6 +19,29 @@ const sync = Object.freeze({
 });
 
 describe("portal state", () => {
+  // Rendering replaces the whole tree on every poll, so anything a reader
+  // decided has to be a fact the next render reads rather than DOM it inspects.
+  it("keeps a reader's folds and opened records across a poll", () => {
+    const start = initialPortalState(parsePortalHash("#/runs/repository_one/run_one/workflow"));
+    expect(start.ui.unfoldedNodes).toEqual([]);
+    expect(start.ui.openedRecords).toEqual([]);
+
+    const opened = portalReducer(
+      portalReducer(start, { type: "graph-unfold", nodeId: "phase_research" }),
+      { type: "record-disclosure", recordKey: "Events:7 phase-started" },
+    );
+    expect(opened.ui.unfoldedNodes).toEqual(["phase_research"]);
+    expect(opened.ui.openedRecords).toEqual(["Events:7 phase-started"]);
+
+    // Both are toggles: asking again is how a reader takes the decision back.
+    const closed = portalReducer(
+      portalReducer(opened, { type: "graph-unfold", nodeId: "phase_research" }),
+      { type: "record-disclosure", recordKey: "Events:7 phase-started" },
+    );
+    expect(closed.ui.unfoldedNodes).toEqual([]);
+    expect(closed.ui.openedRecords).toEqual([]);
+  });
+
   it("keeps authority caches revision keyed and locks actions through gaps", () => {
     const original = initialPortalState(parsePortalHash("#/runs/repository_one/run_one/record"));
     const selected = portalReducer(original, {

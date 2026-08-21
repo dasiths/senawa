@@ -861,6 +861,7 @@ export class PortalApplication {
       setGraphMode: (mode) => this.#dispatch({ type: "graph-mode", mode }),
       setGraphViewport: (viewport) => this.#dispatch({ type: "graph-viewport", viewport }),
       unfoldNode: (nodeId) => this.#dispatch({ type: "graph-unfold", nodeId }),
+      toggleRecord: (recordKey) => this.#dispatch({ type: "record-disclosure", recordKey }),
       focusRecord: (recordId) => {
         this.#dispatch({ type: "focus-record", recordId });
         void this.#syncTranscript();

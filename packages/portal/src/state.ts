@@ -158,6 +158,8 @@ export interface PortalUiState {
    * so this records only the decision to disagree, which must outlive a poll.
    */
   readonly unfoldedNodes: readonly string[];
+  /** Activity rows a reader opened. Their detail is built only while they are. */
+  readonly openedRecords: readonly string[];
   readonly graphViewport: PortalGraphViewport;
   readonly transcript: TranscriptView;
   readonly transcriptScope: TranscriptScope;
@@ -222,6 +224,7 @@ export type PortalAction =
   | { readonly type: "right-rail"; readonly open: boolean }
   | { readonly type: "graph-mode"; readonly mode: GraphMode }
   | { readonly type: "graph-unfold"; readonly nodeId: string }
+  | { readonly type: "record-disclosure"; readonly recordKey: string }
   | { readonly type: "graph-viewport"; readonly viewport: PortalGraphViewport }
   | { readonly type: "transcript-owner"; readonly owner: PortalTranscriptOwner | undefined }
   | { readonly type: "transcript-page"; readonly page: PortalTranscriptPage }
@@ -272,6 +275,7 @@ export function initialPortalState(route: PortalRoute): PortalState {
       rightRailOpen: false,
       graphMode: "diagram",
       unfoldedNodes: Object.freeze([]),
+      openedRecords: Object.freeze([]),
       graphViewport: INITIAL_GRAPH_VIEWPORT,
       transcript: emptyTranscriptView(),
       transcriptScope: "node",
@@ -486,6 +490,13 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
       if (!open.delete(action.nodeId)) open.add(action.nodeId);
       return next(state, {
         ui: Object.freeze({ ...state.ui, unfoldedNodes: Object.freeze([...open].sort()) }),
+      });
+    }
+    case "record-disclosure": {
+      const open = new Set(state.ui.openedRecords);
+      if (!open.delete(action.recordKey)) open.add(action.recordKey);
+      return next(state, {
+        ui: Object.freeze({ ...state.ui, openedRecords: Object.freeze([...open].sort()) }),
       });
     }
     case "graph-viewport":

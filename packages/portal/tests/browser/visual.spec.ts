@@ -186,6 +186,18 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
     .locator(".activity-view")
     .evaluate((node) => (node as HTMLElement).innerText);
   expect((activityText.match(/\b[0-9a-f]{64}\b/gu) ?? []).length).toBe(0);
+  // Hiding a record is not the same as not building it. A hundred closed
+  // disclosures each holding a JSON tree is a hundred JSON trees.
+  await expect(page.locator(".activity-item .json-viewer")).toHaveCount(0);
+
+  const record = page.locator(".activity-item > details").first();
+  await record.locator("summary").click();
+  await expect(record).toHaveAttribute("open", "");
+  await expect(record.locator(".json-viewer")).toHaveCount(1);
+  // Opening a record is a decision, so it survives the next render rather than
+  // closing itself under the reader.
+  await expect(page.locator(".activity-item > details[open]")).toHaveCount(1);
+
   const firstTail = await receiptSummaries.first().textContent();
   await page.getByRole("button", { name: "Earlier receipts" }).click();
   await expect(receiptSummaries.first()).not.toHaveText(firstTail ?? "");
