@@ -1,10 +1,8 @@
 export const PORTAL_ROUTES = Object.freeze([
   "workflow",
   "record",
-  "delivery",
   "artifacts",
   "amendments",
-  "workspaces",
   "agents",
 ] as const);
 

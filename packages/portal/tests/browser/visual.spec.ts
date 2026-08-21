@@ -65,7 +65,7 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   await amendmentDialog.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
-  await navigate(page, "Delivery");
+  await navigate(page, "Record");
   await expect(page.getByRole("heading", { name: "Standard delivery authority" })).toBeVisible();
   // Depth is one action away and absent until asked for, which is what
   // progressive disclosure has to mean to be worth anything.
@@ -83,7 +83,7 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   await captureState(page, "agents", mobile);
 
   await selectRun(page, runs.workspace);
-  await navigate(page, "Workspaces");
+  await navigate(page, "Record");
   await expect(
     page.getByRole("heading", { name: "Integration, conflict, and rework" }),
   ).toBeVisible();

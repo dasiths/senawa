@@ -377,7 +377,23 @@ test("offers the action for a need on the node the need is about", async ({ page
   expect(diagnostics.severe()).toEqual([]);
 });
 
-// The workflow said which phases were open and the Agents tab said who was on
+// Where a task's work is happening, and whether that work can be accepted, was
+// a table of its own keyed by a task identity a reader had to match by eye
+// against the workflow. It is a fact about the task, so it belongs on the task.
+test("says where a task's work is happening inside the task", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.workspace);
+  await navigate(page, "Workflow");
+  const tree = page.getByRole("tree");
+  await expect(tree).toBeVisible();
+
+  const where = tree.locator(".workflow-workspace").first();
+  await expect(where).toBeVisible();
+  await expect(where.locator(".workspace-mode")).not.toBeEmpty();
+  await expect(where.locator(".workspace-state")).not.toBeEmpty();
+  expect(diagnostics.severe()).toEqual([]);
+});
+
+// The workflow said which phases were open and a separate tab said who was on
 // them, so answering "who is doing this, and how is it going" meant holding two
 // views in your head and matching a task identity between them.
 test("names who is on a piece of work inside the work itself", async ({ page }) => {

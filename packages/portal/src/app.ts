@@ -343,13 +343,17 @@ export class PortalApplication {
     // only the activity route, so fetching them everywhere made three requests
     // where one was wanted and delayed the view a reader actually asked for.
     if (route === "record") {
-      const [events, receipts] = await Promise.all([
+      const [events, receipts, delivery, integrations] = await Promise.all([
         this.#client.events(repositoryId, runId),
         this.#client.receipts(repositoryId, runId),
+        this.#client.delivery(repositoryId, runId),
+        this.#client.integrations(repositoryId, runId),
       ]);
       if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
       this.#dispatch({ type: "cache", cache: "events", key, value: events });
       this.#dispatch({ type: "cache", cache: "receipts", key, value: receipts });
+      this.#dispatch({ type: "cache", cache: "delivery", key, value: delivery });
+      this.#dispatch({ type: "cache", cache: "integrations", key, value: integrations });
     }
     switch (route) {
       case "record":
@@ -392,12 +396,6 @@ export class PortalApplication {
         void this.#syncTranscript();
         return true;
       }
-      case "delivery": {
-        const delivery = await this.#client.delivery(repositoryId, runId);
-        if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
-        this.#dispatch({ type: "cache", cache: "delivery", key, value: delivery });
-        return true;
-      }
       case "artifacts": {
         const artifacts = await this.#client.artifacts(repositoryId, runId);
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
@@ -424,16 +422,6 @@ export class PortalApplication {
         const agents = await this.#client.agents(repositoryId, runId);
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
         this.#dispatch({ type: "cache", cache: "agents", key, value: agents });
-        return true;
-      }
-      case "workspaces": {
-        const [workspaces, integrations] = await Promise.all([
-          this.#client.workspaces(repositoryId, runId),
-          this.#client.integrations(repositoryId, runId),
-        ]);
-        if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
-        this.#dispatch({ type: "cache", cache: "workspaces", key, value: workspaces });
-        this.#dispatch({ type: "cache", cache: "integrations", key, value: integrations });
         return true;
       }
     }

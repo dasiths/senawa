@@ -641,6 +641,19 @@ button:disabled {
   font-size: 12px;
 }
 
+.workflow-workspace {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  border-left: 2px solid var(--rule);
+  padding-left: 8px;
+  font-size: 12px;
+}
+
+.workspace-blocked {
+  color: var(--attention, #8a5300);
+}
+
 .workflow-waiting {
   color: var(--attention, #8a5300);
   font-size: 12px;

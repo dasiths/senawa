@@ -524,17 +524,11 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
     case "workflow":
       main.append(renderWorkflow(state, actions));
       break;
-    case "delivery":
-      main.append(renderDelivery(state));
-      break;
     case "artifacts":
       main.append(renderArtifacts(state, actions));
       break;
     case "amendments":
       main.append(renderAmendments(state));
-      break;
-    case "workspaces":
-      main.append(renderWorkspaces(state));
       break;
     case "agents":
       main.append(renderAgents(state, actions));
@@ -548,7 +542,12 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
 // the second an undifferentiated log.
 function renderRecord(state: PortalState, actions: PortalRenderActions): HTMLElement {
   const section = element("section", "record-view");
-  section.append(renderOverview(state, actions), renderActivity(state, actions));
+  section.append(
+    renderOverview(state, actions),
+    renderDelivery(state),
+    renderIntegrations(state),
+    renderActivity(state, actions),
+  );
   return section;
 }
 
@@ -756,6 +755,10 @@ function workflowTree(
       ? []
       : (state.caches.agents[runKey(ids.repositoryId, ids.runId)]?.agents ?? []);
   const visible = new Set(nodes.map(({ nodeId }) => nodeId));
+  const workspaces =
+    ids === undefined
+      ? []
+      : (state.caches.workspaces[runKey(ids.repositoryId, ids.runId)]?.workspaces ?? []);
   const roots = nodes.filter(
     ({ parentNodeId }) => parentNodeId === undefined || !visible.has(parentNodeId),
   );
@@ -793,6 +796,20 @@ function workflowTree(
       line.append(
         textElement("span", "workflow-waiting", `${String(node.humanNeedCount)} waiting on you`),
       );
+    // Where a task's work is happening, and whether that work can be accepted,
+    // is a fact about the task. It was a table of its own keyed by an identity
+    // a reader had to match by eye against this tree.
+    const workspace = workspaces.find((candidate) => String(candidate.taskId) === node.nodeId);
+    if (workspace !== undefined) {
+      const where = element("span", "workflow-workspace");
+      where.append(
+        textElement("span", "workspace-mode", workspace.mode),
+        textElement("span", `workspace-state state-${workspace.state}`, workspace.state),
+      );
+      if (!workspace.completionEligible)
+        where.append(textElement("span", "workspace-blocked", "cannot be accepted yet"));
+      line.append(where);
+    }
     item.append(line);
     item.addEventListener("click", () => actions.focusRecord(node.nodeId));
     item.addEventListener("keydown", treeKeydown);
@@ -1217,28 +1234,16 @@ function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLEle
   return section;
 }
 
-function renderWorkspaces(state: PortalState): HTMLElement {
+// Integration is about a cohort rather than a task, so it has no node to sit on
+// and belongs with the rest of the run's record.
+function renderIntegrations(state: PortalState): HTMLElement {
   const ids = selectedIds(state);
-  if (ids === undefined) return emptySection("Loading workspaces");
-  const key = runKey(ids.repositoryId, ids.runId);
-  const section = element("section", "workspace-view");
-  const workspaces = state.caches.workspaces[key]?.workspaces ?? [];
-  const integrations = state.caches.integrations[key]?.integrations ?? [];
-  section.append(
-    textElement("h2", "section-heading", "Task workspaces"),
-    summaryTable(
-      ["Task", "Generation", "Mode", "State", "Completion", "Result"],
-      workspaces.map((workspace) => [
-        workspace.taskId,
-        String(workspace.definitionGeneration),
-        workspace.mode,
-        workspace.state,
-        workspace.completionEligible ? "Eligible" : "Blocked",
-        workspace.resultDigest ?? "No captured result",
-      ]),
-      "Task workspace authority",
-    ),
-  );
+  const section = element("section", "integration-view");
+  const integrations =
+    ids === undefined
+      ? []
+      : (state.caches.integrations[runKey(ids.repositoryId, ids.runId)]?.integrations ?? []);
+  if (integrations.length === 0) return section;
   section.append(
     textElement("h2", "section-heading", "Integration, conflict, and rework"),
     summaryTable(
@@ -1797,11 +1802,9 @@ function routeLabel(route: PortalRouteName): string {
   const labels: Readonly<Record<PortalRouteName, string>> = {
     workflow: "Workflow",
     record: "Record",
-    delivery: "Delivery",
     artifacts: "Artifacts",
     amendments: "Amendments",
     agents: "Agents",
-    workspaces: "Workspaces",
   };
   return labels[route];
 }

@@ -127,9 +127,11 @@ person something real.
   recorded only the service starting and stopping. A failed drive is now an
   `error` log against the run, and a workflow that will not compile names the
   file, the pointer and the fault rather than counting diagnostics.
-* [ ] `forces a timed-out process group that ignores SIGTERM` fails under the
-  parallel suite and passes alone, three runs in a row. A test that only holds
-  when the machine is quiet is not holding anything.
+* [ ] Tests that only hold when the machine is quiet. Two process-sensor cases
+  and `waits for the members still working whichever one finishes first` fail
+  under the parallel suite and pass alone, repeatedly. The fan-out one takes
+  seventeen seconds by itself, because every `advance` opens and verifies the
+  record; that is the latency of Phase 5 showing up as a flake.
 * [x] A question whose guards no longer bind stays queued as a human need
   forever, offers a button, and refuses every answer. Nothing prunes it. F-040.
 * [x] `/agents` returned 500 for a healthy run. F-039.
@@ -165,8 +167,11 @@ layout is judged on legible material, and structure last.
   workflow. A row now reads `phase research closed` instead of a `Kind`,
   `Generation` and `Lifecycle` column, and a need appears as a button on the
   node it blocks. The thirty-four browser tests were moved with it and pass.
-* [ ] Fold Agents, Delivery and Workspaces into the selection the workflow view
-  already has, and put `Steer` and `Override` in its toolbar.
+* [x] Fold Agents, Delivery and Workspaces into the selection the workflow view
+  already has. Where a task's work is happening and who is doing it now render
+  inside the task, and the delivery and integration records moved to `Record`,
+  which is where a run's history already lives. Seven tabs are now five.
+  `Steer` and `Override` in the workflow toolbar are still owed.
 * [x] Retire the Human needs tab. Every need renders on the node it blocks with
   its action inline, and the queue survives in the rail, so the tab was
   rendering the same needs a second time. That second copy is the one the live
