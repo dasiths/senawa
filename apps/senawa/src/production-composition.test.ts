@@ -43,7 +43,11 @@ import {
   runtimePrincipal,
 } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { ProductionScheduler, selectCurrentDispatches } from "./production-scheduler.js";
+import {
+  ProductionScheduler,
+  schedulableDispatches,
+  selectCurrentDispatches,
+} from "./production-scheduler.js";
 
 const roots = new Set<string>();
 
@@ -71,6 +75,32 @@ afterEach(() => {
 });
 
 describe("production worker composition", () => {
+  // An answer reaches an agent by being carried into a fresh dispatch. The
+  // scheduler refused to schedule anything at all while any answer was still
+  // undelivered, which included that fresh dispatch, so a second answer arriving
+  // before the first had run left the run unable to schedule either one: the
+  // answer could only be delivered by a dispatch, and no dispatch could run
+  // while an answer was undelivered. Observed live, with a run idle for
+  // seventeen minutes holding a dispatch nothing had ever queued work for.
+  it("schedules the fresh dispatch that carries an answer, not the one it replaced", () => {
+    const stale = {
+      dispatch: { dispatchId: "dispatch_asked" },
+    } as unknown as Parameters<typeof schedulableDispatches>[0] extends
+      | readonly (infer Item)[]
+      | undefined
+      ? Item
+      : never;
+    const fresh = {
+      dispatch: { dispatchId: "dispatch_carrying-the-answer" },
+    } as unknown as typeof stale;
+    const owed = [{ historicalDispatchId: "dispatch_asked" }];
+
+    expect(schedulableDispatches([stale, fresh], owed)).toEqual([fresh]);
+    // And nothing outstanding leaves every current dispatch schedulable.
+    expect(schedulableDispatches([stale, fresh], [])).toEqual([stale, fresh]);
+    expect(schedulableDispatches(undefined, owed)).toBeUndefined();
+  });
+
   it("selects one exact durable current dispatch and fails closed on ambiguity", () => {
     const baseGraph = createRuntimeGraph();
     const taskNode = baseGraph.nodes.find(({ kind }) => kind === "task");

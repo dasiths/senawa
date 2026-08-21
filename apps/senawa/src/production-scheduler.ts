@@ -94,9 +94,13 @@ export class ProductionScheduler {
     if (runControl !== undefined && runControl.mode !== "running") {
       return { worked: false, batchSize: 1 };
     }
-    if (this.listFreshDispatchRequirements(input.repositoryId, input.runId).length > 0) {
-      return { worked: false, batchSize: 1 };
-    }
+    // A requirement names one stale dispatch, not a stale run. Refusing to
+    // schedule anything while one was outstanding also refused the fresh
+    // dispatch created to carry the answer, so a second answer arriving before
+    // that dispatch had run left the run unable to schedule either: the answer
+    // could only be delivered by a dispatch, and no dispatch could be scheduled
+    // while the answer was undelivered.
+    const outstanding = this.listFreshDispatchRequirements(input.repositoryId, input.runId);
     const runtime = this.#options.authority.commandAuthority.queryRunScheduling(
       input.repositoryId,
       input.runId,
@@ -108,10 +112,13 @@ export class ProductionScheduler {
     if (runtime === undefined || runtimeBinding === undefined) {
       return { worked: false, batchSize: 1 };
     }
-    const dispatches = selectCurrentDispatches(
-      runtime,
-      this.#options.contextBroker.authority.snapshot().taskScopes,
-      this.#options.contextBroker.listWorkerDispatches(input.repositoryId, input.runId),
+    const dispatches = schedulableDispatches(
+      selectCurrentDispatches(
+        runtime,
+        this.#options.contextBroker.authority.snapshot().taskScopes,
+        this.#options.contextBroker.listWorkerDispatches(input.repositoryId, input.runId),
+      ),
+      outstanding,
     );
     if (dispatches === undefined || dispatches.length === 0) {
       return { worked: false, batchSize: 1 };
@@ -588,6 +595,22 @@ function workerDispatchId(input: JsonValue): string | undefined {
       ? workerRecord.dispatchId
       : undefined
     : undefined;
+}
+
+/**
+ * The dispatches that may run while answers are still owed to earlier ones.
+ *
+ * A fresh dispatch requirement names the one dispatch an answer made stale. It
+ * does not make the run stale, and in particular it does not make stale the
+ * fresh dispatch created to carry that answer.
+ */
+export function schedulableDispatches(
+  dispatches: readonly StoredDispatch[] | undefined,
+  requirements: readonly { readonly historicalDispatchId: string }[],
+): readonly StoredDispatch[] | undefined {
+  if (dispatches === undefined) return undefined;
+  const stale = new Set(requirements.map(({ historicalDispatchId }) => historicalDispatchId));
+  return dispatches.filter((stored) => !stale.has(stored.dispatch.dispatchId));
 }
 
 export function selectCurrentDispatches(

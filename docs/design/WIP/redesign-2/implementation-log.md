@@ -4358,3 +4358,44 @@ made on purpose rather than at the end of a long session.
 The narrower statement, for whoever takes it: everything under the supervisor
 recovers correctly, and there is a test for it. What is missing is that nothing
 tries again.
+
+## F-064 Answering a second question stopped the run
+
+A run was left with three questions from one agent. Answering two of them made
+the third disappear from the portal and the run went idle for seventeen minutes
+with `senawa status` reporting two agents dispatched and nothing waiting.
+
+The record said it plainly. One runner command had ever been queued, for the
+original dispatch, and its effect was cancelled. A second dispatch existed in the
+context broker, carrying one of the two answers, and nothing had ever queued work
+for it. No claim, no intent, no transcript. The agent was never launched.
+
+An answer reaches an agent by being carried into a fresh dispatch, and the
+scheduler guarded that with:
+
+```ts
+if (this.listFreshDispatchRequirements(repositoryId, runId).length > 0) {
+  return { worked: false, batchSize: 1 };
+}
+```
+
+The intent is right — an answer makes the dispatch that asked stale, and running
+it again would run an agent that cannot hand work in. The scope is wrong. A
+requirement names one stale dispatch; this refuses to schedule *anything*,
+including the fresh dispatch created to carry the answer. So the second answer
+arriving before the first dispatch had run closed the loop: the answer could only
+be delivered by a dispatch, and no dispatch could be scheduled while an answer was
+undelivered.
+
+The guard now excludes the dispatches the outstanding requirements name, and
+schedules the rest. `schedulableDispatches` states that rule on its own so it can
+be tested, and the test fails against the old one.
+
+Proven twice. As a test, and live: with the fix deployed the seventeen-minute-old
+dispatch started within seconds, and the run then took an answer from the command
+line and another from the portal, dispatching a fresh attempt for each.
+
+The disappearing question was a symptom rather than a second defect. The answer
+was accepted and recorded, so the question stopped being open; it could not be
+delivered, so nothing acted on it. What a person saw was a question they had
+answered vanishing and nothing happening, which is the worst of both.
