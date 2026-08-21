@@ -140,7 +140,7 @@ textarea {
   border: 1px solid var(--rule);
   border-radius: 999px;
   background: var(--surface);
-  padding: 4px 12px;
+  padding: 4px 14px;
   font-size: 12px;
   color: var(--muted);
 }
@@ -181,7 +181,7 @@ textarea {
   border-radius: 999px;
   background: var(--surface);
   color: var(--muted);
-  padding: 4px 12px;
+  padding: 4px 14px;
   font-size: 12px;
   cursor: pointer;
 }
@@ -214,7 +214,7 @@ textarea {
   border-radius: 0;
   background: none;
   color: var(--muted);
-  padding: 9px 14px;
+  padding: 10px 14px;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -234,7 +234,7 @@ textarea {
 .global-strip {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   flex-wrap: wrap;
   min-width: 0;
   color: var(--faint);
@@ -309,13 +309,13 @@ textarea {
 
 .main-workspace {
   min-width: 0;
-  padding: 18px 20px 28px;
+  padding: 20px 20px 24px;
 }
 
 .run-head {
   display: flex;
   align-items: baseline;
-  gap: 12px;
+  gap: 14px;
   flex-wrap: wrap;
   margin-bottom: 14px;
 }
@@ -333,7 +333,7 @@ textarea {
 }
 
 .proof {
-  margin-top: 18px;
+  margin-top: 20px;
   border-top: 1px solid var(--rule);
   padding-top: 10px;
   color: var(--muted);
@@ -406,7 +406,7 @@ textarea {
 }
 
 .view-toolbar {
-  margin-bottom: 12px;
+  margin-bottom: 14px;
   flex-wrap: wrap;
 }
 
@@ -441,7 +441,7 @@ textarea {
 .graph {
   position: relative;
   overflow-x: auto;
-  padding: 18px 16px 16px;
+  padding: 20px 16px 16px;
 }
 
 /* Edges sit under the nodes so a line can be seen entering the group it feeds. */
@@ -482,18 +482,18 @@ textarea {
 }
 
 .band[open] {
-  padding-bottom: 13px;
+  padding-bottom: 14px;
 }
 
 .band > summary {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin: -11px 0 0;
+  margin: -10px 0 0;
   border: 1px solid var(--rule);
   border-radius: 999px;
   background: var(--surface);
-  padding: 2px 11px;
+  padding: 2px 10px;
   font-size: 12px;
   font-weight: 620;
   list-style: none;
@@ -505,7 +505,7 @@ textarea {
 }
 
 .band[open] > summary {
-  margin-bottom: 15px;
+  margin-bottom: 16px;
 }
 
 .fold-sub {
@@ -524,14 +524,14 @@ textarea {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
   width: 190px;
   border: 1px solid var(--rule);
   border-left: 3px solid var(--amber);
   border-radius: 8px;
   background: var(--surface);
   box-shadow: var(--shadow);
-  padding: 9px 11px;
+  padding: 10px 10px;
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -577,7 +577,7 @@ textarea {
 .g-foot {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -585,12 +585,12 @@ textarea {
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   border: 1px solid var(--rule);
   border-radius: 999px;
   background: var(--surface);
   box-shadow: var(--shadow);
-  padding: 4px 11px;
+  padding: 4px 10px;
   color: var(--muted);
   font-size: 12px;
   cursor: pointer;
@@ -610,7 +610,7 @@ textarea {
   border: 1px dashed var(--rule-strong);
   border-radius: 999px;
   background: var(--paper);
-  padding: 5px 14px;
+  padding: 4px 14px;
   color: var(--faint);
   font-size: 12px;
   text-align: center;
@@ -620,7 +620,7 @@ textarea {
   display: flex;
   gap: 16px;
   border-top: 1px solid var(--rule);
-  padding: 9px 16px;
+  padding: 10px 16px;
   color: var(--faint);
   font-size: 11.5px;
   flex-wrap: wrap;
@@ -656,7 +656,7 @@ textarea {
   border: 1px solid var(--rule);
   border-radius: 999px;
   background: var(--surface);
-  padding: 2px 9px;
+  padding: 2px 10px;
   color: var(--muted);
   font: inherit;
   font-size: 11.5px;
@@ -678,7 +678,7 @@ textarea {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
-  padding: 0 11px;
+  padding: 0 10px;
   font-size: 12px;
   cursor: pointer;
 }
@@ -713,7 +713,7 @@ textarea {
   border-radius: 999px;
   background: none;
   color: var(--muted);
-  padding: 3px 11px;
+  padding: 4px 10px;
 }
 
 .segmented-control .command[aria-selected="true"] {
@@ -731,7 +731,7 @@ textarea {
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--surface);
-  padding: 6px 9px;
+  padding: 6px 10px;
   font-size: 13px;
 }
 
@@ -739,7 +739,7 @@ textarea {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   gap: 8px;
-  margin: 12px 0 0;
+  margin: 14px 0 0;
 }
 
 .count-item {
@@ -774,7 +774,7 @@ textarea {
 .artifact-facts {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
-  gap: 5px 10px;
+  gap: 4px 10px;
   margin: 8px 0 0;
   font-size: 12px;
 }
@@ -955,7 +955,7 @@ textarea {
 
 .json-viewer {
   min-width: 0;
-  margin-top: 9px;
+  margin-top: 10px;
   border-top: 1px solid var(--rule);
   padding-top: 8px;
   font-size: 12px;
@@ -975,7 +975,7 @@ textarea {
   min-height: 28px;
   cursor: pointer;
   overflow-wrap: anywhere;
-  padding: 5px 2px;
+  padding: 4px 2px;
   font-family: "Cascadia Code", "SFMono-Regular", "DejaVu Sans Mono", monospace;
 }
 
@@ -1054,7 +1054,7 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 8px 0 12px;
+  margin: 8px 0 14px;
 }
 
 .review-dialog::backdrop {
@@ -1210,7 +1210,7 @@ textarea {
 }
 
 .tree-group {
-  padding-left: 18px;
+  padding-left: 20px;
 }
 
 .workflow-node {
@@ -1223,7 +1223,7 @@ textarea {
   gap: 8px;
   width: 100%;
   border-radius: var(--radius-sm);
-  padding: 7px 9px;
+  padding: 6px 10px;
   text-align: left;
   cursor: pointer;
 }
@@ -1268,7 +1268,7 @@ textarea {
 .state {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
@@ -1336,7 +1336,7 @@ textarea {
   border-radius: 999px;
   background: var(--amber-soft);
   color: #7a4d0a;
-  padding: 2px 9px;
+  padding: 2px 10px;
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
@@ -1353,14 +1353,14 @@ textarea {
   align-items: flex-start;
   gap: 10px;
   border-bottom: 1px solid var(--rule);
-  padding: 12px 14px;
+  padding: 14px 14px;
   flex-wrap: wrap;
 }
 
 .detail-title {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -1400,13 +1400,13 @@ textarea {
 }
 
 .a-q {
-  margin: 0 0 3px;
+  margin: 0 0 4px;
   font-weight: 550;
   overflow-wrap: anywhere;
 }
 
 .a-a {
-  margin: 0 0 3px;
+  margin: 0 0 4px;
   color: var(--muted);
   overflow-wrap: anywhere;
 }
@@ -1428,7 +1428,7 @@ textarea {
   display: flex;
   gap: 14px;
   border-bottom: 1px solid var(--rule);
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .detail-tab {
@@ -1467,7 +1467,7 @@ textarea {
   gap: 8px;
   flex-wrap: wrap;
   border-bottom: 1px solid #23272e;
-  padding: 5px 10px;
+  padding: 4px 10px;
   color: var(--term-dim);
   font-size: 11px;
 }
@@ -1562,13 +1562,13 @@ textarea {
   gap: 8px;
   border-top: 1px solid #23272e;
   background: #191c21;
-  padding: 9px 10px;
+  padding: 10px 10px;
 }
 
 .reply-caret {
   color: var(--term-accent);
   font-family: var(--mono);
-  padding-top: 5px;
+  padding-top: 4px;
 }
 
 .reply textarea {
@@ -1589,7 +1589,7 @@ textarea {
 
 .reply-side {
   display: grid;
-  gap: 5px;
+  gap: 4px;
   justify-items: end;
 }
 
@@ -1626,7 +1626,7 @@ textarea {
 
 .answered li {
   border-bottom: 1px solid var(--rule);
-  padding: 9px 0;
+  padding: 10px 0;
 }
 
 .a-q {
@@ -1670,7 +1670,7 @@ textarea {
 .dense-table td,
 .summary-table td {
   border-bottom: 1px solid var(--rule);
-  padding: 7px 8px;
+  padding: 6px 8px;
   vertical-align: top;
   overflow-wrap: anywhere;
 }
@@ -1700,7 +1700,7 @@ textarea {
 
 .grid td {
   border-bottom: 1px solid var(--rule);
-  padding: 9px 14px;
+  padding: 10px 14px;
   overflow-wrap: anywhere;
 }
 
@@ -1745,7 +1745,7 @@ textarea {
 
 .activity-item {
   border-bottom: 1px solid var(--rule);
-  padding: 9px 14px;
+  padding: 10px 14px;
 }
 
 .activity-item:last-child {
@@ -1835,7 +1835,7 @@ textarea {
   border: 1px solid var(--rule);
   border-radius: var(--radius);
   background: var(--surface);
-  padding: 10px 12px;
+  padding: 10px 14px;
   margin-top: 8px;
 }
 
@@ -1962,16 +1962,16 @@ textarea {
 
   .app-header {
     flex-wrap: wrap;
-    padding: 8px 12px;
+    padding: 8px 14px;
   }
 
   .main-workspace {
-    padding: 14px 12px 24px;
+    padding: 14px 14px 24px;
   }
 
   .primary-nav,
   .global-strip {
-    padding-inline: 12px;
+    padding-inline: 14px;
   }
 
   .nav-list {
@@ -2029,8 +2029,8 @@ textarea {
 
 .agent-attempts {
   display: flex;
-  gap: 12px;
-  margin: 5px 0 0;
+  gap: 14px;
+  margin: 4px 0 0;
   padding: 0;
   flex-wrap: wrap;
   list-style: none;
@@ -2090,7 +2090,7 @@ textarea {
   max-height: 320px;
   border-radius: var(--radius-sm);
   background: var(--term-bg);
-  padding: 10px 12px;
+  padding: 10px 14px;
   color: var(--term-ink);
   font-family: var(--mono);
   font-size: 12px;
@@ -2131,7 +2131,7 @@ textarea {
 @media (min-width: 1180px) {
   .right-rail[data-collapsed="true"] {
     overflow: hidden;
-    padding-inline: 5px;
+    padding-inline: 4px;
   }
 
   .right-rail[data-collapsed="true"] .compact-heading,
@@ -2197,7 +2197,7 @@ textarea {
 .timeline {
   position: relative;
   margin: 0;
-  padding: 12px 14px 14px 0;
+  padding: 14px 14px 14px 0;
   list-style: none;
 }
 
@@ -2220,7 +2220,7 @@ textarea {
   display: grid;
   grid-template-columns: 74px 22px minmax(0, 1fr);
   align-items: baseline;
-  padding: 3px 0;
+  padding: 4px 0;
 }
 
 .moment::before {
@@ -2322,7 +2322,7 @@ textarea {
   display: inline-grid;
   place-items: center;
   min-width: 30px;
-  padding-inline: 7px;
+  padding-inline: 6px;
   color: var(--muted);
 }
 
@@ -2440,6 +2440,6 @@ textarea {
 
   .nav-item,
   .detail-tab {
-    padding-block: 12px;
+    padding-block: 14px;
   }
 }

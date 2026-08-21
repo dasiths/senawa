@@ -676,3 +676,23 @@ The touch-target rule taught the lesson twice. Raising `min-height` on `button`
 lost to `.rail-toggle` on specificity, so the control never grew. Raising the
 token inside the media query raises every control at once and cannot lose,
 because there is nothing to lose to.
+
+### Phase 10, second pass
+
+A second adversarial reader was given both viewports of all four tabs beside
+their mocks. Most of what it returned was wrong in an instructive way: it read
+the mock's invented data as a layout requirement and reported the Agents,
+Artifacts and Record tabs as "completely broken" because the fixture has fewer
+rows than the mock draws. A reviewer that cannot tell a fixture from a defect
+will call every empty state a failure, so its findings were taken as claims to
+check rather than as work to do.
+
+What survived checking was the spacing. Twelve distinct off-scale values were in
+the stylesheet: 3, 5, 7, 9, 11, 12, 13, 15, 18, 26, 28 and 96 pixels, sixty-four
+declarations in all. Every one that is a padding, a margin or a gap now snaps to
+the scale. The three that remain are measurements rather than choices: the rail
+offset in the timeline, the gap between nodes in the graph flow, and the summary
+that sits astride its own band border.
+
+That is the difference the phase was for. A spacing scale nobody can enumerate is
+not a scale, and now it can be enumerated by a script in one pass.
