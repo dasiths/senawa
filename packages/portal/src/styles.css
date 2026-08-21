@@ -650,6 +650,11 @@ button:disabled {
   font-size: 12px;
 }
 
+.agent-action {
+  font-size: 11px;
+  padding: 1px 6px;
+}
+
 .workspace-blocked {
   color: var(--attention, #8a5300);
 }

@@ -377,6 +377,22 @@ test("offers the action for a need on the node the need is about", async ({ page
   expect(diagnostics.severe()).toEqual([]);
 });
 
+// Redirecting an agent was a control on a list of agents that named the work by
+// identity, so acting on the right one meant matching a digest by eye against
+// the workflow. It belongs beside the work it redirects.
+test("offers to redirect an agent from the work it is doing", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await navigate(page, "Workflow");
+  const steer = page.getByRole("tree").locator(".agent-action-steer").first();
+  await expect(steer).toBeVisible();
+
+  await steer.click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(diagnostics.severe()).toEqual([]);
+});
+
 // Where a task's work is happening, and whether that work can be accepted, was
 // a table of its own keyed by a task identity a reader had to match by eye
 // against the workflow. It is a fact about the task, so it belongs on the task.

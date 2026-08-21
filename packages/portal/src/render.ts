@@ -783,6 +783,18 @@ function workflowTree(
       who.append(textElement("span", `agent-state ${latest.state}`, latest.state));
       if (working.length > 1)
         who.append(textElement("span", "agent-attempts", `attempt ${String(latest.attempt)}`));
+      // Redirecting an agent, or accepting work it could not finish, is done
+      // while looking at the work. Both controls lived on a list of agents that
+      // named the work by identity, so acting on the right one meant matching a
+      // digest by eye against this tree.
+      if (latest.state === "working" && hasCapability(state, "portal-write-steer-agent"))
+        who.append(agentActionButton("steer", "Steer", latest, actions));
+      if (
+        latest.state === "finished" &&
+        latest.latestRefusal !== undefined &&
+        hasCapability(state, "portal-write-override-member")
+      )
+        who.append(agentActionButton("override", "Accept anyway", latest, actions));
       line.append(who);
     }
     // A need belongs on the thing it blocks. Scattering them across three tabs
@@ -822,6 +834,26 @@ function workflowTree(
   };
   for (const node of roots) appendChildren(tree, node, 1);
   return tree;
+}
+
+function agentActionButton(
+  kind: "steer" | "override",
+  label: string,
+  agent: PortalAgentSummary,
+  actions: PortalRenderActions,
+): HTMLElement {
+  const triggerId = `${kind}-${agent.dispatchId}`;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.id = triggerId;
+  button.className = `agent-action agent-action-${kind}`;
+  button.textContent = label;
+  button.addEventListener("click", (event) => {
+    // The node is clickable, and this button sits inside it.
+    event.stopPropagation();
+    actions.openAgentAction(kind, agent, triggerId);
+  });
+  return button;
 }
 
 // A need is never about nothing. One that names a task belongs on that task; one

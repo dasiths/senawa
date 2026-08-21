@@ -171,7 +171,8 @@ layout is judged on legible material, and structure last.
   already has. Where a task's work is happening and who is doing it now render
   inside the task, and the delivery and integration records moved to `Record`,
   which is where a run's history already lives. Seven tabs are now five.
-  `Steer` and `Override` in the workflow toolbar are still owed.
+  Redirecting an agent, and accepting work it could not finish, are controls on
+  the node rather than on a list that named the work by identity.
 * [x] Retire the Human needs tab. Every need renders on the node it blocks with
   its action inline, and the queue survives in the rail, so the tab was
   rendering the same needs a second time. That second copy is the one the live
