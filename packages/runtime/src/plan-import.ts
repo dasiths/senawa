@@ -279,6 +279,7 @@ function taskOperation(
       predecessor === undefined
         ? member.taskKey
         : consumerKey(`${member.taskKey.slice(0, 46)}-${successorDigest?.slice(0, 16)}`),
+    ...memberTitle(member),
     generation,
     parentId: template.parentPhaseId,
     dependsOn: member.dependencyTaskIds.map(
@@ -297,6 +298,16 @@ function taskOperation(
     completionPolicy,
   };
   return { kind: "add-task", task, criteria };
+}
+
+// The planner already titled every item it produced, so a member is named by the
+// work it was asked to do rather than by the digest that identifies it.
+function memberTitle(member: FanOutMember): { readonly title?: string } {
+  const input = member.input;
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return {};
+  const title = (input as { readonly title?: unknown }).title;
+  if (typeof title !== "string" || title.length === 0) return {};
+  return { title: title.length > 256 ? title.slice(0, 256) : title };
 }
 
 function successorTaskId(predecessor: FanOutMember, successor: FanOutMember, sha256: Sha256) {

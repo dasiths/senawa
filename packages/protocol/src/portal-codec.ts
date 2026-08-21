@@ -1226,13 +1226,14 @@ function agentSummary(value: unknown, path: string): PortalAgentSummary {
   token(object.persona, `${path}.persona`);
   identity(object.phaseId, `${path}.phaseId`);
   identity(object.taskId, `${path}.taskId`);
-  // An authored name is whatever the workflow author wrote, so it is bounded
-  // free text rather than a token the reader gets to constrain.
+  // An authored name is whatever the workflow author or the planner wrote, so it
+  // is bounded free text rather than a token the reader gets to constrain. The
+  // bound is the one a planned task's title already carries.
   if (object.phaseName !== undefined) {
-    boundedString(object.phaseName, `${path}.phaseName`, 1, 128);
+    boundedString(object.phaseName, `${path}.phaseName`, 1, 256);
   }
   if (object.taskName !== undefined) {
-    boundedString(object.taskName, `${path}.taskName`, 1, 128);
+    boundedString(object.taskName, `${path}.taskName`, 1, 256);
   }
   integer(object.attempt, `${path}.attempt`, 1);
   // A model name comes from a vendor and carries whatever they use, such as the

@@ -276,6 +276,8 @@ interface ParsedPhaseExit {
 interface ParsedWork {
   readonly pointer: string;
   readonly key: string;
+  /** What a person calls this piece of work. The key stays the identity. */
+  readonly title?: string;
   readonly generation: number;
   readonly role: string;
   readonly budgets: readonly ParsedBudget[];
@@ -1746,6 +1748,7 @@ function parsePhase(
             {
               pointer: `${pointer}/executor`,
               key: "phase-executor",
+              title: key,
               generation,
               role: executor.role,
               budgets: executor.budgets,
@@ -3713,6 +3716,7 @@ function lowerWorkDeclaration(
   const task = {
     id,
     key: consumerKey(work.key),
+    ...(work.title === undefined ? {} : { title: work.title }),
     generation: definitionGeneration(work.generation),
     parentId: phaseIdentity(workflowKey, phaseKey, sha256),
     dependsOn: work.dependsOn.map((reference) =>

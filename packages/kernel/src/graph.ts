@@ -40,6 +40,8 @@ export interface SourcePointer {
 interface DefinitionInput<Id, SupersededId = never> {
   readonly id: Id;
   readonly key: ConsumerKey;
+  /** What a person calls this. Presentation only: never part of identity or the digest. */
+  readonly title?: string;
   readonly generation: DefinitionGeneration;
   readonly source: SourcePointerInput;
   readonly input?: unknown;
@@ -75,6 +77,7 @@ export interface NormalizedWorkflowInput {
 interface Definition<Id> {
   readonly id: Id;
   readonly key: ConsumerKey;
+  readonly title?: string;
   readonly generation: DefinitionGeneration;
   readonly source: SourcePointer;
   readonly input: CanonicalValue;
@@ -740,18 +743,17 @@ function nodeInput(value: unknown, path: string): ValidatedNodeInput {
 
 function workflowDefinitionInput(value: unknown, path: string): WorkflowDefinitionInput {
   const definitionPath = `${path}.definition`;
-  assertExactKeys(value, definitionPath, [
-    "id",
-    "key",
-    "generation",
-    "source",
-    "input",
-    "definitionDigest",
-  ]);
+  assertExactKeys(
+    value,
+    definitionPath,
+    ["id", "key", "generation", "source", "input", "definitionDigest"],
+    ["title"],
+  );
   assertCommonDefinition(value, definitionPath, isWorkflowId);
   return {
     id: value.id as WorkflowId,
     key: value.key as ConsumerKey,
+    ...decodedTitle(value, definitionPath),
     generation: value.generation as DefinitionGeneration,
     source: sourceInput(value.source, definitionPath),
     input: value.input,
@@ -760,17 +762,22 @@ function workflowDefinitionInput(value: unknown, path: string): WorkflowDefiniti
 
 function phaseDefinitionInput(value: unknown, path: string): PhaseDefinitionInput {
   const definitionPath = `${path}.definition`;
-  assertExactKeys(value, definitionPath, [
-    "id",
-    "key",
-    "generation",
-    "source",
-    "input",
-    "definitionDigest",
-    "parentId",
-    "dependsOn",
-    "supersedes",
-  ]);
+  assertExactKeys(
+    value,
+    definitionPath,
+    [
+      "id",
+      "key",
+      "generation",
+      "source",
+      "input",
+      "definitionDigest",
+      "parentId",
+      "dependsOn",
+      "supersedes",
+    ],
+    ["title"],
+  );
   assertCommonDefinition(value, definitionPath, isPhaseId);
   if (!isWorkflowId(value.parentId) && !isPhaseId(value.parentId)) {
     invalidGraph(`${definitionPath}.parentId must be a workflow or phase identity`);
@@ -780,6 +787,7 @@ function phaseDefinitionInput(value: unknown, path: string): PhaseDefinitionInpu
   return {
     id: value.id as PhaseId,
     key: value.key as ConsumerKey,
+    ...decodedTitle(value, definitionPath),
     generation: value.generation as DefinitionGeneration,
     source: sourceInput(value.source, definitionPath),
     input: value.input,
@@ -791,18 +799,23 @@ function phaseDefinitionInput(value: unknown, path: string): PhaseDefinitionInpu
 
 function taskDefinitionInput(value: unknown, path: string): TaskDefinitionInput {
   const definitionPath = `${path}.definition`;
-  assertExactKeys(value, definitionPath, [
-    "id",
-    "key",
-    "generation",
-    "source",
-    "input",
-    "definitionDigest",
-    "parentId",
-    "dependsOn",
-    "supersedes",
-    "completionPolicy",
-  ]);
+  assertExactKeys(
+    value,
+    definitionPath,
+    [
+      "id",
+      "key",
+      "generation",
+      "source",
+      "input",
+      "definitionDigest",
+      "parentId",
+      "dependsOn",
+      "supersedes",
+      "completionPolicy",
+    ],
+    ["title"],
+  );
   assertCommonDefinition(value, definitionPath, isTaskId);
   if (!isPhaseId(value.parentId)) {
     invalidGraph(`${definitionPath}.parentId must be a phase identity`);
@@ -816,6 +829,7 @@ function taskDefinitionInput(value: unknown, path: string): TaskDefinitionInput 
   return {
     id: value.id as TaskId,
     key: value.key as ConsumerKey,
+    ...decodedTitle(value, definitionPath),
     generation: value.generation as DefinitionGeneration,
     source: sourceInput(value.source, definitionPath),
     input: value.input,
@@ -837,16 +851,12 @@ function graphCompletionPolicy(value: unknown, path: string): CompletionPolicy {
 
 function criterionDefinitionInput(value: unknown, path: string): CriterionDefinitionInput {
   const definitionPath = `${path}.definition`;
-  assertExactKeys(value, definitionPath, [
-    "id",
-    "key",
-    "generation",
-    "source",
-    "input",
-    "definitionDigest",
-    "parentId",
-    "supersedes",
-  ]);
+  assertExactKeys(
+    value,
+    definitionPath,
+    ["id", "key", "generation", "source", "input", "definitionDigest", "parentId", "supersedes"],
+    ["title"],
+  );
   assertCommonDefinition(value, definitionPath, isCriterionId);
   if (!isTaskId(value.parentId)) {
     invalidGraph(`${definitionPath}.parentId must be a task identity`);
@@ -855,12 +865,25 @@ function criterionDefinitionInput(value: unknown, path: string): CriterionDefini
   return {
     id: value.id as CriterionId,
     key: value.key as ConsumerKey,
+    ...decodedTitle(value, definitionPath),
     generation: value.generation as DefinitionGeneration,
     source: sourceInput(value.source, definitionPath),
     input: value.input,
     parentId: value.parentId,
     supersedes: value.supersedes as CriterionId[],
   };
+}
+
+function decodedTitle(value: Record<string, unknown>, path: string): { readonly title?: string } {
+  if (value.title === undefined) return {};
+  if (
+    typeof value.title !== "string" ||
+    value.title.length === 0 ||
+    value.title.length > MAX_DEFINITION_TITLE
+  ) {
+    invalidGraph(`${path}.title must be 1 to ${MAX_DEFINITION_TITLE} characters`);
+  }
+  return { title: value.title };
 }
 
 function assertCommonDefinition(
@@ -927,11 +950,15 @@ function assertExactKeys(
   value: unknown,
   path: string,
   expectedKeys: readonly string[],
+  optionalKeys: readonly string[] = [],
 ): asserts value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     invalidGraph(`${path} must be an object`);
   }
-  const actualKeys = Object.keys(value).sort(compareText);
+  const optional = new Set(optionalKeys);
+  const actualKeys = Object.keys(value)
+    .filter((key) => !optional.has(key))
+    .sort(compareText);
   const expected = [...expectedKeys].sort(compareText);
   if (
     actualKeys.length !== expected.length ||
@@ -1112,6 +1139,7 @@ function compileCommon<Id>(
 ): Definition<Id> {
   const source = sourcePointer(input.source);
   const normalizedInput = canonicalValue(input.input ?? null);
+  // The digest names its fields, so a title rides along without renaming anything.
   const definitionDigest = canonicalDigest(
     canonicalValue({
       kind,
@@ -1127,11 +1155,24 @@ function compileCommon<Id>(
   return {
     id: input.id,
     key: input.key,
+    ...(input.title === undefined ? {} : { title: definitionTitle(input.title) }),
     generation: input.generation,
     source,
     input: normalizedInput,
     definitionDigest,
   };
+}
+
+const MAX_DEFINITION_TITLE = 256;
+
+function definitionTitle(value: string): string {
+  if (value.length === 0 || value.length > MAX_DEFINITION_TITLE) {
+    throw new GraphCompilationError(
+      "invalid-input",
+      `A definition title must be 1 to ${MAX_DEFINITION_TITLE} characters`,
+    );
+  }
+  return value;
 }
 
 function sourcePointer(input: SourcePointerInput): SourcePointer {

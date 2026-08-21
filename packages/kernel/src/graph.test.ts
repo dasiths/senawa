@@ -143,6 +143,50 @@ describe("workflow graph compilation", () => {
     expect(firstTask.definition.definitionDigest).not.toBe(secondTask.definition.definitionDigest);
     expect(first.revisionDigest).not.toBe(second.revisionDigest);
   });
+
+  it("carries a title without letting it reach identity or any digest", () => {
+    const plain = softwareDeliveryFixture();
+    const titled: MutableWorkflowInput = {
+      ...plain,
+      phases: plain.phases.map((phase) => ({ ...phase, title: "build it" })),
+      executableWork: plain.executableWork.map((task) => ({
+        ...task,
+        title: "compile the payments service",
+      })),
+    };
+
+    const first = compileWorkflowGraph(plain, deterministicSha256);
+    const second = compileWorkflowGraph(titled, deterministicSha256);
+    const compiled = required(
+      second.nodes.find((node) => node.definition.id === taskId("task_compile")),
+    );
+
+    expect(compiled.definition.title).toBe("compile the payments service");
+    expect(
+      required(first.nodes.find((node) => node.definition.id === taskId("task_compile"))).definition
+        .title,
+    ).toBeUndefined();
+    // Renaming work must never look like changing it, or every replan would
+    // supersede tasks that nobody touched.
+    expect(second.revisionDigest).toBe(first.revisionDigest);
+    for (const node of second.nodes) {
+      const original = required(
+        first.nodes.find((other) => other.definition.id === node.definition.id),
+      );
+      expect(node.definition.definitionDigest).toBe(original.definition.definitionDigest);
+    }
+  });
+
+  it("refuses a title that is empty or longer than a planned task may carry", () => {
+    const fixture = softwareDeliveryFixture();
+    for (const title of ["", "x".repeat(257)]) {
+      const input: MutableWorkflowInput = {
+        ...fixture,
+        executableWork: fixture.executableWork.map((task) => ({ ...task, title })),
+      };
+      expect(() => compileWorkflowGraph(input, deterministicSha256)).toThrow(GraphCompilationError);
+    }
+  });
 });
 
 describe("workflow graph validation", () => {

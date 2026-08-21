@@ -3800,7 +3800,7 @@ export class SqlitePortalQueryAuthority {
         return {
           nodeId: definition.id,
           kind: node.kind,
-          title: definition.key,
+          title: definition.title ?? definition.key,
           definitionGeneration: definition.generation,
           lifecycle: "defined",
           runState: status.runState,
@@ -4885,7 +4885,9 @@ export class SqlitePortalQueryAuthority {
   #nodeNames(repositoryId: string, runId: string): ReadonlyMap<string, string> {
     const graph = this.#graph(repositoryId, runId);
     if (graph === undefined) return new Map();
-    return new Map(graph.nodes.map((node) => [node.definition.id, node.definition.key]));
+    return new Map(
+      graph.nodes.map((node) => [node.definition.id, node.definition.title ?? node.definition.key]),
+    );
   }
 
   #requiredGraphRevision(repositoryId: string, runId: string, graphRevision: string) {

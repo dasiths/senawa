@@ -113,6 +113,35 @@ describe("plan import", () => {
     expect(successorB?.dependsOn).toEqual([successorA?.id]);
     expect(successorB?.generation).toBe(2);
   });
+
+  it("names a generated member after the planned task rather than its identity", () => {
+    const titled = canonicalValue({
+      identity: "rules",
+      dependsOn: [],
+      title: "write the game rules module",
+    });
+    const untitled = canonicalValue({ identity: "cli", dependsOn: [] });
+    const fixture = createFixture([titled, untitled]);
+    const diff = compareFanOutEvaluations(fixture.evaluation, undefined, sha256);
+    const tasks = createFanOutAmendmentOperations(diff, fixture.request.template, sha256).map(
+      (operation) => {
+        if (operation.kind !== "add-task") throw new Error("Expected generated task operation");
+        return operation.task;
+      },
+    );
+
+    // Every generated key is a digest, so the title is the only thing that can
+    // tell one member from another on screen.
+    expect(tasks.map((task) => String(task.key))).toEqual([
+      expect.stringMatching(/^implement-[0-9a-f]+$/),
+      expect.stringMatching(/^implement-[0-9a-f]+$/),
+    ]);
+    expect(tasks.map((task) => task.title).filter((title) => title !== undefined)).toEqual([
+      "write the game rules module",
+    ]);
+    // A plan item with no title leaves the key showing rather than inventing one.
+    expect(tasks.filter((task) => task.title === undefined)).toHaveLength(1);
+  });
 });
 
 class MemoryPersistence implements PlanImportPersistencePort {

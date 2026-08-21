@@ -334,6 +334,9 @@ describe("v1 workflow configuration", () => {
       kind: "task",
       definition: {
         key: "phase-executor",
+        // Every agent phase reserves the same key, so the key cannot tell two
+        // pieces of work apart. The phase's own name can.
+        title: "work",
         source: { pointer: "/phases/work/executor" },
       },
     });
