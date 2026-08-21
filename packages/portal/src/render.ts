@@ -925,9 +925,11 @@ function nodeActions(
   nodes: readonly PortalGraphNode[],
   edges: readonly PortalGraphEdge[],
 ): readonly NodeToolbarAction[] {
+  // The graph and the tree must agree about which node a need belongs to, or a
+  // badge counts something the controls beside it refuse to act on.
   const need = state.humanNeeds.find(
     (candidate) =>
-      candidate.taskId === node.nodeId &&
+      needBlocks(candidate, node) &&
       (candidate.definitionGeneration === undefined ||
         candidate.definitionGeneration === node.definitionGeneration),
   );
@@ -941,7 +943,7 @@ function nodeActions(
     }),
     Object.freeze({
       key: "focus",
-      label: "Focus in diagram",
+      label: "Focus in graph",
       disabled: false,
       run: () => {
         const viewport =
@@ -954,7 +956,9 @@ function nodeActions(
     }),
     Object.freeze({
       key: "review",
-      label: "Review linked human need",
+      // Named for the decision it is, so the graph can be read without first
+      // opening the need to find out what kind it is.
+      label: need === undefined ? "Review linked human need" : needChipLabel(need),
       disabled:
         need === undefined ||
         actionsLocked(state) ||

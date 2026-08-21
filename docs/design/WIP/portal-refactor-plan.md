@@ -69,9 +69,9 @@ More of this existed than the analysis found. `graph-layout.ts` and
 share selection with the tree through `focusedRecord`, and are already covered by
 browser tests.
 
-* [ ] `Workflow` carries `Graph` and `Tree` over one selection, graph first
+* [x] `Workflow` carries `Graph` and `Tree` over one selection, graph first
 * [x] A carried edge is distinguishable from one not yet carried
-* [ ] The graph carries a need's action, not only its count
+* [x] The graph carries a need's action, not only its count
 * [ ] An artifact renders on the edge leaving the node that produced it
 * [ ] A phase folds when its last member lands, and unfolds while work remains
 * [ ] An edge whose endpoint is folded away attaches to the group instead
@@ -161,3 +161,26 @@ has not stays dashed, so how far a run has got reads without opening a node.
 The portal is served from a built bundle, so a source edit is invisible to the
 browser tests until `vite build` runs in `packages/portal`. Ten failures became
 five after rebuilding, and only the five were real.
+
+### Phase 3, second pass
+
+The action was already there and badly named. `nodeActions` offered `Review
+linked human need` on whatever node was selected, which is a label about the
+machinery rather than the decision, so a person had to open the need to find out
+what it was. It now reuses the same wording the tree uses, and reads `Answer this
+question` or `Review the budget it asked for`.
+
+That is what the graph was missing, and with it the graph can lead. `Focus in
+diagram` became `Focus in graph` for the same reason the tabs were renamed.
+
+The three tests that had failed were asserting tree behaviour without asking for
+the tree, which was invisible while the tree was also the default. They now
+select it. A fourth test was added for the claim that earns the flip: from the
+graph, a node with a need offers the named action and opens it.
+
+That fourth test immediately found a second defect. The graph decided which node
+owned a need with `candidate.taskId === node.nodeId`, while the tree used
+`needBlocks`, which also gives a need with no task to the run root. So a run-level
+need was counted by a badge the controls beside it refused to act on, and the two
+readings of the same workflow disagreed about who was blocked. Both now use
+`needBlocks`.

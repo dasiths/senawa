@@ -243,6 +243,7 @@ test("publishes only the selected run when authority loads overlap", async ({ br
   await expect(page.getByRole("region", { name: "Portal status" })).toContainText("Data current");
   await expect(page.getByRole("region", { name: "Portal status" })).toContainText("2 human needs");
   await expect(page.getByRole("heading", { name: "Workflow", level: 1 })).toBeVisible();
+  await page.getByRole("tab", { name: "Tree", exact: true }).click();
   await expect(page.locator(".workflow-tree .tree-item")).not.toHaveCount(0);
   expect(await visibleCursor(page)).toBeLessThan(999_999);
   await expect

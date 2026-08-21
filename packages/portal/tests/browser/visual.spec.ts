@@ -43,6 +43,7 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
 
   // The question is reachable on the node it blocks, which is the surface that
   // survives a narrow viewport collapsing the rail.
+  await page.getByRole("tab", { name: "Tree", exact: true }).click();
   await page.getByRole("button", { name: "Answer this question" }).first().click();
   const questionDialog = page.getByRole("dialog");
   // The consequence has to say what happens to the person answering. It used to
@@ -136,6 +137,7 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
   await page.keyboard.press("ArrowLeft");
   await expect(page.getByRole("heading", { name: "Workflow", level: 1 })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Workflow", exact: true })).toBeFocused();
+  await page.getByRole("tab", { name: "Tree", exact: true }).click();
   const filter = page.getByRole("searchbox", { name: "Filter the workflow" });
   await filter.fill("verify");
   const row = page.locator(".workflow-tree .tree-item").first();

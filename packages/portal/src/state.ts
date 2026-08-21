@@ -264,7 +264,7 @@ export function initialPortalState(route: PortalRoute): PortalState {
       filter: "",
       focusedRecord: undefined,
       rightRailOpen: false,
-      graphMode: "tree",
+      graphMode: "diagram",
       graphViewport: INITIAL_GRAPH_VIEWPORT,
       transcript: emptyTranscriptView(),
       transcriptScope: "node",

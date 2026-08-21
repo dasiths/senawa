@@ -361,6 +361,7 @@ test("shows who is working, on what, and on which model", async ({ page }) => {
 test("offers the action for a need on the node the need is about", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
+  await page.getByRole("tab", { name: "Tree", exact: true }).click();
   const tree = page.getByRole("tree");
   await expect(tree).toBeVisible();
 
@@ -377,12 +378,34 @@ test("offers the action for a need on the node the need is about", async ({ page
   expect(diagnostics.severe()).toEqual([]);
 });
 
+// The graph leads, so it has to carry what the tree carries. A count badge says
+// a node is waiting; it does not say what the decision is or let a person make
+// it, and a view that only counts is a view that sends people elsewhere to act.
+test("names and offers a node's need from the graph, not only a count", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await navigate(page, "Workflow");
+  await expect(page.locator(".diagram-canvas")).toHaveCount(1);
+
+  await page.locator('[data-node-id="task_verify"]').click();
+  const toolbar = page.getByRole("toolbar", { name: "Selected node actions" });
+  await expect(toolbar).toHaveCount(1);
+  // Named for the decision, so the graph reads without opening the need first.
+  const action = toolbar.getByRole("button", { name: "Answer this question" });
+  await expect(action).toBeEnabled();
+
+  await action.click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  expect(diagnostics.severe()).toEqual([]);
+});
+
 // Redirecting an agent was a control on a list of agents that named the work by
 // identity, so acting on the right one meant matching a digest by eye against
 // the workflow. It belongs beside the work it redirects.
 test("offers to redirect an agent from the work it is doing", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
+  await page.getByRole("tab", { name: "Tree", exact: true }).click();
   const steer = page.getByRole("tree").locator(".agent-action-steer").first();
   await expect(steer).toBeVisible();
 
@@ -399,6 +422,7 @@ test("offers to redirect an agent from the work it is doing", async ({ page }) =
 test("says where a task's work is happening inside the task", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.workspace);
   await navigate(page, "Workflow");
+  await page.getByRole("tab", { name: "Tree", exact: true }).click();
   const tree = page.getByRole("tree");
   await expect(tree).toBeVisible();
 
@@ -415,6 +439,7 @@ test("says where a task's work is happening inside the task", async ({ page }) =
 test("names who is on a piece of work inside the work itself", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
+  await page.getByRole("tab", { name: "Tree", exact: true }).click();
   const tree = page.getByRole("tree");
   await expect(tree).toBeVisible();
 
