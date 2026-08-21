@@ -813,6 +813,13 @@ button:disabled {
   fill: none;
   stroke: var(--rule-strong);
   stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+}
+
+/* An edge nothing has travelled yet stays dashed, so how far a run has got
+   reads without opening a single node. */
+.diagram-edge-carried {
+  stroke-dasharray: none;
 }
 
 .diagram-edge-dependency {

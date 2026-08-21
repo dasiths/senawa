@@ -61,7 +61,7 @@ import {
 import type { TranscriptScope } from "./transcript-view-model.js";
 import { transcriptNames } from "./transcript-view-model.js";
 
-const GRAPH_MODES: readonly GraphMode[] = Object.freeze(["tree", "diagram"]);
+const GRAPH_MODES: readonly GraphMode[] = Object.freeze(["diagram", "tree"]);
 
 export interface PortalRenderActions {
   readonly navigate: (route: PortalRouteName) => void;
@@ -723,8 +723,8 @@ function graphBody(
 
 function graphModeLabel(mode: GraphMode): string {
   const labels: Readonly<Record<GraphMode, string>> = {
-    diagram: "Diagram",
-    tree: "Outline",
+    diagram: "Graph",
+    tree: "Tree",
   };
   return labels[mode];
 }

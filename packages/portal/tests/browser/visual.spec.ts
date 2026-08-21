@@ -146,7 +146,7 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
   await expect(detail).toContainText("prefix shown");
   await expect(detail.locator("script, style, svg, a, iframe, object, embed")).toHaveCount(0);
   await filter.fill("");
-  await page.getByRole("tab", { name: "Outline", exact: true }).click();
+  await page.getByRole("tab", { name: "Tree", exact: true }).click();
   const tree = page.getByRole("tree");
   await expect(tree).toBeVisible();
   const firstTreeItem = tree.getByRole("treeitem").first();

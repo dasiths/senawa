@@ -113,6 +113,9 @@ export function graphDiagramModel(
     ? selectedNodeId
     : undefined;
   const nodes = layout.nodes.map((node) => diagramNode(node, node.nodeId === selected));
+  const carried = new Set(
+    layout.nodes.filter((node) => node.runState === "accepted").map(({ nodeId }) => nodeId),
+  );
   const rows: string[][] = [];
   for (const node of layout.nodes) {
     const row = rows[node.row];
@@ -125,7 +128,11 @@ export function graphDiagramModel(
       layout.edges.map((edge) =>
         Object.freeze({
           edgeId: edge.edgeId,
-          className: `diagram-edge diagram-edge-${token(edge.kind, KNOWN_EDGE_KINDS)}`,
+          // Whether work has actually travelled an edge is the fastest read of
+          // how far a run has got, so it is a property of the line itself.
+          className: `diagram-edge diagram-edge-${token(edge.kind, KNOWN_EDGE_KINDS)}${
+            carried.has(edge.fromNodeId) ? " diagram-edge-carried" : ""
+          }`,
           points: edge.points.map(({ x, y }) => `${x},${y}`).join(" "),
         }),
       ),

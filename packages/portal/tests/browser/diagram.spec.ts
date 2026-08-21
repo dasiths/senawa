@@ -5,7 +5,7 @@ import { assertDocumentFits, bootstrapPortal, navigate, runs, selectRun } from "
 test("renders, selects, traverses, and zooms the workflow diagram", async ({ page }, testInfo) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
-  await page.getByRole("tab", { name: "Diagram", exact: true }).click();
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
   await expect(page.locator(".diagram-node")).not.toHaveCount(0);
 
   const summary = await page.locator(".result-count").textContent();
@@ -72,7 +72,7 @@ test("renders, selects, traverses, and zooms the workflow diagram", async ({ pag
 
   await selectRun(page, runs.workspace);
   await navigate(page, "Workflow");
-  await page.getByRole("tab", { name: "Diagram", exact: true }).click();
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
   await expect(page.locator(".diagram-state-running")).not.toHaveCount(0);
   await expect(page.locator(".diagram-state-not-started")).not.toHaveCount(0);
   expect(diagnostics.severe()).toEqual([]);
@@ -84,11 +84,11 @@ test("orders phases by execution order in every graph view", async ({ page }) =>
 
   // The authority pages nodes in digest order, so a view that echoes arrival
   // order renders the workflow in an order unrelated to how it runs.
-  await page.getByRole("tab", { name: "Diagram", exact: true }).click();
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
   await expect(page.locator(".diagram-node")).not.toHaveCount(0);
   expect(await phaseOrder(page, ".diagram-node")).toEqual(PHASE_EXECUTION_ORDER);
 
-  await page.getByRole("tab", { name: "Outline", exact: true }).click();
+  await page.getByRole("tab", { name: "Tree", exact: true }).click();
   await expect(page.locator(".tree-item")).not.toHaveCount(0);
   expect(await phaseOrder(page, ".tree-item")).toEqual(PHASE_EXECUTION_ORDER);
   expect(diagnostics.severe()).toEqual([]);

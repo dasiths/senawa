@@ -15,7 +15,7 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
 }, testInfo) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
-  await page.getByRole("tab", { name: "Diagram", exact: true }).click();
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
   await expect(page.locator(".diagram-node")).not.toHaveCount(0);
 
   const pane = page.getByRole("log", { name: /Agent output/u });
@@ -156,7 +156,7 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
 
   await selectRun(page, runs.workspace);
   await navigate(page, "Workflow");
-  await page.getByRole("tab", { name: "Diagram", exact: true }).click();
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
   await expect(page.locator(".agent-terminal-scope")).toHaveText("No node selected");
   await page.getByRole("button", { name: /^task verify,/u }).click();
   await expect(page.locator(".agent-terminal-scope")).toHaveText("dispatch dispatch-browser");

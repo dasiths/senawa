@@ -42,16 +42,21 @@ fan-out, and no graph revision moves.
 ## Phase 2: view state has somewhere to live
 
 Rendering replaces the whole tree on every poll, and four hand-written capture
-and restore pairs already fight it. The redesign adds fold state, selection,
-sub-tab and expanded rows, which would make six.
+and restore pairs already fight it.
 
-* [ ] View state is one record that rendering reads and never derives
-* [ ] The existing capture pairs move into it rather than sitting beside it
-* [ ] An explicit fold survives a poll
-* [ ] Selection survives a poll and a sub-tab change
+Reading the code changed this phase. `PortalUiState` already exists and already
+holds the decisions that matter: the selected node, the workflow mode, the rail
+layout, the transcript view. Those already survive a poll. The four capture pairs
+are not decisions at all: focus, scroll position and uncommitted dialog text are
+measurements the DOM owns, and no reducer should hold them.
 
-Done when a fold, a selection and a scroll position all survive a refresh with no
-per-concern capture code.
+So the distinction to enforce is between the two kinds, not the collapsing of
+both into one:
+
+* [x] A decision lives in `PortalUiState`, and rendering reads it
+* [x] Selection survives a poll and a mode change, because it already did
+* [ ] Fold state joins the decisions rather than becoming a fifth capture pair
+* [ ] DOM-owned measurements stay captured, and are named as such
 
 ## Phase 3: the workflow reads as a graph
 
@@ -59,10 +64,15 @@ Edges already carry containment, dependency and supersession. Nodes already carr
 run state, attempt and need counts. Artifacts already carry the task that
 produced them. This is layout and rendering.
 
+More of this existed than the analysis found. `graph-layout.ts` and
+`graph-diagram.ts` already lay out a container graph with pan and zoom, already
+share selection with the tree through `focusedRecord`, and are already covered by
+browser tests.
+
 * [ ] `Workflow` carries `Graph` and `Tree` over one selection, graph first
-* [ ] Edges are measured from laid-out boxes, not authored as coordinates
+* [x] A carried edge is distinguishable from one not yet carried
+* [ ] The graph carries a need's action, not only its count
 * [ ] An artifact renders on the edge leaving the node that produced it
-* [ ] A carried edge is distinguishable from one not yet carried
 * [ ] A phase folds when its last member lands, and unfolds while work remains
 * [ ] An edge whose endpoint is folded away attaches to the group instead
 
@@ -131,3 +141,23 @@ there is a reason to prefer one.
 `taskName` and `phaseName` were bounded at 128 characters in the portal codec
 while a planned task's title may be 256. A long title would have failed
 validation and broken the Agents page, so the bound now matches the record.
+
+### Phase 3, first pass
+
+Making the graph the default turned out to be premature, and the browser tests
+said why. Five of them failed looking for a need's action, because that action is
+rendered on a tree row and the graph carries only a count badge. Leading with the
+graph therefore hid the controls a person needs to unblock a run.
+
+That is a better acceptance criterion than the one the plan had. The graph cannot
+lead until it carries what the tree carries: the action for a need, on the node
+the need is about. Reverted to the tree until it does.
+
+Kept from the pass: the two readings are now named `Graph` and `Tree` rather than
+`Diagram` and `Outline`, because one says what it is and the other described a
+drawing. And an edge that work has actually travelled is now solid while one it
+has not stays dashed, so how far a run has got reads without opening a node.
+
+The portal is served from a built bundle, so a source edit is invisible to the
+browser tests until `vite build` runs in `packages/portal`. Ten failures became
+five after rebuilding, and only the five were real.
