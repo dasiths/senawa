@@ -46,6 +46,9 @@ lifecycle in Phase 1, whose declared protocol payload cannot say which task an
 attempt belongs to, and the scheduled retry in F-061, which changes how the
 service decides when to wake.
 
+[Open decisions](open-decisions.md) states every remaining item as the question
+it actually is, with what the evidence says and what each answer costs.
+
 ## Phase 1: make the attempt lifecycle real
 
 A task may have one agent at a time. A later attempt takes the task scope over,
