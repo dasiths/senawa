@@ -19,7 +19,7 @@ test("reconnects from the last cursor, deduplicates replay, and resynchronizes a
   const diagnostics = await bootstrapPortal(page, runs.journey);
   const before = await visibleCursor(page);
   // The portal opens on the graph. Run controls live on the overview.
-  await navigate(page, "Record");
+  await navigate(page, "Timeline");
   await page.getByRole("button", { name: "Pause" }).click();
   await page.getByRole("button", { name: "Confirm pause" }).click();
   await expect.poll(() => visibleCursor(page)).toBeGreaterThan(before);
@@ -91,7 +91,7 @@ test("reloads authority after an event races the final overview read", async ({ 
   const main = await simulatedEventPortal(browser, runs.workspace);
   const { page, diagnostics } = main;
   // This test is about the overview read, so the main page has to be on it.
-  await navigate(page, "Record");
+  await navigate(page, "Timeline");
   let overviewRequests = 0;
   let staleOverviewReady = false;
   let releaseStaleOverview: (() => void) | undefined;
@@ -123,7 +123,7 @@ test("reloads authority after an event races the final overview read", async ({ 
   await expect.poll(() => staleOverviewReady).toBe(true);
 
   const controller = await simulatedEventPortal(browser, runs.workspace);
-  await navigate(controller.page, "Record");
+  await navigate(controller.page, "Timeline");
   await controller.page.getByRole("button", { name: "Pause" }).click();
   await controller.page.getByRole("button", { name: "Confirm pause" }).click();
   await expect(controller.page.locator(".run-head .state", { hasText: /^paused$/u })).toBeVisible();
@@ -183,7 +183,7 @@ test("preserves reviewed values across rerenders and closes authority on run cha
   await amendmentDialog.press("Escape");
 
   await selectRun(page, runs.workspace);
-  await navigate(page, "Record");
+  await navigate(page, "Timeline");
   await page.getByRole("button", { name: "Pause" }).click();
   await expect(page.getByRole("dialog")).toContainText("runModeRevision");
   const commandRequests: string[] = [];
@@ -196,7 +196,7 @@ test("preserves reviewed values across rerenders and closes authority on run cha
     (hash) => {
       location.hash = hash;
     },
-    portalHash(runs.journey, "record"),
+    portalHash(runs.journey, "timeline"),
   );
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "Select repository and run" })).toHaveValue(
@@ -303,7 +303,7 @@ test("records exact human decisions with pending recovery", async ({ page }) => 
   });
   await reviewNeed(page, "question");
   const answer = JSON.stringify({ target: "production", exact: true });
-  await page.getByRole("textbox", { name: "Answer" }).fill(answer);
+  await page.getByRole("textbox", { name: "Answer", exact: true }).fill(answer);
   await page.getByRole("button", { name: "Submit exact answer" }).click();
   await questionRouteObserved;
   await expect(page.getByRole("heading", { name: "Session expired" })).toBeVisible();
@@ -377,14 +377,14 @@ test("reviews pause, resume, and permanent end, then exposes ending and ended mo
 }) => {
   const main = await simulatedEventPortal(browser, runs.workspace);
   const { page, diagnostics } = main;
-  await navigate(page, "Record");
+  await navigate(page, "Timeline");
   await expect(page.locator(".run-head .state", { hasText: /^running$/u })).toBeVisible();
 
   await page.getByRole("button", { name: "Pause" }).click();
   const stalePause = page.getByRole("dialog");
   await expect(stalePause).toContainText("does not cancel active effects");
   const controller = await simulatedEventPortal(browser, runs.workspace);
-  await navigate(controller.page, "Record");
+  await navigate(controller.page, "Timeline");
   await controller.page.getByRole("button", { name: "Pause" }).click();
   await controller.page.getByRole("button", { name: "Confirm pause" }).click();
   await expect(controller.page.locator(".run-head .state", { hasText: /^paused$/u })).toBeVisible();

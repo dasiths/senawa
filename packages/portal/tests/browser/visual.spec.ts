@@ -66,7 +66,7 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   await amendmentDialog.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
-  await navigate(page, "Record");
+  await navigate(page, "Timeline");
   await expect(page.getByRole("heading", { name: "What happened" })).toBeVisible();
   // Depth is one action away and absent until asked for, which is what
   // progressive disclosure has to mean to be worth anything.
@@ -83,7 +83,7 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   await captureState(page, "agents", mobile);
 
   await selectRun(page, runs.workspace);
-  await navigate(page, "Record");
+  await navigate(page, "Timeline");
   await expect(
     page.getByRole("heading", { name: "Integration, conflict, and rework" }),
   ).toBeVisible();
@@ -105,7 +105,7 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   expect(advance.ok).toBe(true);
   // Noticing an expired session takes a request, so the route has to change.
   await page.getByRole("tab", { name: "Workflow", exact: true }).click();
-  await page.getByRole("tab", { name: "Record", exact: true }).click();
+  await page.getByRole("tab", { name: "Timeline", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Session expired" })).toBeVisible({
     timeout: 15_000,
   });
@@ -169,7 +169,7 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
   await page.keyboard.press("ArrowDown");
   await expect(tree.getByRole("treeitem").nth(1)).toBeFocused();
 
-  await navigate(page, "Artifacts");
+  await navigate(page, "Timeline");
   await expect(page.getByText("Verified bytes unavailable", { exact: true })).toBeVisible();
   await expect(page.getByText("No preview for this kind of file", { exact: true })).toBeVisible();
   const jsonArtifact = page.locator(".artifact-row").filter({ hasText: "asset_json" });
@@ -180,7 +180,7 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
   const activeArtifact = page.locator(".artifact-row").filter({ hasText: "asset_active" });
   await expect(activeArtifact.getByRole("button", { name: /Preview|Download/u })).toHaveCount(0);
 
-  await navigate(page, "Record");
+  await navigate(page, "Timeline");
   // Record answers "what happened, and when". It used to render every record
   // fully expanded, which put twenty-four thousand characters and a hundred and
   // sixty-eight digests in front of a reader who had not asked a question yet.
@@ -237,13 +237,13 @@ test("serves strict static assets, hash reloads, and remains usable at 200 perce
   );
   expect(new Set(resources)).toEqual(new Set([origin]));
 
-  await page.goto(`${origin}/portal/${portalHash(runs.journey, "artifacts")}`);
-  await expect(page.getByRole("tab", { name: "Artifacts", exact: true })).toHaveAttribute(
+  await page.goto(`${origin}/portal/${portalHash(runs.journey, "timeline")}`);
+  await expect(page.getByRole("tab", { name: "Timeline", exact: true })).toHaveAttribute(
     "aria-selected",
     "true",
   );
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Artifacts", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Timeline", level: 1 })).toBeVisible();
 
   if (testInfo.project.name === "desktop-chromium") {
     await page.setViewportSize({ width: 720, height: 450 });

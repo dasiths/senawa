@@ -24,7 +24,7 @@ test("narrates one submitted command from submission through its receipt", async
     return route.continue();
   });
   // The portal opens on the graph. Run controls live on the overview.
-  await navigate(page, "Record");
+  await navigate(page, "Timeline");
   await page.getByRole("button", { name: "Pause" }).click();
   await page.getByRole("button", { name: "Confirm pause" }).click();
   await expect(narrator).toHaveText("pause-run is submitting");
@@ -156,13 +156,13 @@ test("resizes, collapses, and persists the attention rail from the keyboard", as
   await expect(page.locator("#rail-collapse-right")).toHaveAttribute("aria-expanded", "false");
   await assertDocumentFits(page);
 
-  await page.goto(`${new URL(page.url()).origin}/portal/${portalHash(runs.journey, "record")}`);
+  await page.goto(`${new URL(page.url()).origin}/portal/${portalHash(runs.journey, "timeline")}`);
   await expect(page.locator(".portal-body")).toHaveAttribute("data-rail-right", "collapsed");
   await page.locator("#rail-collapse-right").click();
   await expect(page.locator(".portal-body")).toHaveAttribute("data-rail-right", "352");
 
   // Navigation is always reachable now, because it is not in a rail that folds.
-  await expect(page.getByRole("tab", { name: "Record", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Timeline", exact: true })).toBeVisible();
 
   const grip = await page.locator("#rail-handle-right").boundingBox();
   const gripX = (grip?.x ?? 0) + (grip?.width ?? 0) / 2;
@@ -243,7 +243,7 @@ test("expands a bounded artifact into a full-screen overlay that traps and resto
   page,
 }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
-  await navigate(page, "Artifacts");
+  await navigate(page, "Timeline");
   // Opening the row is what fetches the content; there is no separate control.
   const row = page.locator(".artifact-row").filter({ hasText: "asset_json" });
   await row.click();

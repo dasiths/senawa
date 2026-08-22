@@ -114,15 +114,23 @@ export function graphFlowView(options: GraphFlowOptions): HTMLElement {
 
   // The run itself is named by the page heading; a band is a phase.
   const phases = nodes.filter((node) => node.kind === "phase");
+  // A phase owns its tasks, and a task owns what it had to produce. Matching on
+  // the direct parent alone left every criterion out of its own band and piled
+  // them all under the last one.
+  const membersOf = (phaseId: string): readonly PortalGraphNode[] => {
+    const ordered: PortalGraphNode[] = [];
+    for (const member of nodes.filter((node) => node.parentNodeId === phaseId)) {
+      ordered.push(member, ...nodes.filter((node) => node.parentNodeId === member.nodeId));
+    }
+    return ordered;
+  };
+  const placed = new Set(phases.flatMap((phase) => membersOf(phase.nodeId).map((n) => n.nodeId)));
   const orphans = nodes.filter(
-    (node) =>
-      node.kind !== "phase" &&
-      node.kind !== "workflow" &&
-      !phases.some((phase) => phase.nodeId === node.parentNodeId),
+    (node) => node.kind !== "phase" && node.kind !== "workflow" && !placed.has(node.nodeId),
   );
   let previous = "start";
   for (const phase of phases) {
-    const members = nodes.filter((node) => node.parentNodeId === phase.nodeId);
+    const members = membersOf(phase.nodeId);
     const band = document.createElement("details");
     band.className = "band";
     band.dataset.node = phase.nodeId;

@@ -1378,8 +1378,15 @@ textarea {
   padding: 14px;
 }
 
+/* The transcript and the reply are one pane, so the pane carries the border and
+   the curve. Rounding them separately made each corner curve away from the thing
+   it is welded to. */
 .live-pane {
   margin: -14px;
+  border: 1px solid #0e1013;
+  border-radius: var(--radius);
+  background: var(--term-bg);
+  overflow: hidden;
 }
 
 .detail-where {
@@ -1454,8 +1461,6 @@ textarea {
 /* -------------------------------------------------------- terminal and reply */
 
 .agent-terminal {
-  border: 1px solid #0e1013;
-  border-radius: var(--radius);
   background: var(--term-bg);
   overflow: hidden;
 }
@@ -1729,6 +1734,23 @@ textarea {
 
 .activity-panel {
   padding: 0;
+}
+
+/* A fold is the panel's own heading, so it carries the panel's padding. */
+.activity-panel > .disclosure > .disclosure-summary {
+  padding: 12px 14px;
+}
+
+.activity-body {
+  padding: 4px 14px 10px;
+}
+
+.activity-panel > .disclosure[open] > .disclosure-summary {
+  border-bottom: 1px solid var(--rule);
+}
+
+.activity-panel .paging-row {
+  padding: 10px 14px;
 }
 
 .activity-panel > .view-toolbar {
@@ -2065,6 +2087,18 @@ textarea {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  /* The controls sit at the far edge and the scope takes what is left, so a
+     long name shortens rather than pushing them onto a second line. */
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.agent-terminal-scope {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .terminal-state {
@@ -2214,7 +2248,9 @@ textarea {
   margin-top: 0;
 }
 
-/* One column of times, one rail, one column of what happened. */
+/* One column of times, one rail, one column of what happened. Every item is
+   placed, because the mark is pinned to the rail and auto-placement then pushed
+   the time past it and wrapped the words into the first column's width. */
 .moment {
   position: relative;
   display: grid;
@@ -2223,10 +2259,23 @@ textarea {
   padding: 4px 0;
 }
 
+.moment-time {
+  grid-column: 1;
+}
+
+.moment-body {
+  grid-column: 3;
+  min-width: 0;
+}
+
 .moment::before {
   grid-column: 2;
+  grid-row: 1;
   justify-self: center;
-  align-self: center;
+  /* The mark belongs to the line that says what happened, not to the middle of
+     however many lines the detail runs to. */
+  align-self: start;
+  margin-top: 5px;
   width: 7px;
   height: 7px;
   border: 1px solid var(--rule-strong);
@@ -2454,11 +2503,6 @@ textarea {
 
 .agent-terminal-log {
   border-radius: 0;
-}
-
-.reply {
-  border-bottom-right-radius: var(--radius);
-  border-bottom-left-radius: var(--radius);
 }
 
 .reply-input {

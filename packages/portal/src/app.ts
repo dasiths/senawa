@@ -342,21 +342,37 @@ export class PortalApplication {
     // Needs drive the attention banner on every route. Events and receipts feed
     // only the activity route, so fetching them everywhere made three requests
     // where one was wanted and delayed the view a reader actually asked for.
-    if (route === "record") {
-      const [events, receipts, delivery, integrations] = await Promise.all([
-        this.#client.events(repositoryId, runId),
-        this.#client.receipts(repositoryId, runId),
-        this.#client.delivery(repositoryId, runId),
-        this.#client.integrations(repositoryId, runId),
-      ]);
+    if (route === "timeline") {
+      // The history is what happened, so it needs the questions and the node
+      // names as much as the frames: a command stream on its own says that
+      // something was queued, never what it was or what it happened to. What the
+      // run made belongs to the same reading, at the end of it.
+      const [events, receipts, delivery, integrations, questions, nodes, artifacts] =
+        await Promise.all([
+          this.#client.events(repositoryId, runId),
+          this.#client.receipts(repositoryId, runId),
+          this.#client.delivery(repositoryId, runId),
+          this.#client.integrations(repositoryId, runId),
+          this.#client.questions(repositoryId, runId),
+          this.#client.graphNodes(repositoryId, runId, overview.sync.graphRevision),
+          this.#client.artifacts(repositoryId, runId),
+        ]);
       if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
       this.#dispatch({ type: "cache", cache: "events", key, value: events });
       this.#dispatch({ type: "cache", cache: "receipts", key, value: receipts });
       this.#dispatch({ type: "cache", cache: "delivery", key, value: delivery });
       this.#dispatch({ type: "cache", cache: "integrations", key, value: integrations });
+      this.#dispatch({ type: "cache", cache: "questions", key, value: questions });
+      this.#dispatch({ type: "cache", cache: "artifacts", key, value: artifacts });
+      this.#dispatch({
+        type: "cache",
+        cache: "graphNodes",
+        key: revisionKey(repositoryId, runId, overview.sync.graphRevision),
+        value: nodes,
+      });
     }
     switch (route) {
-      case "record":
+      case "timeline":
         return true;
       case "workflow": {
         const summary = await this.#client.graph(repositoryId, runId);
@@ -396,21 +412,12 @@ export class PortalApplication {
         void this.#syncTranscript();
         return true;
       }
-      case "artifacts": {
-        const artifacts = await this.#client.artifacts(repositoryId, runId);
-        if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
-        this.#dispatch({
-          type: "cache",
-          cache: "artifacts",
-          key,
-          value: artifacts,
-        });
-        return true;
-      }
       case "agents": {
         const agents = await this.#client.agents(repositoryId, runId);
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
         this.#dispatch({ type: "cache", cache: "agents", key, value: agents });
+        // Agents reaches the same pane as Workflow, so it has to fill it.
+        void this.#syncTranscript();
         return true;
       }
     }
@@ -820,7 +827,7 @@ export class PortalApplication {
     } catch (error) {
       this.#dispatch({
         type: "freshness",
-        resource: "artifacts",
+        resource: "timeline",
         freshness: { status: "failed", message: safeMessage(error, "Artifact preview failed") },
       });
     }

@@ -18,6 +18,8 @@ export interface TranscriptPaneActions {
 export interface TranscriptPaneInput {
   readonly view: TranscriptView;
   readonly scope: TranscriptScope;
+  /** Whether there is a node to narrow to, which only a selection provides. */
+  readonly narrowable: boolean;
   readonly actions: TranscriptPaneActions;
   readonly names?: TranscriptNames;
 }
@@ -43,12 +45,12 @@ const LOG_SELECTOR = ".agent-terminal-log";
 const TAIL_SLACK = 12;
 
 export function transcriptPaneView(input: TranscriptPaneInput): HTMLElement {
-  const { view, scope, actions } = input;
+  const { view, scope, narrowable, actions } = input;
   const names = input.names ?? {};
   const pane = element("section", "agent-terminal");
   const rows = transcriptRows(view);
   const plainText = transcriptPlainText(view, undefined, names);
-  pane.append(bar(view, scope, rows.length, plainText, actions, names));
+  pane.append(bar(view, scope, narrowable, rows.length, plainText, actions, names));
   pane.append(log(view, rows, actions, names));
   window.__senawaTranscriptPane = Object.freeze({
     ownerKind: view.owner?.kind,
@@ -65,6 +67,7 @@ export function transcriptPaneView(input: TranscriptPaneInput): HTMLElement {
 function bar(
   view: TranscriptView,
   scope: TranscriptScope,
+  narrowable: boolean,
   lineCount: number,
   plainText: string,
   actions: TranscriptPaneActions,
@@ -75,7 +78,11 @@ function bar(
     textElement(
       "span",
       "agent-terminal-scope mono",
-      view.owner === undefined ? "No node selected" : transcriptOwnerLabel(view.owner, names),
+      view.owner === undefined || view.owner.kind === "run"
+        ? scope === "run"
+          ? "every agent"
+          : "no agent selected"
+        : transcriptOwnerLabel(view.owner, names),
     ),
   );
   const controls = element("div", "agent-terminal-controls");
@@ -83,7 +90,10 @@ function bar(
     actions.setTranscriptScope(scope === "run" ? "node" : "run"),
   );
   runWide.className = "command agent-terminal-run-scope";
-  runWide.setAttribute("aria-pressed", scope === "run" ? "true" : "false");
+  // Narrowing to one agent means nothing until a reader has said which one, and
+  // a pressed control that cannot act reads as a state the pane is already in.
+  runWide.disabled = scope === "run" && !narrowable;
+  runWide.setAttribute("aria-pressed", scope === "node" ? "true" : "false");
   controls.append(runWide);
   const copy = commandButton("Copy", () => {
     const clipboard = navigator.clipboard as Clipboard | undefined;

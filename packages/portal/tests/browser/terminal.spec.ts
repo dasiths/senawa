@@ -45,6 +45,23 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   await expect(page.locator(".agent-terminal-log")).toHaveCSS("white-space", "normal");
   await expect(page.locator(".agent-terminal-text").first()).toHaveCSS("white-space", "pre-wrap");
 
+  // The transcript and the reply are one pane. Rounded separately they curve
+  // away from each other and the reply reads as a second box parked underneath.
+  await expect(page.locator(".live-pane")).toHaveCSS("overflow", "hidden");
+  for (const corner of ["top-left", "top-right", "bottom-left", "bottom-right"]) {
+    await expect(page.locator(".agent-terminal")).toHaveCSS(`border-${corner}-radius`, "0px");
+    await expect(page.locator(".reply")).toHaveCSS(`border-${corner}-radius`, "0px");
+  }
+  expect(
+    await page.locator(".live-pane").evaluate((element) => {
+      const terminal = element.querySelector(".agent-terminal")?.getBoundingClientRect();
+      const reply = element.querySelector(".reply")?.getBoundingClientRect();
+      return terminal === undefined || reply === undefined
+        ? undefined
+        : Math.round(reply.top - terminal.bottom);
+    }),
+  ).toBe(0);
+
   // The diagram with a selected node and its live output is the parity feature
   // this branch restores, so it needs its own review evidence.
   const mobile = testInfo.project.name === "mobile-chromium";
@@ -144,7 +161,7 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   // The explicit run-wide option merges every owner of the run in one scope and
   // still names the owner that produced each line.
   await page.getByRole("button", { name: "All agents", exact: true }).click();
-  await expect(page.locator(".agent-terminal-scope")).toHaveText(`run ${runs.journey}`);
+  await expect(page.locator(".agent-terminal-scope")).toHaveText("every agent");
   await expect.poll(async () => (await snapshot(page)).lineCount).toBe(145 + beforeAppend + 1);
   await expect(page.locator(".agent-terminal-log")).toContainText("journey task output line 1");
   await expect(page.locator(".agent-terminal-log")).toContainText("phase attempt 1 opened");
@@ -172,8 +189,10 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   await selectRun(page, runs.workspace);
   await navigate(page, "Workflow");
   await page.getByRole("tab", { name: "Graph", exact: true }).click();
-  // No selection means no terminal at all: the detail surface says what to do.
-  await expect(page.locator(".agent-terminal-scope")).toHaveCount(0);
+  // With nothing selected the pane carries the whole run, because what a reader
+  // arrives wanting is what is happening, not an instruction to go and find it.
+  await expect(page.locator(".detail-title")).toContainText("Every agent");
+  await expect(page.locator(".agent-terminal-scope")).toHaveText("every agent");
   await page.locator('.gnode[data-node="task_verify"]').click();
   await expect(page.locator(".agent-terminal-scope")).toHaveText("dispatch dispatch-browser");
   await expect(page.locator(".agent-terminal-log")).toContainText("workspace dispatch output");

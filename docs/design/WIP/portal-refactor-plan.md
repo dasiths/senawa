@@ -521,6 +521,33 @@ to a word. A digest has no break points; a name has plenty.
 * [x] A name breaks between words; only machine text breaks anywhere
 * [x] The empty detail card is gone: with nothing selected the pane carries the run-wide terminal
 
+### Phase 12: what driving it in a browser showed
+
+Reading the portal beside a real run found faults that no fixture reproduces,
+because a fixture has one member per phase and identities short enough to fit.
+
+* [x] The transcript and the reply are one pane, so nothing curves away from the
+  thing it is welded to
+* [x] The reply says nothing until it is doing something, rather than narrating
+  its own contract
+* [x] A moment's content takes the width it has. The mark was pinned to the rail
+  and auto-placement then pushed the time past it and wrapped the words into the
+  first column's seventy-four pixels
+* [x] Record reads the run's story: one moment per command rather than three, and
+  the questions and answers merged into it by time
+* [x] `Artifacts` and `Record` are one view called `Timeline`, because what a run
+  produced is the end of what happened to it
+* [x] What a phase produced sits in that phase. A criterion's parent is the task,
+  so matching on the direct parent alone piled every one of them at the bottom
+* [x] Agents is a tree grouped by phase. Six rows all reading `implementor` name
+  nobody
+* [x] Narrowing to one agent is refused until there is one to narrow to
+* [x] The terminal bar names the run-wide scope rather than printing the run's
+  digest, and its controls stay on one line
+* [x] A fold survives a poll, which is what made the receipts list unusable while
+  a run was live
+* [x] The receipts panel says its name once, and its rows have a gutter
+
 ### An escalation the budget can already satisfy is never resolved
 
 The live run stopped one member short of finishing. Four members of `implement`

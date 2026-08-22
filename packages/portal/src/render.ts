@@ -549,14 +549,11 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
     return main;
   }
   switch (state.route.name) {
-    case "record":
+    case "timeline":
       main.append(renderRecord(state, actions));
       break;
     case "workflow":
       main.append(renderWorkflow(state, actions));
-      break;
-    case "artifacts":
-      main.append(renderArtifacts(state, actions));
       break;
     case "agents":
       main.append(renderAgents(state, actions));
@@ -582,7 +579,12 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
  */
 function renderRecord(state: PortalState, actions: PortalRenderActions): HTMLElement {
   const section = element("section", "record-view");
-  section.append(renderHistory(state, actions), renderIntegrations(state));
+  // What the run made is the end of what happened to it, not a tab of its own.
+  section.append(
+    renderHistory(state, actions),
+    renderArtifacts(state, actions),
+    renderIntegrations(state),
+  );
   const receipts = renderReceipts(state, actions);
   if (receipts !== undefined) section.append(receipts);
   section.append(renderRunFacts(state));
@@ -597,35 +599,36 @@ function renderReceipts(state: PortalState, actions: PortalRenderActions): HTMLE
   const receipts = page?.receipts ?? [];
   if (receipts.length === 0) return undefined;
   const panel = element("section", "card activity-panel");
-  const body = element("div", "pane");
-  body.append(
-    activityList(
-      "Commands you submitted",
-      receipts,
+  panel.append(
+    keptDisclosure(
+      "fold:receipts",
       state,
       actions,
-      (entry) => `${entry.cursor} ${entry.status} ${entry.commandId}`,
-    ),
-  );
-  const holder = element("details", "proof");
-  holder.append(
-    textElement(
-      "summary",
-      "disclosure-summary",
       `Commands you submitted (${String(receipts.length)})`,
+      () => {
+        const body = element("div", "pane");
+        body.append(
+          activityList(
+            "Commands you submitted",
+            receipts,
+            state,
+            actions,
+            (entry) => `${entry.cursor} ${entry.status} ${entry.commandId}`,
+          ),
+        );
+        if (page?.hasEarlier === true) {
+          const paging = element("div", "paging-row");
+          paging.append(
+            commandButton("Earlier receipts", () =>
+              actions.pageActivity("receipts", page.receipts[0]?.cursor ?? page.earliestCursor),
+            ),
+          );
+          body.append(paging);
+        }
+        return body;
+      },
     ),
-    body,
   );
-  panel.append(holder);
-  if (page?.hasEarlier === true) {
-    const paging = element("div", "paging-row");
-    paging.append(
-      commandButton("Earlier receipts", () =>
-        actions.pageActivity("receipts", page.receipts[0]?.cursor ?? page.earliestCursor),
-      ),
-    );
-    body.append(paging);
-  }
   return panel;
 }
 
@@ -673,8 +676,9 @@ function renderHistory(state: PortalState, actions: PortalRenderActions): HTMLEl
       ? []
       : (state.caches.graphNodes[revisionKey(ids.repositoryId, ids.runId, revision)]?.nodes ?? []);
   const produced = state.caches.delivery[key]?.records ?? [];
+  const questions = state.caches.questions[key]?.questions ?? [];
   const needle = state.ui.filter.toLocaleLowerCase();
-  const moments = timelineMoments(events, nodes).filter((moment) =>
+  const moments = timelineMoments(events, nodes, questions).filter((moment) =>
     `${moment.what} ${moment.where ?? ""} ${moment.detail ?? ""}`
       .toLocaleLowerCase()
       .includes(needle),
@@ -1172,6 +1176,7 @@ function livePane(
     transcriptPaneView({
       view: state.ui.transcript,
       scope: state.ui.transcriptScope,
+      narrowable: node !== undefined,
       names:
         ids === undefined
           ? {}
@@ -1272,19 +1277,20 @@ function replyBox(
     event.preventDefault();
     send.click();
   });
-  const note = replyNote(state.ui.reply, label);
-  side.append(send, note);
+  const note = replyNote(state.ui.reply);
+  side.append(send);
+  if (note !== undefined) side.append(note);
   reply.append(side);
   return reply;
 }
 
-/** What the box is doing, said where the reader is looking. */
-function replyNote(reply: PortalState["ui"]["reply"], label: string): HTMLElement {
+/** What the box is doing, said only once it is doing something. */
+function replyNote(reply: PortalState["ui"]["reply"]): HTMLElement | undefined {
   if (reply.status === "sending") return textElement("span", "reply-note", "sending\u2026");
   if (reply.status === "sent") return textElement("span", "reply-note sent", "sent as written");
   if (reply.status === "failed")
     return textElement("span", "reply-note failed", reply.message ?? "could not send");
-  return textElement("span", "reply-note", `${label} \u00b7 sent as written`);
+  return undefined;
 }
 
 /** The agent a reply is addressed to: the one on the node, or the run's if none is selected. */
@@ -1395,13 +1401,8 @@ function activityList<Value>(
   actions: PortalRenderActions,
   label: (value: Value) => string,
 ): HTMLElement {
-  const panel = element("section", "card activity-panel");
-  const header = element("header", "view-toolbar");
-  header.append(
-    textElement("h2", "card-heading", title),
-    textElement("span", "count", "open one to load its exact record"),
-  );
-  panel.append(header);
+  // The fold above already names this list, so it is not named again inside it.
+  const panel = element("div", "activity-body");
   const list = element("ol", "activity-list");
   const needle = state.ui.filter.toLocaleLowerCase();
   const opened = new Set(state.ui.openedRecords);
@@ -1722,6 +1723,7 @@ function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLEle
     return split;
   }
   const list = element("ul", "workflow-tree agent-roster");
+  list.setAttribute("role", "tree");
   // One row per piece of work an agent holds, latest attempt first in the row.
   const byWork = new Map<string, PortalAgentSummary[]>();
   for (const agent of agents) {
@@ -1730,36 +1732,67 @@ function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLEle
     if (existing === undefined) byWork.set(groupKey, [agent]);
     else existing.push(agent);
   }
+  // A roster of six rows all reading "implementor" names nobody. The phase each
+  // agent is working in is the thing that tells them apart, so it is the branch
+  // they hang from.
+  const byPhase = new Map<string, PortalAgentSummary[][]>();
   for (const group of byWork.values()) {
-    const attempts = [...group].sort((left, right) => left.attempt - right.attempt);
-    const current = attempts[attempts.length - 1];
-    if (current === undefined) continue;
-    const nodeId = String(current.taskId);
-    const item = element("li", "workflow-node agent-entry");
-    if (state.ui.focusedRecord === nodeId) item.setAttribute("aria-selected", "true");
-    const row = element("span", "node");
-    row.dataset.focusKey = nodeId;
-    row.append(
-      textElement("span", "node-mark", "\u25cf"),
-      textElement("span", "node-name", current.persona),
+    const phase = group[0]?.phaseName ?? String(group[0]?.phaseId ?? "");
+    const held = byPhase.get(phase);
+    if (held === undefined) byPhase.set(phase, [group]);
+    else held.push(group);
+  }
+  for (const [phase, groups] of byPhase) {
+    const branch = element("li", "tree-item workflow-node kind-phase");
+    branch.setAttribute("role", "treeitem");
+    branch.setAttribute("aria-level", "1");
+    const heading = element("span", "node");
+    heading.append(
+      textElement("span", "node-mark", nodeMark("phase")),
+      textElement("span", "node-name", phase),
+      textElement("span", "node-sub", `${String(groups.length)} working on it`),
     );
-    const right = element("span", "node-right");
-    const work = textElement("span", "node-sub agent-work", current.taskName ?? nodeId);
-    // The identity is kept for hovering, because a digest names nothing to a reader.
-    work.title = nodeId;
-    right.append(work);
-    if (current.model !== undefined) right.append(textElement("span", "model", current.model));
-    if (attempts.length > 1)
-      right.append(textElement("span", "node-sub", `${String(attempts.length)} attempts`));
-    if (current.latestRefusal !== undefined)
-      right.append(textElement("span", "asks", "could not finish"));
-    right.append(
-      textElement("span", `state ${AGENT_TONES[current.state] ?? "is-waiting"}`, current.state),
-    );
-    row.append(right);
-    item.append(row);
-    item.addEventListener("click", () => actions.focusRecord(nodeId));
-    list.append(item);
+    branch.append(heading);
+    const children = element("ul", "tree-children");
+    children.setAttribute("role", "group");
+    branch.append(children);
+    list.append(branch);
+    for (const group of groups) {
+      const attempts = [...group].sort((left, right) => left.attempt - right.attempt);
+      const current = attempts[attempts.length - 1];
+      if (current === undefined) continue;
+      const nodeId = String(current.taskId);
+      const item = element("li", "tree-item workflow-node agent-entry");
+      item.setAttribute("role", "treeitem");
+      item.setAttribute("aria-level", "2");
+      if (state.ui.focusedRecord === nodeId) item.setAttribute("aria-selected", "true");
+      const row = element("span", "node");
+      row.dataset.focusKey = nodeId;
+      row.append(
+        textElement("span", "node-mark", "\u25cf"),
+        textElement("span", "node-name", current.persona),
+      );
+      const right = element("span", "node-right");
+      const work = textElement("span", "node-sub agent-work", current.taskName ?? nodeId);
+      // The identity is kept for hovering, because a digest names nothing to a reader.
+      work.title = nodeId;
+      right.append(work);
+      if (current.model !== undefined) right.append(textElement("span", "model", current.model));
+      if (attempts.length > 1)
+        right.append(textElement("span", "node-sub", `${String(attempts.length)} attempts`));
+      if (current.latestRefusal !== undefined)
+        right.append(textElement("span", "asks", "could not finish"));
+      right.append(
+        textElement("span", `state ${AGENT_TONES[current.state] ?? "is-waiting"}`, current.state),
+      );
+      row.append(right);
+      item.append(row);
+      item.addEventListener("click", (event) => {
+        event.stopPropagation();
+        actions.focusRecord(nodeId);
+      });
+      children.append(item);
+    }
   }
   card.append(list);
   split.append(card);
@@ -2233,6 +2266,25 @@ function disclosure(label: string, ...children: readonly Node[]): HTMLElement {
   return wrapper;
 }
 
+/** A fold a live run cannot close: it is re-rendered under the reader constantly. */
+function keptDisclosure(
+  key: string,
+  state: PortalState,
+  actions: PortalRenderActions,
+  label: string,
+  build: () => Node,
+): HTMLElement {
+  const open = state.ui.openedRecords.includes(key);
+  const wrapper = element("details", "disclosure");
+  wrapper.append(textElement("summary", "disclosure-summary", label));
+  wrapper.open = open;
+  if (open) wrapper.append(build());
+  wrapper.addEventListener("toggle", () => {
+    if (wrapper.open !== open) actions.toggleRecord(key);
+  });
+  return wrapper;
+}
+
 function appendMetric(list: HTMLElement, label: string, value: number): void {
   const item = element("div", "count-item");
   item.append(textElement("dt", "", label), textElement("dd", "", String(value)));
@@ -2286,8 +2338,7 @@ function needAllowedByCapabilities(need: PortalHumanNeed, state: PortalState): b
 function routeLabel(route: PortalRouteName): string {
   const labels: Readonly<Record<PortalRouteName, string>> = {
     workflow: "Workflow",
-    record: "Record",
-    artifacts: "Artifacts",
+    timeline: "Timeline",
     agents: "Agents",
   };
   return labels[route];

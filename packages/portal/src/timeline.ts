@@ -11,6 +11,8 @@ export interface TimelineMoment {
   /** The event's own identity, because a cursor is not unique in a replay. */
   readonly momentId: string;
   readonly cursor: number;
+  /** When it happened, which is the only order records from different sources share. */
+  readonly at: number;
   /** UTC clock time, which is what the record is written in. */
   readonly time: string;
   /** What happened, in the reader's words. */
@@ -85,39 +87,204 @@ export function momentTime(occurredAt: string): string {
   return Number.isNaN(parsed) ? "--:--:--" : new Date(parsed).toISOString().slice(11, 19);
 }
 
+/**
+ * What a command was for, read from the name it was given.
+ *
+ * The event stream carries `command-queued`, `command-claimed` and
+ * `command-completed`, and every payload is the status it already announced: no
+ * task, no phase, no reason. Read alone it is a queue's ticker rather than a
+ * history. The command's own identity is the only part that says what was
+ * happening, because the driver names each one after the thing it is doing.
+ */
+function commandPhrase(commandId: string):
+  | {
+      what: string;
+      where: string | undefined;
+      tone: TimelineMoment["tone"] | undefined;
+    }
+  | undefined {
+  // A gate command carries the candidate digest as well as its own, so the
+  // trailing identities come off together rather than one at a time.
+  const name = commandId.replace(/^command_/u, "").replace(/(?:-[0-9a-f]{16,})+$/u, "");
+  const plain = { where: undefined, tone: undefined };
+  if (name.startsWith("instantiate"))
+    return { what: "the run was created", where: undefined, tone: "opened" };
+  if (name.startsWith("worker-completion"))
+    return { what: "an agent handed its work in", ...plain };
+  if (name.startsWith("fanout-propose"))
+    return { what: "splitting the work was proposed", ...plain };
+  if (name.startsWith("fanout-decide")) return { what: "the split was decided", ...plain };
+  if (name.startsWith("fanout-apply"))
+    return { what: "the work was split into members", where: undefined, tone: "opened" };
+  const staged = /^(gate|close|advance)-(.+?)(?:-(\d+))?$/u.exec(name);
+  if (staged !== null) {
+    const [, verb, phase, attempt] = staged;
+    const at = attempt === undefined ? "" : `, attempt ${attempt}`;
+    if (verb === "advance") return { what: `${phase} opened${at}`, where: phase, tone: "opened" };
+    if (verb === "close") return { what: `${phase} closed${at}`, where: phase, tone: "closed" };
+    return { what: `${phase} was checked${at}`, where: phase, tone: undefined };
+  }
+  // A command the portal submitted is named by a fresh identity, so its name
+  // says nothing. What it did is already told by the answer or the grant it
+  // carried, and the receipts below list every one of them exactly.
+  return undefined;
+}
+
+/**
+ * One moment per command, rather than three.
+ *
+ * A command is queued, claimed and completed, which is one thing happening and
+ * three rows saying so. What a reader wants is the thing, and whether it took.
+ */
+function commandMoments(
+  events: readonly EventStreamFrame[],
+  named: (id: string | undefined) => string | undefined,
+): readonly TimelineMoment[] {
+  const byCommand = new Map<string, EventStreamFrame[]>();
+  const loose: EventStreamFrame[] = [];
+  for (const event of events) {
+    if (event.commandId === undefined || !event.eventType.startsWith("command-")) {
+      loose.push(event);
+      continue;
+    }
+    const held = byCommand.get(String(event.commandId));
+    if (held === undefined) byCommand.set(String(event.commandId), [event]);
+    else held.push(event);
+  }
+  const moments: TimelineMoment[] = [];
+  for (const [commandId, frames] of byCommand) {
+    const ordered = [...frames].sort((left, right) => left.cursor - right.cursor);
+    const first = ordered[0];
+    const last = ordered[ordered.length - 1];
+    if (first === undefined || last === undefined) continue;
+    const phrase = commandPhrase(commandId);
+    if (phrase === undefined) continue;
+    const refused = last.eventType === "command-refused";
+    moments.push(
+      Object.freeze({
+        momentId: String(first.eventId),
+        cursor: first.cursor,
+        at: momentOrder(first.occurredAt),
+        time: momentTime(first.occurredAt),
+        what: refused ? `${phrase.what} \u2014 refused` : phrase.what,
+        where: phrase.where,
+        detail: undefined,
+        tone: (refused ? "failed" : (phrase.tone ?? "plain")) as TimelineMoment["tone"],
+        record: ordered.length === 1 ? first : ordered,
+      }),
+    );
+  }
+  for (const event of loose) {
+    const payload = event.payload;
+    const where =
+      named(readString(payload, "taskId")) ??
+      named(readString(payload, "phaseId")) ??
+      readString(payload, "phase") ??
+      readString(payload, "task");
+    const output = readString(payload, "outputName");
+    const bytes = readNumber(payload, "byteLength");
+    moments.push(
+      Object.freeze({
+        momentId: String(event.eventId),
+        cursor: event.cursor,
+        at: momentOrder(event.occurredAt),
+        time: momentTime(event.occurredAt),
+        what: momentWhat(event.eventType),
+        where,
+        detail:
+          output === undefined
+            ? readString(payload, "reason")
+            : bytes === undefined
+              ? output
+              : `${output}, ${String(bytes)} bytes`,
+        tone: TONES[event.eventType] ?? "plain",
+        record: event,
+      }),
+    );
+  }
+  return moments;
+}
+
+/**
+ * One order for moments that come from different records.
+ *
+ * A frame has a cursor and a question has only a time, so the clock is the one
+ * thing they share. Frames that share a millisecond still fall back to the
+ * cursor, which is the only total order the stream has.
+ */
+function momentOrder(occurredAt: string): number {
+  const parsed = Date.parse(occurredAt);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/** What an agent asked and what it was told, which is the part people remember. */
+function questionMoments(
+  questions: readonly TimelineQuestion[],
+  named: (id: string | undefined) => string | undefined,
+): readonly TimelineMoment[] {
+  const moments: TimelineMoment[] = [];
+  for (const question of questions) {
+    const where = named(String(question.source.taskId));
+    moments.push(
+      Object.freeze({
+        momentId: `asked:${String(question.source.submissionId)}`,
+        cursor: 0,
+        at: momentOrder(question.source.submittedAt),
+        time: momentTime(question.source.submittedAt),
+        what: "an agent asked",
+        where,
+        detail: question.prompt,
+        tone: "asked" as const,
+        record: question,
+      }),
+    );
+    if (question.answer === undefined) continue;
+    moments.push(
+      Object.freeze({
+        momentId: `answered:${String(question.answer.answerId)}`,
+        cursor: 0,
+        at: momentOrder(question.answer.answeredAt),
+        time: momentTime(question.answer.answeredAt),
+        what: "you answered",
+        where,
+        detail: answerText(question.answer.answer),
+        tone: "closed" as const,
+        record: question.answer,
+      }),
+    );
+  }
+  return moments;
+}
+
+function answerText(answer: unknown): string | undefined {
+  if (typeof answer === "string") return answer;
+  const held = readString(answer, "answer") ?? readString(answer, "text");
+  return held ?? (answer === undefined ? undefined : JSON.stringify(answer));
+}
+
+export interface TimelineQuestion {
+  readonly source: {
+    readonly submissionId: string;
+    readonly taskId: string;
+    readonly submittedAt: string;
+  };
+  readonly prompt: string;
+  readonly answer?: {
+    readonly answerId: string;
+    readonly answeredAt: string;
+    readonly answer: unknown;
+  };
+}
+
 export function timelineMoments(
   events: readonly EventStreamFrame[],
   nodes: readonly PortalGraphNode[],
+  questions: readonly TimelineQuestion[] = [],
 ): readonly TimelineMoment[] {
   const names = new Map(nodes.map((node) => [node.nodeId, node.title]));
   const named = (id: string | undefined): string | undefined =>
     id === undefined ? undefined : (names.get(id) ?? id);
-  return [...events]
-    .sort((left, right) => left.cursor - right.cursor)
-    .map((event) => {
-      const payload = event.payload;
-      const where =
-        named(readString(payload, "taskId")) ??
-        named(readString(payload, "phaseId")) ??
-        readString(payload, "phase") ??
-        readString(payload, "task");
-      const output = readString(payload, "outputName");
-      const bytes = readNumber(payload, "byteLength");
-      const detail =
-        output === undefined
-          ? readString(payload, "reason")
-          : bytes === undefined
-            ? output
-            : `${output}, ${String(bytes)} bytes`;
-      return Object.freeze({
-        momentId: String(event.eventId),
-        cursor: event.cursor,
-        time: momentTime(event.occurredAt),
-        what: momentWhat(event.eventType),
-        where,
-        detail,
-        tone: TONES[event.eventType] ?? "plain",
-        record: event,
-      });
-    });
+  return [...commandMoments(events, named), ...questionMoments(questions, named)].sort(
+    (left, right) => left.at - right.at || left.cursor - right.cursor,
+  );
 }

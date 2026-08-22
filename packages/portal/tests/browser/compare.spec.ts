@@ -13,8 +13,8 @@ const CAPTURES = resolve(import.meta.dirname, "../../test-results/compare");
 const TABS = [
   { name: "Workflow", mock: "index.html" },
   { name: "Agents", mock: "agents.html" },
-  { name: "Artifacts", mock: "artifacts.html" },
-  { name: "Record", mock: "record.html" },
+  { name: "Timeline", mock: "artifacts.html" },
+  { name: "Timeline", mock: "record.html" },
 ] as const;
 
 const TYPES: Readonly<Record<string, string>> = {

@@ -54,26 +54,23 @@ close an open dialog or full-screen asset overlay.
 
 ## Views
 
-Eight views exist, each addressable by URL hash as
+Three views exist, each addressable by URL hash as
 `#/runs/{repositoryId}/{runId}/{view}`. The display name in the navigation rail
-is followed by the exact `{view}` token below:
+is the exact `{view}` token, in lower case:
 
-* Overview, `overview`, shows the run mode, phase, task, criterion, human need,
-  and effect counts, the authority vector, and the run control buttons.
-* Graph, `graph`, shows the workflow structure and the agent output view.
-* Delivery, `delivery`, shows standard delivery metadata: phase outputs, fan-out
-  evaluations, and their digests and states.
-* Activity, `activity`, shows paged receipts and events.
-* Artifacts, `artifacts`, shows worker artifact metadata, bounded previews, and
-  downloads.
-* Human needs, `needs`, shows the human queue with a filter.
-* Amendments, `amendments`, shows amendment source, impact, and diff as inert
-  bounded data.
-* Workspaces, `workspaces`, shows task workspaces and integration attempts.
+* Workflow, `workflow`, shows the run as phases, the work inside each phase, and
+  what that work produced, as a diagram or a tree. Selecting a piece of work
+  opens what it is doing beside it.
+* Agents, `agents`, shows who is working, grouped by the phase they are working
+  in, and reaches the same detail surface as Workflow.
+* Timeline, `timeline`, shows what happened in order, what the run produced, the
+  commands this browser submitted, and the counts and revisions a reader checks
+  a claim against.
 
-Human needs is the only display name that differs from its token. A hash with an
-unknown token, an unparsable repository or run identity, or a different segment
-count resolves to the overview with no run selected.
+Both Workflow and Agents open with the whole run's agent output and narrow to
+one agent when a reader selects it. A hash with an unknown token, an
+unparsable repository or run identity, or a different segment count resolves to
+Workflow with no run selected.
 
 A view assembles from an overview read, bounded resource reads, and a second
 overview read. Any change to the authority vector invalidates the assembly and
@@ -240,9 +237,9 @@ submit button is styled as destructive.
 Run control requires the `portal-write-run-control` capability. Without it the
 buttons render disabled.
 
-## Artifacts
+## What the run produced
 
-The Artifacts view lists worker artifact metadata. Metadata stays
+The Timeline view lists worker artifact metadata after the history. Metadata stays
 `metadata-only` until the exact digest, size, media type, and installed bytes
 verify. Previews read at most 64 KiB and the JSON viewer renders at most 500
 nodes. Opening a preview full screen uses a modal overlay that traps focus,

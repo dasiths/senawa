@@ -374,6 +374,9 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
           assetOverlay: undefined,
           graphViewport: INITIAL_GRAPH_VIEWPORT,
           transcript: emptyTranscriptView(),
+          // Another run has none of this run's nodes, so a scope narrowed to one
+          // of them would follow something that is no longer there.
+          transcriptScope: "run" as const,
         }),
       });
     case "repositories":

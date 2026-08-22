@@ -1,4 +1,4 @@
-export const PORTAL_ROUTES = Object.freeze(["workflow", "agents", "artifacts", "record"] as const);
+export const PORTAL_ROUTES = Object.freeze(["workflow", "agents", "timeline"] as const);
 
 export type PortalRouteName = (typeof PORTAL_ROUTES)[number];
 
