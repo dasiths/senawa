@@ -521,6 +521,33 @@ to a word. A digest has no break points; a name has plenty.
 * [x] A name breaks between words; only machine text breaks anywhere
 * [x] The empty detail card is gone: with nothing selected the pane carries the run-wide terminal
 
+### An escalation the budget can already satisfy is never resolved
+
+The live run stopped one member short of finishing. Four members of `implement`
+were dispatched, three handed in, and the fourth waits for a budget escalation
+that nothing will ever answer.
+
+Two members ran out of `review-iteration` within seconds of each other, so two
+escalations were raised. Granting one raised the shared budget from eight to
+sixteen, which gave the second escalation the room it had asked for. The needs
+list drops an escalation once the budget has room, deliberately and with a
+comment saying so: a request that has already been satisfied should not offer a
+button that cannot do anything.
+
+But nothing resolves it either. No resolution row is written, the member is never
+resumed, and the escalation is invisible on every surface while remaining the
+reason the run cannot finish. The portal says nothing is waiting, the CLI agrees,
+and both are wrong about what that means.
+
+The display half of this was decided; the other half was not. Whether the engine
+may record that an escalation was satisfied when no person decided anything is a
+question about the authority model, not a rendering choice, so it is written down
+here rather than answered in passing.
+
+* [ ] An escalation the budget can already satisfy is resolved, or is shown
+* [ ] A member blocked on a satisfied escalation is resumed
+* [ ] `#runScopedNeedCount` and the needs list agree about what is outstanding
+
 ### What the live run showed about Record
 
 Rebuilt, Record reads its moments from the run's event stream. Against a real
