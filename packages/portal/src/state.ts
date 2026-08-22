@@ -142,6 +142,11 @@ export const INITIAL_GRAPH_VIEWPORT: PortalGraphViewport = Object.freeze({
   panY: 0,
 });
 
+export interface PortalReplyState {
+  readonly status: "idle" | "sending" | "sent" | "failed";
+  readonly message?: string;
+}
+
 export const DETAIL_TABS = Object.freeze(["live", "answers", "produced", "about"] as const);
 export type DetailTab = (typeof DETAIL_TABS)[number];
 
@@ -165,6 +170,8 @@ export interface PortalUiState {
   readonly openedRecords: readonly string[];
   /** Which face of the one detail surface is showing. */
   readonly detailTab: DetailTab;
+  /** What the reply box under the transcript is doing. */
+  readonly reply: PortalReplyState;
   readonly graphViewport: PortalGraphViewport;
   readonly transcript: TranscriptView;
   readonly transcriptScope: TranscriptScope;
@@ -230,6 +237,7 @@ export type PortalAction =
   | { readonly type: "graph-mode"; readonly mode: GraphMode }
   | { readonly type: "graph-unfold"; readonly nodeId: string }
   | { readonly type: "detail-tab"; readonly tab: DetailTab }
+  | { readonly type: "reply-state"; readonly reply: PortalReplyState }
   | { readonly type: "record-disclosure"; readonly recordKey: string }
   | { readonly type: "graph-viewport"; readonly viewport: PortalGraphViewport }
   | { readonly type: "transcript-owner"; readonly owner: PortalTranscriptOwner | undefined }
@@ -282,10 +290,11 @@ export function initialPortalState(route: PortalRoute): PortalState {
       graphMode: "diagram",
       unfoldedNodes: Object.freeze([]),
       detailTab: "live",
+      reply: Object.freeze({ status: "idle" }),
       openedRecords: Object.freeze([]),
       graphViewport: INITIAL_GRAPH_VIEWPORT,
       transcript: emptyTranscriptView(),
-      transcriptScope: "node",
+      transcriptScope: "run",
       narration: undefined,
       railLayout: DEFAULT_RAIL_LAYOUT,
       assetOverlay: undefined,
@@ -480,7 +489,11 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
       return next(state, { ui: Object.freeze({ ...state.ui, filter: action.value }) });
     case "focus-record":
       return next(state, {
-        ui: Object.freeze({ ...state.ui, focusedRecord: action.recordId }),
+        ui: Object.freeze({
+          ...state.ui,
+          focusedRecord: action.recordId,
+          transcriptScope: action.recordId === undefined ? "run" : "node",
+        }),
       });
     case "right-rail":
       return next(state, { ui: Object.freeze({ ...state.ui, rightRailOpen: action.open }) });
@@ -491,6 +504,11 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
           graphMode: action.mode,
           graphViewport: INITIAL_GRAPH_VIEWPORT,
         }),
+      });
+    case "reply-state":
+      return Object.freeze({
+        ...state,
+        ui: Object.freeze({ ...state.ui, reply: action.reply }),
       });
     case "detail-tab":
       return Object.freeze({

@@ -26,5 +26,5 @@ export function portalViewModel(state: PortalState): PortalViewModel {
 }
 
 function graphSearchText(node: PortalGraphNode): string {
-  return `${node.kind} ${node.title} ${node.lifecycle} ${node.nodeId}`.toLocaleLowerCase();
+  return `${node.kind} ${node.title} ${node.runState} ${node.nodeId}`.toLocaleLowerCase();
 }

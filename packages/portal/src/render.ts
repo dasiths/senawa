@@ -93,6 +93,7 @@ export interface PortalRenderActions {
   readonly setTranscriptPinned: (pinned: boolean) => void;
   readonly setTranscriptScope: (scope: TranscriptScope) => void;
   readonly setDetailTab: (tab: DetailTab) => void;
+  readonly sendReply: (need: PortalHumanNeed | undefined, text: string) => void;
   readonly setRailLayout: (layout: RailLayout) => void;
   readonly setRailCollapsed: (side: RailSide, collapsed: boolean) => void;
   readonly openAssetOverlay: (artifactId: string, triggerId: string) => void;
@@ -474,7 +475,7 @@ function renderNavigation(state: PortalState, actions: PortalRenderActions): HTM
  * What the run is and what it is doing. A revision and a cursor are how a reader
  * checks a claim, not how they form one, so they sit under a disclosure.
  */
-function renderRunHead(state: PortalState): HTMLElement {
+function renderRunHead(state: PortalState, actions: PortalRenderActions): HTMLElement {
   const head = element("div", "run-head");
   const overview = selectedOverview(state);
   const title = textElement(
@@ -494,6 +495,17 @@ function renderRunHead(state: PortalState): HTMLElement {
         `${String(overview.counts.closedPhases)} of ${String(overview.counts.phases)} phases closed`,
       ),
     );
+    // Pausing, resuming and ending are decisions about this run, so they belong
+    // beside what the run is doing rather than under a disclosure of facts.
+    const controls = element("div", "run-controls");
+    const locked = actionsLocked(state) || !hasCapability(state, "portal-write-run-control");
+    if (overview.mode === "running")
+      controls.append(runControlButton("Pause", "pause", locked, actions));
+    if (overview.mode === "paused")
+      controls.append(runControlButton("Resume", "resume", locked, actions));
+    if (!overview.terminal)
+      controls.append(runControlButton("End run", "end", locked, actions, true));
+    if (controls.childElementCount > 0) head.append(controls);
   }
   return head;
 }
@@ -513,7 +525,7 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
   const main = element("main", "main-workspace");
   main.id = "main";
   main.tabIndex = -1;
-  main.append(renderRunHead(state));
+  main.append(renderRunHead(state, actions));
   if (state.session.status === "expired" || state.session.status === "invalid") {
     const failure = element("section", "terminal-state");
     failure.setAttribute("role", "alert");
@@ -557,65 +569,100 @@ function renderMain(state: PortalState, actions: PortalRenderActions): HTMLEleme
 // What the run is, and what has happened to it, are the same question asked at
 // two lengths. Separating them made the first tab seven revision counters and
 // the second an undifferentiated log.
+/**
+ * What happened, in order, and what it produced.
+ *
+ * This was four cards inherited from a debugging view: counts, revisions, a
+ * timeline and a list of receipts. It answered "what does the authority
+ * contain", which is the question the authority's operator asks. A person
+ * watching their own work get done arrives asking what happened, what it made,
+ * and what they decided, so that is what this reads as now. The counts and the
+ * revisions moved under the proof disclosure, where a fact you check but do not
+ * form a view from belongs.
+ */
 function renderRecord(state: PortalState, actions: PortalRenderActions): HTMLElement {
   const section = element("section", "record-view");
-  section.append(
-    renderOverview(state, actions),
-    renderDelivery(state),
-    renderIntegrations(state),
-    renderActivity(state, actions),
-  );
+  section.append(renderHistory(state, actions), renderIntegrations(state));
+  const receipts = renderReceipts(state, actions);
+  if (receipts !== undefined) section.append(receipts);
+  section.append(renderRunFacts(state, actions));
   return section;
 }
 
-function renderOverview(state: PortalState, actions: PortalRenderActions): HTMLElement {
-  const section = element("section", "overview-view");
+/** The commands this browser submitted, which is machinery, and folded away. */
+function renderReceipts(state: PortalState, actions: PortalRenderActions): HTMLElement | undefined {
+  const ids = selectedIds(state);
+  if (ids === undefined) return undefined;
+  const page = state.caches.receipts[runKey(ids.repositoryId, ids.runId)];
+  const receipts = page?.receipts ?? [];
+  if (receipts.length === 0) return undefined;
+  const panel = element("section", "card activity-panel");
+  const body = element("div", "pane");
+  body.append(
+    activityList(
+      "Commands you submitted",
+      receipts,
+      state,
+      actions,
+      (entry) => `${entry.cursor} ${entry.status} ${entry.commandId}`,
+    ),
+  );
+  const holder = element("details", "proof");
+  holder.append(
+    textElement(
+      "summary",
+      "disclosure-summary",
+      `Commands you submitted (${String(receipts.length)})`,
+    ),
+    body,
+  );
+  panel.append(holder);
+  if (page?.hasEarlier === true) {
+    const paging = element("div", "paging-row");
+    paging.append(
+      commandButton("Earlier receipts", () =>
+        actions.pageActivity("receipts", page.receipts[0]?.cursor ?? page.earliestCursor),
+      ),
+    );
+    body.append(paging);
+  }
+  return panel;
+}
+
+/** What a reader checks a claim against, rather than forms a view from. */
+function renderRunFacts(state: PortalState, actions: PortalRenderActions): HTMLElement {
   const overview = selectedOverview(state);
-  if (overview === undefined) return emptySection("Loading run authority");
-  const modeBand = element("div", "mode-band");
-  const title = element("div", "mode-title");
-  title.append(textElement("h2", "section-heading", overview.workflowName));
-  const controls = element("div", "run-controls");
-  const locked = actionsLocked(state) || !hasCapability(state, "portal-write-run-control");
-  if (overview.mode === "running")
-    controls.append(runControlButton("Pause", "pause", locked, actions));
-  if (overview.mode === "paused")
-    controls.append(runControlButton("Resume", "resume", locked, actions));
-  if (!overview.terminal)
-    controls.append(runControlButton("End run", "end", locked, actions, true));
-  modeBand.append(title, controls);
+  const proof = element("details", "proof");
+  proof.append(textElement("summary", "disclosure-summary", "Counts, effects and revisions"));
+  if (overview === undefined) {
+    proof.append(textElement("p", "empty-state", "Loading run authority."));
+    return proof;
+  }
   const counts = element("dl", "count-grid");
   for (const [label, value] of [
     ["Phases", overview.counts.phases],
     ["Tasks", overview.counts.tasks],
     ["Criteria", overview.counts.criteria],
-  ] as const)
-    appendMetric(counts, label, value);
-  // Effect counters answer "why is nothing moving", which is a question a
-  // reader arrives at rather than starts with.
-  const effects = element("dl", "count-grid");
-  for (const [label, value] of [
     ["Active effects", overview.counts.activeEffects],
     ["Uncertain effects", overview.counts.uncertainEffects],
   ] as const)
-    appendMetric(effects, label, value);
+    appendMetric(counts, label, value);
   const vectorFacts = element("dl", "dense-facts");
   for (const [label, value] of Object.entries(overview.sync))
     appendFact(vectorFacts, label, String(value));
-  section.append(
-    modeBand,
-    counts,
-    disclosure("Effects and authority vector", effects, vectorFacts),
-  );
-  return section;
+  proof.append(counts, vectorFacts);
+  return proof;
 }
 
 /**
- * What happened, in order. A table of delivery records answered "what exists"
- * when the question this view is asked is "what happened, and when"; delivery
- * records carry neither a time nor an order, and the event stream carries both.
+ * What happened, in order.
+ *
+ * Built from the event stream, which is the only projection carrying both a
+ * time and a position. Delivery records carry neither, so what a phase produced
+ * hangs off the moment that published it rather than standing in a table beside
+ * it pretending to an order it does not have.
  */
-function renderDelivery(state: PortalState): HTMLElement {
+function renderHistory(state: PortalState, actions: PortalRenderActions): HTMLElement {
   const ids = selectedIds(state);
   if (ids === undefined) return emptySection("Loading what happened");
   const key = runKey(ids.repositoryId, ids.runId);
@@ -625,7 +672,13 @@ function renderDelivery(state: PortalState): HTMLElement {
     revision === undefined
       ? []
       : (state.caches.graphNodes[revisionKey(ids.repositoryId, ids.runId, revision)]?.nodes ?? []);
-  const moments = timelineMoments(events, nodes);
+  const produced = state.caches.delivery[key]?.records ?? [];
+  const needle = state.ui.filter.toLocaleLowerCase();
+  const moments = timelineMoments(events, nodes).filter((moment) =>
+    `${moment.what} ${moment.where ?? ""} ${moment.detail ?? ""}`
+      .toLocaleLowerCase()
+      .includes(needle),
+  );
   const section = element("section", "card timeline-view");
   const header = element("header", "view-toolbar");
   header.append(
@@ -635,17 +688,23 @@ function renderDelivery(state: PortalState): HTMLElement {
       "count",
       moments.length === 0 ? "nothing yet" : `${String(moments.length)} moments \u00b7 newest last`,
     ),
+    filterInput(state, actions, "Filter what happened"),
   );
   section.append(header);
   if (moments.length === 0) {
-    section.append(textElement("p", "empty-state", "This run has not done anything yet."));
+    section.append(
+      textElement(
+        "p",
+        "empty-state",
+        needle.length > 0 ? "Nothing here matches that." : "This run has not done anything yet.",
+      ),
+    );
     return section;
   }
+  const opened = new Set(state.ui.openedRecords);
   const list = element("ol", "timeline");
   let previous: string | undefined;
   for (const moment of moments) {
-    // A run reads as phases, so the phase is stated when it changes and assumed
-    // until it does.
     if (moment.where !== undefined && moment.where !== previous) {
       list.append(textElement("li", "timeline-where", moment.where));
       previous = moment.where;
@@ -655,20 +714,25 @@ function renderDelivery(state: PortalState): HTMLElement {
     const body = element("div", "moment-body");
     body.append(textElement("p", "moment-what", moment.what));
     if (moment.detail !== undefined) body.append(textElement("p", "moment-detail", moment.detail));
+    const recordKey = `moment:${moment.momentId}`;
+    body.append(
+      recordDisclosure(recordKey, opened.has(recordKey), actions, () =>
+        renderJson(asJson(moment.record), "Exact record"),
+      ),
+    );
     item.append(body);
     list.append(item);
   }
   section.append(list);
-  const page = state.caches.delivery[key];
-  // What a phase produced has no time of its own, so it is stated apart from
-  // the order rather than folded into it as though it had one.
-  if (page !== undefined && page.records.length > 0) {
+  // What a phase produced has no time of its own, so it is stated apart from the
+  // order rather than folded into it as though it had one.
+  if (produced.length > 0) {
     section.append(
       disclosure(
-        `What the run produced (${String(page.records.length)})`,
+        `What the run produced (${String(produced.length)}, undated)`,
         summaryTable(
           ["Kind", "Phase or task", "Attempt", "State", "Detail"],
-          page.records.map((record) => [
+          produced.map((record) => [
             record.kind.replaceAll("-", " "),
             record.phaseId ?? record.taskId ?? "-",
             record.attempt === undefined ? "-" : String(record.attempt),
@@ -911,7 +975,7 @@ function workflowTree(
         where.append(textElement("span", "node-sub", "cannot be accepted yet"));
       right.append(where);
     }
-    right.append(statePill(node.lifecycle));
+    right.append(statePill(node.runState));
     item.append(line);
     item.addEventListener("click", (event) => {
       // Rows nest, so without this every ancestor row also claims the click.
@@ -1166,27 +1230,64 @@ function replyBox(
   node: PortalGraphNode,
 ): HTMLElement {
   const reply = element("div", "reply");
-  const needs = state.humanNeeds.filter((need) => needBlocks(need, node));
+  // A budget is a number under a policy, not prose, so it keeps its reviewed
+  // form. What a person writes in words is answered and steered from here.
+  const needs = state.humanNeeds.filter(
+    (candidate) => needBlocks(candidate, node) && candidate.kind === "question",
+  );
   const need = needs[0];
+  const working = workingAgent(state, node);
+  const sendable = need !== undefined || working !== undefined;
   reply.append(textElement("span", "reply-caret", "\u203a"));
   const box = document.createElement("textarea");
   box.className = "reply-input";
   box.rows = 2;
-  const label = need === undefined ? "Steer this agent" : needChipLabel(need);
+  const label = need === undefined ? "Steer this agent" : "Answer this question";
   box.setAttribute("aria-label", label);
-  box.placeholder = need === undefined ? "Redirect the agent\u2026" : `${label}\u2026`;
+  box.placeholder = sendable
+    ? `${label}\u2026`
+    : "Nothing here is waiting on you, and no agent is working";
+  box.disabled = !sendable || actionsLocked(state);
   reply.append(box);
   const side = element("div", "reply-side");
-  const triggerId = `reply-${safeDomId(node.nodeId)}`;
   const send = commandButton("Send", () => {
-    if (need !== undefined) actions.openNeed(need, triggerId);
+    const text = box.value;
+    box.value = "";
+    actions.sendReply(need, text);
   });
   send.className = "send";
-  send.id = triggerId;
-  send.disabled = need === undefined || actionsLocked(state);
-  side.append(send, textElement("span", "reply-note", "sent as written"));
+  send.id = `reply-${safeDomId(node.nodeId)}`;
+  send.disabled = box.disabled;
+  // Enter sends, because this is a reply and not a document.
+  box.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    send.click();
+  });
+  const note = replyNote(state.ui.reply, label);
+  side.append(send, note);
   reply.append(side);
   return reply;
+}
+
+/** What the box is doing, said where the reader is looking. */
+function replyNote(reply: PortalState["ui"]["reply"], label: string): HTMLElement {
+  if (reply.status === "sending") return textElement("span", "reply-note", "sending\u2026");
+  if (reply.status === "sent") return textElement("span", "reply-note sent", "sent as written");
+  if (reply.status === "failed")
+    return textElement("span", "reply-note failed", reply.message ?? "could not send");
+  return textElement("span", "reply-note", `${label} \u00b7 sent as written`);
+}
+
+/** The agent currently working the selected node, if there is one. */
+function workingAgent(state: PortalState, node: PortalGraphNode): PortalAgentSummary | undefined {
+  const ids = selectedIds(state);
+  if (ids === undefined) return undefined;
+  const agents = state.caches.agents[runKey(ids.repositoryId, ids.runId)]?.agents ?? [];
+  return agents
+    .filter((agent) => agent.state === "working" && String(agent.taskId) === node.nodeId)
+    .sort((left, right) => left.attempt - right.attempt)
+    .at(-1);
 }
 
 /**
@@ -1274,42 +1375,6 @@ function nodeActions(
 function copyText(value: string): void {
   const clipboard = navigator.clipboard as Clipboard | undefined;
   if (clipboard !== undefined) void clipboard.writeText(value).catch(() => undefined);
-}
-
-function renderActivity(state: PortalState, actions: PortalRenderActions): HTMLElement {
-  const section = element("section", "activity-view");
-  const ids = selectedIds(state);
-  if (ids === undefined) return emptySection("Loading activity");
-  const key = runKey(ids.repositoryId, ids.runId);
-  const events = state.caches.events[key];
-  const receipts = state.caches.receipts[key];
-  section.append(filterInput(state, actions, "Filter loaded activity"));
-  const columns = element("div", "activity-columns");
-  columns.append(
-    activityList(
-      "Receipts",
-      receipts?.receipts ?? [],
-      state,
-      actions,
-      (entry) => `${entry.cursor} ${entry.status} ${entry.commandId}`,
-    ),
-  );
-  section.append(columns);
-  const paging = element("div", "paging-row");
-  if (events?.hasEarlier === true)
-    paging.append(
-      commandButton("Earlier events", () =>
-        actions.pageActivity("events", events.events[0]?.cursor ?? events.earliestCursor),
-      ),
-    );
-  if (receipts?.hasEarlier === true)
-    paging.append(
-      commandButton("Earlier receipts", () =>
-        actions.pageActivity("receipts", receipts.receipts[0]?.cursor ?? receipts.earliestCursor),
-      ),
-    );
-  section.append(paging);
-  return section;
 }
 
 function activityList<Value>(
@@ -2180,7 +2245,7 @@ function asJson(value: unknown): JsonValue {
 }
 
 function graphText(node: PortalGraphNode): string {
-  return `${node.kind} ${node.title} ${node.lifecycle} ${node.nodeId}`.toLocaleLowerCase();
+  return `${node.kind} ${node.title} ${node.runState} ${node.nodeId}`.toLocaleLowerCase();
 }
 
 function previewAllowed(mediaType: string): boolean {

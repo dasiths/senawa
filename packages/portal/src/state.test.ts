@@ -215,10 +215,12 @@ describe("portal state", () => {
       expect(cleared.ui.transcript.owner).toBeUndefined();
       expect(cleared.ui.transcript.pinned).toBe(true);
     }
-    const runWide = portalReducer(loaded, { type: "transcript-scope", scope: "run" });
-    expect(runWide.ui.transcriptScope).toBe("run");
-    expect(runWide.ui.transcript.lines).toEqual([]);
-    expect(portalReducer(runWide, { type: "transcript-scope", scope: "run" })).toBe(runWide);
+    // The terminal opens on the whole run, so narrowing to one node is the
+    // change that discards what was retained for the wider scope.
+    const narrowed = portalReducer(loaded, { type: "transcript-scope", scope: "node" });
+    expect(narrowed.ui.transcriptScope).toBe("node");
+    expect(narrowed.ui.transcript.lines).toEqual([]);
+    expect(portalReducer(narrowed, { type: "transcript-scope", scope: "node" })).toBe(narrowed);
   });
 });
 

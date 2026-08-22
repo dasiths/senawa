@@ -26,6 +26,27 @@ test("reads the workflow as bands of phases carrying cards of work", async ({ pa
   expect(diagnostics.severe()).toEqual([]);
 });
 
+// Nodes carry both `lifecycle` and `runState`. The first is the literal
+// `defined` on every node ever projected, so a view that reads it says
+// "not started" about a run that has finished, and nothing ever changes.
+test("says what each node is actually doing, not what every node always is", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await navigate(page, "Workflow");
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
+  await expect(page.locator(".gnode")).not.toHaveCount(0);
+
+  const words = new Set(
+    await page
+      .locator(".graph-flow .state")
+      .evaluateAll((elements) => elements.map((element) => (element.textContent ?? "").trim())),
+  );
+  // This fixture has work that is done and work that is not, so one word for
+  // all of them means the view is reading a constant.
+  expect(words.size).toBeGreaterThan(1);
+  expect(words).toContain("done");
+  expect(diagnostics.severe()).toEqual([]);
+});
+
 test("selects a card, opens one detail surface, and keeps the selection across readings", async ({
   page,
 }) => {

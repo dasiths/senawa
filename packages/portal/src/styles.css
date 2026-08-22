@@ -2443,3 +2443,86 @@ textarea {
     padding-block: 14px;
   }
 }
+
+/* ------------------------------------------- the terminal and its reply line */
+
+/* The reply is part of the pane, so it carries the pane's bottom corners. */
+.agent-terminal {
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-terminal-log {
+  border-radius: 0;
+}
+
+.reply {
+  border-bottom-right-radius: var(--radius);
+  border-bottom-left-radius: var(--radius);
+}
+
+.reply-input {
+  border-radius: var(--radius-sm);
+}
+
+/* A control on a dark ground needs a ground of its own to be found at all. */
+.agent-terminal-bar .command {
+  border-color: #39414c;
+  background: #20242a;
+  color: #c7cdd6;
+}
+
+.agent-terminal-bar .command:hover:not(:disabled) {
+  border-color: #4d5765;
+  background: #262b32;
+  color: #fff;
+}
+
+.agent-terminal-bar .command[aria-pressed="true"] {
+  border-color: var(--term-accent);
+  background: #12314e;
+  color: #cfe6ff;
+}
+
+.agent-terminal-bar .command:disabled {
+  border-color: #2a2f36;
+  color: #5d6672;
+}
+
+.reply-note.sent {
+  color: #86d68f;
+}
+
+.reply-note.failed {
+  color: #ffb4a8;
+}
+
+/* -------------------------------------------------- names break between words */
+
+/* `overflow-wrap: anywhere` is for machine text, which has no break points. A
+   name has plenty, and breaking `researcher` into `researche` and `r` is what
+   applying it to everything looked like. */
+.node-name,
+.g-name,
+.q-what,
+.a-q,
+.moment-what,
+.card-heading,
+.compact-heading {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.mono,
+.agent-terminal-text,
+.moment-detail,
+.q-where,
+.artifact-row td,
+.grid td {
+  overflow-wrap: anywhere;
+}
+
+/* An empty surface is padded like a full one. */
+.detail > .pane > .empty-state {
+  padding: 6px 0;
+}

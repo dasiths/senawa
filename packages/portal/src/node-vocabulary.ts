@@ -1,7 +1,10 @@
 /**
- * How a node is drawn: its mark, the word for its lifecycle, and the tone that
+ * How a node is drawn: its mark, the word for its run state, and the tone that
  * word wears. The tree and the graph are two readings of one workflow, so they
  * read from one vocabulary rather than each keeping a copy.
+ *
+ * The state is `runState`. A node also carries `lifecycle`, which is always the
+ * literal `defined` and therefore says nothing about what the node is doing.
  */
 
 export const NODE_MARKS: Readonly<Record<string, string>> = Object.freeze({
@@ -12,7 +15,6 @@ export const NODE_MARKS: Readonly<Record<string, string>> = Object.freeze({
 });
 
 export const STATE_LABELS: Readonly<Record<string, string>> = Object.freeze({
-  defined: "not started",
   "not-started": "not started",
   running: "working",
   "awaiting-human": "waiting on you",
@@ -22,7 +24,6 @@ export const STATE_LABELS: Readonly<Record<string, string>> = Object.freeze({
 });
 
 export const STATE_TONES: Readonly<Record<string, string>> = Object.freeze({
-  defined: "is-idle",
   "not-started": "is-idle",
   running: "is-working",
   "awaiting-human": "is-waiting",
@@ -35,18 +36,18 @@ export function nodeMark(kind: string): string {
   return NODE_MARKS[kind] ?? "\u25cb";
 }
 
-export function stateTone(lifecycle: string): string {
-  return STATE_TONES[lifecycle] ?? "is-waiting";
+export function stateTone(runState: string): string {
+  return STATE_TONES[runState] ?? "is-waiting";
 }
 
-export function stateLabel(lifecycle: string): string {
-  return STATE_LABELS[lifecycle] ?? lifecycle;
+export function stateLabel(runState: string): string {
+  return STATE_LABELS[runState] ?? runState;
 }
 
 /** One dot and one word, the same in both readings. */
-export function statePill(lifecycle: string): HTMLElement {
+export function statePill(runState: string): HTMLElement {
   const pill = document.createElement("span");
-  pill.className = `state ${stateTone(lifecycle)}`;
-  pill.textContent = stateLabel(lifecycle);
+  pill.className = `state ${stateTone(runState)}`;
+  pill.textContent = stateLabel(runState);
   return pill;
 }

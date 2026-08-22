@@ -346,9 +346,19 @@ async function step(
     (left, right) => left.ordinal - right.ordinal,
   );
   const handedIn = new Set(state.completionOutbox.map((entry) => String(entry.fact.dispatchId)));
-  const dispatch =
-    phaseMembers.find((candidate) => !handedIn.has(String(candidate.dispatchId))) ??
-    phaseMembers.at(-1);
+  // A phase that owns work no dispatch covers cannot close: the kernel refuses
+  // the candidate, and a refusal is not a wait, so the driver retried the same
+  // refused candidate on every cycle for ever. Treat it as a phase that has not
+  // finished starting.
+  const covered = coversEveryActiveTask(
+    snapshot,
+    phaseKey,
+    dispatchedPhaseTasks(snapshot, state, input.runId, phaseKey),
+  );
+  const dispatch = !covered
+    ? undefined
+    : (phaseMembers.find((candidate) => !handedIn.has(String(candidate.dispatchId))) ??
+      phaseMembers.at(-1));
 
   const dataflow = new RuntimeDataflowAuthority(
     input.dependencies.sha256,
@@ -1181,6 +1191,43 @@ function dispatchedPhaseTasks(
   return currentPhaseDispatches(snapshot, state, runId, phaseKey)
     .map((candidate) => candidate.task)
     .sort((left, right) => (left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0));
+}
+
+/**
+ * The tasks the phase owns that a candidate has to cover, read the way the
+ * kernel reads them: every direct task of the phase that nothing supersedes,
+ * in task-id order.
+ */
+function activePhaseTaskIds(snapshot: ConfigurationSnapshot, phaseKey: string): readonly string[] {
+  const tasks = phaseTasks(snapshot, phaseKey) as readonly {
+    readonly definition: { readonly id: string; readonly supersedes?: readonly string[] };
+  }[];
+  const superseded = new Set(tasks.flatMap((task) => task.definition.supersedes ?? []));
+  return tasks
+    .map((task) => task.definition.id)
+    .filter((id) => !superseded.has(id))
+    .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+}
+
+/**
+ * Whether every task the phase owns has a dispatch in the candidate set.
+ *
+ * The kernel refuses a candidate that does not cover the phase exactly, and a
+ * refusal is not a wait: the driver retried the same refused candidate on every
+ * cycle, for ever, while the run looked merely slow. A phase that owns work no
+ * dispatch covers has not finished starting, so it is dispatched rather than
+ * closed.
+ */
+function coversEveryActiveTask(
+  snapshot: ConfigurationSnapshot,
+  phaseKey: string,
+  tasks: readonly TaskGenerationReference[],
+): boolean {
+  const active = activePhaseTaskIds(snapshot, phaseKey);
+  return (
+    tasks.length === active.length &&
+    active.every((id, index) => String(tasks[index]?.taskId) === id)
+  );
 }
 
 /**

@@ -8,6 +8,8 @@ import type { EventStreamFrame, PortalGraphNode } from "@senawa/protocol";
  */
 
 export interface TimelineMoment {
+  /** The event's own identity, because a cursor is not unique in a replay. */
+  readonly momentId: string;
   readonly cursor: number;
   /** UTC clock time, which is what the record is written in. */
   readonly time: string;
@@ -18,6 +20,8 @@ export interface TimelineMoment {
   /** A detail worth one line, such as what was published. */
   readonly detail: string | undefined;
   readonly tone: "opened" | "closed" | "asked" | "failed" | "plain";
+  /** The exact record behind the moment, built only when a reader opens it. */
+  readonly record: unknown;
 }
 
 const WHAT: Readonly<Record<string, string>> = Object.freeze({
@@ -106,12 +110,14 @@ export function timelineMoments(
             ? output
             : `${output}, ${String(bytes)} bytes`;
       return Object.freeze({
+        momentId: String(event.eventId),
         cursor: event.cursor,
         time: momentTime(event.occurredAt),
         what: momentWhat(event.eventType),
         where,
         detail,
         tone: TONES[event.eventType] ?? "plain",
+        record: event,
       });
     });
 }

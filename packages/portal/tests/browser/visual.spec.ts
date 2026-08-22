@@ -71,7 +71,7 @@ test("captures deterministic overview, review, amendment, conflict, and expired 
   // Depth is one action away and absent until asked for, which is what
   // progressive disclosure has to mean to be worth anything.
   await expect(page.getByText("Active effects", { exact: true })).toBeHidden();
-  await page.getByText("Effects and authority vector", { exact: true }).click();
+  await page.getByText("Counts, effects and revisions", { exact: true }).click();
   await expect(page.getByText("Active effects", { exact: true })).toBeVisible();
   await expect(page.getByText("Uncertain effects", { exact: true })).toBeVisible();
   await captureState(page, "delivery", mobile);
@@ -181,35 +181,37 @@ test("supports keyboard graph inspection, hostile bounds, activity paging, and a
   await expect(activeArtifact.getByRole("button", { name: /Preview|Download/u })).toHaveCount(0);
 
   await navigate(page, "Record");
-  const receiptSummaries = page
-    .locator(".activity-panel")
-    .filter({ hasText: "Receipts" })
-    .locator(".activity-summary");
-  await expect(receiptSummaries).toHaveCount(100);
-  // This view answers "what happened, and when". It used to render every
-  // record fully expanded, which put twenty-four thousand characters and a
-  // hundred and sixty-eight digests in front of a reader who had not asked a
-  // question yet. The record stays one disclosure away.
-  await expect(page.locator(".activity-item > details[open]")).toHaveCount(0);
-  // `textContent` reads through a closed disclosure, so this has to measure
-  // what is rendered rather than what is present. A hundred and thirty-seven
-  // digests were on this screen before the record moved behind a disclosure.
-  const activityText = await page
-    .locator(".activity-view")
+  // Record answers "what happened, and when". It used to render every record
+  // fully expanded, which put twenty-four thousand characters and a hundred and
+  // sixty-eight digests in front of a reader who had not asked a question yet.
+  // The record stays one disclosure away.
+  await expect(page.locator(".timeline .moment")).not.toHaveCount(0);
+  await expect(page.locator(".moment details[open]")).toHaveCount(0);
+  // `textContent` reads through a closed disclosure, so this has to measure what
+  // is rendered rather than what is present.
+  const historyText = await page
+    .locator(".timeline-view")
     .evaluate((node) => (node as HTMLElement).innerText);
-  expect((activityText.match(/\b[0-9a-f]{64}\b/gu) ?? []).length).toBe(0);
-  // Hiding a record is not the same as not building it. A hundred closed
-  // disclosures each holding a JSON tree is a hundred JSON trees.
-  await expect(page.locator(".activity-item .json-viewer")).toHaveCount(0);
+  expect((historyText.match(/\b[0-9a-f]{64}\b/gu) ?? []).length).toBe(0);
+  // Hiding a record is not the same as not building it.
+  await expect(page.locator(".moment .json-viewer")).toHaveCount(0);
 
-  const record = page.locator(".activity-item > details").first();
+  const record = page.locator(".moment details").first();
   await record.locator("summary").click();
   await expect(record).toHaveAttribute("open", "");
   await expect(record.locator(".json-viewer")).toHaveCount(1);
   // Opening a record is a decision, so it survives the next render rather than
   // closing itself under the reader.
-  await expect(page.locator(".activity-item > details[open]")).toHaveCount(1);
+  await page.waitForTimeout(1_500);
+  await expect(record).toHaveAttribute("open", "");
+  await expect(record.locator(".json-viewer")).toHaveCount(1);
 
+  // Commands this browser submitted are machinery, so they are folded away.
+  const receiptsFold = page.getByText(/^Commands you submitted \(/u);
+  await expect(receiptsFold).toBeVisible();
+  await receiptsFold.click();
+  const receiptSummaries = page.locator(".activity-summary");
+  await expect(receiptSummaries).toHaveCount(100);
   const firstTail = await receiptSummaries.first().textContent();
   await page.getByRole("button", { name: "Earlier receipts" }).click();
   await expect(receiptSummaries.first()).not.toHaveText(firstTail ?? "");

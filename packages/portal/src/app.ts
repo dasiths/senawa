@@ -472,6 +472,80 @@ export class PortalApplication {
     }, POLL_INTERVAL_MS);
   }
 
+  /**
+   * Answers or steers from the box welded under the transcript.
+   *
+   * The exact record is still loaded and verified before anything is built, so
+   * the safety the dialog carried is kept; what goes is the dialog itself,
+   * which covered the words the reader was answering.
+   */
+  async #sendReply(need: PortalHumanNeed | undefined, text: string): Promise<void> {
+    const identity = this.#selectedIdentity();
+    const overview = this.#selectedOverview();
+    const trimmed = text.trim();
+    if (identity === undefined || overview === undefined || trimmed.length === 0) return;
+    const kind = need === undefined ? "steer" : dialogKindForNeed(need);
+    if (kind === undefined) return;
+    this.#dispatch({ type: "reply-state", reply: { status: "sending" } });
+    try {
+      const source =
+        need === undefined
+          ? this.#steerSource()
+          : await this.#loadReviewSource(identity.repositoryId, identity.runId, need, kind);
+      if (source === undefined) throw new Error("There is no agent to send this to");
+      if (need !== undefined && !verifyReviewSource(need, kind, source, overview)) {
+        throw new Error("The exact record did not verify; open the full review");
+      }
+      this.#dialogNeed = need;
+      const values =
+        kind === "steer" ? { instruction: trimmed, delivery: "queued" } : { answer: trimmed };
+      const draft = commandDraft(
+        kind,
+        Object.freeze(values),
+        identity.repositoryId,
+        identity.runId,
+        overview,
+        need,
+        source,
+      );
+      const pending = await createPendingSubmission(draft);
+      this.#dispatch({ type: "pending-add", pending });
+      this.#dispatch({ type: "reply-state", reply: { status: "sent" } });
+      try {
+        await this.#client.postCanonicalSubmission(pending.canonicalSubmission);
+      } catch (error) {
+        if (error instanceof PortalTransportError && error.status === 401) return;
+      }
+      await this.#recoverPending(pending, true);
+    } catch (error) {
+      this.#dispatch({
+        type: "reply-state",
+        reply: { status: "failed", message: safeMessage(error, "Could not send") },
+      });
+    }
+  }
+
+  /** The working agent on the selected node, which a steering is addressed to. */
+  #steerSource(): Record<string, string> | undefined {
+    const identity = this.#selectedIdentity();
+    if (identity === undefined) return undefined;
+    const agents =
+      this.#state.caches.agents[runKey(identity.repositoryId, identity.runId)]?.agents ?? [];
+    const working = agents
+      .filter(
+        (agent) =>
+          agent.state === "working" && String(agent.taskId) === this.#state.ui.focusedRecord,
+      )
+      .sort((left, right) => left.attempt - right.attempt)
+      .at(-1);
+    if (working === undefined) return undefined;
+    return {
+      dispatchId: String(working.dispatchId),
+      taskId: String(working.taskId),
+      contextDigest: "",
+    };
+  }
+
   async #openNeed(need: PortalHumanNeed, triggerId: string): Promise<void> {
     const identity = this.#selectedIdentity();
     if (identity === undefined) return;
@@ -865,6 +939,7 @@ export class PortalApplication {
       setGraphViewport: (viewport) => this.#dispatch({ type: "graph-viewport", viewport }),
       unfoldNode: (nodeId) => this.#dispatch({ type: "graph-unfold", nodeId }),
       setDetailTab: (tab) => this.#dispatch({ type: "detail-tab", tab }),
+      sendReply: (need, text) => void this.#sendReply(need, text),
       toggleRecord: (recordKey) => this.#dispatch({ type: "record-disclosure", recordKey }),
       focusRecord: (recordId) => {
         this.#dispatch({ type: "focus-record", recordId });

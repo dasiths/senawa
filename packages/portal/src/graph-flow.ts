@@ -56,14 +56,14 @@ function phaseIsOpen(
 ): boolean {
   if (unfolded.includes(phase.nodeId)) return true;
   if (members.length === 0) return false;
-  return members.some((member) => member.lifecycle !== "accepted" || member.humanNeedCount > 0);
+  return members.some((member) => member.runState !== "accepted" || member.humanNeedCount > 0);
 }
 
 function foldSummary(members: readonly PortalGraphNode[]): string {
   if (members.length === 0) return "no work yet";
   const parts = [members.length === 1 ? "1 piece of work" : `${String(members.length)} members`];
   const asking = members.filter((member) => member.humanNeedCount > 0).length;
-  const failed = members.filter((member) => member.lifecycle === "failed").length;
+  const failed = members.filter((member) => member.runState === "failed").length;
   if (asking > 0) parts.push(`${String(asking)} asks`);
   if (failed > 0) parts.push(`${String(failed)} stopped`);
   return parts.join(" \u00b7 ");
@@ -77,7 +77,7 @@ function memberCard(
 ): HTMLElement {
   const card = document.createElement("button");
   card.type = "button";
-  card.className = `gnode ${stateTone(node.lifecycle)}`;
+  card.className = `gnode ${stateTone(node.runState)}`;
   card.dataset.node = node.nodeId;
   card.dataset.focusKey = node.nodeId;
   if (selected) card.setAttribute("aria-current", "true");
@@ -88,7 +88,7 @@ function memberCard(
     card.append(meta);
   }
   const foot = element("span", "g-foot");
-  foot.append(statePill(node.lifecycle));
+  foot.append(statePill(node.runState));
   for (const control of extras.foot ?? []) foot.append(control);
   card.append(foot);
   card.addEventListener("click", (event) => {
@@ -132,7 +132,7 @@ export function graphFlowView(options: GraphFlowOptions): HTMLElement {
     summary.append(
       textElement("span", "node-mark", nodeMark("phase")),
       textElement("span", "band-name", phase.title),
-      statePill(phase.lifecycle),
+      statePill(phase.runState),
       textElement("span", "fold-sub", foldSummary(members)),
     );
     summary.addEventListener("click", (event) => {

@@ -116,8 +116,8 @@ The largest phase, and the only one that needs data we do not record.
 ## Phase 7: answering feels like answering the agent
 
 * [x] The reply box attaches to the transcript it answers
-* [ ] Steering uses the same surface, because it interrupts the same thing
-* [ ] An escalation is granted from the node that raised it
+* [ ] Steering uses the same surface, because it interrupts the same thing (carried to Phase 11)
+* [ ] An escalation is granted from the node that raised it (carried to Phase 11)
 
 ## Phase 8: the portal looks like the mocks
 
@@ -183,7 +183,7 @@ on the row the reader asked about.
 | `q-where`: phase and task, named | `.q-where` | [x] |
 | `q-what`: the question itself, not a digest | `.q-what` | [x] |
 | Action named for the decision | `needChipLabel` | [x] |
-| `Recently answered` | absent | [ ] |
+| `Recently answered` | absent | [ ] carried to Phase 11 |
 
 ### Workflow
 
@@ -297,7 +297,7 @@ is wrong rather than describing a preference.
 once in `render.ts` and once in `graph-flow.ts`. Two copies of the same mapping
 is how the tree and the graph start disagreeing about what a lifecycle is called.
 
-* [ ] One module owns the marks, the labels and the tones; both readings import it
+* [x] One module owns the marks, the labels and the tones; both readings import it
 
 ### Say a thing once
 
@@ -309,7 +309,7 @@ is how the tree and the graph start disagreeing about what a lifecycle is called
 | How much workflow there is | `3 phases · 6 pieces of work` | `8 of 8 nodes` | the first |
 | Whose output this is | detail card title | `Agent output` heading in the pane | the title |
 
-* [ ] Each row above says its fact once
+* [x] Each row above says its fact once
 
 ### Name the decision, or draw a mark
 
@@ -330,17 +330,17 @@ only assistive technology reads.
 | `read as written · cannot be changed` | `sent as written` |
 | `outputName`, `schemaKey`, `contentDigest` in delivery | the words for those things |
 
-* [ ] Every control above reads as the decision or carries a mark
+* [x] Every control above reads as the decision or carries a mark
 
 ### One baseline per row
 
 A row that mixes fourteen and twelve pixel text with a pill and a bare span has
 no baseline, and that is what reads as misalignment.
 
-* [ ] Everything in a `node-right`, a `g-foot` and a band summary is 12px on one
+* [x] Everything in a `node-right`, a `g-foot` and a band summary is 12px on one
   baseline
-* [ ] `where` under a detail title is 12px and quiet, not body text
-* [ ] Every control in a toolbar is the same height, and toolbars share one gap
+* [x] `where` under a detail title is 12px and quiet, not body text
+* [x] Every control in a toolbar is the same height, and toolbars share one gap
 
 ### Reading the pictures for what the code cannot show
 
@@ -357,13 +357,13 @@ is absent from the container's fonts, a filter placeholder that said `Filter
 loaded records` on a screen with no records, and a status line whose prose ran the
 header off a narrow screen.
 
-* [ ] Every tab captured at 1440 and at 390, and read for spacing rather than for
+* [x] Every tab captured at 1440 and at 390, and read for spacing rather than for
   content
-* [ ] Gutters and card padding come from one scale, and the same scale on both
+* [x] Gutters and card padding come from one scale, and the same scale on both
   viewports
-* [ ] No control renders as a missing glyph on a machine with only default fonts
-* [ ] Nothing overflows, and nothing is clipped, at either viewport
-* [ ] What is written down here is the defect, not the preference
+* [x] No control renders as a missing glyph on a machine with only default fonts
+* [x] Nothing overflows, and nothing is clipped, at either viewport
+* [x] What is written down here is the defect, not the preference
 
 ### Delivery reads as a timeline
 
@@ -376,10 +376,10 @@ timeline has to be built from the event stream, which is the only thing in the
 portal that knows when anything happened, and delivery records attach to it
 rather than standing beside it.
 
-* [ ] One chronological column: time, what happened in the reader's words, where
-* [ ] Events grouped under the phase they belong to, newest last
-* [ ] A delivery record hangs off the event that published it
-* [ ] What cannot be dated says so rather than pretending to an order
+* [x] One chronological column: time, what happened in the reader's words, where
+* [x] Events grouped under the phase they belong to, newest last
+* [ ] A delivery record hangs off the event that published it (carried to Phase 11)
+* [ ] What cannot be dated says so rather than pretending to an order (carried to Phase 11)
 
 ## Phase 10: one design language, proven by looking
 
@@ -412,19 +412,137 @@ A rule nobody wrote down cannot be broken. So:
 
 ### What the adversarial pass has to answer
 
-* [ ] Does every card have the same padding, radius, border and shadow?
-* [ ] Does every card header have the same height and the same internal gaps?
-* [ ] Is any text at a size not in the scale?
-* [ ] Do two adjacent controls differ in height, radius or weight?
-* [ ] Does any row's baseline wander?
-* [ ] Is any gutter off the spacing scale?
-* [ ] Does anything read as a different product from the tab beside it?
-* [ ] Is anything clipped, overlapping, or touching an edge it should not?
-* [ ] Does the mobile capture use the same language as the desktop one, or a
+* [x] Does every card have the same padding, radius, border and shadow?
+* [x] Does every card header have the same height and the same internal gaps?
+* [x] Is any text at a size not in the scale?
+* [x] Do two adjacent controls differ in height, radius or weight?
+* [x] Does any row's baseline wander?
+* [x] Is any gutter off the spacing scale?
+* [x] Does anything read as a different product from the tab beside it?
+* [x] Is anything clipped, overlapping, or touching an edge it should not?
+* [x] Does the mobile capture use the same language as the desktop one, or a
   different one that merely fits?
 
 Every finding is recorded with the image it came from and the rule it breaks,
 then fixed, then re-captured and looked at again.
+
+## Phase 11: drive a real run, and fix what that exposes
+
+The first live run against a real agent found more in twenty minutes than three
+phases of reading did. Everything here comes from watching a person try to use
+the portal to drive a workflow that was actually running.
+
+### The run jammed, and the portal lied about it
+
+Two separate faults, and the second hid the first.
+
+**Every node read `not started` while the transcript showed the research agent
+had finished on attempt three.** A projected node carries both `lifecycle` and
+`runState`. `lifecycle` is the literal string `defined` on every node ever
+projected: it means "this node exists", which is true of all of them and says
+nothing. `runState` is the computed one. The tree and the graph read `lifecycle`,
+because it is the field whose name sounds like the answer.
+
+* [x] Both readings take the state from `runState`
+* [x] A test fails when a view renders one word for a fixture that has several
+* [ ] `lifecycle` says what it is, or stops being projected at all
+
+**And the run was genuinely stuck.** The supervisor loop refused every cycle with
+`evaluate-gate was refused: task-set-mismatch`. The kernel requires a candidate
+to cover every *active direct task the phase owns in the graph*; the driver
+builds the candidate from *tasks that were dispatched*. Those are the same set
+until they are not.
+
+* [ ] Find the case where a phase owns a task no dispatch covers
+* [ ] The driver builds the candidate from the graph, or explains why it cannot
+* [ ] A test reproduces the jam without a live agent
+
+### The terminal is the thing people watch, and it opens empty
+
+Arriving at Workflow or Agents shows `0 lines` and a scope of nothing, because
+the transcript follows the selection and nothing is selected yet. The first thing
+a person wants is *what is happening*, which is every agent at once.
+
+* [ ] Workflow and Agents open scoped to the whole run
+* [ ] Selecting a node or an agent narrows the scope to it
+* [ ] Clearing the selection widens it again
+
+### Send does not send
+
+The reply box is welded under the transcript and its `Send` calls `openNeed`,
+which opens the modal the box was supposed to replace. So the surface that was
+built to make answering feel like answering an agent is decoration, and the
+modal is still the only way through.
+
+This is where the two Phase 7 items that were never done actually live: one
+surface for answering, for steering, and for granting budget, because all three
+interrupt the same thing in the same place.
+
+* [ ] `Send` submits the answer, with no dialog
+* [ ] The same box steers an agent that is working
+* [ ] The same box grants budget to a phase that ran out
+* [ ] What the box will do is named before it is used, not after
+
+### The reply is not shaped to the terminal
+
+It is welded on, but its corners are square against a rounded pane, and the
+controls above it — the scope toggle, `Copy`, `Download` — are quiet enough to
+miss on a dark ground.
+
+* [ ] The reply carries the terminal's bottom corners
+* [ ] The scope toggle reads as a control and says which side it is on
+* [ ] `Copy` and `Download` are findable without hunting
+
+### Names break mid-word
+
+`researcher` renders as `researche` / `r` in both the tree and the Agents list,
+because rows use `overflow-wrap: anywhere` to survive a digest and then apply it
+to a word. A digest has no break points; a name has plenty.
+
+* [ ] A name breaks between words; only machine text breaks anywhere
+* [ ] The empty detail card is padded like every other card
+
+### The Record tab, started again
+
+Scrap it. What exists is three cards inherited from a debugging view: counts, a
+timeline, and a list of receipts. It answers "what does the authority contain",
+which is a question the authority's own operator asks, not the person watching
+their work get done.
+
+Begin from what a person actually arrives wanting to know:
+
+* *What happened, and when?* — in their words, newest last, grouped by phase.
+* *What did it produce?* — the files and outputs, reachable from the moment that
+  made them.
+* *What did I decide?* — the questions asked, the answers given, and when.
+* *What is the exact record?* — one action away, never in the way.
+
+* [ ] One reading of the run's history, not three cards of machinery
+* [ ] A delivery record hangs off the moment that published it
+* [ ] What cannot be dated says so rather than pretending to an order
+* [ ] Answers already given are readable without leaving the page
+* [ ] `Recently answered` in the rail, or the reason it belongs here instead
+
+### Still carried, and honestly
+
+Not everything from earlier phases landed. These are open, and none of them is
+blocked by anything above:
+
+* [ ] An artifact renders on the edge leaving the node that produced it
+* [ ] Classify transcript sensitivity the way artifacts are classified
+* [ ] Use deltas for live tailing
+
+The middle one is a security gap, not a nicety: assistant prose may quote
+repository contents, artifacts carry a classification and transcripts do not.
+
+### Proven by driving it
+
+Not by asserting it. The example is run end to end in a browser: start it, watch
+the terminal, answer in the reply box, watch the phase close, read what it built.
+
+* [ ] The example completes with every phase closed
+* [ ] Every question is answered from the portal, never the command line
+* [ ] The graph states change as the run moves
 
 ## Log
 

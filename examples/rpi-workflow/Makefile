@@ -39,6 +39,7 @@ endef
 
 .PHONY: help
 help:
+	@echo "make preflight  check node, copilot, the binary, and the workflow"
 	@echo "make check      compile the workflow and report every problem at once"
 	@echo "make service    start the local supervisor, with the portal listener on"
 	@echo "make portal     print a one-time URL for the browser console"
@@ -55,8 +56,26 @@ help:
 	@echo ""
 	@echo "Spends AI credits from 'copilot login'. See README.md."
 
+# Everything that can be checked before spending anything. A Copilot login is
+# the one thing that cannot: the CLI has no command that reports it, so a stale
+# one only surfaces at the first dispatch, in the service log named below.
+.PHONY: preflight
+preflight:
+	@fail=0; \
+	major=$$(node --version | sed 's/^v//' | cut -d. -f1); \
+	if [ "$$major" = "22" ]; then echo "node        $$(node --version)"; \
+	else echo "node        $$(node --version), but this workflow targets 22"; fail=1; fi; \
+	if command -v copilot >/dev/null 2>&1; then echo "copilot     $$(copilot --version 2>&1 | head -1)"; \
+	else echo "copilot     not on PATH; install it and run 'copilot login'"; fail=1; fi; \
+	if [ -f "$(abspath $(CURDIR)/../../apps/senawa/dist/main.js)" ]; then echo "senawa      built"; \
+	else echo "senawa      not built; run 'pnpm build' from the repository root"; fail=1; fi; \
+	if [ -d "$(PROJECT)/.senawa-state" ]; then echo "state       present; 'make clean' removes it and the cached credential"; \
+	else echo "state       clean"; fi; \
+	echo "login       not checkable offline; a bad one appears in $(PROJECT)/.senawa-state/senawa/service.log"; \
+	exit $$fail
+
 .PHONY: check
-check:
+check: preflight
 	@$(SENAWA) doctor
 
 # Deliberately underspecified. The research agent is told to ask a person about
