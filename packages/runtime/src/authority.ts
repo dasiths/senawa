@@ -1020,7 +1020,13 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
     if (!Array.isArray(payload.readings)) {
       throw new RuntimeRefusal("invalid-gate", "Gate readings must be an array");
     }
-    const tasks = records.assessments.map((accepted) => accepted.assessment.submission.task);
+    // The kernel compares a candidate's tasks against the phase's active tasks
+    // in task-id order, so the order assessments happened to arrive in is not
+    // the order it will accept.
+    const tasks = records.assessments
+      .map((accepted) => accepted.assessment.submission.task)
+      .slice()
+      .sort((left, right) => compareText(left.taskId, right.taskId));
     if (!Array.isArray(payload.requiredOutputPublications)) {
       throw new RuntimeRefusal(
         "invalid-candidate",

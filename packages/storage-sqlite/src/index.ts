@@ -4325,33 +4325,43 @@ export class SqlitePortalQueryAuthority {
     if (after !== undefined) validateOpaqueIdentity(after);
     validatePortalLimit(limit, PORTAL_LIMITS.maxArtifactItems);
     const rows = this.#database
-      .prepare<[string, string, string, number], { canonical_submission: string }>(
+      .prepare<[string, string], { canonical_submission: string }>(
         `SELECT canonical_submission FROM context_submissions
          WHERE repository_id = ? AND run_id = ?
            AND submission_type IN ('asset', 'phase-output')
-           AND submission_id > ? ORDER BY submission_id LIMIT ?`,
+         ORDER BY submission_id`,
       )
-      .all(repositoryId, runId, after ?? "", limit + 1);
-    const artifacts = rows.slice(0, limit).map(({ canonical_submission }) => {
-      const submission = requiredJsonRecord(
-        decodeCanonicalJsonValue(canonical_submission),
-        "Portal worker asset submission",
+      .all(repositoryId, runId);
+    // A page is read back in artifact order, and an artifact is named by its
+    // asset rather than by the submission that carried it. Paging on the
+    // submission handed back a page whose own contract refused it, so the whole
+    // view answered five hundred for every run that made more than one thing.
+    const ordered = rows
+      .map(({ canonical_submission }) => {
+        const submission = requiredJsonRecord(
+          decodeCanonicalJsonValue(canonical_submission),
+          "Portal worker asset submission",
+        );
+        // A phase output is the thing the workflow exists to produce. Listing only
+        // proposed assets hid it from everyone who finished a run.
+        const asset =
+          submission.asset === undefined
+            ? phaseOutputAsAsset(requiredJsonRecord(submission.output, "Portal phase output"))
+            : requiredJsonRecord(submission.asset, "Portal worker asset metadata");
+        return this.#artifactMetadata(submission, asset);
+      })
+      .filter((artifact) => after === undefined || artifact.artifactId > after)
+      .sort((left, right) =>
+        left.artifactId < right.artifactId ? -1 : left.artifactId > right.artifactId ? 1 : 0,
       );
-      // A phase output is the thing the workflow exists to produce. Listing only
-      // proposed assets hid it from everyone who finished a run.
-      const asset =
-        submission.asset === undefined
-          ? phaseOutputAsAsset(requiredJsonRecord(submission.output, "Portal phase output"))
-          : requiredJsonRecord(submission.asset, "Portal worker asset metadata");
-      return this.#artifactMetadata(submission, asset);
-    });
+    const artifacts = ordered.slice(0, limit);
     return decodePortalArtifactPage({
       apiVersion: PROTOCOL_VERSION,
       repositoryId,
       runId,
       contextRevision: this.#portalRevision(repositoryId, runId).context_revision,
       ...(after === undefined ? {} : { after }),
-      hasMore: rows.length > limit,
+      hasMore: ordered.length > limit,
       artifacts,
     });
   }

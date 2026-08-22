@@ -525,16 +525,17 @@ export class PortalApplication {
     }
   }
 
-  /** The working agent on the selected node, which a steering is addressed to. */
+  /** The agent a steering is addressed to: the one on the selected node, or the run's. */
   #steerSource(): Record<string, string> | undefined {
     const identity = this.#selectedIdentity();
     if (identity === undefined) return undefined;
     const agents =
       this.#state.caches.agents[runKey(identity.repositoryId, identity.runId)]?.agents ?? [];
+    const focused = this.#state.ui.focusedRecord;
     const working = agents
       .filter(
         (agent) =>
-          agent.state === "working" && String(agent.taskId) === this.#state.ui.focusedRecord,
+          agent.state === "working" && (focused === undefined || String(agent.taskId) === focused),
       )
       .sort((left, right) => left.attempt - right.attempt)
       .at(-1);

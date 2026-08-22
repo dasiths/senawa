@@ -140,6 +140,17 @@ describe("advancing a run", () => {
       expect(
         gateIds.every((id) => /^command_gate-[a-z]+-\d+-[0-9a-f]{16}-[0-9a-f]+$/.test(id)),
       ).toBe(true);
+
+      // A gate refusal is cached under the identity that earned it, and that
+      // identity is re-derived every cycle, so a phase gated on evidence the
+      // authority has not accepted yet can never be gated again. The driver has
+      // to wait instead of submitting, which means a driven run refuses nothing.
+      expect(
+        authority
+          .queryReceiptHistory("repository_close", "run_close")
+          .filter((receipt) => receipt.status === "refused")
+          .map((receipt) => String(receipt.commandId)),
+      ).toEqual([]);
     } finally {
       authority.close();
     }

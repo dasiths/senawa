@@ -585,7 +585,7 @@ function renderRecord(state: PortalState, actions: PortalRenderActions): HTMLEle
   section.append(renderHistory(state, actions), renderIntegrations(state));
   const receipts = renderReceipts(state, actions);
   if (receipts !== undefined) section.append(receipts);
-  section.append(renderRunFacts(state, actions));
+  section.append(renderRunFacts(state));
   return section;
 }
 
@@ -630,7 +630,7 @@ function renderReceipts(state: PortalState, actions: PortalRenderActions): HTMLE
 }
 
 /** What a reader checks a claim against, rather than forms a view from. */
-function renderRunFacts(state: PortalState, actions: PortalRenderActions): HTMLElement {
+function renderRunFacts(state: PortalState): HTMLElement {
   const overview = selectedOverview(state);
   const proof = element("details", "proof");
   proof.append(textElement("summary", "disclosure-summary", "Counts, effects and revisions"));
@@ -806,17 +806,24 @@ function renderWorkflow(state: PortalState, actions: PortalRenderActions): HTMLE
   const focused = nodes.find(({ nodeId }) => nodeId === state.ui.focusedRecord);
   split.append(
     focused === undefined
-      ? emptyDetail("Select a piece of work to read what it is doing.")
+      ? runWideDetail(state, actions, "Select a piece of work to narrow this to one agent.")
       : graphDetail(focused, state, actions, nodes, edges),
   );
   return split;
 }
 
-function emptyDetail(message: string): HTMLElement {
+/** With nothing selected the reader wants the whole run talking, not a prompt. */
+function runWideDetail(
+  state: PortalState,
+  actions: PortalRenderActions,
+  narrow: string,
+): HTMLElement {
   const detail = element("section", "card detail detail-panel");
-  const pane = element("div", "pane");
-  pane.append(textElement("p", "empty-state", message));
-  detail.append(pane);
+  const head = element("header", "detail-head");
+  const title = element("div", "detail-title");
+  title.append(textElement("h2", "", "Every agent"), textElement("p", "detail-sub", narrow));
+  head.append(title);
+  detail.append(head, livePane(state, actions));
   return detail;
 }
 
@@ -1157,7 +1164,7 @@ const DETAIL_TAB_LABELS: Readonly<Record<DetailTab, string>> = {
 function livePane(
   state: PortalState,
   actions: PortalRenderActions,
-  node: PortalGraphNode,
+  node?: PortalGraphNode,
 ): HTMLElement {
   const ids = selectedIds(state);
   const holder = element("div", "live-pane");
@@ -1227,13 +1234,14 @@ function producedPane(state: PortalState, node: PortalGraphNode): HTMLElement {
 function replyBox(
   state: PortalState,
   actions: PortalRenderActions,
-  node: PortalGraphNode,
+  node?: PortalGraphNode,
 ): HTMLElement {
   const reply = element("div", "reply");
   // A budget is a number under a policy, not prose, so it keeps its reviewed
   // form. What a person writes in words is answered and steered from here.
   const needs = state.humanNeeds.filter(
-    (candidate) => needBlocks(candidate, node) && candidate.kind === "question",
+    (candidate) =>
+      (node === undefined || needBlocks(candidate, node)) && candidate.kind === "question",
   );
   const need = needs[0];
   const working = workingAgent(state, node);
@@ -1256,7 +1264,7 @@ function replyBox(
     actions.sendReply(need, text);
   });
   send.className = "send";
-  send.id = `reply-${safeDomId(node.nodeId)}`;
+  send.id = `reply-${node === undefined ? "run" : safeDomId(node.nodeId)}`;
   send.disabled = box.disabled;
   // Enter sends, because this is a reply and not a document.
   box.addEventListener("keydown", (event) => {
@@ -1279,13 +1287,16 @@ function replyNote(reply: PortalState["ui"]["reply"], label: string): HTMLElemen
   return textElement("span", "reply-note", `${label} \u00b7 sent as written`);
 }
 
-/** The agent currently working the selected node, if there is one. */
-function workingAgent(state: PortalState, node: PortalGraphNode): PortalAgentSummary | undefined {
+/** The agent a reply is addressed to: the one on the node, or the run's if none is selected. */
+function workingAgent(state: PortalState, node?: PortalGraphNode): PortalAgentSummary | undefined {
   const ids = selectedIds(state);
   if (ids === undefined) return undefined;
   const agents = state.caches.agents[runKey(ids.repositoryId, ids.runId)]?.agents ?? [];
   return agents
-    .filter((agent) => agent.state === "working" && String(agent.taskId) === node.nodeId)
+    .filter(
+      (agent) =>
+        agent.state === "working" && (node === undefined || String(agent.taskId) === node.nodeId),
+    )
     .sort((left, right) => left.attempt - right.attempt)
     .at(-1);
 }
@@ -1707,7 +1718,7 @@ function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLEle
   card.append(header);
   if (agents.length === 0) {
     card.append(textElement("p", "empty-note", "No agent has been dispatched yet."));
-    split.append(card, emptyDetail("Nothing is working yet."));
+    split.append(card, runWideDetail(state, actions, "Nothing is working yet."));
     return split;
   }
   const list = element("ul", "workflow-tree agent-roster");
@@ -1755,7 +1766,7 @@ function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLEle
   const focused = nodes.find(({ nodeId }) => nodeId === state.ui.focusedRecord);
   split.append(
     focused === undefined
-      ? emptyDetail("Select an agent to read what it is doing.")
+      ? runWideDetail(state, actions, "Select an agent to narrow this to one agent.")
       : graphDetail(focused, state, actions, nodes, edges),
   );
   return split;

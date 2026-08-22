@@ -933,6 +933,70 @@ describe("SQLite Phase 11B portal query authority", () => {
     fixture.dispose();
   });
 
+  it("lists artifacts in artifact order, whatever order they were submitted in", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    const worker = createWorkerExecutionFixture(createRuntimeGraph(), ["worker.submit.asset"]);
+    const broker = new SqliteContextBroker({
+      databasePath: fixture.databasePath,
+      dependencies: contextDependencies(),
+    });
+    broker.registerDispatch({
+      context: worker.context,
+      dispatch: worker.dispatch,
+      completionRequirements: worker.completionRequirements,
+      taskScope: taskScope(worker.context.contextDigest),
+    });
+    // The submission order and the asset order disagree, which is the ordinary
+    // case: an asset is named by its content and a submission by when it
+    // arrived.
+    for (const [submissionId, assetId] of [
+      ["submission_portal-order-1", "asset_zulu"],
+      ["submission_portal-order-2", "asset_alpha"],
+    ] as const) {
+      const bytes = new TextEncoder().encode(assetId);
+      broker.admitSubmission({
+        submission: {
+          apiVersion: PROTOCOL_VERSION,
+          submissionId,
+          repositoryId: worker.dispatch.repositoryId,
+          runId: worker.dispatch.runId,
+          dispatchId: worker.dispatch.dispatchId,
+          task: worker.dispatch.task,
+          contextId: worker.dispatch.contextId,
+          contextDigest: worker.dispatch.contextDigest,
+          principalId: worker.dispatch.worker.principalId,
+          type: "asset",
+          asset: {
+            assetId,
+            contentDigest: deterministicSha256.digest(bytes),
+            byteLength: bytes.byteLength,
+            mediaType: "text/plain",
+            sensitivity: "internal",
+            summary: assetId,
+          },
+        },
+      });
+    }
+    const portal = new SqlitePortalQueryAuthority(fixture.options);
+    // Paging on the submission built a page the page's own contract refuses, so
+    // the whole view answered five hundred for any run that made two things.
+    const page = portal.listArtifacts(runtimeFixture.repositoryId, runtimeFixture.runId);
+    expect(page.artifacts.map((artifact) => artifact.artifactId)).toEqual([
+      "asset_alpha",
+      "asset_zulu",
+    ]);
+    expect(
+      portal
+        .listArtifacts(runtimeFixture.repositoryId, runtimeFixture.runId, "asset_alpha")
+        .artifacts.map((artifact) => artifact.artifactId),
+    ).toEqual(["asset_zulu"]);
+    portal.close();
+    authority.close();
+    fixture.dispose();
+  });
+
   it("distinguishes worker metadata from verified installed bytes and caps previews", () => {
     const fixture = createFixture();
     const authority = new SqliteAuthority(fixture.options);

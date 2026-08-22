@@ -453,9 +453,24 @@ to cover every *active direct task the phase owns in the graph*; the driver
 builds the candidate from *tasks that were dispatched*. Those are the same set
 until they are not.
 
-* [ ] Find the case where a phase owns a task no dispatch covers
-* [ ] The driver builds the candidate from the graph, or explains why it cannot
-* [ ] A test reproduces the jam without a live agent
+**What it actually was.** The authority builds a gate's task set from the
+completion facts it has *accepted*; the driver built it from tasks that were
+*dispatched*, and read the authority's view at the top of the cycle, before the
+same cycle delivered the completion. So the first gate after an agent finished
+was computed from a pre-delivery reading. It did not match, and it was refused.
+
+The refusal is the durable part. A gate command is named by the candidate digest
+it carries, that digest is re-derived identically every cycle, and a refused
+receipt is cached under the identity that earned it. One premature submission
+therefore wedges the phase for good: the evidence arrives a second later, and
+the phase can never be gated again. From the outside the run just looks slow.
+
+* [x] The driver reads the accepted set the authority will use, after delivery
+* [x] It waits rather than submitting when that set does not cover the phase
+* [x] A test reproduces the jam without a live agent
+* [x] A driven run refuses nothing, asserted from the receipt history
+* [x] The authority orders its task set the way the kernel compares it
+* [x] A completion naming a dispatch the broker cannot load is an error, not a skip
 
 ### The terminal is the thing people watch, and it opens empty
 
@@ -463,9 +478,9 @@ Arriving at Workflow or Agents shows `0 lines` and a scope of nothing, because
 the transcript follows the selection and nothing is selected yet. The first thing
 a person wants is *what is happening*, which is every agent at once.
 
-* [ ] Workflow and Agents open scoped to the whole run
-* [ ] Selecting a node or an agent narrows the scope to it
-* [ ] Clearing the selection widens it again
+* [x] Workflow and Agents open scoped to the whole run
+* [x] Selecting a node or an agent narrows the scope to it
+* [x] Clearing the selection widens it again
 
 ### Send does not send
 
@@ -478,10 +493,14 @@ This is where the two Phase 7 items that were never done actually live: one
 surface for answering, for steering, and for granting budget, because all three
 interrupt the same thing in the same place.
 
-* [ ] `Send` submits the answer, with no dialog
-* [ ] The same box steers an agent that is working
-* [ ] The same box grants budget to a phase that ran out
-* [ ] What the box will do is named before it is used, not after
+* [x] `Send` submits the answer, with no dialog
+* [x] The same box steers an agent that is working
+* [~] The same box grants budget to a phase that ran out — **rejected, not
+  done.** A grant is a number checked against a ceiling, a current limit and what
+  is available. Typing it as prose into a box that sends what you wrote loses
+  every one of those, so a budget keeps its reviewed form and the box carries
+  only what a person says in words.
+* [x] What the box will do is named before it is used, not after
 
 ### The reply is not shaped to the terminal
 
@@ -489,9 +508,9 @@ It is welded on, but its corners are square against a rounded pane, and the
 controls above it — the scope toggle, `Copy`, `Download` — are quiet enough to
 miss on a dark ground.
 
-* [ ] The reply carries the terminal's bottom corners
-* [ ] The scope toggle reads as a control and says which side it is on
-* [ ] `Copy` and `Download` are findable without hunting
+* [x] The reply carries the terminal's bottom corners
+* [x] The scope toggle reads as a control and says which side it is on
+* [x] `Copy` and `Download` are findable without hunting
 
 ### Names break mid-word
 
@@ -499,8 +518,27 @@ miss on a dark ground.
 because rows use `overflow-wrap: anywhere` to survive a digest and then apply it
 to a word. A digest has no break points; a name has plenty.
 
-* [ ] A name breaks between words; only machine text breaks anywhere
-* [ ] The empty detail card is padded like every other card
+* [x] A name breaks between words; only machine text breaks anywhere
+* [x] The empty detail card is gone: with nothing selected the pane carries the run-wide terminal
+
+### What the live run showed about Record
+
+Rebuilt, Record reads its moments from the run's event stream. Against a real
+run that stream carries `command-queued`, `command-claimed`, `command-completed`
+and `command-refused`, and nothing else. Every payload is `{"status":"queued"}`:
+no task, no phase, no reason, no command kind. So the vocabulary the timeline
+translates — `question-raised`, `you answered`, `phase closed`, `work finished` —
+maps event types this system never emits, and "What happened" reads as a command
+queue's ticker three lines at a time.
+
+The story exists; it is just somewhere else. Questions and their answers, the
+dispatches, the publications and the receipts are all recorded. Record has to be
+assembled from those, or the engine has to emit events that describe the run
+rather than the queue that drives it.
+
+* [ ] Record reads the run's story, not the command queue's status
+* [ ] A moment names what it happened to
+* [ ] `Exact record` opens something that answers a question a reader has
 
 ### The Record tab, started again
 

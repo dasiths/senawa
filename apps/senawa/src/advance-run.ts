@@ -346,19 +346,9 @@ async function step(
     (left, right) => left.ordinal - right.ordinal,
   );
   const handedIn = new Set(state.completionOutbox.map((entry) => String(entry.fact.dispatchId)));
-  // A phase that owns work no dispatch covers cannot close: the kernel refuses
-  // the candidate, and a refusal is not a wait, so the driver retried the same
-  // refused candidate on every cycle for ever. Treat it as a phase that has not
-  // finished starting.
-  const covered = coversEveryActiveTask(
-    snapshot,
-    phaseKey,
-    dispatchedPhaseTasks(snapshot, state, input.runId, phaseKey),
-  );
-  const dispatch = !covered
-    ? undefined
-    : (phaseMembers.find((candidate) => !handedIn.has(String(candidate.dispatchId))) ??
-      phaseMembers.at(-1));
+  const dispatch =
+    phaseMembers.find((candidate) => !handedIn.has(String(candidate.dispatchId))) ??
+    phaseMembers.at(-1);
 
   const dataflow = new RuntimeDataflowAuthority(
     input.dependencies.sha256,
@@ -613,10 +603,23 @@ async function step(
   deliverFacts(input, supervisor, broker, state, phaseDispatchIds);
 
   const gate = gateFor(snapshot, phase, input.dependencies.sha256);
+  // The authority builds the gate's task set from the completion facts it has
+  // accepted, so the driver has to read that same source. Building it from
+  // dispatches instead computes a digest the authority cannot reproduce, and
+  // because the digest names the command, the refusal it earns is cached under
+  // an identity the driver keeps re-deriving: the phase can then never be gated
+  // again, however correct its evidence later becomes.
+  // The accepted set has to be read after the delivery above, not from the view
+  // the cycle opened with, or the driver gates on evidence the authority has
+  // since been given.
+  const delivered =
+    supervisor.commandAuthority.queryRunScheduling(input.repositoryId, input.runId) ?? scheduling;
+  const tasks = acceptedPhaseTasks(delivered, snapshot, phaseKey);
+  // Waiting is right when the evidence is not in yet. Submitting is not, because
+  // a refusal here is permanent.
+  if (!coversEveryActiveTask(snapshot, phaseKey, tasks))
+    return { kind: "awaiting-agent", phaseKey };
   const measured = gate === undefined ? [] : await readGate(input, snapshot, gate);
-  // The candidate must cover every active task the phase owns, not only the one
-  // this dispatch carried.
-  const tasks = dispatchedPhaseTasks(snapshot, state, input.runId, phaseKey);
 
   const candidate = createPhaseCandidate(
     {
@@ -944,7 +947,12 @@ function deliverFacts(
     // conflicting with itself. The run then stopped driving for good.
     if (entry.delivered) continue;
     const stored = broker.loadWorkerDispatch(entry.fact.dispatchId);
-    if (stored === undefined) continue;
+    // Skipping this quietly leaves the phase permanently short of the evidence
+    // it needs to close, and the run merely looks slow.
+    if (stored === undefined)
+      throw new Error(
+        `Completion ${entry.submissionId} names dispatch ${String(entry.fact.dispatchId)}, which the broker does not hold`,
+      );
     try {
       submit(
         supervisor,
@@ -1176,24 +1184,6 @@ function submit(
 }
 
 /**
- * Every task the phase has dispatched, in the order the candidate expects.
- *
- * The candidate must cover the phase's active tasks exactly. Their context
- * revision is known only to the dispatch, so the set is read from dispatches
- * rather than rebuilt from the graph.
- */
-function dispatchedPhaseTasks(
-  snapshot: ConfigurationSnapshot,
-  state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
-  runId: string,
-  phaseKey: string,
-): readonly TaskGenerationReference[] {
-  return currentPhaseDispatches(snapshot, state, runId, phaseKey)
-    .map((candidate) => candidate.task)
-    .sort((left, right) => (left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0));
-}
-
-/**
  * The tasks the phase owns that a candidate has to cover, read the way the
  * kernel reads them: every direct task of the phase that nothing supersedes,
  * in task-id order.
@@ -1210,13 +1200,10 @@ function activePhaseTaskIds(snapshot: ConfigurationSnapshot, phaseKey: string): 
 }
 
 /**
- * Whether every task the phase owns has a dispatch in the candidate set.
+ * Whether the tasks a candidate carries cover the phase exactly.
  *
- * The kernel refuses a candidate that does not cover the phase exactly, and a
- * refusal is not a wait: the driver retried the same refused candidate on every
- * cycle, for ever, while the run looked merely slow. A phase that owns work no
- * dispatch covers has not finished starting, so it is dispatched rather than
- * closed.
+ * The kernel compares the candidate's task set against every active direct task
+ * of the phase, in task-id order, and refuses anything else.
  */
 function coversEveryActiveTask(
   snapshot: ConfigurationSnapshot,
@@ -1228,6 +1215,21 @@ function coversEveryActiveTask(
     tasks.length === active.length &&
     active.every((id, index) => String(tasks[index]?.taskId) === id)
   );
+}
+
+/**
+ * The tasks the authority has accepted completion facts for, narrowed to this
+ * phase and ordered the way the kernel compares them.
+ */
+function acceptedPhaseTasks(
+  scheduling: { readonly acceptedTasks: readonly { readonly task: TaskGenerationReference }[] },
+  snapshot: ConfigurationSnapshot,
+  phaseKey: string,
+): readonly TaskGenerationReference[] {
+  return scheduling.acceptedTasks
+    .map(({ task }) => task)
+    .filter((task) => phaseKeyByTask(snapshot, String(task.taskId)) === phaseKey)
+    .sort((left, right) => (left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0));
 }
 
 /**
