@@ -609,7 +609,10 @@ assembled from those, or the engine has to emit events that describe the run
 rather than the queue that drives it.
 
 * [x] Record reads the run's story, not the command queue's status
-* [ ] A moment names what it happened to
+* [x] A moment names what it happened to — a `worker-completion` command is
+  named after its own digest, so the name could never say. Its receipt carries
+  `assessment.submission.task.taskId` and the agent's own summary, so a moment
+  now reads the work by title and shows what the agent said it did.
 * [x] `Exact record` opens something that answers a question a reader has — a
   command's frames only ever repeat the stage they announce, so a moment now
   reads its receipt alongside them. A refused command says why on the line

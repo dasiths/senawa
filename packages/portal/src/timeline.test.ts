@@ -108,4 +108,64 @@ describe("timeline", () => {
     expect(moment?.detail).toBeUndefined();
     expect(moment?.record).toMatchObject({ eventType: "command-queued" });
   });
+
+  it("names the work a handed-in completion was for, and what the agent said", () => {
+    // The shape a live run writes: the command is named after its own digest,
+    // so only the receipt says which task it was.
+    const receipt = {
+      commandId: "command_worker-completion-cf928aaf",
+      status: "completed",
+      result: {
+        assessment: {
+          submission: {
+            task: { taskId: "task_verify" },
+            summary: "Established requirements for a tic-tac-toe game in Node.js 22.x.",
+          },
+        },
+      },
+    } as unknown as DurableReceipt;
+
+    const [moment] = timelineMoments(
+      [
+        frame({
+          cursor: 7,
+          eventType: "command-completed",
+          commandId: "command_worker-completion-cf928aaf",
+        }),
+      ],
+      NODES,
+      [],
+      [receipt],
+    );
+
+    expect(moment?.where).toBe("check the game rules");
+    expect(moment?.detail).toBe("Established requirements for a tic-tac-toe game in Node.js 22.x.");
+  });
+
+  it("keeps a long summary to one line", () => {
+    const receipt = {
+      commandId: "command_worker-completion-cf928aaf",
+      status: "completed",
+      result: {
+        assessment: {
+          submission: { summary: `${"word ".repeat(60)}end`, task: { taskId: "task_verify" } },
+        },
+      },
+    } as unknown as DurableReceipt;
+
+    const [moment] = timelineMoments(
+      [
+        frame({
+          eventType: "command-completed",
+          commandId: "command_worker-completion-cf928aaf",
+        }),
+      ],
+      NODES,
+      [],
+      [receipt],
+    );
+
+    expect(moment?.detail?.length).toBeLessThanOrEqual(141);
+    expect(moment?.detail?.endsWith("\u2026")).toBe(true);
+  });
 });

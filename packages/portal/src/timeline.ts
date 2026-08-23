@@ -131,6 +131,40 @@ function commandPhrase(commandId: string):
 }
 
 /**
+ * The task a command's receipt says it was for, and what the agent said it did.
+ *
+ * A `worker-completion` command is named after its own digest, so its name says
+ * nothing about the work. The receipt is where the task and the agent's own
+ * summary are, and both are what a reader is looking for.
+ */
+function receiptFacts(receipt: DurableReceipt | undefined): {
+  readonly taskId: string | undefined;
+  readonly summary: string | undefined;
+} {
+  const assessment = readObject(receipt?.result, "assessment");
+  const submission = readObject(assessment, "submission");
+  return {
+    taskId: readString(readObject(submission, "task"), "taskId"),
+    summary: oneLine(readString(submission, "summary")),
+  };
+}
+
+function readObject(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null) return undefined;
+  return (value as Record<string, unknown>)[key];
+}
+
+/** A summary is written as prose, and a moment has room for the first line of it. */
+function oneLine(text: string | undefined): string | undefined {
+  if (text === undefined) return undefined;
+  const flat = text.replaceAll(/\s+/gu, " ").trim();
+  if (flat.length <= 140) return flat;
+  const cut = flat.slice(0, 140);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > 80 ? cut.slice(0, space) : cut).trimEnd()}\u2026`;
+}
+
+/**
  * One moment per command, rather than three.
  *
  * A command is queued, claimed and completed, which is one thing happening and
@@ -164,6 +198,7 @@ function commandMoments(
     // The frames only ever say which stage a command reached. Its receipt is
     // where the result and the refusal reason are, so the two are read together.
     const receipt = receipts.get(commandId);
+    const facts = receiptFacts(receipt);
     moments.push(
       Object.freeze({
         momentId: String(first.eventId),
@@ -171,8 +206,8 @@ function commandMoments(
         at: momentOrder(first.occurredAt),
         time: momentTime(first.occurredAt),
         what: refused ? `${phrase.what} \u2014 refused` : phrase.what,
-        where: phrase.where,
-        detail: refused ? receipt?.error?.message : undefined,
+        where: phrase.where ?? named(facts.taskId),
+        detail: refused ? receipt?.error?.message : facts.summary,
         tone: (refused ? "failed" : (phrase.tone ?? "plain")) as TimelineMoment["tone"],
         record:
           receipt === undefined
