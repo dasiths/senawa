@@ -123,7 +123,6 @@ export function createStandardWorkflowConfiguration(): WorkflowConfigurationDocu
         key: "accepted-implementation",
         phase: "implement",
         evidenceKinds: ["task-completion"],
-        sensitivityCeiling: "internal",
       },
     ],
     forEach: [
@@ -417,7 +416,7 @@ function mapping(key: string, source: object, destinationPointer: string) {
 }
 
 function output(key: string, schema: string, path: string, maxBytes: number) {
-  return { key, schema, path, maxBytes, sensitivity: "internal" };
+  return { key, schema, path, maxBytes };
 }
 
 function completionPolicy(key: string, evidenceMode: "none" | "task") {

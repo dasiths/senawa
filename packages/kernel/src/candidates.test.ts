@@ -571,7 +571,6 @@ describe("phase closure", () => {
         contentDigest: INTEGRATION_DIGEST,
         byteLength: 42,
         mediaType: "application/json",
-        sensitivity: "internal",
         producingTask: required(input.tasks[0]),
         dispatchId: dispatchId("dispatch_verifier"),
         contextId: contextId("context_verifier"),

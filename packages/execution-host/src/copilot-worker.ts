@@ -1286,7 +1286,6 @@ async function submitPhaseOutput(
           contentDigest,
           byteLength: bytes.byteLength,
           mediaType: "application/json",
-          sensitivity: slot.declaration.sensitivity,
           graphRevisionDigest: context.graphRevisionDigest,
           configurationSnapshotDigest: context.configurationSnapshotDigest,
           inputBindingDigest: context.phaseInputBinding.bindingDigest,
@@ -1436,7 +1435,6 @@ function submissionPayload(
       "contentDigest",
       "byteLength",
       "mediaType",
-      "sensitivity",
       "summary",
     ]);
     return {
@@ -1445,7 +1443,6 @@ function submissionPayload(
         contentDigest: value.contentDigest,
         byteLength: value.byteLength,
         mediaType: value.mediaType,
-        sensitivity: value.sensitivity,
         summary: value.summary,
       },
     };
@@ -1835,10 +1832,9 @@ const ASSET_SCHEMA = closedObject(
       ...stringSchema(127, 3),
       pattern: "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$",
     },
-    sensitivity: { enum: ["public", "internal", "confidential", "restricted"] },
     summary: stringSchema(WORKER_PROTOCOL_LIMITS.maxSubmissionSummaryLength),
   },
-  ["assetId", "contentDigest", "byteLength", "mediaType", "sensitivity", "summary"],
+  ["assetId", "contentDigest", "byteLength", "mediaType", "summary"],
 );
 const DISCOVERY_SCHEMA = closedObject(
   {

@@ -83,7 +83,6 @@ const OUTPUT_DECLARATION = Object.freeze({
   schemaKey: consumerKey("verification-output"),
   schemaResourceDigest: OUTPUT_CONTRACT.schemaResourceDigest,
   maxBytes: 4_096,
-  sensitivity: "internal" as const,
 });
 const OUTPUT_NAME = String(OUTPUT_DECLARATION.outputName);
 const ACCEPTED_OUTPUT = Object.freeze({
@@ -180,7 +179,6 @@ describe("Phase 14I structured output acceptance", () => {
           outputName: OUTPUT_NAME,
           schemaKey: OUTPUT_CONTRACT.key,
           mediaType: "application/json",
-          sensitivity: "internal",
         });
         expect(
           only(second.submissions.filter(({ type }) => type === "phase-output")),

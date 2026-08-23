@@ -312,7 +312,6 @@ describe("v1 workflow configuration", () => {
           schema: "work-input",
           path: "result.json",
           maxBytes: 262_144,
-          sensitivity: "internal",
         },
       ],
       iteration: {

@@ -520,7 +520,6 @@ function contextInput(kind: "software" | "non-software") {
         aliasBindingDigest: digest("6"),
         contentDigest: digest("7"),
         mediaType: kind === "software" ? "application/json" : "text/csv",
-        sensitivity: "internal" as const,
         byteLength: 128,
       },
       {
@@ -528,7 +527,6 @@ function contextInput(kind: "software" | "non-software") {
         aliasBindingDigest: digest("8"),
         contentDigest: digest("9"),
         mediaType: kind === "software" ? "text/markdown" : "image/png",
-        sensitivity: "public" as const,
         byteLength: 4096,
       },
     ],

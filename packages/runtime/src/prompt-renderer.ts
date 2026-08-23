@@ -174,7 +174,6 @@ function operatingContract(
         name: String(declaration.outputName),
         schema: String(declaration.schemaKey),
         maxBytes: declaration.maxBytes,
-        sensitivity: declaration.sensitivity,
       })),
       criteria: policy.criteria.map((criterion) => ({
         criterionId: String(criterion.criterionId),

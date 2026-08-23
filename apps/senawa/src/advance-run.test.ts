@@ -411,7 +411,6 @@ async function completeDispatch(
           contentDigest: installed.contentDigest,
           byteLength: installed.byteLength,
           mediaType: "application/json",
-          sensitivity: declaration.sensitivity,
           graphRevisionDigest: stored.context.graphRevisionDigest,
           configurationSnapshotDigest: stored.context.configurationSnapshotDigest,
           inputBindingDigest: stored.context.phaseInputBinding.bindingDigest,

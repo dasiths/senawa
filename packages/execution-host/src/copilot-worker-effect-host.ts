@@ -103,7 +103,6 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
           assetBindingId: asset.assetBindingId,
           allowedPointer: "",
           readMode: "pointer-and-chunk",
-          sensitivityCeiling: asset.sensitivity,
           expiresAt,
           maxOperations: input.grantPolicy.maxOperations,
           maxBytes: input.grantPolicy.maxBytes,

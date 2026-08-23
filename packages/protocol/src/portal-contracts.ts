@@ -7,7 +7,6 @@ import type {
   RepositoryId,
   RunId,
 } from "./contracts.js";
-import type { AssetSensitivity } from "./worker-contracts.js";
 
 export const PORTAL_CAPABILITIES = Object.freeze([
   "portal-read-activity",
@@ -205,7 +204,6 @@ export interface PortalDeliveryRecord {
   readonly schemaKey?: string;
   readonly contentDigest?: string;
   readonly byteLength?: number;
-  readonly sensitivity?: AssetSensitivity;
   readonly accepted?: boolean;
   readonly trigger?: string;
   readonly disposition?: string;
@@ -368,7 +366,6 @@ export interface PortalArtifactMetadata {
   readonly contentDigest: string;
   readonly byteLength: number;
   readonly mediaType: string;
-  readonly sensitivity: AssetSensitivity;
   readonly summary: string;
   readonly availability: PortalArtifactAvailability;
   readonly taskId?: OpaqueIdentity;

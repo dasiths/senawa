@@ -49,10 +49,6 @@ describe("the authored workflow senawa ships for itself", () => {
     // The loop is authored, including a phase that refuses to retry.
     expect(phase("verify")?.iteration).toMatchObject({ onGateRejected: "fail" });
     expect(phase("implement")?.iteration).toMatchObject({ maximumAttempts: 5 });
-    // Sensitivity reaches the output rather than being fixed at internal.
-    expect(phase("verify")?.outputs).toEqual([
-      expect.objectContaining({ sensitivity: "confidential" }),
-    ]);
     // Approval names a role.
     expect(phase("verify")?.exit).toMatchObject({
       approval: { policy: "required", authority: { role: "release-manager" } },
@@ -106,19 +102,14 @@ describe("defaults are available and overridable", () => {
 
       const authored = await readFile(join(root, ".senawa/workflow.yaml"), "utf8");
       // Nothing the scaffold omits is missing from the run: it declares no
-      // iteration policy, no sensitivity, and no evidence policy, and gets the
-      // documented defaults for all three.
-      for (const absent of [
-        "attempts:",
-        "sensitivity:",
-        "completionEvidence:",
-        "onGateRejected:",
-      ]) {
+      // iteration policy and no evidence policy, and gets the documented
+      // defaults for both.
+      for (const absent of ["attempts:", "completionEvidence:", "onGateRejected:"]) {
         expect(authored).not.toContain(absent);
       }
       const phase = phaseValue(loaded.snapshot, "plan");
       expect(phase.iteration).toMatchObject({ maximumAttempts: 3, onGateRejected: "iterate" });
-      expect(phase.outputs[0]).toMatchObject({ sensitivity: "internal", maxBytes: 262_144 });
+      expect(phase.outputs[0]).toMatchObject({ maxBytes: 262_144 });
     } finally {
       await rm(root, { force: true, recursive: true });
     }
@@ -136,10 +127,6 @@ describe("defaults are available and overridable", () => {
     expect(phaseValue(snapshot, "implement").iteration).toMatchObject({ maximumAttempts: 5 });
     expect(authored).toContain("onGateRejected: fail");
     expect(phaseValue(snapshot, "verify").iteration).toMatchObject({ onGateRejected: "fail" });
-    expect(authored).toContain("sensitivity: confidential");
-    expect(phaseValue(snapshot, "verify").outputs[0]).toMatchObject({
-      sensitivity: "confidential",
-    });
     expect(authored).toContain("role: release-manager");
     expect(phaseValue(snapshot, "verify").exit).toMatchObject({
       approval: { authority: { role: "release-manager" } },

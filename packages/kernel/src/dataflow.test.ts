@@ -334,7 +334,6 @@ function publicationInput() {
     contentDigest: OTHER_DIGEST,
     byteLength: 42,
     mediaType: "application/json" as const,
-    sensitivity: "internal" as const,
     producingTask: {
       taskId: taskId("task_executor"),
       definitionGeneration: definitionGeneration(1),

@@ -230,7 +230,6 @@ export class BrokerWorkerSubmissionSink implements WorkerSubmissionSink {
         phase: stored.context.phaseAttempt.phase,
         schemaKey: declaration.schemaKey,
         schemaResourceDigest: declaration.schemaResourceDigest,
-        sensitivity: declaration.sensitivity,
         validationReceiptDigest,
       },
     );

@@ -1225,7 +1225,6 @@ class DeterministicAcceptanceWorkers {
               contentDigest,
               byteLength: bytes.byteLength,
               mediaType: "text/plain",
-              sensitivity: "internal",
               summary: `Deterministic ${seed.key} output`,
             },
           },

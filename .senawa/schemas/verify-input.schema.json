@@ -15,7 +15,7 @@
     "completionEvidence": {
       "type": "array",
       "maxItems": 200,
-      "description": "Attachments the members offered for their completion criteria, filtered to the allowlisted kinds and capped by the view's sensitivity ceiling. Senawa assembles this; an agent cannot widen it.",
+      "description": "Attachments the members offered for their completion criteria, filtered to the allowlisted kinds. Senawa assembles this; an agent cannot widen it.",
       "items": {
         "type": "object",
         "required": ["kind"],

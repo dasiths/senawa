@@ -8,7 +8,6 @@ import {
   type Sha256Digest,
 } from "./canonical.js";
 import type { TaskGenerationReference } from "./completion.js";
-import type { AssetSensitivity } from "./context.js";
 import {
   type ConsumerKey,
   type ContextId,
@@ -181,7 +180,6 @@ export interface PhaseOutputPublicationInput {
   readonly contentDigest: Sha256Digest;
   readonly byteLength: number;
   readonly mediaType: "application/json";
-  readonly sensitivity: AssetSensitivity;
   readonly producingTask: TaskGenerationReference;
   readonly dispatchId: DispatchId;
   readonly contextId: ContextId;
@@ -506,7 +504,6 @@ export function validatePhaseOutputPublication(
     "contentDigest",
     "byteLength",
     "mediaType",
-    "sensitivity",
     "producingTask",
     "dispatchId",
     "contextId",
@@ -531,7 +528,6 @@ export function validatePhaseOutputPublication(
       contentDigest: submitted.contentDigest as unknown as Sha256Digest,
       byteLength: submitted.byteLength as unknown as number,
       mediaType: submitted.mediaType as unknown as "application/json",
-      sensitivity: submitted.sensitivity as unknown as AssetSensitivity,
       producingTask: submitted.producingTask as unknown as TaskGenerationReference,
       dispatchId: submitted.dispatchId as unknown as DispatchId,
       contextId: submitted.contextId as unknown as ContextId,
@@ -710,7 +706,6 @@ function phaseOutputPublicationContent(
     "contentDigest",
     "byteLength",
     "mediaType",
-    "sensitivity",
     "producingTask",
     "dispatchId",
     "contextId",
@@ -738,11 +733,6 @@ function phaseOutputPublicationContent(
   if (value.mediaType !== "application/json") {
     fail("invalid-dataflow-record", "Phase outputs must use application/json");
   }
-  if (
-    !new Set(["public", "internal", "confidential", "restricted"]).has(String(value.sensitivity))
-  ) {
-    fail("invalid-dataflow-record", "Phase output sensitivity is invalid");
-  }
   const producingTask = validateTaskReference(value.producingTask);
   if (!isDispatchId(value.dispatchId) || !isContextId(value.contextId)) {
     fail("invalid-dataflow-record", "Phase output dispatch and context identities are invalid");
@@ -757,7 +747,6 @@ function phaseOutputPublicationContent(
     contentDigest: value.contentDigest,
     byteLength: value.byteLength,
     mediaType: value.mediaType,
-    sensitivity: value.sensitivity,
     producingTask,
     dispatchId: value.dispatchId,
     contextId: value.contextId,

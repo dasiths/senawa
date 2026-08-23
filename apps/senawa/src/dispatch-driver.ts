@@ -1,5 +1,5 @@
 import type { ConfigurationRegistryEntry, ConfigurationSnapshot } from "@senawa/configuration";
-import type { AssetSensitivity, ContextBudget, DataMappingDeclaration } from "@senawa/kernel";
+import type { ContextBudget, DataMappingDeclaration } from "@senawa/kernel";
 import {
   type AgentSessionResumeBinding,
   type AgentSessionScope,
@@ -48,7 +48,6 @@ interface SnapshotPhase {
     readonly key: string;
     readonly schema: string;
     readonly maxBytes: number;
-    readonly sensitivity: AssetSensitivity;
   }[];
 }
 
@@ -369,7 +368,6 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
         schemaResourceDigest: runtimeSchemaContract(snapshot, output.schema, sha256)
           .schemaResourceDigest,
         maxBytes: output.maxBytes,
-        sensitivity: output.sensitivity,
       })),
       // The same policy the broker judges completion by, so the generated
       // contract cannot promise the agent different terms.

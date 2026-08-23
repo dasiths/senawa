@@ -73,18 +73,15 @@ phases:
     agent: verifier
     needs: [implement]
     # Read the accepted completion evidence of an earlier phase, not only its
-    # output. The kinds are allowlisted and the ceiling caps what may cross, so
-    # a confidential attachment cannot leak into a phase cleared for less.
+    # output. The kinds are allowlisted, so only the evidence this phase was
+    # written to read crosses into it.
     completionEvidenceFrom:
       - phase: implement
         kinds: [task-completion]
-        maxSensitivity: internal
     # Two sources now feed this phase, so the merged shape is named explicitly.
     input: schemas/verify-input.schema.json
     output:
       schema: schemas/verification.schema.json
-      # Marks the asset so it is withheld from surfaces below this ceiling.
-      sensitivity: confidential
       maxBytes: 65536
     gates: [build, tests, coverage]
     # Verification failing is a real failure; retrying it would only hide it.

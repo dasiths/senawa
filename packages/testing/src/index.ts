@@ -207,7 +207,6 @@ export function createWorkerExecutionFixture(
           schemaKey: consumerKey("verification-output"),
           schemaResourceDigest: sha256Digest("6".repeat(64)),
           maxBytes: 262_144,
-          sensitivity: "internal",
         },
       ],
       completionPolicy: {

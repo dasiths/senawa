@@ -239,7 +239,7 @@ content.
 * Leave the remote connector off unless you operate the destination and its
   egress policy.
 * Review what a workflow declares before running it. Sensors are local processes
-  and `sensitivity` values decide what can leave.
+  that run with your privileges.
 
 ## Related reading
 

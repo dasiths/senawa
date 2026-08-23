@@ -12,7 +12,6 @@ import type {
   AssetReadDenialCode,
   AssetReadMode,
   AssetReadRequest,
-  AssetSensitivity,
   ContextGrantEnvelope,
   WorkerAmendmentProposalSubmission,
   WorkerAssetSubmission,
@@ -46,17 +45,10 @@ const GRANT_TOKEN_PATTERN = /^[A-Za-z0-9_-]+$/;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 const MEDIA_TYPE_PATTERN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/;
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
-const SENSITIVITIES = new Set<AssetSensitivity>([
-  "public",
-  "internal",
-  "confidential",
-  "restricted",
-]);
 const READ_MODES = new Set<AssetReadMode>(["pointer", "chunk", "pointer-and-chunk"]);
 const DENIAL_CODES = new Set<AssetReadDenialCode>([
   "invalid-token",
   "scope-denied",
-  "sensitivity-denied",
   "expired",
   "budget-exhausted",
   "invalid-pointer",
@@ -92,7 +84,6 @@ export function decodeContextGrantEnvelope(input: string | unknown): ContextGran
     "assetBindingId",
     "allowedPointer",
     "readMode",
-    "sensitivityCeiling",
     "issuedAt",
     "expiresAt",
     "maxOperations",
@@ -121,7 +112,6 @@ export function decodePersistedContextGrantEnvelope(
     "assetBindingId",
     "allowedPointer",
     "readMode",
-    "sensitivityCeiling",
     "issuedAt",
     "expiresAt",
     "maxOperations",
@@ -143,7 +133,6 @@ function contextGrantEnvelopeFields(object: Readonly<Record<string, unknown>>) {
   identity(object.assetBindingId, "$.assetBindingId", "asset-binding_");
   jsonPointer(object.allowedPointer, "$.allowedPointer");
   enumValue(object.readMode, "$.readMode", READ_MODES);
-  enumValue(object.sensitivityCeiling, "$.sensitivityCeiling", SENSITIVITIES);
   timestamp(object.issuedAt, "$.issuedAt");
   timestamp(object.expiresAt, "$.expiresAt");
   boundedPositiveInteger(
@@ -171,7 +160,6 @@ function contextGrantEnvelopeFields(object: Readonly<Record<string, unknown>>) {
     assetBindingId: object.assetBindingId as string,
     allowedPointer: object.allowedPointer as string,
     readMode: object.readMode as AssetReadMode,
-    sensitivityCeiling: object.sensitivityCeiling as AssetSensitivity,
     issuedAt: object.issuedAt as string,
     expiresAt: object.expiresAt as string,
     maxOperations: object.maxOperations as number,
@@ -409,14 +397,12 @@ export function decodeWorkerSubmission(input: string | unknown): WorkerSubmissio
         "contentDigest",
         "byteLength",
         "mediaType",
-        "sensitivity",
         "summary",
       ]);
       identity(asset.assetId, "$.asset.assetId", "asset_");
       digest(asset.contentDigest, "$.asset.contentDigest");
       nonNegativeInteger(asset.byteLength, "$.asset.byteLength");
       mediaType(asset.mediaType, "$.asset.mediaType");
-      enumValue(asset.sensitivity, "$.asset.sensitivity", SENSITIVITIES);
       boundedString(
         asset.summary,
         "$.asset.summary",
@@ -482,7 +468,6 @@ export function decodeWorkerSubmission(input: string | unknown): WorkerSubmissio
         "contentDigest",
         "byteLength",
         "mediaType",
-        "sensitivity",
         "graphRevisionDigest",
         "configurationSnapshotDigest",
         "inputBindingDigest",
@@ -504,7 +489,6 @@ export function decodeWorkerSubmission(input: string | unknown): WorkerSubmissio
       if (output.mediaType !== "application/json") {
         fail("invalid-value", "$.output.mediaType", "must be application/json");
       }
-      enumValue(output.sensitivity, "$.output.sensitivity", SENSITIVITIES);
       digest(output.graphRevisionDigest, "$.output.graphRevisionDigest");
       digest(output.configurationSnapshotDigest, "$.output.configurationSnapshotDigest");
       digest(output.inputBindingDigest, "$.output.inputBindingDigest");

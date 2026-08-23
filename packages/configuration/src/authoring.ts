@@ -33,7 +33,6 @@ export interface AuthoredLoweringResult {
 const WORKFLOW_API_VERSION = "senawa.dev/workflow/v1";
 const SESSION_SCOPES = new Set(["run", "phase", "element"]);
 const FAILURE_POLICIES = new Set(["continue", "fail-fast"]);
-const OUTPUT_SENSITIVITIES = new Set(["public", "internal", "confidential", "restricted"]);
 const EVIDENCE_MODES = new Set(["none", "task", "required-criteria", "all-satisfied"]);
 const ITERATE_OR_FAIL = new Set(["iterate", "fail"]);
 const ESCALATE_OR_FAIL = new Set(["escalate", "fail"]);
@@ -237,7 +236,6 @@ export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLow
         key: `${phase.name}-from-${view.phase}`,
         phase: view.phase,
         evidenceKinds: [...view.kinds].sort(compare),
-        sensitivityCeiling: view.maxSensitivity,
       })),
     ),
     forEach: phases
@@ -319,7 +317,6 @@ interface AuthoredPhase {
   readonly sessionTurns?: number;
   readonly needs: readonly string[];
   readonly output: string;
-  readonly outputSensitivity: string;
   readonly outputMaxBytes: number;
   readonly input?: string;
   readonly gates: readonly string[];
@@ -1109,7 +1106,6 @@ function readPhases(
       session: agents.get(agent)?.session ?? "run",
       needs,
       output: output.schema,
-      outputSensitivity: output.sensitivity,
       outputMaxBytes: output.maxBytes,
       ...(declaredInput === undefined ? {} : { input: declaredInput }),
       gates,
@@ -1142,14 +1138,13 @@ function readPhases(
 export interface AuthoredCompletionEvidenceView {
   readonly phase: string;
   readonly kinds: readonly string[];
-  readonly maxSensitivity: "public" | "internal" | "confidential" | "restricted";
 }
 
 /**
  * Reads the phases whose accepted completion evidence this phase may read.
  *
- * The kinds are an allowlist and the ceiling caps what may cross, so a
- * confidential attachment cannot reach a phase cleared for less.
+ * The kinds are an allowlist, so only the evidence a later phase was written
+ * to read crosses into it.
  */
 function readCompletionEvidenceFrom(
   collector: Collector,
@@ -1184,22 +1179,7 @@ function readCompletionEvidenceFrom(
       add(collector, "missing-field", path, `${at}/kinds`, "Name at least one evidence kind");
       continue;
     }
-    const ceiling = typeof entry.maxSensitivity === "string" ? entry.maxSensitivity : "internal";
-    if (!OUTPUT_SENSITIVITIES.has(ceiling)) {
-      add(
-        collector,
-        "invalid-field",
-        path,
-        `${at}/maxSensitivity`,
-        `Must be one of ${[...OUTPUT_SENSITIVITIES].sort().join(", ")}`,
-      );
-      continue;
-    }
-    views.push({
-      phase,
-      kinds,
-      maxSensitivity: ceiling as AuthoredCompletionEvidenceView["maxSensitivity"],
-    });
+    views.push({ phase, kinds });
   }
   return views;
 }
@@ -1305,10 +1285,10 @@ function readOutput(
   path: string,
   pointer: string,
   raw: Readonly<Record<string, unknown>>,
-): { schema: string; sensitivity: string; maxBytes: number } | undefined {
+): { schema: string; maxBytes: number } | undefined {
   const value = raw.output;
   if (typeof value === "string") {
-    return { schema: value, sensitivity: "internal", maxBytes: MAX_OUTPUT_BYTES };
+    return { schema: value, maxBytes: MAX_OUTPUT_BYTES };
   }
   if (!isRecord(value)) {
     add(collector, "missing-field", path, `${pointer}/output`, "output is required");
@@ -1316,16 +1296,6 @@ function readOutput(
   }
   const schema = requiredString(collector, `${pointer}/output`, "", value, "schema");
   if (schema === undefined) return undefined;
-  const sensitivity = typeof value.sensitivity === "string" ? value.sensitivity : "internal";
-  if (!OUTPUT_SENSITIVITIES.has(sensitivity)) {
-    add(
-      collector,
-      "invalid-field",
-      path,
-      `${pointer}/output/sensitivity`,
-      `Sensitivity must be one of ${[...OUTPUT_SENSITIVITIES].sort().join(", ")}`,
-    );
-  }
   const maxBytes = typeof value.maxBytes === "number" ? value.maxBytes : MAX_OUTPUT_BYTES;
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_OUTPUT_BYTES) {
     add(
@@ -1336,7 +1306,7 @@ function readOutput(
       `An output may be at most ${MAX_OUTPUT_BYTES} bytes`,
     );
   }
-  return { schema, sensitivity, maxBytes };
+  return { schema, maxBytes };
 }
 
 /** Reads the completion evidence policy, defaulting to requiring none. */
@@ -1598,7 +1568,6 @@ function lowerPhase(
         schema: schemaKey(phase.output),
         path: `outputs/${phase.name}.json`,
         maxBytes: phase.outputMaxBytes,
-        sensitivity: phase.outputSensitivity,
       },
     ],
     actions: [],

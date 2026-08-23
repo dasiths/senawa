@@ -58,10 +58,6 @@ function vocabulary(snapshot: ConfigurationSnapshot): ReadonlySet<string> {
     if (approval?.policy !== undefined) used.add(`approval:${String(approval.policy)}`);
     if (asRecord(approval?.authority)?.role !== undefined) used.add("approval:role-bound");
 
-    for (const output of listOf(phase.outputs)) {
-      used.add(`sensitivity:${String(output.sensitivity)}`);
-    }
-
     const evidence = asRecord(completion?.completionEvidencePolicy);
     if (evidence?.mode !== undefined) used.add(`evidence:${String(evidence.mode)}`);
     for (const requirement of listOf(evidence?.requirements)) {

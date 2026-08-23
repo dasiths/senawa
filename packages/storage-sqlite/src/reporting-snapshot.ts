@@ -383,7 +383,6 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
           schema_resource_digest: string;
           content_digest: string;
           byte_length: number;
-          sensitivity: string;
           producing_task_id: string;
           dispatch_id: string;
           context_id: string;
@@ -395,7 +394,7 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
       >(
         `SELECT p.publication_id, p.publication_digest, p.attempt_digest, p.output_name,
                 p.schema_key, p.schema_resource_digest, p.content_digest, p.byte_length,
-                p.sensitivity, p.producing_task_id, p.dispatch_id, p.context_id,
+                p.producing_task_id, p.dispatch_id, p.context_id,
                 p.validation_receipt_digest, a.acceptance_digest, a.candidate_digest,
                 a.closure_digest
          FROM phase_output_publications p
@@ -422,7 +421,6 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
             scalar("outputName", publication.output_name),
             scalar("schemaKey", publication.schema_key),
             scalar("byteLength", publication.byte_length),
-            scalar("sensitivity", publication.sensitivity),
             scalar("accepted", publication.acceptance_digest !== null),
           ],
         }),
@@ -1101,12 +1099,11 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
           content_digest: string;
           byte_length: number;
           media_type: string;
-          sensitivity: string;
           context_id: string;
         }
       >(
         `SELECT DISTINCT a.asset_binding_id, a.semantic_asset_id, a.alias_binding_digest,
-                a.content_digest, a.byte_length, a.media_type, a.sensitivity, a.context_id
+                a.content_digest, a.byte_length, a.media_type, a.context_id
          FROM context_asset_bindings a JOIN context_dispatches d ON d.context_id = a.context_id
          WHERE d.repository_id = ? AND d.run_id = ? ORDER BY a.asset_binding_id`,
       )
@@ -1124,7 +1121,6 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
             aliasBindingDigest: row.alias_binding_digest,
             byteLength: row.byte_length,
             mediaType: row.media_type,
-            sensitivity: row.sensitivity,
           }),
         }),
       );
@@ -1229,13 +1225,11 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
           const assetId = objectString(asset, "assetId");
           const contentDigest = objectString(asset, "contentDigest");
           const mediaType = objectString(asset, "mediaType");
-          const sensitivity = objectString(asset, "sensitivity");
           const byteLength = asset.byteLength;
           if (
             assetId !== undefined &&
             contentDigest !== undefined &&
             mediaType !== undefined &&
-            sensitivity !== undefined &&
             typeof byteLength === "number" &&
             Number.isSafeInteger(byteLength)
           ) {
@@ -1251,7 +1245,6 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
                 scalars: scalars({
                   byteLength,
                   mediaType,
-                  sensitivity,
                   verifiedStored: installedAsset.get(contentDigest) !== undefined,
                 }),
               }),

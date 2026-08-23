@@ -180,7 +180,6 @@ interface ParsedCompletionEvidenceView {
   readonly key: string;
   readonly phase: string;
   readonly evidenceKinds: readonly CanonicalValue[];
-  readonly sensitivityCeiling: "public" | "internal" | "confidential" | "restricted";
 }
 
 interface ParsedForEach {
@@ -254,7 +253,6 @@ interface ParsedPhaseOutput {
   readonly schema: string;
   readonly path: string;
   readonly maxBytes: number;
-  readonly sensitivity: "public" | "internal" | "confidential" | "restricted";
 }
 
 interface ParsedPhaseIteration {
@@ -1654,13 +1652,7 @@ function parseCompletionEvidenceViews(
   collector: DiagnosticCollector,
 ): readonly ParsedCompletionEvidenceView[] | undefined {
   return parseArray(value, "/completionEvidenceViews", collector, (item, pointer) => {
-    const object = exactObject(
-      item,
-      pointer,
-      ["key", "phase", "evidenceKinds", "sensitivityCeiling"],
-      [],
-      collector,
-    );
+    const object = exactObject(item, pointer, ["key", "phase", "evidenceKinds"], [], collector);
     if (object === undefined) return undefined;
     const key = parseKey(object.key, `${pointer}/key`, collector);
     const phase = parseReference(object.phase, `${pointer}/phase`, collector);
@@ -1675,32 +1667,12 @@ function parseCompletionEvidenceViews(
         "Evidence views require at least one allowlisted evidence kind",
       );
     }
-    const sensitivityCeiling = object.sensitivityCeiling;
-    if (
-      !new Set(["public", "internal", "confidential", "restricted"]).has(String(sensitivityCeiling))
-    ) {
-      addDiagnostic(
-        collector,
-        "invalid-field",
-        `${pointer}/sensitivityCeiling`,
-        "Evidence view sensitivity ceiling is not recognized",
-      );
-    }
     return key === undefined ||
       phase === undefined ||
       evidenceKinds === undefined ||
-      evidenceKinds.length === 0 ||
-      typeof sensitivityCeiling !== "string" ||
-      !new Set(["public", "internal", "confidential", "restricted"]).has(sensitivityCeiling)
+      evidenceKinds.length === 0
       ? undefined
-      : {
-          pointer,
-          key,
-          phase,
-          evidenceKinds,
-          sensitivityCeiling:
-            sensitivityCeiling as ParsedCompletionEvidenceView["sensitivityCeiling"],
-        };
+      : { pointer, key, phase, evidenceKinds };
   });
 }
 
@@ -2018,7 +1990,7 @@ function parsePhaseOutputs(
     const object = exactObject(
       item,
       itemPointer,
-      ["key", "schema", "path", "maxBytes", "sensitivity"],
+      ["key", "schema", "path", "maxBytes"],
       [],
       collector,
     );
@@ -2040,29 +2012,9 @@ function parsePhaseOutputs(
         `${itemPointer}/path`,
         "Output path must be a normalized relative .json path",
       );
-    const sensitivity = object.sensitivity;
-    if (!new Set(["public", "internal", "confidential", "restricted"]).has(String(sensitivity))) {
-      addDiagnostic(
-        collector,
-        "invalid-field",
-        `${itemPointer}/sensitivity`,
-        "Output sensitivity is not recognized",
-      );
-    }
-    return key === undefined ||
-      schema === undefined ||
-      maxBytes === undefined ||
-      path === undefined ||
-      typeof sensitivity !== "string" ||
-      !new Set(["public", "internal", "confidential", "restricted"]).has(sensitivity)
+    return key === undefined || schema === undefined || maxBytes === undefined || path === undefined
       ? undefined
-      : {
-          key,
-          schema,
-          path,
-          maxBytes,
-          sensitivity: sensitivity as ParsedPhaseOutput["sensitivity"],
-        };
+      : { key, schema, path, maxBytes };
   });
 }
 

@@ -144,7 +144,7 @@ describe("SQLite reporting snapshot authority", () => {
     fixture.authority.close();
   });
 
-  it("excludes unpatterned worker summary text from restricted asset metadata", () => {
+  it("excludes unpatterned worker summary text from worker asset metadata", () => {
     const fixture = createAuthority();
     seedRestrictedWorkerAsset(fixture.options.databasePath);
     const reporting = new SqliteReportingSnapshotAuthority({
@@ -167,7 +167,6 @@ describe("SQLite reporting snapshot authority", () => {
     expect(workerAsset?.scalars).toEqual([
       { name: "byteLength", value: 47 },
       { name: "mediaType", value: "text/plain" },
-      { name: "sensitivity", value: "restricted" },
       { name: "verifiedStored", value: false },
     ]);
     expect(JSON.stringify(snapshot)).not.toContain(RESTRICTED_SUMMARY);
@@ -527,7 +526,6 @@ function seedRestrictedWorkerAsset(databasePath: string): void {
           assetId: "asset_restricted-summary",
           contentDigest: "e".repeat(64),
           mediaType: "text/plain",
-          sensitivity: "restricted",
           summary: RESTRICTED_SUMMARY,
           byteLength: 47,
         },

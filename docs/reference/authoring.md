@@ -99,14 +99,11 @@ workflow.yaml#/phases/2/input [missing-field] Phase verify reads 2 upstream outp
 ```yaml
     output:
       schema: schemas/verification.schema.json
-      sensitivity: confidential
       maxBytes: 65536
 ```
 
-`sensitivity` is one of `public`, `internal`, `confidential`, or `restricted`,
-and defaults to `internal`. `maxBytes` is at most 262144, which is also the
-default. The scalar form `output: schemas/x.schema.json` means the same as
-naming only `schema`.
+`maxBytes` is at most 262144, which is also the default. The scalar form
+`output: schemas/x.schema.json` means the same as naming only `schema`.
 
 #### Expanded `approve`
 
@@ -137,11 +134,10 @@ is refused, because a mode that collects nothing cannot owe anything.
     completionEvidenceFrom:
       - phase: implement
         kinds: [task-completion]
-        maxSensitivity: internal
 ```
 
-The kinds are an allowlist and `maxSensitivity` caps what may cross the phase
-boundary. It defaults to `internal`.
+The kinds are an allowlist, so only the evidence a phase was written to read
+crosses the phase boundary.
 
 #### Fan-out
 

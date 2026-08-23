@@ -426,7 +426,6 @@ function seedArtifacts(
           contentDigest,
           byteLength: asset.bytes.byteLength,
           mediaType: asset.mediaType,
-          sensitivity: "internal",
           summary: `${asset.id} <a href='https://invalid.example'>blocked link</a>`,
         },
       },

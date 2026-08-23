@@ -229,19 +229,17 @@ describe("authored workflow lowering", () => {
     });
   });
 
-  it("takes output sensitivity and size from the author", () => {
+  it("takes output size from the author", () => {
     const lowered = lowerAuthoredWorkflow(
       authoredWithVerify(
-        "    output:\n      schema: schemas/verification.schema.json\n      sensitivity: confidential\n      maxBytes: 4096\n",
+        "    output:\n      schema: schemas/verification.schema.json\n      maxBytes: 4096\n",
       ),
     );
     expect(lowered.diagnostics).toEqual([]);
     const phases = (
       lowered.document as unknown as { readonly phases: readonly Record<string, never>[] }
     ).phases;
-    expect(phases[1]?.outputs).toEqual([
-      expect.objectContaining({ sensitivity: "confidential", maxBytes: 4096 }),
-    ]);
+    expect(phases[1]?.outputs).toEqual([expect.objectContaining({ maxBytes: 4096 })]);
   });
 
   it("refuses an output larger than the kernel will accept", () => {

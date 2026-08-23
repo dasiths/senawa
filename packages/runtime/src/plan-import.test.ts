@@ -234,7 +234,6 @@ function createFixture(items: readonly ReturnType<typeof item>[]) {
       contentDigest: DIGEST,
       byteLength: 1,
       mediaType: "application/json",
-      sensitivity: "internal",
       producingTask: {
         taskId: taskId("task_planner"),
         definitionGeneration: definitionGeneration(1),

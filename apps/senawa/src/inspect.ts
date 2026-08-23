@@ -71,7 +71,7 @@ export function listArtifacts(options: InspectOptions): CliResult {
     if (page.artifacts.length === 0) return { exitCode: 0, output: "no artifacts yet" };
     const lines = page.artifacts.map(
       (artifact) =>
-        `${artifact.artifactId} ${artifact.mediaType} ${artifact.byteLength}B ${artifact.sensitivity} ${artifact.availability}`,
+        `${artifact.artifactId} ${artifact.mediaType} ${artifact.byteLength}B ${artifact.availability}`,
     );
     if (page.hasMore) lines.push("(more available)");
     return { exitCode: 0, output: lines.join("\n") };

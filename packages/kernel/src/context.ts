@@ -57,7 +57,6 @@ export const CONTEXT_CONTRACT_KINDS = [
 ] as const;
 
 export type ContextContractKind = (typeof CONTEXT_CONTRACT_KINDS)[number];
-export type AssetSensitivity = "public" | "internal" | "confidential" | "restricted";
 
 export interface ContextTaskInput {
   readonly taskId: TaskId;
@@ -102,7 +101,6 @@ export interface HistoricalAssetBindingInput {
   readonly aliasBindingDigest: Sha256Digest;
   readonly contentDigest: Sha256Digest;
   readonly mediaType: string;
-  readonly sensitivity: AssetSensitivity;
   readonly byteLength: number;
 }
 
@@ -146,7 +144,6 @@ export interface PhaseOutputDeclarationInput {
   readonly schemaKey: ConsumerKey;
   readonly schemaResourceDigest: Sha256Digest;
   readonly maxBytes: number;
-  readonly sensitivity: AssetSensitivity;
 }
 
 export interface PhaseOutputDeclaration extends PhaseOutputDeclarationInput {
@@ -407,7 +404,6 @@ export function validateWorkerContextBase(value: unknown, sha256: Sha256): Worke
         "aliasBindingDigest",
         "contentDigest",
         "mediaType",
-        "sensitivity",
         "byteLength",
         "assetBindingId",
       ]);
@@ -429,7 +425,6 @@ export function validateWorkerContextBase(value: unknown, sha256: Sha256): Worke
         "schemaKey",
         "schemaResourceDigest",
         "maxBytes",
-        "sensitivity",
         "declarationDigest",
       ]);
       return {
@@ -437,7 +432,6 @@ export function validateWorkerContextBase(value: unknown, sha256: Sha256): Worke
         schemaKey: declaration.schemaKey,
         schemaResourceDigest: declaration.schemaResourceDigest,
         maxBytes: declaration.maxBytes,
-        sensitivity: declaration.sensitivity,
       };
     }),
     completionPolicy: snapshot.completionPolicy,
@@ -797,7 +791,6 @@ function outputDeclarations(value: unknown, sha256: Sha256): readonly PhaseOutpu
       "schemaKey",
       "schemaResourceDigest",
       "maxBytes",
-      "sensitivity",
     ]);
     if (!isConsumerKey(item.outputName) || !isConsumerKey(item.schemaKey)) {
       fail("invalid-context", "Phase output declaration keys are invalid");
@@ -806,17 +799,11 @@ function outputDeclarations(value: unknown, sha256: Sha256): readonly PhaseOutpu
     if (!isPositiveSafeInteger(item.maxBytes)) {
       fail("invalid-context", "Phase output declaration maxBytes must be positive and finite");
     }
-    if (
-      !new Set(["public", "internal", "confidential", "restricted"]).has(String(item.sensitivity))
-    ) {
-      fail("invalid-context", "Phase output declaration sensitivity is invalid");
-    }
     const content = {
       outputName: item.outputName,
       schemaKey: item.schemaKey,
       schemaResourceDigest: item.schemaResourceDigest,
       maxBytes: item.maxBytes,
-      sensitivity: item.sensitivity,
     };
     return canonicalValue({
       ...content,
@@ -1048,7 +1035,6 @@ function historicalAssetBindings(value: unknown, sha256: Sha256): HistoricalAsse
       "aliasBindingDigest",
       "contentDigest",
       "mediaType",
-      "sensitivity",
       "byteLength",
     ]);
     if (!isAssetId(binding.semanticAssetId)) {
@@ -1056,7 +1042,7 @@ function historicalAssetBindings(value: unknown, sha256: Sha256): HistoricalAsse
     }
     assertDigest(binding.aliasBindingDigest, "aliasBindingDigest", "invalid-context");
     assertDigest(binding.contentDigest, "contentDigest", "invalid-context");
-    if (!isMediaType(binding.mediaType) || !isAssetSensitivity(binding.sensitivity)) {
+    if (!isMediaType(binding.mediaType)) {
       fail("invalid-context", `Worker context asset ${index} has invalid media metadata`);
     }
     if (!isNonNegativeSafeInteger(binding.byteLength)) {
@@ -1375,10 +1361,6 @@ function isTerminalDisposition(value: unknown): value is TerminalDisposition {
 
 function isBudgetUnit(value: unknown): value is BudgetUnit {
   return BUDGET_UNITS.includes(value as BudgetUnit);
-}
-
-function isAssetSensitivity(value: unknown): value is AssetSensitivity {
-  return ["public", "internal", "confidential", "restricted"].includes(value as AssetSensitivity);
 }
 
 function isCapability(value: unknown): value is string {

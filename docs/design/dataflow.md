@@ -97,14 +97,14 @@ result becomes a `PhaseInputBinding` with a validation receipt digest.
 
 ## Schema-validated phase outputs
 
-A phase declares its outputs: a key, a schema key, a path, a maximum byte count,
-and a sensitivity of `public`, `internal`, `confidential`, or `restricted`.
+A phase declares its outputs: a key, a schema key, a path, and a maximum byte
+count.
 
 An accepted output becomes a `PhaseOutputPublication` naming the phase attempt,
 the output name, the schema key and resource digest, the content digest and byte
-length, the media type `application/json`, the sensitivity, the producing task,
-the dispatch and context identity, the graph revision and snapshot digests, the
-input binding digest, and a validation receipt digest.
+length, the media type `application/json`, the producing task, the dispatch and
+context identity, the graph revision and snapshot digests, the input binding
+digest, and a validation receipt digest.
 
 Publication is not acceptance. `PhaseOutputAcceptance` binds a publication to a
 specific candidate and closure, and closure carries its acceptances. A downstream

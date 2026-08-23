@@ -311,7 +311,6 @@ export class RuntimeDataflowAuthority {
         contentDigest: output.contentDigest as Sha256Digest,
         byteLength: output.byteLength,
         mediaType: output.mediaType,
-        sensitivity: output.sensitivity,
         producingTask: request.fact.producingTask,
         dispatchId: request.fact.dispatchId as never,
         contextId: request.fact.contextId as never,

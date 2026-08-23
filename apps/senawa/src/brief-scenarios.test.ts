@@ -29,7 +29,6 @@ import {
   type SteerInput,
   steerAgent,
 } from "./decide.js";
-import { listArtifacts } from "./inspect.js";
 import { runGates } from "./run-gates.js";
 import { runStatus } from "./run-status.js";
 
@@ -758,39 +757,6 @@ describe("one phase in sequence", () => {
     expect(outcome).toMatchObject({ kind: "output-refused", phaseKey: "define" });
     if (outcome.kind !== "output-refused") throw new Error("expected a refusal");
     expect(outcome.reasons.join(" ")).toContain("define");
-  });
-
-  it("keeps a confidential output labelled and its content out of the prompt", async () => {
-    const scenario = await startScenario("confidential", { confidentialOutput: true });
-    const secret = "the-confidential-body";
-
-    // The contract tells the agent what it is producing, which is a label and
-    // never the content of anything.
-    const pack = await promptPackText(scenario, scenario.dispatchId);
-    const contract = JSON.parse(pack).sections.find(
-      (section: { kind: string }) => section.kind === "senawa-operating-contract",
-    ) as { value: { completion: { requiredOutputs: { sensitivity: string }[] } } };
-    expect(contract.value.completion.requiredOutputs).toEqual([
-      expect.objectContaining({ sensitivity: "confidential" }),
-    ]);
-    expect(pack).not.toContain(secret);
-
-    await completeThroughSink(scenario, scenario.dispatchId, [
-      { name: "define", value: canonicalValue({ definition: secret }) },
-    ]);
-    expect(await advance(scenario)).toEqual({ kind: "finished" });
-
-    // Whoever reads the listing has to be able to see which artifacts carry a
-    // classification before deciding to share one.
-    const listed = listArtifacts({
-      ...scenario.paths,
-      repositoryId: scenario.repositoryId,
-      runId: scenario.runId,
-      dependencies,
-      currentTime: NOW,
-    });
-    expect(listed.output).toContain("confidential");
-    expect(listed.output).not.toContain(secret);
   });
 
   it("refuses a completion that owes evidence, naming the kind and the count", async () => {

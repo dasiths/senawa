@@ -130,7 +130,6 @@ const OUTPUT_DECLARATION = Object.freeze({
   schemaKey: consumerKey("verification-output"),
   schemaResourceDigest: OUTPUT_CONTRACT.schemaResourceDigest,
   maxBytes: 4_096,
-  sensitivity: "internal" as const,
 });
 
 describe("CopilotSerialWorkerAdapter", () => {
@@ -393,7 +392,6 @@ describe("CopilotSerialWorkerAdapter", () => {
         contentDigest: "a".repeat(64),
         byteLength: 12,
         mediaType: "text/plain",
-        sensitivity: "internal",
         summary: hostileSummary,
         grantToken: GRANT_TOKEN,
       });
@@ -1009,7 +1007,6 @@ describe("CopilotSerialWorkerAdapter", () => {
       outputName: "verification",
       schemaKey: "verification-output",
       mediaType: "application/json",
-      sensitivity: "internal",
     });
     expect(submission.output.validationReceiptDigest).toBe(
       required(fixture.broker.installedOutputs[0]).validationReceiptDigest,
@@ -1557,7 +1554,6 @@ function harness(
           aliasBindingDigest: sha256Digest("3".repeat(64)),
           contentDigest: sha256Digest("4".repeat(64)),
           mediaType: "text/plain",
-          sensitivity: "internal",
           byteLength: 4,
         },
       ],
@@ -1746,7 +1742,6 @@ function toolArgs(name: string, fixture: ReturnType<typeof harness>): unknown {
         contentDigest: "a".repeat(64),
         byteLength: 12,
         mediaType: "text/plain",
-        sensitivity: "internal",
         summary: "Proposed asset",
       };
     case "record_discovery":

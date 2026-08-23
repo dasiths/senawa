@@ -2199,11 +2199,11 @@ export class SqliteAuthority
         .prepare(
           `INSERT INTO phase_output_publications(
              publication_id, publication_digest, run_key, attempt_digest, output_name,
-             schema_key, schema_resource_digest, content_digest, byte_length, sensitivity,
+             schema_key, schema_resource_digest, content_digest, byte_length,
              producing_task_id, producing_task_generation, dispatch_id, context_id,
              context_digest, graph_revision_digest, configuration_snapshot_digest,
              input_binding_digest, validation_receipt_digest, canonical_publication
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           publication.publicationId,
@@ -2215,7 +2215,6 @@ export class SqliteAuthority
           publication.schemaResourceDigest,
           publication.contentDigest,
           publication.byteLength,
-          publication.sensitivity,
           publication.producingTask.taskId,
           publication.producingTask.definitionGeneration,
           publication.dispatchId,
@@ -3939,13 +3938,12 @@ export class SqlitePortalQueryAuthority {
           schema_key: string;
           content_digest: string;
           byte_length: number;
-          sensitivity: NonNullable<PortalDeliveryRecord["sensitivity"]>;
           acceptance_digest: string | null;
         }
       >(
         `SELECT p.publication_digest, a.phase_id, a.definition_generation,
                 a.attempt_ordinal, p.output_name, p.schema_key, p.content_digest,
-                p.byte_length, p.sensitivity, x.acceptance_digest
+                p.byte_length, x.acceptance_digest
          FROM phase_output_publications p
          JOIN phase_attempts a ON a.attempt_digest = p.attempt_digest
          LEFT JOIN phase_output_acceptances x ON x.publication_id = p.publication_id
@@ -3962,7 +3960,6 @@ export class SqlitePortalQueryAuthority {
         schemaKey: row.schema_key,
         contentDigest: row.content_digest,
         byteLength: row.byte_length,
-        sensitivity: row.sensitivity,
         accepted: row.acceptance_digest !== null,
       });
     }
@@ -5419,7 +5416,6 @@ export class SqlitePortalQueryAuthority {
       contentDigest: digestValue,
       byteLength: requiredNonNegativeIntegerField(asset.byteLength, "asset byteLength"),
       mediaType: requiredStringField(asset.mediaType, "asset mediaType"),
-      sensitivity: asset.sensitivity as PortalArtifactMetadata["sensitivity"],
       summary: requiredStringField(asset.summary, "asset summary"),
       availability: verified ? "verified-stored" : "metadata-only",
       taskId: requiredStringField(task.taskId, "asset taskId"),
@@ -10722,8 +10718,8 @@ export class SqliteContextBroker {
         .prepare(
           `INSERT INTO context_asset_bindings(
              asset_binding_id, context_id, semantic_asset_id, alias_binding_digest,
-             content_digest, byte_length, media_type, sensitivity
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(asset_binding_id) DO NOTHING`,
+             content_digest, byte_length, media_type
+           ) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(asset_binding_id) DO NOTHING`,
         )
         .run(
           row.asset_binding_id,
@@ -10733,7 +10729,6 @@ export class SqliteContextBroker {
           row.content_digest,
           row.byte_length,
           row.media_type,
-          row.sensitivity,
         );
     this.#database.exec(
       `DELETE FROM context_amendment_outbox;
@@ -15173,7 +15168,6 @@ function normalizeContextAuthority(
           content_digest: binding.contentDigest,
           byte_length: binding.byteLength,
           media_type: binding.mediaType,
-          sensitivity: binding.sensitivity,
         })),
       )
       .sort((left, right) => compareNormalizedText(left.asset_binding_id, right.asset_binding_id)),
@@ -15327,7 +15321,7 @@ function verifyNormalizedContextAuthority(
     database
       .prepare(
         `SELECT asset_binding_id, context_id, semantic_asset_id, alias_binding_digest,
-                content_digest, byte_length, media_type, sensitivity
+                content_digest, byte_length, media_type
          FROM context_asset_bindings ORDER BY asset_binding_id`,
       )
       .all(),
@@ -15622,11 +15616,6 @@ function deriveExpectedContextReadAccounting(
   if (replay.assetBindingId !== grant.envelope.assetBindingId) return denied("scope-denied");
   if (Date.parse(receipt.occurredAt) >= Date.parse(grant.envelope.expiresAt))
     return denied("expired");
-  if (
-    contextSensitivityRank(binding.sensitivity) >
-    contextSensitivityRank(grant.envelope.sensitivityCeiling)
-  )
-    return denied("sensitivity-denied");
   if (!persistedContextRequestAllowed(replay, grant.envelope, binding))
     return denied(replay.type === "chunk" ? "invalid-range" : "invalid-pointer");
   const worstCaseBytes = assetReadWorstCaseBytes(replay);
@@ -15687,10 +15676,6 @@ function parsePersistedJsonPointer(pointer: string): readonly string[] {
     .slice(1)
     .split("/")
     .map((segment) => segment.replace(/~1/gu, "/").replace(/~0/gu, "~"));
-}
-
-function contextSensitivityRank(value: HistoricalAssetBinding["sensitivity"]): number {
-  return ["public", "internal", "confidential", "restricted"].indexOf(value);
 }
 
 function readVerifiedContextAssetRange(
@@ -16851,7 +16836,6 @@ function phaseOutputAsAsset(
     byteLength: output.byteLength ?? 0,
     contentDigest,
     mediaType: output.mediaType ?? "application/json",
-    sensitivity: output.sensitivity ?? "internal",
     summary: `phase output ${String(output.outputName)}`,
   };
 }

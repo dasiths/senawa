@@ -273,7 +273,6 @@ export interface ContextGrantInput {
   readonly assetBindingId: string;
   readonly allowedPointer: string;
   readonly readMode: ContextGrantEnvelope["readMode"];
-  readonly sensitivityCeiling: ContextGrantEnvelope["sensitivityCeiling"];
   readonly expiresAt: string;
   readonly maxOperations: number;
   readonly maxBytes: number;
@@ -1493,7 +1492,6 @@ export class ContextBroker implements ContextBrokerClient {
       assetBindingId: binding.assetBindingId,
       allowedPointer: input.allowedPointer,
       readMode: input.readMode,
-      sensitivityCeiling: input.sensitivityCeiling,
       issuedAt,
       expiresAt: input.expiresAt,
       maxOperations: input.maxOperations,
@@ -1629,8 +1627,6 @@ export class ContextBroker implements ContextBrokerClient {
       ({ assetBindingId }) => assetBindingId === grant.envelope.assetBindingId,
     );
     if (binding === undefined) return deny("scope-denied");
-    if (sensitivityRank(binding.sensitivity) > sensitivityRank(grant.envelope.sensitivityCeiling))
-      return deny("sensitivity-denied");
     const worstCaseBytes = assetReadWorstCaseBytes(request);
     if (!this.requestAllowedByGrant(request, grant, binding))
       return deny(request.type === "chunk" ? "invalid-range" : "invalid-pointer");
@@ -1891,7 +1887,6 @@ export class ContextBroker implements ContextBrokerClient {
       submission.output.schemaKey !== declaration.schemaKey ||
       submission.output.schemaResourceDigest !== declaration.schemaResourceDigest ||
       submission.output.byteLength > declaration.maxBytes ||
-      submission.output.sensitivity !== declaration.sensitivity ||
       submission.output.graphRevisionDigest !== context.graphRevisionDigest ||
       submission.output.configurationSnapshotDigest !== context.configurationSnapshotDigest ||
       submission.output.inputBindingDigest !== context.phaseInputBinding.bindingDigest
@@ -2412,10 +2407,6 @@ function encodeBase64Url(bytes: Uint8Array): string {
   }
   if (bits > 0) result += alphabet[(accumulator << (6 - bits)) & 63];
   return result;
-}
-
-function sensitivityRank(value: ContextGrantEnvelope["sensitivityCeiling"]): number {
-  return ["public", "internal", "confidential", "restricted"].indexOf(value);
 }
 
 function validateTimestamp(value: string, label: string): void {

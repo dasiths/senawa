@@ -49,19 +49,18 @@ validates against it.
 
 ### Saying more about an output
 
-The scalar form above is shorthand. The expanded form takes a ceiling, a
-sensitivity, and a path to write the asset to:
+The scalar form above is shorthand. The expanded form takes a size ceiling and a
+path to write the asset to:
 
 ```yaml
     output:
       schema: schemas/plan.schema.json
-      sensitivity: confidential
       maxBytes: 262144
       path: docs/plan.md
 ```
 
-`sensitivity: confidential` keeps the content out of context assembly for later
-phases, out of the portal, and out of exported reports.
+`maxBytes` caps how large the produced output may be. A phase that exceeds it is
+refused rather than published.
 
 ### Approval
 

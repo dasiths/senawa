@@ -232,7 +232,6 @@ describe("portal codecs", () => {
           schemaKey: "plan-output",
           contentDigest: "b".repeat(64),
           byteLength: 120,
-          sensitivity: "internal",
           accepted: true,
         },
         {

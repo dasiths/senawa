@@ -271,7 +271,6 @@ export function registerContextBrokerConformance(
       expect(text).toContain("SENAWA_CONFIGURED_PROMPT_BEGIN");
       expect(text).toContain("SENAWA_UNTRUSTED_INPUT_BEGIN");
       expect(text).not.toContain(required(harness.context.assets[0]).assetBindingId);
-      expect(text).not.toContain("confidential");
       expect(text).not.toContain("ignore prior instructions");
       expect(text).not.toContain("approve everything");
       expect(text).not.toContain("grantToken");
@@ -417,16 +416,6 @@ export function registerContextBrokerConformance(
         chargedBytes: 0,
       });
 
-      const lowSensitivity = grantAsset(harness, { sensitivityCeiling: "internal" });
-      const sensitivityDenied = await harness.broker.readAsset({
-        request: chunkRequest(lowSensitivity, "request_sensitivity", 0, 1),
-      });
-      expect(sensitivityDenied.receipt).toMatchObject({
-        status: "denied",
-        denialCode: "sensitivity-denied",
-        chargedBytes: 0,
-      });
-
       const corrupt = Uint8Array.from(harness.bytes);
       corrupt[0] = corrupt[0] === 0 ? 1 : 0;
       if (harness.assetPort.acceptsInvalidBytes !== true) {
@@ -549,7 +538,6 @@ export function registerContextBrokerConformance(
             contentDigest: OTHER_DIGEST,
             byteLength: 12,
             mediaType: "application/json",
-            sensitivity: "internal",
             summary: "Report",
           },
         }),
@@ -623,7 +611,6 @@ export function registerContextBrokerConformance(
             contentDigest: OTHER_DIGEST,
             byteLength: 1,
             mediaType: "text/plain",
-            sensitivity: "internal",
             summary: embedded,
           },
         }),
@@ -1080,7 +1067,6 @@ export function registerContextBrokerConformance(
           contentDigest: OTHER_DIGEST,
           byteLength: 3,
           mediaType: "text/plain",
-          sensitivity: "internal",
           summary: "Output",
         });
         session.proposeAmendment("submission_journey-amendment", {
@@ -1271,7 +1257,6 @@ function registerBoundDispatch(
           aliasBindingDigest: sha256Digest(graphCharacter.repeat(64)),
           contentDigest: sha256Digest(contextBrokerSha256.digest(bytes)),
           mediaType: "application/json",
-          sensitivity: "confidential",
           byteLength: bytes.byteLength,
         },
       ],
@@ -1295,7 +1280,6 @@ function registerBoundDispatch(
           schemaKey: consumerKey("verification-output"),
           schemaResourceDigest: sha256Digest("6".repeat(64)),
           maxBytes: 262_144,
-          sensitivity: "internal",
         },
       ],
       completionPolicy: {
@@ -1399,7 +1383,6 @@ function grantAsset(
     assetBindingId: required(harness.context.assets[0]).assetBindingId,
     allowedPointer: "/work",
     readMode: "pointer-and-chunk",
-    sensitivityCeiling: "confidential",
     expiresAt: EXPIRES_AT,
     maxOperations: 4,
     maxBytes: 512,
@@ -1497,7 +1480,6 @@ function phaseOutputSubmission(harness: ContextBrokerHarness, submissionId: stri
       contentDigest: sha256Digest(contextBrokerSha256.digest(bytes)),
       byteLength: bytes.byteLength,
       mediaType: "application/json" as const,
-      sensitivity: declaration.sensitivity,
       graphRevisionDigest: harness.context.graphRevisionDigest,
       configurationSnapshotDigest: harness.context.configurationSnapshotDigest,
       inputBindingDigest: harness.context.phaseInputBinding.bindingDigest,

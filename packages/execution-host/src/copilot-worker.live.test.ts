@@ -72,7 +72,6 @@ const LIVE_OUTPUT_DECLARATION = Object.freeze({
   schemaKey: consumerKey("verification-output"),
   schemaResourceDigest: LIVE_OUTPUT_CONTRACT.schemaResourceDigest,
   maxBytes: 4_096,
-  sensitivity: "internal" as const,
 });
 
 describe.skipIf(!liveEnabled)("Copilot live worker", () => {

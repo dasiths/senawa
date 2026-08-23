@@ -202,7 +202,6 @@ describe("runtime dataflow authority", () => {
         contentDigest: asset.contentDigest,
         byteLength: asset.byteLength,
         mediaType: "application/json" as const,
-        sensitivity: "internal" as const,
         graphRevisionDigest: DIGEST,
         configurationSnapshotDigest: OTHER_DIGEST,
         inputBindingDigest: DIGEST,

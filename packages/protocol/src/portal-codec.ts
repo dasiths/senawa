@@ -63,7 +63,6 @@ import {
   type PortalWorkspaceSummary,
   TRANSCRIPT_LIMITS,
 } from "./portal-contracts.js";
-import type { AssetSensitivity } from "./worker-contracts.js";
 
 const IDENTITY = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 const DIGEST = /^[0-9a-f]{64}$/;
@@ -105,12 +104,6 @@ const ASSET_SOURCES = new Set<PortalArtifactSource>(["worker", "completion-evide
 const ASSET_AVAILABILITIES = new Set<PortalArtifactAvailability>([
   "metadata-only",
   "verified-stored",
-]);
-const SENSITIVITIES = new Set<AssetSensitivity>([
-  "public",
-  "internal",
-  "confidential",
-  "restricted",
 ]);
 const ACTIVITY_DIRECTIONS = new Set<PortalActivityDirection>(["tail", "after", "before"]);
 const DELIVERY_KINDS = new Set<PortalDeliveryRecordKind>([
@@ -338,7 +331,6 @@ function portalDeliveryRecord(value: unknown, path: string): PortalDeliveryRecor
     "schemaKey",
     "contentDigest",
     "byteLength",
-    "sensitivity",
     "accepted",
     "trigger",
     "disposition",
@@ -374,9 +366,6 @@ function portalDeliveryRecord(value: unknown, path: string): PortalDeliveryRecor
   }
   for (const key of ["accepted", "applied"] as const) {
     if (Object.hasOwn(object, key)) bool(object[key], `${path}.${key}`);
-  }
-  if (Object.hasOwn(object, "sensitivity")) {
-    oneOf(object.sensitivity, `${path}.sensitivity`, SENSITIVITIES);
   }
   for (const key of [
     "state",
@@ -1152,16 +1141,7 @@ function artifactMetadata(value: unknown, path: string): PortalArtifactMetadata 
   const object = exact(
     value,
     path,
-    [
-      "artifactId",
-      "source",
-      "contentDigest",
-      "byteLength",
-      "mediaType",
-      "sensitivity",
-      "summary",
-      "availability",
-    ],
+    ["artifactId", "source", "contentDigest", "byteLength", "mediaType", "summary", "availability"],
     ["taskId", "definitionGeneration", "criterionId"],
   );
   identity(object.artifactId, `${path}.artifactId`);
@@ -1171,7 +1151,6 @@ function artifactMetadata(value: unknown, path: string): PortalArtifactMetadata 
   boundedString(object.mediaType, `${path}.mediaType`, 3, 127);
   if (!MEDIA_TYPE.test(object.mediaType as string))
     fail("invalid-value", `${path}.mediaType`, "must be a lowercase media type");
-  oneOf(object.sensitivity, `${path}.sensitivity`, SENSITIVITIES);
   boundedString(object.summary, `${path}.summary`, 1, 8_192);
   oneOf(object.availability, `${path}.availability`, ASSET_AVAILABILITIES);
   optional(object, "taskId", identity, path);

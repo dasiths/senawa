@@ -58,9 +58,8 @@ What it forbids:
   which records an audit receipt for every attempt and every denial.
 * Mutating a context after dispatch. A changed input produces a new context
   digest and a new dispatch, not an edit.
-* Silent widening. Asset sensitivity (`public`, `internal`, `confidential`,
-  `restricted`) travels with the binding and bounds what a downstream view can
-  expose.
+* Silent widening. A grant names one asset binding, one pointer, and one read
+  mode, and a read outside those bounds is denied and recorded.
 
 ## Proposal-only agents
 

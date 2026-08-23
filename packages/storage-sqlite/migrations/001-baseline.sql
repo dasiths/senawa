@@ -195,7 +195,6 @@ CREATE TABLE context_asset_bindings (
   content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
   byte_length INTEGER NOT NULL CHECK (byte_length >= 0),
   media_type TEXT NOT NULL,
-  sensitivity TEXT NOT NULL,
   UNIQUE (context_id, semantic_asset_id, asset_binding_id)
 ) STRICT;
 
@@ -608,9 +607,6 @@ CREATE TABLE phase_output_publications (
   schema_resource_digest TEXT NOT NULL CHECK (length(schema_resource_digest) = 64),
   content_digest TEXT NOT NULL REFERENCES assets(digest),
   byte_length INTEGER NOT NULL CHECK (byte_length >= 0),
-  sensitivity TEXT NOT NULL CHECK (
-    sensitivity IN ('public', 'internal', 'confidential', 'restricted')
-  ),
   producing_task_id TEXT NOT NULL,
   producing_task_generation INTEGER NOT NULL CHECK (producing_task_generation > 0),
   dispatch_id TEXT NOT NULL REFERENCES context_dispatches(dispatch_id),

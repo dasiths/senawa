@@ -218,7 +218,6 @@ export interface PhaseOutputDeclaration {
   readonly schema: string;
   readonly path: string;
   readonly maxBytes: number;
-  readonly sensitivity: "public" | "internal" | "confidential" | "restricted";
 }
 
 export interface PhaseIterationDeclaration {
@@ -243,7 +242,6 @@ export interface CompletionEvidenceViewDeclaration {
   readonly key: string;
   readonly phase: string;
   readonly evidenceKinds: readonly unknown[];
-  readonly sensitivityCeiling: "public" | "internal" | "confidential" | "restricted";
 }
 
 export interface ExecutableWorkDeclaration {

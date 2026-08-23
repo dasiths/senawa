@@ -1,6 +1,5 @@
 import type { JsonValue, OpaqueIdentity, ProtocolVersion } from "./contracts.js";
 
-export type AssetSensitivity = "public" | "internal" | "confidential" | "restricted";
 export type AssetReadMode = "pointer" | "chunk" | "pointer-and-chunk";
 
 export interface WorkerTaskGenerationReference {
@@ -22,7 +21,6 @@ export interface ContextGrantEnvelope {
   readonly assetBindingId: OpaqueIdentity;
   readonly allowedPointer: string;
   readonly readMode: AssetReadMode;
-  readonly sensitivityCeiling: AssetSensitivity;
   readonly issuedAt: string;
   readonly expiresAt: string;
   readonly maxOperations: number;
@@ -56,7 +54,6 @@ export type AssetReadReceiptStatus = "served" | "denied";
 export type AssetReadDenialCode =
   | "invalid-token"
   | "scope-denied"
-  | "sensitivity-denied"
   | "expired"
   | "budget-exhausted"
   | "invalid-pointer"
@@ -147,7 +144,6 @@ export interface WorkerAssetSubmission extends WorkerSubmissionBase {
     readonly contentDigest: string;
     readonly byteLength: number;
     readonly mediaType: string;
-    readonly sensitivity: AssetSensitivity;
     readonly summary: string;
   }>;
 }
@@ -184,7 +180,6 @@ export interface WorkerPhaseOutputSubmission extends WorkerSubmissionBase {
     readonly contentDigest: string;
     readonly byteLength: number;
     readonly mediaType: "application/json";
-    readonly sensitivity: AssetSensitivity;
     readonly graphRevisionDigest: string;
     readonly configurationSnapshotDigest: string;
     readonly inputBindingDigest: string;

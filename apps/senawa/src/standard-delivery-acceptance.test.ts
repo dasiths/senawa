@@ -17,7 +17,6 @@ import {
 } from "@senawa/execution-host";
 import {
   type AccountingAssessment,
-  type AssetSensitivity,
   approvalId,
   assessCompletionAccounting,
   type CanonicalValue,
@@ -632,7 +631,6 @@ interface SnapshotPhase {
     readonly key: string;
     readonly schema: string;
     readonly maxBytes: number;
-    readonly sensitivity: AssetSensitivity;
   }[];
 }
 
@@ -804,16 +802,13 @@ function closeAgentPhase(input: {
       },
       phaseAttempt: started.attempt,
       phaseInputBinding: started.inputBinding,
-      phaseOutputDeclarations: declaration.outputs.map(
-        ({ key, schema, maxBytes, sensitivity }) => ({
-          outputName: consumerKey(key),
-          schemaKey: consumerKey(schema),
-          schemaResourceDigest: runtimeSchemaContract(input.snapshot, schema, deterministicSha256)
-            .schemaResourceDigest,
-          maxBytes,
-          sensitivity,
-        }),
-      ),
+      phaseOutputDeclarations: declaration.outputs.map(({ key, schema, maxBytes }) => ({
+        outputName: consumerKey(key),
+        schemaKey: consumerKey(schema),
+        schemaResourceDigest: runtimeSchemaContract(input.snapshot, schema, deterministicSha256)
+          .schemaResourceDigest,
+        maxBytes,
+      })),
       completionPolicy: task.definition.completionPolicy,
       priorRefusals: [],
       answeredQuestions: [],
@@ -920,7 +915,6 @@ function closeAgentPhase(input: {
         contentDigest: asset.contentDigest,
         byteLength: asset.byteLength,
         mediaType: "application/json",
-        sensitivity: "internal",
         graphRevisionDigest: input.snapshot.graph.revisionDigest,
         configurationSnapshotDigest: input.snapshot.snapshotDigest,
         inputBindingDigest: started.inputBinding.bindingDigest,
@@ -1513,7 +1507,6 @@ class GeneratedWorkers implements AsyncEffectHost {
               contentDigest,
               byteLength: bytes.byteLength,
               mediaType: "text/plain",
-              sensitivity: "internal",
               summary: `Generated ${identity} completionEvidence`,
             },
           },

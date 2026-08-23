@@ -85,8 +85,6 @@ export interface ScenarioOptions {
   readonly routeLimits?: boolean;
   /** Requires completion evidence of a named kind before the phase can close. */
   readonly requireEvidence?: number;
-  /** Declares the phase output confidential rather than the default internal. */
-  readonly confidentialOutput?: boolean;
   /** Gives `definer` a session of this scope, and a second phase to work on. */
   readonly session?: "run" | "phase" | "element";
   /** Bounds how many turns one conversation carries before it is renewed. */
@@ -256,7 +254,6 @@ export async function agentTurn(
               contentDigest: installed.contentDigest,
               byteLength: installed.byteLength,
               mediaType: "application/json",
-              sensitivity: declaration.sensitivity,
               graphRevisionDigest: stored.context.graphRevisionDigest,
               configurationSnapshotDigest: stored.context.configurationSnapshotDigest,
               inputBindingDigest: stored.context.phaseInputBinding.bindingDigest,
@@ -591,11 +588,7 @@ phases:
         ? "\n    items:\n      - key: alpha\n        input: { instruction: write alpha }\n      - key: beta\n        input: { instruction: write beta }"
         : ""
     }
-    output: ${
-      options.confidentialOutput === true
-        ? "\n      schema: schemas/definition.schema.json\n      sensitivity: confidential"
-        : "schemas/definition.schema.json"
-    }
+    output: schemas/definition.schema.json
     gates: [check]${options.unknownField === true ? "\n    aproove: true" : ""}${options.approval === true ? "\n    approve: true" : ""}${
       options.attempts === undefined ? "" : `\n    attempts: ${options.attempts}`
     }${
