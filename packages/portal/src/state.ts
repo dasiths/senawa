@@ -172,6 +172,8 @@ export interface PortalUiState {
   readonly detailTab: DetailTab;
   /** What the reply box under the transcript is doing. */
   readonly reply: PortalReplyState;
+  /** Which open need the reply box is addressed to; nothing means a steering. */
+  readonly replyTarget: string | undefined;
   readonly graphViewport: PortalGraphViewport;
   readonly transcript: TranscriptView;
   readonly transcriptScope: TranscriptScope;
@@ -238,6 +240,7 @@ export type PortalAction =
   | { readonly type: "graph-unfold"; readonly nodeId: string }
   | { readonly type: "detail-tab"; readonly tab: DetailTab }
   | { readonly type: "reply-state"; readonly reply: PortalReplyState }
+  | { readonly type: "reply-target"; readonly needId: string | undefined }
   | { readonly type: "record-disclosure"; readonly recordKey: string }
   | { readonly type: "graph-viewport"; readonly viewport: PortalGraphViewport }
   | { readonly type: "transcript-owner"; readonly owner: PortalTranscriptOwner | undefined }
@@ -291,6 +294,7 @@ export function initialPortalState(route: PortalRoute): PortalState {
       unfoldedNodes: Object.freeze([]),
       detailTab: "live",
       reply: Object.freeze({ status: "idle" }),
+      replyTarget: undefined,
       openedRecords: Object.freeze([]),
       graphViewport: INITIAL_GRAPH_VIEWPORT,
       transcript: emptyTranscriptView(),
@@ -512,6 +516,16 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
       return Object.freeze({
         ...state,
         ui: Object.freeze({ ...state.ui, reply: action.reply }),
+      });
+    case "reply-target":
+      return Object.freeze({
+        ...state,
+        ui: Object.freeze({
+          ...state.ui,
+          replyTarget: action.needId,
+          // A note about the last thing sent says nothing about the next one.
+          reply: Object.freeze({ status: "idle" as const }),
+        }),
       });
     case "detail-tab":
       return Object.freeze({

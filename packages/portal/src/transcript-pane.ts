@@ -2,6 +2,7 @@ import {
   type TranscriptNames,
   type TranscriptRow,
   type TranscriptScope,
+  type TranscriptTurn,
   type TranscriptView,
   transcriptDownloadName,
   transcriptOwnerLabel,
@@ -20,6 +21,8 @@ export interface TranscriptPaneInput {
   readonly scope: TranscriptScope;
   /** Whether there is a node to narrow to, which only a selection provides. */
   readonly narrowable: boolean;
+  /** What a person sent into this run, shown beside what the agents said. */
+  readonly mine?: readonly TranscriptTurn[];
   readonly actions: TranscriptPaneActions;
   readonly names?: TranscriptNames;
 }
@@ -48,7 +51,7 @@ export function transcriptPaneView(input: TranscriptPaneInput): HTMLElement {
   const { view, scope, narrowable, actions } = input;
   const names = input.names ?? {};
   const pane = element("section", "agent-terminal");
-  const rows = transcriptRows(view);
+  const rows = transcriptRows(view, undefined, input.mine ?? []);
   const plainText = transcriptPlainText(view, undefined, names);
   pane.append(bar(view, scope, narrowable, rows.length, plainText, actions, names));
   pane.append(log(view, rows, actions, names));
@@ -149,9 +152,12 @@ function log(
     const line = element("div", `agent-terminal-row ${row.stream}`);
     line.dataset.sequence = String(row.sequence);
     line.append(textElement("span", "agent-terminal-time", row.time));
+    // The owner column is what the run-wide grid is built on, so a person's own
+    // turn keeps the cell and leaves it empty: the stream beside it already says
+    // who, and a task digest there would name nothing.
     if (transcriptShowsOwner(view)) {
-      const label = transcriptOwnerLabel(row.owner, names);
-      line.dataset.owner = label;
+      const label = row.stream === "you" ? "" : transcriptOwnerLabel(row.owner, names);
+      if (label !== "") line.dataset.owner = label;
       line.append(textElement("span", "agent-terminal-owner", label));
     }
     line.append(

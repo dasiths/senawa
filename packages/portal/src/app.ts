@@ -504,8 +504,17 @@ export class PortalApplication {
         throw new Error("The exact record did not verify; open the full review");
       }
       this.#dialogNeed = need;
+      // A grant is a number under a ceiling, so what is typed has to be one.
+      const increaseBy = Number.parseInt(trimmed, 10);
+      if (kind === "allowance" && (!Number.isSafeInteger(increaseBy) || increaseBy < 1)) {
+        throw new Error("A grant is how much more to allow, as a whole number");
+      }
       const values =
-        kind === "steer" ? { instruction: trimmed, delivery: "queued" } : { answer: trimmed };
+        kind === "steer"
+          ? { instruction: trimmed, delivery: "queued" }
+          : kind === "allowance"
+            ? { increaseBy: String(increaseBy) }
+            : { answer: trimmed };
       const draft = commandDraft(
         kind,
         Object.freeze(values),
@@ -956,6 +965,8 @@ export class PortalApplication {
       unfoldNode: (nodeId) => this.#dispatch({ type: "graph-unfold", nodeId }),
       setDetailTab: (tab) => this.#dispatch({ type: "detail-tab", tab }),
       sendReply: (need, text) => void this.#sendReply(need, text),
+      clearReplyState: () => this.#dispatch({ type: "reply-state", reply: { status: "idle" } }),
+      setReplyTarget: (needId) => this.#dispatch({ type: "reply-target", needId }),
       toggleRecord: (recordKey) => this.#dispatch({ type: "record-disclosure", recordKey }),
       focusRecord: (recordId) => {
         this.#dispatch({ type: "focus-record", recordId });

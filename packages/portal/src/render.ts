@@ -64,7 +64,7 @@ import {
   restoreTranscriptScroll,
   transcriptPaneView,
 } from "./transcript-pane.js";
-import type { TranscriptScope } from "./transcript-view-model.js";
+import type { TranscriptScope, TranscriptTurn } from "./transcript-view-model.js";
 import { transcriptNames } from "./transcript-view-model.js";
 
 const GRAPH_MODES: readonly GraphMode[] = Object.freeze(["diagram", "tree"]);
@@ -94,6 +94,8 @@ export interface PortalRenderActions {
   readonly setTranscriptScope: (scope: TranscriptScope) => void;
   readonly setDetailTab: (tab: DetailTab) => void;
   readonly sendReply: (need: PortalHumanNeed | undefined, text: string) => void;
+  readonly clearReplyState: () => void;
+  readonly setReplyTarget: (needId: string | undefined) => void;
   readonly setRailLayout: (layout: RailLayout) => void;
   readonly setRailCollapsed: (side: RailSide, collapsed: boolean) => void;
   readonly openAssetOverlay: (artifactId: string, triggerId: string) => void;
@@ -1186,6 +1188,7 @@ function livePane(
       view: state.ui.transcript,
       scope: state.ui.transcriptScope,
       narrowable: node !== undefined,
+      mine: sentTurns(state, node),
       names:
         ids === undefined
           ? {}
@@ -1242,34 +1245,55 @@ function producedPane(state: PortalState, node: PortalGraphNode): HTMLElement {
 }
 
 /**
- * A reply is given on the line under the words it answers. The same box carries
- * an answer, a steer and a grant, because they interrupt the same thing.
+ * A reply is given on the line under the words it answers.
+ *
+ * Which thing it answers is picked, never guessed. Taking the first open need
+ * silently meant a reader typed into a box that named no question and sent it
+ * to whichever one happened to be first.
  */
 function replyBox(
   state: PortalState,
   actions: PortalRenderActions,
   node?: PortalGraphNode,
 ): HTMLElement {
-  const reply = element("div", "reply");
-  // A budget is a number under a policy, not prose, so it keeps its reviewed
-  // form. What a person writes in words is answered and steered from here.
-  const needs = state.humanNeeds.filter(
-    (candidate) =>
-      (node === undefined || needBlocks(candidate, node)) && candidate.kind === "question",
+  const holder = element("div", "reply-holder");
+  // Every open need, whatever is selected. Narrowing these to the selected node
+  // hid the only thing waiting on a person behind a selection made minutes ago:
+  // a selection scopes what you are watching, not what you are allowed to answer.
+  const open = state.humanNeeds.filter(
+    (candidate) => candidate.kind === "question" || candidate.kind === "escalation",
   );
-  const need = needs[0];
+  const need = open.find((candidate) => candidate.needId === state.ui.replyTarget);
   const working = workingAgent(state, node);
+  if (open.length > 0) holder.append(replyTargets(open, need, working, actions));
+  if (need !== undefined) holder.append(replyAsked(need, state));
+  const reply = element("div", "reply");
   const sendable = need !== undefined || working !== undefined;
   reply.append(textElement("span", "reply-caret", "\u203a"));
   const box = document.createElement("textarea");
   box.className = "reply-input";
   box.rows = 2;
-  const label = need === undefined ? "Steer this agent" : "Answer this question";
+  const label =
+    need === undefined
+      ? "Steer this agent"
+      : need.kind === "escalation"
+        ? "Grant more budget"
+        : "Answer this question";
   box.setAttribute("aria-label", label);
-  box.placeholder = sendable
-    ? `${label}\u2026`
-    : "Nothing here is waiting on you, and no agent is working";
-  box.disabled = !sendable || actionsLocked(state);
+  const locked = actionsLocked(state);
+  box.placeholder = locked
+    ? // A disabled control that will not say why reads as a broken one.
+      state.connection.status === "live"
+      ? "Waiting for this run's current state\u2026"
+      : "Not connected to this run, so nothing can be sent"
+    : sendable
+      ? need?.kind === "escalation"
+        ? "How much more to allow, as a number\u2026"
+        : `${label}\u2026`
+      : open.length > 0
+        ? "Pick what to answer above, or wait for an agent to steer"
+        : "Nothing here is waiting on you, and no agent is working";
+  box.disabled = !sendable || locked;
   reply.append(box);
   const side = element("div", "reply-side");
   const send = commandButton("Send", () => {
@@ -1286,17 +1310,106 @@ function replyBox(
     event.preventDefault();
     send.click();
   });
+  // A note left over from the last send tells the next one nothing. Typing
+  // clears it, so `sent` always means the thing just sent.
+  box.addEventListener("input", () => {
+    if (state.ui.reply.status !== "idle") actions.clearReplyState();
+  });
   const note = replyNote(state.ui.reply);
   side.append(send);
   if (note !== undefined) side.append(note);
   reply.append(side);
-  return reply;
+  holder.append(reply);
+  return holder;
 }
 
-/** What the box is doing, said only once it is doing something. */
+/** The open needs, so a reader picks the one they are answering. */
+function replyTargets(
+  open: readonly PortalHumanNeed[],
+  selected: PortalHumanNeed | undefined,
+  working: PortalAgentSummary | undefined,
+  actions: PortalRenderActions,
+): HTMLElement {
+  const strip = element("div", "reply-targets");
+  strip.setAttribute("role", "group");
+  strip.setAttribute("aria-label", "What this reply answers");
+  for (const candidate of open) {
+    const chip = commandButton(replyTargetLabel(candidate), () =>
+      actions.setReplyTarget(candidate.needId === selected?.needId ? undefined : candidate.needId),
+    );
+    chip.className = `command reply-target kind-${candidate.kind}`;
+    chip.setAttribute("aria-pressed", String(candidate.needId === selected?.needId));
+    chip.title = candidate.title;
+    strip.append(chip);
+  }
+  const steer = commandButton("Steer instead", () => actions.setReplyTarget(undefined));
+  steer.className = "command reply-target kind-steer";
+  steer.setAttribute("aria-pressed", String(selected === undefined));
+  steer.disabled = working === undefined;
+  strip.append(steer);
+  return strip;
+}
+
+/** A question is known by what it asked, not by the kind of thing it is. */
+function replyTargetLabel(need: PortalHumanNeed): string {
+  const words = need.title.trim();
+  const short = words.length > 48 ? `${words.slice(0, 47)}\u2026` : words;
+  return need.kind === "escalation" ? `Budget: ${short}` : short;
+}
+
+/** The whole of what was asked, because a pill can only carry the start of it. */
+function replyAsked(need: PortalHumanNeed, state: PortalState): HTMLElement {
+  const asked = element("div", `reply-asked kind-${need.kind}`);
+  const ids = selectedIds(state);
+  const revision = state.vector?.graphRevision;
+  const nodes =
+    ids === undefined || revision === undefined
+      ? []
+      : (state.caches.graphNodes[revisionKey(ids.repositoryId, ids.runId, revision)]?.nodes ?? []);
+  const where = nodes.find(({ nodeId }) => nodeId === String(need.taskId))?.title;
+  asked.append(
+    textElement(
+      "p",
+      "reply-asked-who",
+      where === undefined
+        ? need.kind === "escalation"
+          ? "A budget request"
+          : "An agent asked"
+        : `${where} \u00b7 ${need.kind === "escalation" ? "ran out of budget" : "asked"}`,
+    ),
+    textElement("p", "reply-asked-what", need.title),
+  );
+  return asked;
+}
+
+/** What a person has already sent this run, so the pane reads as a conversation. */
+function sentTurns(state: PortalState, node?: PortalGraphNode): readonly TranscriptTurn[] {
+  const ids = selectedIds(state);
+  if (ids === undefined) return [];
+  const questions = state.caches.questions[runKey(ids.repositoryId, ids.runId)]?.questions ?? [];
+  const turns: TranscriptTurn[] = [];
+  for (const question of questions) {
+    if (question.answer === undefined) continue;
+    if (node !== undefined && String(question.source.taskId) !== node.nodeId) continue;
+    const answer = question.answer.answer;
+    turns.push({
+      occurredAt: question.answer.answeredAt,
+      text: typeof answer === "string" ? answer : JSON.stringify(answer),
+      owner: Object.freeze({ kind: "task" as const, id: String(question.source.taskId) }),
+    });
+  }
+  return Object.freeze(turns);
+}
+
+/**
+ * What the box is doing, said only when the transcript cannot say it.
+ *
+ * A sent answer appears in the pane above as a turn of the conversation, which
+ * is better proof than a word next to the button. A steering leaves no such
+ * trace and a refusal leaves none at all, so those still speak here.
+ */
 function replyNote(reply: PortalState["ui"]["reply"]): HTMLElement | undefined {
   if (reply.status === "sending") return textElement("span", "reply-note", "sending\u2026");
-  if (reply.status === "sent") return textElement("span", "reply-note sent", "sent as written");
   if (reply.status === "failed")
     return textElement("span", "reply-note failed", reply.message ?? "could not send");
   return undefined;

@@ -20,9 +20,17 @@ export interface TranscriptView {
 export interface TranscriptRow {
   readonly sequence: number;
   readonly time: string;
-  readonly stream: PortalTranscriptStream;
+  /** `you` is not a captured stream: it is what a person sent into this run. */
+  readonly stream: PortalTranscriptStream | "you";
   readonly text: string;
   /** The capture owner of the line, which the run-wide scope merges but never erases. */
+  readonly owner: PortalTranscriptOwner;
+}
+
+/** What a person sent an agent, so a conversation reads as one. */
+export interface TranscriptTurn {
+  readonly occurredAt: string;
+  readonly text: string;
   readonly owner: PortalTranscriptOwner;
 }
 
@@ -125,21 +133,72 @@ export function localTranscriptTime(occurredAt: string): string {
     : value.toLocaleTimeString(undefined, { hour12: false });
 }
 
+/** An unparsable time must not poison the comparison; NaN makes a sort undefined. */
+function momentOrder(occurredAt: string): number {
+  const parsed = Date.parse(occurredAt);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
 export function transcriptRows(
   view: TranscriptView,
   clock: TranscriptClock = localTranscriptTime,
+  mine: readonly TranscriptTurn[] = [],
 ): readonly TranscriptRow[] {
-  return Object.freeze(
-    view.lines.map((line) =>
-      Object.freeze({
-        sequence: line.sequence,
-        time: clock(line.occurredAt),
-        stream: line.stream,
-        text: line.text,
-        owner: line.owner,
-      }),
-    ),
+  const captured = view.lines.map((line) =>
+    Object.freeze({
+      sequence: line.sequence,
+      time: clock(line.occurredAt),
+      stream: line.stream,
+      text: line.text,
+      owner: line.owner,
+    }),
   );
+  if (mine.length === 0) return Object.freeze(captured);
+  // An answer is half the conversation. Without it the pane shows an agent
+  // asking and then, minutes later, carrying on for no visible reason, and a
+  // reader who has just answered cannot tell whether it arrived.
+  //
+  // Captured lines keep the order they were captured in: a sequence is the only
+  // total order a stream has, and its clock can repeat. So each turn is placed
+  // among them rather than everything being sorted by time.
+  const rows: TranscriptRow[] = [];
+  const pending = [...mine].sort(
+    (left, right) => momentOrder(left.occurredAt) - momentOrder(right.occurredAt),
+  );
+  let next = 0;
+  for (const [index, line] of view.lines.entries()) {
+    while (
+      next < pending.length &&
+      momentOrder(pending[next]?.occurredAt ?? "") <= momentOrder(line.occurredAt)
+    ) {
+      const turn = pending[next];
+      next += 1;
+      if (turn === undefined) continue;
+      rows.push(
+        Object.freeze({
+          sequence: -next,
+          time: clock(turn.occurredAt),
+          stream: "you" as const,
+          text: turn.text,
+          owner: turn.owner,
+        }),
+      );
+    }
+    const row = captured[index];
+    if (row !== undefined) rows.push(row);
+  }
+  for (const turn of pending.slice(next)) {
+    rows.push(
+      Object.freeze({
+        sequence: -1 - rows.length,
+        time: clock(turn.occurredAt),
+        stream: "you" as const,
+        text: turn.text,
+        owner: turn.owner,
+      }),
+    );
+  }
+  return Object.freeze(rows);
 }
 
 /** The run-wide scope merges owners, so each row names the one that produced it. */

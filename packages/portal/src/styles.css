@@ -2572,3 +2572,78 @@ textarea {
 .detail > .pane > .empty-state {
   padding: 6px 0;
 }
+
+/* ------------------------------------------------ what a reply is addressed to */
+
+.reply-holder {
+  display: flex;
+  flex-direction: column;
+}
+
+.reply-targets {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  border-top: 1px solid #23272e;
+  background: #191c21;
+  padding: 8px 10px;
+}
+
+.reply-target {
+  max-width: 100%;
+  border-color: #39414c;
+  background: #20242a;
+  color: #c7cdd6;
+  font-size: 11px;
+  text-align: left;
+}
+
+.reply-target:hover:not(:disabled) {
+  border-color: #4d5765;
+  background: #262b32;
+  color: #fff;
+}
+
+.reply-target[aria-pressed="true"] {
+  border-color: #4c8ed9;
+  background: #12314e;
+  color: #fff;
+}
+
+.reply-target.kind-escalation[aria-pressed="true"] {
+  border-color: #d9a34c;
+  background: #4e3a12;
+}
+
+/* A person's own turn is the other half of the conversation, not agent output. */
+.agent-terminal-row.you .agent-terminal-stream {
+  color: #7fd18b;
+}
+
+.agent-terminal-row.you .agent-terminal-text {
+  color: #e6f2e8;
+}
+
+.reply-asked {
+  border-top: 1px solid #23272e;
+  background: #12181f;
+  padding: 10px;
+}
+
+.reply-asked-who {
+  margin: 0 0 4px;
+  color: var(--term-dim);
+  font-size: 11px;
+}
+
+.reply-asked-what {
+  margin: 0;
+  color: #e8edf4;
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: break-word;
+}
+
+.reply-asked.kind-escalation .reply-asked-what {
+  color: #f0d9a8;
+}
