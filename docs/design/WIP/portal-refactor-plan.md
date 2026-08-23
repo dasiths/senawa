@@ -571,9 +571,17 @@ may record that an escalation was satisfied when no person decided anything is a
 question about the authority model, not a rendering choice, so it is written down
 here rather than answered in passing.
 
-* [ ] An escalation the budget can already satisfy is resolved, or is shown
-* [ ] A member blocked on a satisfied escalation is resumed
-* [ ] `#runScopedNeedCount` and the needs list agree about what is outstanding
+* [x] An escalation the budget can already satisfy stops blocking its member
+* [x] A member blocked on a satisfied escalation is resumed
+* [x] `#runScopedNeedCount` and the needs list agree about what is outstanding
+
+**Decided.** A grant is a person's decision, and a shared budget means one grant
+can cover requests it did not name. One grant can only resolve one request — the
+schema says so with a unique constraint — so the second request never gets a
+resolution of its own. It does not need one: what a request waits for is the
+room, and the room is there. The gate that holds a member now reads the budget
+as well as the resolutions, so nothing has to record a decision nobody made.
+
 
 ### What the live run showed about Record
 

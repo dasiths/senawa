@@ -464,6 +464,12 @@ describe("SQLite Phase 11A human authority", () => {
         .needs.filter(({ kind }) => kind === "escalation").length,
     ).toBe(0);
     after.close();
+
+    // Dropping it from the list is only half of it. One grant can resolve only
+    // one request, so the sibling never gets a resolution of its own and waited
+    // for ever on a decision nobody would make, for room that already existed.
+    expect(runner.persistIntent(runInput(sibling)).type).not.toBe("escalated");
+
     authority.close();
     runner.close();
     fixture.dispose();

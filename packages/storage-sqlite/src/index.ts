@@ -5219,9 +5219,17 @@ export class SqlitePortalQueryAuthority {
     const escalations =
       this.#database
         .prepare<[string], { total: number }>(
+          // The same reading as the needs list: a budget with room for what was
+          // asked is not waiting for anyone, and a count that disagrees with the
+          // list it heads is a badge nobody can clear.
           `SELECT COUNT(*) AS total FROM runner_escalations e
            LEFT JOIN runner_allowance_resolutions r ON r.escalation_command_id = e.command_id
-           WHERE e.run_key = ? AND r.escalation_command_id IS NULL`,
+           JOIN runner_budgets b
+             ON b.run_key = e.run_key
+            AND b.unit = json_extract(e.canonical_escalation, '$.unit')
+           WHERE e.run_key = ? AND r.escalation_command_id IS NULL
+             AND b.budget_limit - b.spent
+                 < json_extract(e.canonical_escalation, '$.requested')`,
         )
         .get(runKey)?.total ?? 0;
     const amendments =
@@ -7323,12 +7331,30 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
         .get(command.commandId);
       const escalationResolved =
         existingEscalation !== undefined &&
-        this.#database
+        (this.#database
           .prepare<[string], { present: number }>(
             `SELECT 1 AS present FROM runner_allowance_resolutions
              WHERE escalation_command_id = ?`,
           )
-          .get(command.commandId) !== undefined;
+          .get(command.commandId) !== undefined ||
+          // A budget is shared, so several members can run out within seconds of
+          // each other and each raise its own request. One grant gives all of
+          // them the room they asked for, but only the request that was named
+          // gets a resolution, and one grant can resolve only one request. The
+          // rest waited for ever on a decision nobody would make about them, for
+          // room that already existed. What a request waits for is the room.
+          this.#database
+            .prepare<[string, string, string], { present: number }>(
+              `SELECT 1 AS present FROM runner_budgets b
+               WHERE b.run_key = ?
+                 AND b.unit = json_extract(?, '$.unit')
+                 AND b.budget_limit - b.spent >= json_extract(?, '$.requested')`,
+            )
+            .get(
+              run.run_key,
+              existingEscalation.canonical_escalation,
+              existingEscalation.canonical_escalation,
+            ) !== undefined);
       if (existingEscalation !== undefined && !escalationResolved) {
         this.#database.exec("COMMIT");
         committed = true;
