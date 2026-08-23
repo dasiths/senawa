@@ -1603,7 +1603,7 @@ function renderArtifacts(state: PortalState, actions: PortalRenderActions): HTML
   table.className = "grid";
   const head = document.createElement("thead");
   const headRow = document.createElement("tr");
-  for (const label of ["File", "Type", "Size", "Sensitivity", "Where it is"]) {
+  for (const label of ["File", "Type", "Size", "Where it is"]) {
     const cell = document.createElement("th");
     cell.scope = "col";
     cell.textContent = label;
@@ -1645,7 +1645,6 @@ function renderArtifacts(state: PortalState, actions: PortalRenderActions): HTML
       artifact.summary,
       artifact.mediaType,
       formatBytes(artifact.byteLength),
-      artifact.sensitivity,
       where,
     ]) {
       const cell = document.createElement("td");
@@ -1658,7 +1657,7 @@ function renderArtifacts(state: PortalState, actions: PortalRenderActions): HTML
     detail.className = "detail-row";
     detail.dataset.artifact = artifact.artifactId;
     const cell = document.createElement("td");
-    cell.colSpan = 5;
+    cell.colSpan = 4;
     if (preview === undefined) {
       // The cost is visible, paid once, on the row the reader asked about.
       cell.append(textElement("p", "lazy", "Loading the exact record\u2026"));

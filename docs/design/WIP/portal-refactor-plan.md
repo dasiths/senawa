@@ -110,7 +110,12 @@ The largest phase, and the only one that needs data we do not record.
 * [x] Turn streaming on and subscribe to the persisted events
 * [x] Build the durable transcript from persisted events, never from deltas
 * [x] Decide whether sub-agent events enter the transcript, and how they read
-* [ ] Classify transcript sensitivity the way artifacts are classified
+* [~] Classify transcript sensitivity the way artifacts are classified —
+  dropped. The reader of a transcript is the developer who owns the run, so
+  there is nothing to classify it against. Artifacts no longer show a
+  sensitivity column either. What sensitivity still governs is an agent reading
+  an asset above its grant's ceiling, which is a different question from what a
+  person may see.
 * [ ] Use deltas for live tailing
 
 ## Phase 7: answering feels like answering the agent
@@ -445,7 +450,15 @@ because it is the field whose name sounds like the answer.
 
 * [x] Both readings take the state from `runState`
 * [x] A test fails when a view renders one word for a fixture that has several
-* [ ] `lifecycle` says what it is, or stops being projected at all
+* [ ] `lifecycle` says what it is, or stops being projected at all — attempted
+  and reverted. Removing it is the right branch: the field is typed `string`,
+  is always `defined`, no view reads it, and three fixtures set it to
+  `defined`, `open`, and `ready` without any test noticing, which is proof
+  enough that nothing depends on the value. The removal spans the contract, the
+  codec, the projection and four fixtures; every file took the edit except
+  `portal-codec.ts`, which the editor reported as written and left untouched on
+  disk, so the codec went on requiring a field the contract no longer declared.
+  Reverted whole rather than left half-applied.
 
 **And the run was genuinely stuck.** The supervisor loop refused every cycle with
 `evaluate-gate was refused: task-set-mismatch`. The kernel requires a candidate
