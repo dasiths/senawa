@@ -1,4 +1,4 @@
-import type { EventStreamFrame, PortalGraphNode } from "@senawa/protocol";
+import type { DurableReceipt, EventStreamFrame, PortalGraphNode } from "@senawa/protocol";
 
 /**
  * What happened, in order. The event stream is the only projection that carries
@@ -139,6 +139,7 @@ function commandPhrase(commandId: string):
 function commandMoments(
   events: readonly EventStreamFrame[],
   named: (id: string | undefined) => string | undefined,
+  receipts: ReadonlyMap<string, DurableReceipt>,
 ): readonly TimelineMoment[] {
   const byCommand = new Map<string, EventStreamFrame[]>();
   const loose: EventStreamFrame[] = [];
@@ -160,6 +161,9 @@ function commandMoments(
     const phrase = commandPhrase(commandId);
     if (phrase === undefined) continue;
     const refused = last.eventType === "command-refused";
+    // The frames only ever say which stage a command reached. Its receipt is
+    // where the result and the refusal reason are, so the two are read together.
+    const receipt = receipts.get(commandId);
     moments.push(
       Object.freeze({
         momentId: String(first.eventId),
@@ -168,9 +172,14 @@ function commandMoments(
         time: momentTime(first.occurredAt),
         what: refused ? `${phrase.what} \u2014 refused` : phrase.what,
         where: phrase.where,
-        detail: undefined,
+        detail: refused ? receipt?.error?.message : undefined,
         tone: (refused ? "failed" : (phrase.tone ?? "plain")) as TimelineMoment["tone"],
-        record: ordered.length === 1 ? first : ordered,
+        record:
+          receipt === undefined
+            ? ordered.length === 1
+              ? first
+              : ordered
+            : { receipt, events: ordered },
       }),
     );
   }
@@ -280,11 +289,13 @@ export function timelineMoments(
   events: readonly EventStreamFrame[],
   nodes: readonly PortalGraphNode[],
   questions: readonly TimelineQuestion[] = [],
+  receipts: readonly DurableReceipt[] = [],
 ): readonly TimelineMoment[] {
   const names = new Map(nodes.map((node) => [node.nodeId, node.title]));
   const named = (id: string | undefined): string | undefined =>
     id === undefined ? undefined : (names.get(id) ?? id);
-  return [...commandMoments(events, named), ...questionMoments(questions, named)].sort(
+  const byCommand = new Map(receipts.map((receipt) => [String(receipt.commandId), receipt]));
+  return [...commandMoments(events, named, byCommand), ...questionMoments(questions, named)].sort(
     (left, right) => left.at - right.at || left.cursor - right.cursor,
   );
 }

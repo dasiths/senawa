@@ -610,7 +610,11 @@ rather than the queue that drives it.
 
 * [x] Record reads the run's story, not the command queue's status
 * [ ] A moment names what it happened to
-* [ ] `Exact record` opens something that answers a question a reader has
+* [x] `Exact record` opens something that answers a question a reader has — a
+  command's frames only ever repeat the stage they announce, so a moment now
+  reads its receipt alongside them. A refused command says why on the line
+  itself instead of only that it was refused, and opening it reaches the
+  receipt's result and error rather than three copies of `{"status":"queued"}`.
 
 ### The Record tab, started again
 

@@ -1,4 +1,4 @@
-import type { EventStreamFrame, PortalGraphNode } from "@senawa/protocol";
+import type { DurableReceipt, EventStreamFrame, PortalGraphNode } from "@senawa/protocol";
 import { describe, expect, it } from "vitest";
 import { momentTime, momentWhat, timelineMoments } from "./timeline.js";
 
@@ -77,5 +77,35 @@ describe("timeline", () => {
     expect(momentTime("2026-08-21T04:23:44.118Z")).toBe("04:23:44");
     // A record with no readable time says so rather than inventing one.
     expect(momentTime("not a time")).toBe("--:--:--");
+  });
+
+  it("says why a command was refused, and opens the receipt that says so", () => {
+    const events = [
+      frame({ cursor: 4, eventType: "command-queued", commandId: "command_close-implement-5" }),
+      frame({ cursor: 5, eventType: "command-refused", commandId: "command_close-implement-5" }),
+    ];
+    const receipt = {
+      commandId: "command_close-implement-5",
+      status: "refused",
+      error: { message: "candidate-exists: Completion cannot change after candidate creation" },
+    } as unknown as DurableReceipt;
+
+    const [moment] = timelineMoments(events, [], [], [receipt]);
+
+    expect(moment?.detail).toBe(
+      "candidate-exists: Completion cannot change after candidate creation",
+    );
+    // Opening the moment has to reach the receipt, because the frames only
+    // ever carry the status they already announced.
+    expect(moment?.record).toMatchObject({ receipt: { status: "refused" } });
+  });
+
+  it("leaves the frames as the record when no receipt was kept", () => {
+    const [moment] = timelineMoments(
+      [frame({ cursor: 4, eventType: "command-queued", commandId: "command_close-implement-5" })],
+      [],
+    );
+    expect(moment?.detail).toBeUndefined();
+    expect(moment?.record).toMatchObject({ eventType: "command-queued" });
   });
 });

@@ -680,7 +680,8 @@ function renderHistory(state: PortalState, actions: PortalRenderActions): HTMLEl
   const produced = state.caches.delivery[key]?.records ?? [];
   const questions = state.caches.questions[key]?.questions ?? [];
   const needle = state.ui.filter.toLocaleLowerCase();
-  const moments = timelineMoments(events, nodes, questions).filter((moment) =>
+  const receipts = state.caches.receipts[key]?.receipts ?? [];
+  const moments = timelineMoments(events, nodes, questions, receipts).filter((moment) =>
     `${moment.what} ${moment.where ?? ""} ${moment.detail ?? ""}`
       .toLocaleLowerCase()
       .includes(needle),
