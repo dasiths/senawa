@@ -646,11 +646,15 @@ Not everything from earlier phases landed. These are open, and none of them is
 blocked by anything above:
 
 * [ ] An artifact renders on the edge leaving the node that produced it
-* [ ] Classify transcript sensitivity the way artifacts are classified
+* [x] Classify transcript sensitivity the way artifacts are classified — dropped
+  with the whole idea. Sensitivity is being removed everywhere, so there is no
+  scheme left to classify a transcript against.
 * [ ] Use deltas for live tailing
 
-The middle one is a security gap, not a nicety: assistant prose may quote
-repository contents, artifacts carry a classification and transcripts do not.
+Calling the middle one a security gap was wrong. Transcripts never reached a
+report or a remote peer, and the classification it was to be measured against
+governs an agent reading an asset, not a person reading a page. See
+[the remaining work](redesign-2/remaining-work.md).
 
 ### Proven by driving it
 
