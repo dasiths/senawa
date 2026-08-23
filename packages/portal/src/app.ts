@@ -860,9 +860,17 @@ export class PortalApplication {
       return Object.freeze({ kind: "run", id: identity.runId });
     const revision = this.#state.vector?.graphRevision;
     if (revision === undefined) return undefined;
-    const node = this.#state.caches.graphNodes[
-      revisionKey(identity.repositoryId, identity.runId, revision)
-    ]?.nodes.find(({ nodeId }) => nodeId === this.#state.ui.focusedRecord);
+    const nodes =
+      this.#state.caches.graphNodes[revisionKey(identity.repositoryId, identity.runId, revision)]
+        ?.nodes ?? [];
+    const selected = nodes.find(({ nodeId }) => nodeId === this.#state.ui.focusedRecord);
+    // A criterion is something a task had to produce, not something that ran, so
+    // reading one on its own gave an empty pane. What it says is said by the work
+    // that produced it.
+    const node =
+      selected?.kind === "criterion"
+        ? nodes.find(({ nodeId }) => nodeId === selected.parentNodeId)
+        : selected;
     if (node === undefined) return undefined;
     const workspaces =
       this.#state.caches.workspaces[runKey(identity.repositoryId, identity.runId)]?.workspaces ??

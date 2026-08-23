@@ -1435,7 +1435,9 @@ textarea {
   display: flex;
   gap: 14px;
   border-bottom: 1px solid var(--rule);
-  margin-bottom: 14px;
+  /* The header above and the pane below both inset by the same gutter, so the
+     strip between them does too, and the pane's own padding is the gap. */
+  padding: 0 14px;
 }
 
 .detail-tab {

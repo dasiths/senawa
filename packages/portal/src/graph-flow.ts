@@ -77,7 +77,7 @@ function memberCard(
 ): HTMLElement {
   const card = document.createElement("button");
   card.type = "button";
-  card.className = `gnode ${stateTone(node.runState)}`;
+  card.className = `gnode kind-${node.kind} ${stateTone(node.runState)}`;
   card.dataset.node = node.nodeId;
   card.dataset.focusKey = node.nodeId;
   if (selected) card.setAttribute("aria-current", "true");

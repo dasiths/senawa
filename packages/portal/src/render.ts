@@ -1132,7 +1132,16 @@ function graphDetail(
   const pane = element("div", "pane");
   switch (state.ui.detailTab) {
     case "live":
-      pane.append(livePane(state, actions, node));
+      // A criterion did not run; the task that had to satisfy it did.
+      pane.append(
+        livePane(
+          state,
+          actions,
+          node.kind === "criterion"
+            ? nodes.find(({ nodeId }) => nodeId === node.parentNodeId)
+            : node,
+        ),
+      );
       break;
     case "answers":
       pane.append(answersPane(state, node));

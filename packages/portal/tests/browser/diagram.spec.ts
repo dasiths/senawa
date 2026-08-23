@@ -26,6 +26,20 @@ test("reads the workflow as bands of phases carrying cards of work", async ({ pa
   expect(diagnostics.severe()).toEqual([]);
 });
 
+test("reads a criterion through the work that had to satisfy it", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await navigate(page, "Workflow");
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
+
+  // A criterion is something a task had to produce, not something that ran, so
+  // reading one on its own left the pane with nothing in it at all.
+  await page.locator(".gnode.kind-criterion").first().click();
+  await expect(page.locator(".agent-terminal-scope")).not.toHaveText("no agent selected");
+  await expect(page.locator(".agent-terminal-scope")).not.toHaveText("every agent");
+
+  expect(diagnostics.severe()).toEqual([]);
+});
+
 // Nodes carry both `lifecycle` and `runState`. The first is the literal
 // `defined` on every node ever projected, so a view that reads it says
 // "not started" about a run that has finished, and nothing ever changes.

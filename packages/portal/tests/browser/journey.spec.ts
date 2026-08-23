@@ -378,7 +378,11 @@ test("reviews pause, resume, and permanent end, then exposes ending and ended mo
   const main = await simulatedEventPortal(browser, runs.workspace);
   const { page, diagnostics } = main;
   await navigate(page, "Timeline");
-  await expect(page.locator(".run-head .state", { hasText: /^running$/u })).toBeVisible();
+  // This run is shared, and an earlier spec pauses and resumes it. A fresh
+  // portal can open on the projection from before that resume landed.
+  await expect(page.locator(".run-head .state", { hasText: /^running$/u })).toBeVisible({
+    timeout: 15_000,
+  });
 
   await page.getByRole("button", { name: "Pause" }).click();
   const stalePause = page.getByRole("dialog");
