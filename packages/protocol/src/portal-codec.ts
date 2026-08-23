@@ -985,7 +985,6 @@ function portalGraphNode(value: unknown, path: string): PortalGraphNode {
       "kind",
       "title",
       "definitionGeneration",
-      "lifecycle",
       "runState",
       "humanNeedCount",
       "evidenceCount",
@@ -1005,7 +1004,6 @@ function portalGraphNode(value: unknown, path: string): PortalGraphNode {
   oneOf(object.kind, `${path}.kind`, NODE_KINDS);
   boundedString(object.title, `${path}.title`, 1, 1_024);
   integer(object.definitionGeneration, `${path}.definitionGeneration`, 1);
-  token(object.lifecycle, `${path}.lifecycle`);
   oneOf(object.runState, `${path}.runState`, NODE_RUN_STATES);
   integer(object.humanNeedCount, `${path}.humanNeedCount`);
   integer(object.evidenceCount, `${path}.evidenceCount`);

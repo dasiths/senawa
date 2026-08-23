@@ -133,7 +133,6 @@ describe("portal codecs", () => {
       kind: "task",
       title: "Task",
       definitionGeneration: 1,
-      lifecycle: "ready",
       runState: "running",
       humanNeedCount: 0,
       evidenceCount: 0,

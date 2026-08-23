@@ -3802,7 +3802,6 @@ export class SqlitePortalQueryAuthority {
           kind: node.kind,
           title: definition.title ?? definition.key,
           definitionGeneration: definition.generation,
-          lifecycle: "defined",
           runState: status.runState,
           ...(parentNodeId === undefined ? {} : { parentNodeId }),
           ...(definition.source.pointer.length === 0

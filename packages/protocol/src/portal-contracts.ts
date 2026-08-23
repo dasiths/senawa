@@ -141,7 +141,6 @@ export interface PortalGraphNode {
   readonly kind: PortalGraphNodeKind;
   readonly title: string;
   readonly definitionGeneration: number;
-  readonly lifecycle: string;
   readonly runState: PortalGraphNodeRunState;
   readonly parentNodeId?: OpaqueIdentity;
   readonly sourcePointer?: string;

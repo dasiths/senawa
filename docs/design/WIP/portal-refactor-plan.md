@@ -450,15 +450,12 @@ because it is the field whose name sounds like the answer.
 
 * [x] Both readings take the state from `runState`
 * [x] A test fails when a view renders one word for a fixture that has several
-* [ ] `lifecycle` says what it is, or stops being projected at all — attempted
-  and reverted. Removing it is the right branch: the field is typed `string`,
-  is always `defined`, no view reads it, and three fixtures set it to
-  `defined`, `open`, and `ready` without any test noticing, which is proof
-  enough that nothing depends on the value. The removal spans the contract, the
-  codec, the projection and four fixtures; every file took the edit except
-  `portal-codec.ts`, which the editor reported as written and left untouched on
-  disk, so the codec went on requiring a field the contract no longer declared.
-  Reverted whole rather than left half-applied.
+* [x] `lifecycle` says what it is, or stops being projected at all — it stops.
+  The field was typed `string`, was `defined` on every node ever projected, and
+  no view read it. Three fixtures set it to `defined`, `open` and `ready` and
+  no test ever noticed, which is proof enough that nothing depended on the
+  value. Removed from the contract, the codec and the projection, so putting it
+  back is now a type error rather than a habit.
 
 **And the run was genuinely stuck.** The supervisor loop refused every cycle with
 `evaluate-gate was refused: task-set-mismatch`. The kernel requires a candidate
