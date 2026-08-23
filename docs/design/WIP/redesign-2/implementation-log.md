@@ -4399,3 +4399,45 @@ The disappearing question was a symptom rather than a second defect. The answer
 was accepted and recorded, so the question stopped being open; it could not be
 delivered, so nothing acted on it. What a person saw was a question they had
 answered vanishing and nothing happening, which is the worst of both.
+
+## F-065 A dispatch that never reached the runner is waited on for ever
+
+The live run stopped with `waiting for the agent working on implement` on every
+cycle, nothing waiting on a person, and mode `running`. Restarting the service
+did not move it. This is not F-061 again, and the difference is the whole point.
+
+The tables disagree about how many pieces of work exist:
+
+| table | rows |
+| --- | --- |
+| `context_dispatches` | 10 |
+| `runner_commands` | 9 |
+| `runner_effect_outcomes` | 9 |
+| `runner_effect_claims` | 0 |
+
+Of the ten dispatches, nine have an outcome: three `cancelled` and six
+`completed`. The tenth is an implementor dispatch that has no runner command, no
+effect intent, no claim, and no outcome. It exists only at the context layer.
+
+F-061 recovers an intent that has no outcome, by closing the attempt when a lease
+is taken at a higher fence. That works, and it is why the three `cancelled`
+researcher dispatches recovered and the research phase closed. But this dispatch
+never got as far as having an intent, so there is nothing for that recovery to
+find. It is invisible to every mechanism that exists to clean up after a death.
+
+The fan-in reads a member with no completion as a member still working, which is
+correct. `spentDispatch` is what releases it, and that asks for a terminal
+outcome which is not `completed`. No intent means no outcome means never spent.
+So the phase waits on a dispatch that no process was ever told to run.
+
+The window is between creating the dispatch at the context layer and enqueuing
+the runner command for it, and the run was stopped inside it. That window is
+small, and it is reachable by any stop, crash, or restart — the same argument
+F-061 made about itself. Recovery has to key off the dispatch rather than the
+intent: a dispatch with no runner command and no completion has not started, and
+the honest repair is to enqueue it, not to wait for it.
+
+Recorded rather than fixed. The stop that caused it was mine, taken to run a
+diagnostic while a worker was mid-turn, so the trigger is understood and the run
+is not evidence of drift in normal operation. The fix belongs with the other
+recovery work rather than bolted onto a portal change.

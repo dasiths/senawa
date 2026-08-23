@@ -378,8 +378,13 @@ test("reviews pause, resume, and permanent end, then exposes ending and ended mo
   const main = await simulatedEventPortal(browser, runs.workspace);
   const { page, diagnostics } = main;
   await navigate(page, "Timeline");
-  // This run is shared, and an earlier spec pauses and resumes it. A fresh
-  // portal can open on the projection from before that resume landed.
+  // This run is shared and an earlier spec pauses it. What this test is about
+  // starts from a running run, so it puts one there rather than assuming the
+  // spec before it left one.
+  if ((await page.getByRole("button", { name: "Resume" }).count()) > 0) {
+    await page.getByRole("button", { name: "Resume" }).click();
+    await page.getByRole("button", { name: "Confirm resume" }).click();
+  }
   await expect(page.locator(".run-head .state", { hasText: /^running$/u })).toBeVisible({
     timeout: 15_000,
   });
