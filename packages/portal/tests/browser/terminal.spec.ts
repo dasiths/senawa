@@ -52,15 +52,18 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
     await expect(page.locator(".agent-terminal")).toHaveCSS(`border-${corner}-radius`, "0px");
     await expect(page.locator(".reply")).toHaveCSS(`border-${corner}-radius`, "0px");
   }
+  // Everything a reader answers with hangs off the transcript with no seam: the
+  // pills that pick what is being answered, and the box that answers it.
   expect(
     await page.locator(".live-pane").evaluate((element) => {
       const terminal = element.querySelector(".agent-terminal")?.getBoundingClientRect();
+      const holder = element.querySelector(".reply-holder")?.getBoundingClientRect();
       const reply = element.querySelector(".reply")?.getBoundingClientRect();
-      return terminal === undefined || reply === undefined
+      return terminal === undefined || holder === undefined || reply === undefined
         ? undefined
-        : Math.round(reply.top - terminal.bottom);
+        : [Math.round(holder.top - terminal.bottom), Math.round(holder.bottom - reply.bottom)];
     }),
-  ).toBe(0);
+  ).toEqual([0, 0]);
 
   // The diagram with a selected node and its live output is the parity feature
   // this branch restores, so it needs its own review evidence.
