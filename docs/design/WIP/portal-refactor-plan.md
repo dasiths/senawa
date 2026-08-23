@@ -590,7 +590,7 @@ dispatches, the publications and the receipts are all recorded. Record has to be
 assembled from those, or the engine has to emit events that describe the run
 rather than the queue that drives it.
 
-* [ ] Record reads the run's story, not the command queue's status
+* [x] Record reads the run's story, not the command queue's status
 * [ ] A moment names what it happened to
 * [ ] `Exact record` opens something that answers a question a reader has
 
@@ -609,10 +609,10 @@ Begin from what a person actually arrives wanting to know:
 * *What did I decide?* — the questions asked, the answers given, and when.
 * *What is the exact record?* — one action away, never in the way.
 
-* [ ] One reading of the run's history, not three cards of machinery
+* [x] One reading of the run's history, not three cards of machinery
 * [ ] A delivery record hangs off the moment that published it
 * [ ] What cannot be dated says so rather than pretending to an order
-* [ ] Answers already given are readable without leaving the page
+* [x] Answers already given are readable without leaving the page
 * [ ] `Recently answered` in the rail, or the reason it belongs here instead
 
 ### Still carried, and honestly
@@ -633,8 +633,8 @@ Not by asserting it. The example is run end to end in a browser: start it, watch
 the terminal, answer in the reply box, watch the phase close, read what it built.
 
 * [ ] The example completes with every phase closed
-* [ ] Every question is answered from the portal, never the command line
-* [ ] The graph states change as the run moves
+* [x] Every question is answered from the portal, never the command line
+* [x] The graph states change as the run moves
 
 ## Log
 
