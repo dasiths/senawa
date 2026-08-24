@@ -711,6 +711,9 @@ function renderHistory(state: PortalState, actions: PortalRenderActions): HTMLEl
   const opened = new Set(state.ui.openedRecords);
   const list = element("ol", "timeline");
   let previous: string | undefined;
+  // A delivery record has neither a cursor nor a time, so the only order it can
+  // take is the one belonging to the moment that published it.
+  const hung = new Set<string>();
   for (const moment of moments) {
     if (moment.where !== undefined && moment.where !== previous) {
       list.append(textElement("li", "timeline-where", moment.where));
@@ -721,6 +724,25 @@ function renderHistory(state: PortalState, actions: PortalRenderActions): HTMLEl
     const body = element("div", "moment-body");
     body.append(textElement("p", "moment-what", moment.what));
     if (moment.detail !== undefined) body.append(textElement("p", "moment-detail", moment.detail));
+    const carried = produced.filter(
+      (record) =>
+        !hung.has(record.identity) &&
+        moment.scope !== undefined &&
+        ((record.taskId !== undefined && record.taskId === moment.scope.taskId) ||
+          (record.phaseId !== undefined && record.phaseId === moment.scope.phaseId)),
+    );
+    for (const record of carried) {
+      hung.add(record.identity);
+      body.append(
+        textElement(
+          "p",
+          "moment-produced",
+          `${record.kind.replaceAll("-", " ")} \u00b7 ${deliveryState(record)}${
+            deliveryMetadata(record).length === 0 ? "" : ` \u00b7 ${deliveryMetadata(record)}`
+          }`,
+        ),
+      );
+    }
     const recordKey = `moment:${moment.momentId}`;
     body.append(
       recordDisclosure(recordKey, opened.has(recordKey), actions, () =>
@@ -731,15 +753,16 @@ function renderHistory(state: PortalState, actions: PortalRenderActions): HTMLEl
     list.append(item);
   }
   section.append(list);
-  // What a phase produced has no time of its own, so it is stated apart from the
-  // order rather than folded into it as though it had one.
-  if (produced.length > 0) {
+  // What no moment claimed has no time of its own, so it is stated apart from
+  // the order rather than folded into it as though it had one.
+  const undated = produced.filter((record) => !hung.has(record.identity));
+  if (undated.length > 0) {
     section.append(
       disclosure(
-        `What the run produced (${String(produced.length)}, undated)`,
+        `What the run produced (${String(undated.length)}, undated)`,
         summaryTable(
           ["Kind", "Phase or task", "Attempt", "State", "Detail"],
-          produced.map((record) => [
+          undated.map((record) => [
             record.kind.replaceAll("-", " "),
             record.phaseId ?? record.taskId ?? "-",
             record.attempt === undefined ? "-" : String(record.attempt),

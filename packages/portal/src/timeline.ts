@@ -22,6 +22,8 @@ export interface TimelineMoment {
   /** A detail worth one line, such as what was published. */
   readonly detail: string | undefined;
   readonly tone: "opened" | "closed" | "asked" | "failed" | "plain";
+  /** What the moment happened to, by identity, so records can be hung off it. */
+  readonly scope: { readonly taskId?: string; readonly phaseId?: string } | undefined;
   /** The exact record behind the moment, built only when a reader opens it. */
   readonly record: unknown;
 }
@@ -209,6 +211,7 @@ function commandMoments(
         where: phrase.where ?? named(facts.taskId),
         detail: refused ? receipt?.error?.message : facts.summary,
         tone: (refused ? "failed" : (phrase.tone ?? "plain")) as TimelineMoment["tone"],
+        scope: facts.taskId === undefined ? undefined : { taskId: facts.taskId },
         record:
           receipt === undefined
             ? ordered.length === 1
@@ -242,11 +245,22 @@ function commandMoments(
               ? output
               : `${output}, ${String(bytes)} bytes`,
         tone: TONES[event.eventType] ?? "plain",
+        scope: eventScope(payload),
         record: event,
       }),
     );
   }
   return moments;
+}
+
+function eventScope(payload: unknown): TimelineMoment["scope"] {
+  const taskId = readString(payload, "taskId");
+  const phaseId = readString(payload, "phaseId");
+  if (taskId === undefined && phaseId === undefined) return undefined;
+  return {
+    ...(taskId === undefined ? {} : { taskId }),
+    ...(phaseId === undefined ? {} : { phaseId }),
+  };
 }
 
 /**
@@ -279,6 +293,7 @@ function questionMoments(
         where,
         detail: question.prompt,
         tone: "asked" as const,
+        scope: { taskId: String(question.source.taskId) },
         record: question,
       }),
     );
@@ -293,6 +308,7 @@ function questionMoments(
         where,
         detail: answerText(question.answer.answer),
         tone: "closed" as const,
+        scope: { taskId: String(question.source.taskId) },
         record: question.answer,
       }),
     );

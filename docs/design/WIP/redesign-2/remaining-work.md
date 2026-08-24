@@ -119,9 +119,18 @@ the record that exists in the failure. A dispatch with no runner command has not
 started, and the honest repair is to enqueue it rather than to wait for it or to
 fabricate an outcome saying it failed.
 
-* [ ] A dispatch with no runner command is enqueued rather than waited on
-* [ ] The test stops the supervisor inside the window and drives the run on
-* [ ] The wedged state is reachable in a test without a live model
+* [x] A dispatch with no runner command is enqueued rather than waited on —
+  deviated deliberately. Enqueuing assumes the work is still wanted, and the
+  scheduler may have skipped the dispatch precisely because it was superseded.
+  A dispatch the runner never heard of is instead read as a turn that never
+  began, which lets the existing retry path open a fresh attempt. That is
+  self-healing without resurrecting work the run has moved past.
+* [x] The wedged state is reachable in a test without a live model — the
+  decision is a pure predicate over the runner's effects, tested against the
+  four states that look alike: everything finished, something still active,
+  nothing enqueued yet, and the dispatch actually held. The two positive cases
+  fail against the old reading.
+* [ ] A live restart mid-turn is driven through the browser suite
 
 ## The browser suite fails a different test each run
 
@@ -165,8 +174,10 @@ now knows the task it happened to. Records that match no moment keep the undated
 list, and it keeps its name, because a record with no time saying so is the
 point of that section.
 
-* [ ] A delivery record is reachable from the moment that published it
-* [ ] What cannot be dated still says that it cannot
+* [x] A delivery record is reachable from the moment that published it
+* [x] What cannot be dated still says that it cannot — the undated list keeps
+  its name and now holds only what no moment claimed, so it shrinks to the
+  records that genuinely have no place in the order.
 
 ### `Recently answered`, or the reason it is elsewhere
 

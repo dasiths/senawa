@@ -2344,6 +2344,16 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+/* What the moment produced, set apart from what it said. */
+.moment-produced {
+  margin: 2px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--rule);
+  color: var(--faint);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
 /* ------------------------------------------------------- one row, one baseline */
 
 /* A row that mixes fourteen and twelve pixel text has no baseline, and that is
