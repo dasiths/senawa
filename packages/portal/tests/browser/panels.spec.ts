@@ -63,6 +63,12 @@ test("marks an unanswered question overdue, titles the tab, and clears both", as
   await expect(banner.locator("script, svg, iframe")).toHaveCount(0);
   await assertDocumentFits(page);
 
+  // An answer leaves the queue the moment it is given, so the rail carries what
+  // was decided as well as what is still waiting.
+  const answered = page.locator(".right-rail .rail-section", { hasText: "Recently answered" });
+  await expect(answered).toBeVisible();
+  await expect(answered.locator(".empty-state")).toHaveText("You have not answered anything yet.");
+
   await selectRun(page, runs.workspace);
   await expect(page.locator(".question-attention")).toHaveCount(0);
   await expect(page).toHaveTitle("Senawa Portal");

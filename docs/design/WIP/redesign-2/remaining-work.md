@@ -216,11 +216,35 @@ attempt is what turns both into a stalled run.
 
 * [ ] A cancelled attempt returns its task to the frontier, or the driver
   retries it, and the two agree on which
-* [ ] A scheduler that declines every dispatch says so rather than returning
-  `worked: false` in silence
+* [x] A scheduler that declines every dispatch says so rather than returning
+  `worked: false` in silence — proven against the stalled run, which now
+  reports `no dispatch is schedulable; the ready frontier holds
+  task_1babea53… active, task_407c053a… accepted`.
 
 The second matters as much as the first. Three wrong diagnoses, including one
 shipped and reverted, came from a scheduler that stalls without a word.
+
+### What the retry fix has to account for
+
+Marking `cancelled` as `pending` is not enough on its own, and shipping it alone
+would look like a fix while changing nothing. `#scheduleRepository` skips any
+dispatch that already carries an effect:
+
+```ts
+if (dispatched) continue;
+```
+
+The cancelled dispatch has one, so it would be skipped whatever the frontier
+says. The task needs a *new* dispatch, and only the driver makes those. The
+cancellation itself is ordinary — `workerStatus: "missing-completion"`, an agent
+whose turn ended without handing in — and `spentDispatch` already treats that as
+a spent attempt for a single-agent phase. What is missing is the same reading
+for a fan-out member.
+
+So the two halves are: the frontier must stop treating a cancelled attempt as a
+verdict on its task, and the driver must open a fresh attempt for a member whose
+turn ended empty. Neither is useful without the other, which is why this is one
+item and not two.
 so it can be.
 
 ## The browser suite fails a different test each run

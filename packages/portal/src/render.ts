@@ -58,7 +58,7 @@ import {
   revisionKey,
   runKey,
 } from "./state.js";
-import { timelineMoments } from "./timeline.js";
+import { momentTime, timelineMoments } from "./timeline.js";
 import {
   captureTranscriptScroll,
   restoreTranscriptScroll,
@@ -2030,8 +2030,49 @@ function renderRightRail(
   if (pendingList.childElementCount === 0)
     pendingList.append(textElement("li", "empty-state", "No uncertain commands."));
   pendingSection.append(pendingList);
-  aside.append(needsSection, pendingSection);
+  aside.append(needsSection, answeredSection(state, actions), pendingSection);
   return aside;
+}
+
+/**
+ * What you decided, where you decided it, on the surface that asked.
+ *
+ * An answer leaves the queue the moment it is given, so without this the rail
+ * says a question is gone and nothing says what was said. The transcript and
+ * the timeline both carry it, and neither is the surface a person was looking
+ * at when they answered.
+ */
+function answeredSection(state: PortalState, actions: PortalRenderActions): HTMLElement {
+  const section = element("section", "rail-section");
+  section.append(textElement("h3", "rail-section-heading", "Recently answered"));
+  const ids = selectedIds(state);
+  const questions =
+    ids === undefined
+      ? []
+      : (state.caches.questions[runKey(ids.repositoryId, ids.runId)]?.questions ?? []);
+  const answered = questions
+    .filter((question) => question.answer !== undefined)
+    .sort((left, right) =>
+      String(right.answer?.answeredAt ?? "").localeCompare(String(left.answer?.answeredAt ?? "")),
+    )
+    .slice(0, 5);
+  const list = element("ul", "answered-list");
+  for (const question of answered) {
+    const item = element("li", "answered-item");
+    const open = commandButton(question.prompt, () => {
+      actions.unfoldNode(String(question.source.taskId));
+    });
+    open.className = "answered-open";
+    item.append(
+      textElement("span", "answered-when", momentTime(String(question.answer?.answeredAt))),
+      open,
+    );
+    list.append(item);
+  }
+  if (answered.length === 0)
+    list.append(textElement("li", "empty-state", "You have not answered anything yet."));
+  section.append(list);
+  return section;
 }
 
 function renderDialog(
