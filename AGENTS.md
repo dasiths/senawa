@@ -17,6 +17,14 @@ stop after each phase for an update.
   shared action, or a real blocker.
 * Summarise only when the whole task is finished.
 
+### Ending a turn
+
+* End with at most two short sentences.
+* No bullet lists, tables, headings, or done/remaining inventories.
+* Never end a turn straight after a commit and push. A push is a checkpoint,
+  not a finish line; start the next item in the same turn.
+* Finishing one plan item is not a reason to stop. Move to the next.
+
 ## Architecture boundaries
 
 * Keep the kernel deterministic and free of filesystem, process, network,
