@@ -144,6 +144,43 @@ built on top is guessing.
   sound. The behaviour they proved was the wrong behaviour, which no unit test
   could have told me. The live run did, in twenty minutes.
 
+### What has been ruled out
+
+Two candidates looked decisive and were not. Both are recorded because the next
+attempt should not spend the evidence again.
+
+**Ambiguous dispatches are not it.** `selectCurrentDispatches` returns
+`undefined` for the whole run when any one task has more than one dispatch
+matching its scope, and `schedule()` then quietly does nothing, which would be a
+blast radius worth fixing on its own. It does not fire here. Every dispatch
+carries a distinct `contextDigest`, and the scope's `current_context_digest`
+names exactly one of them, so `matches.length` is never above one:
+
+```text
+task_407c053a…  dispatches=10, ten distinct digests
+scope           current_context_digest a239353edf9f  (one of the ten)
+```
+
+**A lost effect is not it either.** `selectCurrentDispatches` silently skips any
+dispatch whose `effect` is `undefined`, and `context_dispatches` has no effect
+column, which suggested the effect lived only in the registering process's
+memory and could never be scheduled by the daemon. It is persisted, inside the
+`context_authority_state` blob under `$.dispatches[].effect`.
+
+### What is left to read
+
+The decline is therefore in `#ready` or in `schedulableDispatches`:
+
+* `#ready` marks an accepted task and drops it, then asks
+  `deriveReadyTaskFrontier` which of the rest are ready. A task the frontier
+  does not return is skipped by `#scheduleRepository` with no record.
+* `schedulableDispatches` removes any dispatch named by an outstanding fresh
+  dispatch requirement. Three questions were answered on this run, and each
+  answer creates one.
+
+Neither has been read against the stalled run yet. The state is still on disk,
+so it can be.
+
 ## The browser suite fails a different test each run
 
 This one is characterised, not diagnosed, and the plan says so rather than
