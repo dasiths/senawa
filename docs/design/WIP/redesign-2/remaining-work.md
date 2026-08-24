@@ -112,25 +112,37 @@ That asks for a terminal outcome. No intent means no outcome, so a dispatch that
 never started can never be spent, and the phase waits for a process nothing was
 ever told to run.
 
-### The fix
+### The fix, attempted and withdrawn
 
 Recovery has to key off the dispatch, not the intent, because the dispatch is
-the record that exists in the failure. A dispatch with no runner command has not
-started, and the honest repair is to enqueue it rather than to wait for it or to
-fabricate an outcome saying it failed.
+the record that exists in the failure. The first attempt read a dispatch the
+runner had never heard of as a turn that never began, and let the existing
+retry path open a fresh attempt.
 
-* [x] A dispatch with no runner command is enqueued rather than waited on —
-  deviated deliberately. Enqueuing assumes the work is still wanted, and the
-  scheduler may have skipped the dispatch precisely because it was superseded.
-  A dispatch the runner never heard of is instead read as a turn that never
-  began, which lets the existing retry path open a fresh attempt. That is
-  self-healing without resurrecting work the run has moved past.
+Driven live, that was worse than the wedge it replaced. The run reached the
+implement phase and produced **ten dispatches for one task**: one that ran and
+completed, and nine created one after another and never enqueued. The scheduler
+would not schedule them, so each cycle found the newest dispatch unstarted and
+made another. A run that used to stop now grew instead, and still did not move.
+
+The reading was wrong in the same way three earlier guesses were wrong: it
+treated "no runner command" as proof the work had not started, when it is also
+what the scheduler leaves behind when it deliberately declines a dispatch. An
+idle runner does not distinguish those two.
+
+Reverted. What is actually needed first is the answer to a question this
+document cannot yet answer: **why does the scheduler decline these dispatches?**
+`#scheduleRepository` skips any dispatch whose task is not in the ready
+frontier, and `#ready` marks a task `accepted` and drops it. Until that is
+established by reading the scheduler against a real stalled run, any recovery
+built on top is guessing.
+
+* [ ] Establish why the production scheduler declines a registered dispatch
+* [ ] Recovery keyed off that answer, not off the absence of an intent
 * [x] The wedged state is reachable in a test without a live model — the
-  decision is a pure predicate over the runner's effects, tested against the
-  four states that look alike: everything finished, something still active,
-  nothing enqueued yet, and the dispatch actually held. The two positive cases
-  fail against the old reading.
-* [ ] A live restart mid-turn is driven through the browser suite
+  predicate and its four look-alike states were tested, and the tests were
+  sound. The behaviour they proved was the wrong behaviour, which no unit test
+  could have told me. The live run did, in twenty minutes.
 
 ## The browser suite fails a different test each run
 
