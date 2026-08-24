@@ -278,6 +278,19 @@ So the fix is: give a member attempt its own number, distinct from its position,
 and pass the empty-turn refusal so the retry's content differs. That is a change
 to how member dispatches are identified, not a predicate tweak, and it wants its
 own slice.
+
+Taking the next ordinal above every dispatch the phase holds was tried, and the
+dataflow refused it:
+
+```text
+RuntimeDataflowError: Phase attempt ordinal is already assigned to different content
+```
+
+Three attempts, three different failures: waiting for ever, a no-op retry read
+as progress, and an ordinal collision. Each was caught by driving the live run,
+and none by a unit test. The ordinal space is shared between members, retries
+and the phase's own attempts, and picking a free number needs the dataflow's
+rules rather than a maximum. That is the design work this item actually is.
 so it can be.
 
 ## The browser suite fails a different test each run
