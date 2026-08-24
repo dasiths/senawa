@@ -29,7 +29,7 @@ export interface GraphFlowOptions {
   /** Phases a reader opened by hand, which outrank the automatic rule. */
   readonly unfolded: readonly string[];
   /** What each task handed on, keyed by node id. */
-  readonly handedOn: ReadonlyMap<string, string>;
+  readonly handedOn: ReadonlyMap<string, { readonly name: string; readonly size: string }>;
   readonly decorate: (node: PortalGraphNode) => GraphFlowNodeExtras;
   readonly actions: GraphFlowActions;
 }
@@ -167,8 +167,10 @@ export function graphFlowView(options: GraphFlowOptions): HTMLElement {
       chip.className = "chip";
       chip.dataset.node = `artifact-${phase.nodeId}`;
       chip.dataset.from = phase.nodeId;
-      const name = textElement("b", "", phase.title);
-      chip.append(name, textElement("span", "fan", carried));
+      // The line between two phases is where a reader looks for what crossed
+      // it, and the phase's own name is already on the band above.
+      const name = textElement("b", "", carried.name);
+      chip.append(name, textElement("span", "fan", carried.size));
       chip.addEventListener("click", () => actions.select(phase.nodeId));
       flow.append(chip);
       previous = `artifact-${phase.nodeId}`;

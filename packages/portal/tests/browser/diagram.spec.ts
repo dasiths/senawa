@@ -22,6 +22,14 @@ test("reads the workflow as bands of phases carrying cards of work", async ({ pa
     page.locator(".graph-edges script, .graph-edges image, .graph-edges foreignObject"),
   ).toHaveCount(0);
 
+  // What crossed between two phases is named on the line, not by the phase it
+  // came from, whose name is already on the band above.
+  const chip = page.locator(".chip").first();
+  if ((await page.locator(".chip").count()) > 0) {
+    await expect(chip.locator("b")).not.toHaveText("");
+    await expect(chip.locator(".fan")).toHaveText(/\d/u);
+  }
+
   await assertDocumentFits(page);
   expect(diagnostics.severe()).toEqual([]);
 });

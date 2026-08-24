@@ -882,11 +882,12 @@ function graphFlow(
   const key = ids === undefined ? undefined : runKey(ids.repositoryId, ids.runId);
   const agents = key === undefined ? [] : (state.caches.agents[key]?.agents ?? []);
   const artifacts = key === undefined ? [] : (state.caches.artifacts[key]?.artifacts ?? []);
-  const handedOn = new Map<string, string>();
+  const handedOn = new Map<string, { readonly name: string; readonly size: string }>();
   for (const artifact of artifacts) {
     if (artifact.taskId === undefined) continue;
     const id = String(artifact.taskId);
-    if (!handedOn.has(id)) handedOn.set(id, formatBytes(artifact.byteLength));
+    if (!handedOn.has(id))
+      handedOn.set(id, { name: artifact.summary, size: formatBytes(artifact.byteLength) });
   }
   return graphFlowView({
     nodes,
