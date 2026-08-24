@@ -459,7 +459,22 @@ async function step(
   const answered = supervisor.commandAuthority
     .listAnsweredQuestions(input.repositoryId, input.runId)
     .filter((entry) => entry.taskId === String(dispatch.task.taskId));
-  if (answered.length > 0) {
+  // An answer carries into the next attempt, and a task the authority has
+  // accepted has no next attempt. Dispatching one anyway makes work the
+  // scheduler will never start, because an accepted task is not in the ready
+  // frontier, and the fan-in then waits on it for ever.
+  const taskAlreadyAccepted = (scheduling.acceptedTasks ?? []).some(
+    (entry) => String(entry.task.taskId) === String(dispatch.task.taskId),
+  );
+  if (answered.length > 0 && taskAlreadyAccepted) {
+    for (const entry of answered) {
+      supervisor.commandAuthority.satisfyFreshDispatchRequirement(
+        entry.submissionId,
+        String(dispatch.dispatchId),
+      );
+    }
+  }
+  if (answered.length > 0 && !taskAlreadyAccepted) {
     // A member owns its own task, so the fresh dispatch has to name the same
     // member rather than the phase's first.
     const member = members.findIndex(
