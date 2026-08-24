@@ -482,6 +482,14 @@ async function step(
     (scheduling.acceptedTasks ?? []).some(
       (entry) => String(entry.task.taskId) === String(dispatch.task.taskId),
     );
+  // A member that is still working will hand in on its own. Giving it a turn to
+  // carry the answer makes a second dispatch for the same task, and whichever
+  // one loses is waited on for ever. Only a turn that is over needs replacing.
+  const memberStillWorking =
+    !taskAlreadyDone &&
+    !completed &&
+    !spentDispatch(input, dispatchId) &&
+    startedDispatch(input, dispatchId);
   if (answered.length > 0 && taskAlreadyDone) {
     for (const entry of answered) {
       supervisor.commandAuthority.satisfyFreshDispatchRequirement(
@@ -490,7 +498,7 @@ async function step(
       );
     }
   }
-  if (answered.length > 0 && !taskAlreadyDone) {
+  if (answered.length > 0 && !taskAlreadyDone && !memberStillWorking) {
     // A member owns its own task, so the fresh dispatch has to name the same
     // member rather than the phase's first.
     const member = members.findIndex(
@@ -962,6 +970,27 @@ function nextPhaseAttemptOrdinal(
     return 1;
   } finally {
     authority.close();
+  }
+}
+
+/** Whether the runner holds an effect for this dispatch at all. */
+function startedDispatch(input: AdvanceRunInput, dispatchId: string): boolean {
+  const runner = new SqliteRunnerAuthority({
+    databasePath: input.databasePath,
+    dependencies: input.dependencies,
+  });
+  try {
+    return runner
+      .load({ repositoryId: input.repositoryId, runId: input.runId })
+      .effects.some(({ intent }) => {
+        if (intent.command.kind !== "worker") return false;
+        const held = intent.command.input as { readonly dispatchId?: unknown } | null;
+        return held !== null && typeof held === "object" && String(held.dispatchId) === dispatchId;
+      });
+  } catch {
+    return false;
+  } finally {
+    runner.close();
   }
 }
 
