@@ -733,8 +733,18 @@ the symptom were wrong for that reason.
 
 ### Proven the same way
 
+A live run is not a step in this phase; it is the condition for the phase being
+finished. Nothing here counts as done on a green suite alone, because every one
+of the four failed attempts above passed its tests.
+
 * [ ] A run reaches every phase closed with no command-line intervention
 * [ ] A run survives the supervisor being restarted mid-turn
+* [ ] After every item in this plan is done, the example is driven once more
+  from a clean state root, end to end in a browser, and completes
+
+The last one is a condition of success for the plan as a whole. A run driven
+before the final change proves that change against the state it happened to
+find; a run driven after everything proves the plan.
 
 ## Log
 
