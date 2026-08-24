@@ -447,7 +447,7 @@ better home. Build it or delete the promise and say which.
 An output belongs on the arrow leaving the node that produced it, which is where
 a reader looks for it on a graph.
 
-* [ ] An artifact renders on the edge leaving its producing node
+* [x] An artifact renders on the edge leaving its producing node
 
 ### Deltas for live tailing
 
@@ -463,7 +463,9 @@ None of the above is finished until the example runs end to end, in a browser,
 driven by Playwright rather than asserted.
 
 * [ ] The example completes with every phase closed
-* [ ] Every question is answered from the portal
+* [x] Every question is answered from the portal — three questions and a budget
+  grant, driven from the reply box in a browser. The grant released six blocked
+  members at once.
 * [ ] The run recovers from a supervisor restart mid-turn
 
 The last one is new, and belongs here rather than in a unit test, because the

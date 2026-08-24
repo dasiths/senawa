@@ -74,7 +74,9 @@ browser tests.
 * [x] The graph carries a need's action, not only its count
 * [x] A phase folds when its last member lands, and unfolds while work remains
 * [x] An edge whose endpoint is folded away attaches to the group instead
-* [ ] An artifact renders on the edge leaving the node that produced it
+* [x] An artifact renders on the edge leaving the node that produced it — the
+  chip on the connector names the artifact and its size, where it used to
+  repeat the phase title the band above already carries.
 
 ## Phase 4: a record is built when it is opened
 
@@ -121,8 +123,11 @@ The largest phase, and the only one that needs data we do not record.
 ## Phase 7: answering feels like answering the agent
 
 * [x] The reply box attaches to the transcript it answers
-* [ ] Steering uses the same surface, because it interrupts the same thing (carried to Phase 11)
-* [ ] An escalation is granted from the node that raised it (carried to Phase 11)
+* [x] Steering uses the same surface, because it interrupts the same thing — one
+  box, with pills above it choosing what is being answered. No pill means
+  steering.
+* [x] An escalation is granted from the node that raised it — its pill names the
+  member, and the box takes the number.
 
 ## Phase 8: the portal looks like the mocks
 
@@ -383,8 +388,8 @@ rather than standing beside it.
 
 * [x] One chronological column: time, what happened in the reader's words, where
 * [x] Events grouped under the phase they belong to, newest last
-* [ ] A delivery record hangs off the event that published it (carried to Phase 11)
-* [ ] What cannot be dated says so rather than pretending to an order (carried to Phase 11)
+* [x] A delivery record hangs off the event that published it
+* [x] What cannot be dated says so rather than pretending to an order
 
 ## Phase 10: one design language, proven by looking
 
@@ -635,17 +640,19 @@ Begin from what a person actually arrives wanting to know:
 * *What is the exact record?* — one action away, never in the way.
 
 * [x] One reading of the run's history, not three cards of machinery
-* [ ] A delivery record hangs off the moment that published it
-* [ ] What cannot be dated says so rather than pretending to an order
+* [x] A delivery record hangs off the moment that published it
+* [x] What cannot be dated says so rather than pretending to an order — the
+  undated list keeps its name and holds only what no moment claimed.
 * [x] Answers already given are readable without leaving the page
-* [ ] `Recently answered` in the rail, or the reason it belongs here instead
+* [x] `Recently answered` in the rail — the last five, each opening the work it
+  was asked about.
 
 ### Still carried, and honestly
 
 Not everything from earlier phases landed. These are open, and none of them is
 blocked by anything above:
 
-* [ ] An artifact renders on the edge leaving the node that produced it
+* [x] An artifact renders on the edge leaving the node that produced it
 * [x] Classify transcript sensitivity the way artifacts are classified — dropped
   with the whole idea. Sensitivity is being removed everywhere, so there is no
   scheme left to classify a transcript against.
