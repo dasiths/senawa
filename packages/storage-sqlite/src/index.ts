@@ -1647,6 +1647,29 @@ export class SqliteAuthority
     }
   }
 
+  /**
+   * The lowest ordinal no attempt of this phase has taken.
+   *
+   * A phase spends ordinals on more than dispatching — a gate or a close takes
+   * one without a dispatch — so inferring the next one from dispatches lands on
+   * a number the attempts already hold, and the dataflow refuses it.
+   */
+  nextPhaseAttemptOrdinal(input: {
+    readonly repositoryId: string;
+    readonly runId: string;
+    readonly phaseId: string;
+    readonly definitionGeneration: number;
+  }): number {
+    const runKey = this.#requiredRunKey(input.repositoryId, input.runId);
+    const row = this.#database
+      .prepare<[string, string, number], { highest: number | null }>(
+        `SELECT MAX(attempt_ordinal) AS highest FROM phase_attempts
+         WHERE run_key = ? AND phase_id = ? AND definition_generation = ?`,
+      )
+      .get(runKey, input.phaseId, input.definitionGeneration);
+    return (row?.highest ?? 0) + 1;
+  }
+
   appendPhaseAttempt(
     attemptValue: PhaseAttempt,
     inputValue: PhaseInputBinding,

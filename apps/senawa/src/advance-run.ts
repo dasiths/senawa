@@ -411,7 +411,12 @@ async function step(
       candidate.runId === input.runId &&
       phaseKeyByTask(snapshot, candidate.task.taskId) === phaseKey,
   );
-  const nextAttempt = Math.max(...phaseDispatches.map((candidate) => candidate.ordinal)) + 1;
+  // A phase spends ordinals on more than dispatching, so the attempts know
+  // which are taken and the dispatches only guess.
+  const nextAttempt = Math.max(
+    nextPhaseAttemptOrdinal(input, scheduling.phase),
+    Math.max(0, ...phaseDispatches.map((candidate) => candidate.ordinal)) + 1,
+  );
   const taskAttempts = phaseDispatches.filter(
     (candidate) => String(candidate.task.taskId) === String(dispatch.task.taskId),
   ).length;
@@ -895,6 +900,40 @@ function gateFor(
  * means. Until a fact crosses that line the authority has no accepted task for
  * the phase, and evaluating a gate refuses with a task set mismatch.
  */
+/**
+ * The next ordinal no attempt of this phase holds.
+ *
+ * Opening the authority per call matches how the runner is read here, and the
+ * alternative — inferring from dispatches — lands on ordinals a gate or a close
+ * already spent.
+ */
+function nextPhaseAttemptOrdinal(
+  input: AdvanceRunInput,
+  phase: { readonly phaseId?: unknown; readonly definitionGeneration?: unknown },
+): number {
+  const phaseId = typeof phase.phaseId === "string" ? phase.phaseId : undefined;
+  const generation =
+    typeof phase.definitionGeneration === "number" ? phase.definitionGeneration : undefined;
+  if (phaseId === undefined || generation === undefined) return 1;
+  const authority = new SqliteAuthority({
+    databasePath: input.databasePath,
+    assetDirectory: input.assetDirectory,
+    dependencies: input.dependencies,
+  });
+  try {
+    return authority.nextPhaseAttemptOrdinal({
+      repositoryId: input.repositoryId,
+      runId: input.runId,
+      phaseId,
+      definitionGeneration: generation,
+    });
+  } catch {
+    return 1;
+  } finally {
+    authority.close();
+  }
+}
+
 /**
  * Whether the dispatch's turn is over with nothing handed in.
  *
