@@ -171,32 +171,56 @@ memory and could never be scheduled by the daemon. It is persisted, inside the
 
 Fresh dispatch requirements are ruled out too. Three answers were given on this
 run and each created one, but all three name the superseded *researcher*
-dispatches, not the implementor dispatch that is waiting:
+dispatches, not the implementor dispatch that is waiting.
+
+### A cancelled attempt is terminal for its task
+
+Running `#ready` against the stalled database answers it. The ready frontier
+returns **nothing**, and all six live dispatches are declined:
 
 ```text
-fresh dispatch requirements: 3
-   stale dispatch: f2226c1f1df3   researcher
-   stale dispatch: 67c63ef271cb   researcher
-   stale dispatch: 967daa68a5f8   researcher
-selected implementor dispatch:  a239353edf9f   not named by any requirement
+task_407c053a  accepted     task_e30bb4a5  active
+task_6ab7223e  accepted     task_1babea53  active
+task_e00be147  accepted     task_f7fd96a0  cancelled
+ready frontier: 0
 ```
 
-So `schedulableDispatches` passes it through, and the decline is in `#ready`:
+`deriveReadyTaskFrontier` has one filter that decides this:
 
 ```ts
-if (!ready.has(dispatch.taskScope.taskId)) continue;
+.filter((definition) => factsByTask.get(definition.id)?.status === "pending")
 ```
 
-`#ready` marks an accepted task and drops it, then asks
-`deriveReadyTaskFrontier` which of the rest are ready. A task the frontier does
-not return is skipped with nothing recorded to say so. `task_407c053a` has no
-acceptance record and no worker effect, so it should read `pending`; whether
-the frontier withholds it, and why, is the one thing still unread.
+Only a `pending` task is ever ready. And `#ready` derives the status from the
+task's current dispatch:
 
-The next step is to run `#ready` against this database and print the facts it
-builds and the frontier it gets back. The state is still on disk. A scheduler
-that declines a dispatch should say so rather than return `worked: false`,
-which is the change this will most likely justify.
+```ts
+const status = worker === undefined ? "pending"
+  : worker.outcome?.status === "failed" ? "failed"
+  : worker.outcome?.status === "cancelled" ? "cancelled"
+  : "active";
+```
+
+So once a task's current dispatch carries a cancelled outcome, the task reads
+`cancelled` for ever and can never be scheduled again. There is no path back to
+`pending` except a new dispatch, whose absence is the thing being waited on.
+
+This is not an exotic state. `task_f7fd96a0` is the member that ran out of
+budget: it escalated, its attempt was cancelled, the escalation was granted from
+the portal, and the grant released six other dispatches — but this member stayed
+dead, because cancellation had already disqualified its task.
+
+Cancellation is ordinary. A budget that runs out cancels an attempt, and so does
+a supervisor restart. Treating it as a verdict on the task rather than on the
+attempt is what turns both into a stalled run.
+
+* [ ] A cancelled attempt returns its task to the frontier, or the driver
+  retries it, and the two agree on which
+* [ ] A scheduler that declines every dispatch says so rather than returning
+  `worked: false` in silence
+
+The second matters as much as the first. Three wrong diagnoses, including one
+shipped and reverted, came from a scheduler that stalls without a word.
 so it can be.
 
 ## The browser suite fails a different test each run
