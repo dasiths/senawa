@@ -324,6 +324,29 @@ alike, so the two cannot disagree.
 
 * [ ] The driver asks the authority for the next free phase attempt ordinal
 * [ ] The phase retry and the member retry both use it
+
+### The stalled run cannot persist at all
+
+Driving it after the ordinal fix surfaces a different refusal, and it is not
+caused by the retry:
+
+```text
+ProtocolValidationError: $ wire value exceeds 262144 bytes
+    at SqliteContextBroker.registerDispatch
+```
+
+The same line is in the supervisor's own log from before any of these changes,
+so this run has been unable to write a new dispatch for some time. That is a
+second, independent reason it stopped, and it means no fix can be proven against
+this database: every attempt fails on persistence before reaching the behaviour
+under test.
+
+The context authority state is one canonical blob holding every dispatch, and
+this run accumulated eighteen — ten of them for a single task, from the retry
+storm the reverted fix caused. A run's state growing past a fixed wire ceiling
+is worth its own item, because a long run reaches it honestly.
+
+* [ ] A run's context state does not have to fit in one 256KB wire value
 so it can be.
 
 ## The browser suite fails a different test each run
