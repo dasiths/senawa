@@ -459,14 +459,30 @@ async function step(
   const answered = supervisor.commandAuthority
     .listAnsweredQuestions(input.repositoryId, input.runId)
     .filter((entry) => entry.taskId === String(dispatch.task.taskId));
-  // An answer carries into the next attempt, and a task the authority has
-  // accepted has no next attempt. Dispatching one anyway makes work the
-  // scheduler will never start, because an accepted task is not in the ready
-  // frontier, and the fan-in then waits on it for ever.
-  const taskAlreadyAccepted = (scheduling.acceptedTasks ?? []).some(
-    (entry) => String(entry.task.taskId) === String(dispatch.task.taskId),
+  // An answer carries into the next attempt, and work that has already been
+  // handed in has no next attempt. Dispatching one anyway makes work the
+  // scheduler will never start, because a task that is accepted, or waiting to
+  // be, is not in the ready frontier, and the fan-in then waits on it for ever.
+  //
+  // Acceptance alone is too late a signal: a member that hands in sits handed-in
+  // but unaccepted for a cycle or more, which is exactly when an answer arrives.
+  // The durable completion is the fact that does not move.
+  const handedInTaskIds = new Set(
+    state.terminalCompletions
+      .map((entry) =>
+        state.dispatches.find(
+          (candidate) => String(candidate.dispatchId) === String(entry.dispatchId),
+        ),
+      )
+      .filter((candidate) => candidate !== undefined)
+      .map((candidate) => String(candidate.task.taskId)),
   );
-  if (answered.length > 0 && taskAlreadyAccepted) {
+  const taskAlreadyDone =
+    handedInTaskIds.has(String(dispatch.task.taskId)) ||
+    (scheduling.acceptedTasks ?? []).some(
+      (entry) => String(entry.task.taskId) === String(dispatch.task.taskId),
+    );
+  if (answered.length > 0 && taskAlreadyDone) {
     for (const entry of answered) {
       supervisor.commandAuthority.satisfyFreshDispatchRequirement(
         entry.submissionId,
@@ -474,7 +490,7 @@ async function step(
       );
     }
   }
-  if (answered.length > 0 && !taskAlreadyAccepted) {
+  if (answered.length > 0 && !taskAlreadyDone) {
     // A member owns its own task, so the fresh dispatch has to name the same
     // member rather than the phase's first.
     const member = members.findIndex(
