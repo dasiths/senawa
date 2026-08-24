@@ -503,9 +503,7 @@ async function step(
     // A dispatch that ended without handing anything in is a spent attempt, not
     // work still in progress. Reporting it as awaiting the agent waits for a
     // turn that is already over, which stalls the run until a person notices.
-    // A dispatch the runner was never told about has the same effect for the
-    // opposite reason: the turn never began, so waiting for it waits forever.
-    if (!asked && (spentDispatch(input, dispatchId) || unstartedDispatch(input, dispatchId))) {
+    if (!asked && spentDispatch(input, dispatchId)) {
       const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
       if (taskAttempts < maximumAttempts) {
         const retried = dispatchPhase({
@@ -897,55 +895,6 @@ function gateFor(
  * means. Until a fact crosses that line the authority has no accepted task for
  * the phase, and evaluating a gate refuses with a task set mismatch.
  */
-/**
- * Whether the runner was never told about this dispatch.
- *
- * Registering a dispatch and enqueuing its runner command are two writes, made
- * on different cycles. A supervisor that stops in between leaves a dispatch
- * with no intent, no claim and no outcome, which every recovery misses because
- * they all key off the intent. The fan-in then waits for a process nothing was
- * ever told to start.
- *
- * An idle runner is what makes this safe to act on. A scheduler with work in
- * flight may simply not have reached this dispatch yet, and a runner with no
- * effects at all has not started work on anything, so neither says the dispatch
- * was left behind. One that has run everything it holds does.
- */
-export function dispatchNeverStarted(
-  effects: readonly {
-    readonly intent: { readonly command: { readonly kind: string; readonly input: unknown } };
-    readonly outcome?: { readonly status: string } | undefined;
-  }[],
-  dispatchId: string,
-): boolean {
-  if (effects.length === 0) return false;
-  if (effects.some(({ outcome }) => outcome === undefined || outcome.status === "active")) {
-    return false;
-  }
-  return !effects.some(({ intent }) => {
-    if (intent.command.kind !== "worker") return false;
-    const held = intent.command.input as { readonly dispatchId?: unknown } | null;
-    return held !== null && typeof held === "object" && String(held.dispatchId) === dispatchId;
-  });
-}
-
-function unstartedDispatch(input: AdvanceRunInput, dispatchId: string): boolean {
-  const runner = new SqliteRunnerAuthority({
-    databasePath: input.databasePath,
-    dependencies: input.dependencies,
-  });
-  try {
-    return dispatchNeverStarted(
-      runner.load({ repositoryId: input.repositoryId, runId: input.runId }).effects,
-      dispatchId,
-    );
-  } catch {
-    return false;
-  } finally {
-    runner.close();
-  }
-}
-
 /**
  * Whether the dispatch's turn is over with nothing handed in.
  *

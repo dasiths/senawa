@@ -15,7 +15,7 @@ import {
 } from "@senawa/storage-sqlite";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { advanceRun, dispatchNeverStarted } from "./advance-run.js";
+import { advanceRun } from "./advance-run.js";
 import { runtimeDependencies as productionDependencies } from "./daemon.js";
 import { runtimeSchemaContract } from "./dataflow-composition.js";
 import { startAuthoredRun } from "./start-run.js";
@@ -271,49 +271,6 @@ describe("advancing a run", () => {
         repositoryBase: BASE,
       }),
     ).rejects.toThrow(/run_absent: no such run/u);
-  });
-});
-
-// The window is between registering a dispatch and enqueuing its runner
-// command. A supervisor stopped inside it leaves a dispatch no recovery can
-// see, because they all key off an intent that was never written.
-describe("a dispatch the runner was never told about", () => {
-  const worker = (dispatchId: string, status: string | undefined) => ({
-    intent: { command: { kind: "worker", input: { dispatchId } } },
-    ...(status === undefined ? {} : { outcome: { status } }),
-  });
-
-  it("is left behind when the runner has finished everything else", () => {
-    expect(dispatchNeverStarted([worker("dispatch_ran", "completed")], "dispatch_lost")).toBe(true);
-  });
-
-  it("is not claimed when the runner is still working", () => {
-    expect(
-      dispatchNeverStarted(
-        [worker("dispatch_ran", "completed"), worker("dispatch_busy", "active")],
-        "dispatch_lost",
-      ),
-    ).toBe(false);
-  });
-
-  // A scheduler that has not run yet looks exactly like one that skipped this
-  // dispatch. Retrying here would dispatch a second agent for the same turn.
-  it("is not claimed before the runner has been given anything", () => {
-    expect(dispatchNeverStarted([], "dispatch_lost")).toBe(false);
-  });
-
-  it("is not claimed for a dispatch the runner does hold", () => {
-    expect(dispatchNeverStarted([worker("dispatch_lost", "completed")], "dispatch_lost")).toBe(
-      false,
-    );
-  });
-
-  it("ignores work that is not an agent's turn", () => {
-    const git = {
-      intent: { command: { kind: "git", input: {} } },
-      outcome: { status: "completed" },
-    };
-    expect(dispatchNeverStarted([git], "dispatch_lost")).toBe(true);
   });
 });
 
