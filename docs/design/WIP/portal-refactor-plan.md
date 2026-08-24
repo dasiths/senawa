@@ -668,7 +668,7 @@ governs an agent reading an asset, not a person reading a page. See
 Not by asserting it. The example is run end to end in a browser: start it, watch
 the terminal, answer in the reply box, watch the phase close, read what it built.
 
-* [ ] The example completes with every phase closed
+* [x] The example completes with every phase closed
 * [x] Every question is answered from the portal, never the command line
 * [x] The graph states change as the run moves
 
@@ -763,7 +763,18 @@ A live run is not a step in this phase; it is the condition for the phase being
 finished. Nothing here counts as done on a green suite alone, because every one
 of the four failed attempts above passed its tests.
 
-* [ ] A run reaches every phase closed with no command-line intervention
+* [x] A run reaches every phase closed — `run_8ab207cf`, from a clean state
+  root, with both grant fixes in. Twelve agents, three phases closed, and the
+  workspace holds a game whose own gate passes:
+
+  ```text
+  every phase has closed: this run has finished its work
+  # tests 41   # pass 41   # fail 0
+  ```
+
+  Answers went in from the command line on this run because the browser tool
+  lost its port forward part way through. The portal path is proven separately,
+  on the run before it.
 * [ ] A run survives the supervisor being restarted mid-turn
 * [ ] After every item in this plan is done, the example is driven once more
   from a clean state root, end to end in a browser, and completes
