@@ -674,66 +674,63 @@ the terminal, answer in the reply box, watch the phase close, read what it built
 
 ## Phase 12: a fan-out member finishes, or takes another turn
 
-Driving the run twice end to end left the portal work essentially done and the
-runner holding the whole remainder. Both runs stopped in the same place and for
-the same reason, and the reason is not in the portal at all.
+Driving the run three times left the portal work essentially done and the runner
+holding the whole remainder. Every run stopped in the same place, and the reason
+was not the one I spent four attempts on.
 
-A phase closes when every member has handed in. A member whose turn ends without
-handing in never gets another one, so the phase waits for a turn that will not
-happen. Four attempts at this failed in four different ways, every one caught by
-driving the live run and none by a test:
+### What it actually was
+
+Two bugs, both about a grant, and both found by reading the stalled database
+rather than by reasoning about the driver.
+
+**The planner read the resolution, not the room.** A grant is a decision about a
+budget, and only the request that prompted it gets a resolution row. The needs
+list already knew that, which is why nothing showed as waiting. The planner did
+not: it excluded any command whose escalation had no resolution row. So a
+sibling that asked for the same unit had a queued command, no claim, no outcome,
+and never ran again.
+
+```text
+runner_escalations            2 rows
+runner_allowance_resolutions  1 row
+runner_budgets   review-iteration  limit 24, spent 10   → 14 free
+waiting on you: 0
+```
+
+**An answer restarted work that was already finished.** An answer carries into
+the next attempt, and a task the authority has accepted has no next attempt. The
+driver dispatched one anyway; the scheduler will never start it, because an
+accepted task is not in the ready frontier, and the fan-in waited on it for ever.
+
+* [x] The planner treats a request with room as answered, as the needs list does
+* [x] An answer to an accepted task satisfies its requirement without dispatching
+
+### What the four failed attempts were worth
+
+Every one of them passed its tests and failed the run:
 
 | Attempt | What it did |
 | --- | --- |
-| Wait on a missing runner command | Never released, because the absence is also what a declined dispatch leaves |
+| Wait on a missing runner command | Never released; absence is also what a declined dispatch leaves |
 | Retry on absence of an intent | Created dispatches for ever, ten for one task |
-| Retry with the member's own ordinal | Re-registered identical content, a no-op the driver read as progress |
-| Retry with the next ordinal above the dispatches | Collided with an attempt a gate had already spent |
+| Retry with the member's own ordinal | Re-registered identical content, a no-op read as progress |
+| Retry with the next ordinal above the dispatches | Collided with an ordinal a gate had spent |
 
-Two things came out of those that are worth keeping, and both landed: the
-scheduler now says which tasks are holding it rather than returning `worked:
-false` in silence, and a retry takes its ordinal from `phase_attempts` rather
-than guessing from dispatches.
+Two things came out of them that are worth keeping, and both landed. The
+scheduler now says which tasks are holding it rather than returning
+`worked: false` in silence — that log is what found both real bugs in minutes.
+And a retry takes its ordinal from `phase_attempts` rather than guessing from
+dispatches, which the attempts had already run ahead of.
 
-What is left is narrower than it looked. The signal for "has this member handed
-in" has to be the durable completion, not `state.completionOutbox`, which drops
-a completion once it is delivered. Reading the outbox is what made a finished
-member look unfinished and take a turn it did not need — the fourth failure, and
-the one that caused the wedge it was meant to fix.
+The lesson is the one the plan already states and I kept relearning: a green
+suite proves nothing here. Each wrong diagnosis survived its tests and died on
+first contact with a live run.
 
-* [ ] A member's completion is read from the durable record, not the outbox
-* [ ] A member whose turn ended empty takes another, bounded by the phase's limit
-* [ ] A cancelled attempt stops disqualifying its task from the frontier
-* [ ] The two agree: nothing is dispatched for a task already accepted
+### Still open
 
-### What a third run showed
-
-Driven again from a clean state root, with every question and the budget
-answered from the portal, the run stopped in the same place: two phases closed,
-eleven agents dispatched, nothing waiting on a person, `waiting for the agent
-working on implement` for ever.
-
-The dispatch table says which member and why it is different from its siblings:
-
-```text
-task_224d583c   ord 1  OPEN         ord 5  handed-in
-task_f7fd96a0   ord 4  OPEN
-```
-
-Both members had a turn that produced no completion. One of them came back and
-finished; the other never ran again. The difference is that `task_224d583c`
-asked a question. Answering it creates a fresh dispatch, because an answer makes
-the dispatch it was asked from stale, and that fresh dispatch is what finished
-the work.
-
-So there is already a path that gives a member another turn — it just happens to
-hang off answering a question. A member whose turn ends empty without asking
-anything has no equivalent, which is exactly the gap above, and the answer path
-is the shape the fix should follow rather than invent.
-
-One thing did work, twice over: a single grant cleared both budget escalations,
-taking `waiting on you` from three to one. That is the shared-budget fan-out fix
-confirmed on a second independent run.
+* [ ] A member whose turn ends empty without asking anything takes another turn,
+  bounded by the phase's limit, keyed off the durable completion rather than the
+  outbox
 
 ### A run that grows past what it can save
 
