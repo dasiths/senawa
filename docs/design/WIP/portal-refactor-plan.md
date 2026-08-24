@@ -706,6 +706,35 @@ the one that caused the wedge it was meant to fix.
 * [ ] A cancelled attempt stops disqualifying its task from the frontier
 * [ ] The two agree: nothing is dispatched for a task already accepted
 
+### What a third run showed
+
+Driven again from a clean state root, with every question and the budget
+answered from the portal, the run stopped in the same place: two phases closed,
+eleven agents dispatched, nothing waiting on a person, `waiting for the agent
+working on implement` for ever.
+
+The dispatch table says which member and why it is different from its siblings:
+
+```text
+task_224d583c   ord 1  OPEN         ord 5  handed-in
+task_f7fd96a0   ord 4  OPEN
+```
+
+Both members had a turn that produced no completion. One of them came back and
+finished; the other never ran again. The difference is that `task_224d583c`
+asked a question. Answering it creates a fresh dispatch, because an answer makes
+the dispatch it was asked from stale, and that fresh dispatch is what finished
+the work.
+
+So there is already a path that gives a member another turn — it just happens to
+hang off answering a question. A member whose turn ends empty without asking
+anything has no equivalent, which is exactly the gap above, and the answer path
+is the shape the fix should follow rather than invent.
+
+One thing did work, twice over: a single grant cleared both budget escalations,
+taking `waiting on you` from three to one. That is the shared-budget fan-out fix
+confirmed on a second independent run.
+
 ### A run that grows past what it can save
 
 The first live run reached a context state larger than one wire value and could
