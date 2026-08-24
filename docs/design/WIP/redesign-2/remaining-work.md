@@ -291,6 +291,39 @@ as progress, and an ordinal collision. Each was caught by driving the live run,
 and none by a unit test. The ordinal space is shared between members, retries
 and the phase's own attempts, and picking a free number needs the dataflow's
 rules rather than a maximum. That is the design work this item actually is.
+
+### The ordinal has to come from the attempts, not the dispatches
+
+The stalled run says exactly why. `phase_attempts` is keyed on
+`(run, phase, generation, ordinal)`, and the implement phase holds fourteen:
+
+```text
+phase_f489f7d6…  ordinals 1 … 14
+```
+
+Its dispatches only reach thirteen. Attempt fourteen has no dispatch of its own,
+because a phase spends ordinals on more than dispatching: a gate or a close
+takes one too. So any ordinal derived from dispatches is a guess that happens to
+be right most of the time.
+
+The existing phase-level retry makes that guess:
+
+```ts
+const nextAttempt = Math.max(...phaseDispatches.map((candidate) => candidate.ordinal)) + 1;
+```
+
+On this run that yields fourteen, which is taken, and the dataflow refuses it
+with `ordinal is already assigned to different content`. That refusal is already
+in the log as an unexplained `drive-run-failed`, and this is its cause. The bug
+is not new and not mine; the member retry only made it reachable sooner.
+
+The fix both halves need is one thing: **the next free ordinal must be read from
+`phase_attempts`, not inferred from dispatches.** That wants a method on the
+authority the driver already holds, used by the phase retry and the member retry
+alike, so the two cannot disagree.
+
+* [ ] The driver asks the authority for the next free phase attempt ordinal
+* [ ] The phase retry and the member retry both use it
 so it can be.
 
 ## The browser suite fails a different test each run
