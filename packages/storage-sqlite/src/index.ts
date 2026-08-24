@@ -7118,11 +7118,21 @@ export class SqliteRunnerAuthority implements RunnerAuthorityPort {
     // asked for it can run, and keeping the answered request here meant it never
     // ran again. The run then sat with room in its budget, nothing waiting on a
     // person, and no agent working.
+    //
+    // A grant is a decision about a budget, not about the request that happened
+    // to prompt it, and only one request gets a resolution row. Siblings that
+    // asked for the same unit are answered by the same grant, so what a request
+    // waits for is the room, and one with room is no longer waiting.
     const escalations = this.#database
       .prepare<[string], { canonical_escalation: string }>(
         `SELECT e.canonical_escalation FROM runner_escalations e
          LEFT JOIN runner_allowance_resolutions r ON r.escalation_command_id = e.command_id
+         JOIN runner_budgets b
+           ON b.run_key = e.run_key
+          AND b.unit = json_extract(e.canonical_escalation, '$.unit')
          WHERE e.run_key = ? AND r.escalation_command_id IS NULL
+           AND b.budget_limit - b.spent
+               < json_extract(e.canonical_escalation, '$.requested')
          ORDER BY e.command_id`,
       )
       .all(run.run_key)
