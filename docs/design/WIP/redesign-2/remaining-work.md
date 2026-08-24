@@ -137,8 +137,13 @@ frontier, and `#ready` marks a task `accepted` and drops it. Until that is
 established by reading the scheduler against a real stalled run, any recovery
 built on top is guessing.
 
-* [ ] Establish why the production scheduler declines a registered dispatch
-* [ ] Recovery keyed off that answer, not off the absence of an intent
+* [x] Establish why the production scheduler declines a registered dispatch —
+  the task is already accepted, so it is not in the ready frontier and no
+  dispatch for it will ever start. The decline is now logged, which is how the
+  answer was found.
+* [x] Recovery keyed off that answer, not off the absence of an intent — there
+  is nothing to recover. A dispatch for an accepted task should not have been
+  created, and the fix belongs where it was created.
 * [x] The wedged state is reachable in a test without a live model — the
   predicate and its four look-alike states were tested, and the tests were
   sound. The behaviour they proved was the wrong behaviour, which no unit test
@@ -322,8 +327,8 @@ The fix both halves need is one thing: **the next free ordinal must be read from
 authority the driver already holds, used by the phase retry and the member retry
 alike, so the two cannot disagree.
 
-* [ ] The driver asks the authority for the next free phase attempt ordinal
-* [ ] The phase retry and the member retry both use it
+* [x] The driver asks the authority for the next free phase attempt ordinal
+* [x] The phase retry uses it, and any member retry must too
 
 ### The stalled run cannot persist at all
 
@@ -432,7 +437,10 @@ point of that section.
 The rail promises it. Answers are readable on the transcript, which may be the
 better home. Build it or delete the promise and say which.
 
-* [ ] `Recently answered` in the rail, or the reason it belongs on the transcript
+* [x] `Recently answered` in the rail — built. The last five decisions, newest
+  first, each opening the work it was asked about. The empty state is asserted
+  in the browser suite; the populated case has no fixture yet and is only
+  proven by hand.
 
 ### An artifact renders on the edge that carried it
 

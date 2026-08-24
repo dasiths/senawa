@@ -40,6 +40,7 @@ const MAX_OPERATIONAL_ARGUMENT_LENGTH = 4_096;
 import { runAdvanceCommand } from "./advance-command.js";
 import { answerQuestion, decidePhase, overrideMember, steerAgent } from "./decide.js";
 import { grantAllowance } from "./grant-allowance.js";
+import { askOnTerminal, hardReset } from "./hard-reset.js";
 import {
   type InspectOptions,
   inspectPhase,
@@ -261,6 +262,18 @@ async function dispatchOperationalCli(
       socketPath: paths.socketPath,
       environment,
       workspaceRoot: process.cwd(),
+    });
+  }
+  if (group === "hard-reset") {
+    const named = action === undefined ? undefined : boundedArgument(action);
+    const flags = [named, ...rest].filter((value) => value !== undefined);
+    return await hardReset({
+      stateDirectory: paths.stateDirectory,
+      runtimeDirectory: paths.runtimeDirectory,
+      requestedPath: named === "--yes" ? boundedArgument(rest[0]) : named,
+      assumeYes: flags.includes("--yes"),
+      serviceRunning: existsSync(paths.socketPath),
+      ...(process.stdin.isTTY === true ? { confirm: askOnTerminal } : {}),
     });
   }
   if (group === "service" && action === "run" && rest.length === 0) {

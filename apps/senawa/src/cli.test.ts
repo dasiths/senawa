@@ -61,6 +61,7 @@ Commands:
   diagnostics create <fresh-dir>        Create a secret-safe diagnostic bundle
   repair plan                           Plan refusal-first maintenance
   repair apply <backup> <fresh-root>    Apply verified fresh restore only
+  hard-reset <state-root> [--yes]       Remove a state root, after confirming
   portal                                Create a one-time portal URL
 
 Options:
