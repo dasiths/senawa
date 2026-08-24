@@ -169,16 +169,34 @@ memory and could never be scheduled by the daemon. It is persisted, inside the
 
 ### What is left to read
 
-The decline is therefore in `#ready` or in `schedulableDispatches`:
+Fresh dispatch requirements are ruled out too. Three answers were given on this
+run and each created one, but all three name the superseded *researcher*
+dispatches, not the implementor dispatch that is waiting:
 
-* `#ready` marks an accepted task and drops it, then asks
-  `deriveReadyTaskFrontier` which of the rest are ready. A task the frontier
-  does not return is skipped by `#scheduleRepository` with no record.
-* `schedulableDispatches` removes any dispatch named by an outstanding fresh
-  dispatch requirement. Three questions were answered on this run, and each
-  answer creates one.
+```text
+fresh dispatch requirements: 3
+   stale dispatch: f2226c1f1df3   researcher
+   stale dispatch: 67c63ef271cb   researcher
+   stale dispatch: 967daa68a5f8   researcher
+selected implementor dispatch:  a239353edf9f   not named by any requirement
+```
 
-Neither has been read against the stalled run yet. The state is still on disk,
+So `schedulableDispatches` passes it through, and the decline is in `#ready`:
+
+```ts
+if (!ready.has(dispatch.taskScope.taskId)) continue;
+```
+
+`#ready` marks an accepted task and drops it, then asks
+`deriveReadyTaskFrontier` which of the rest are ready. A task the frontier does
+not return is skipped with nothing recorded to say so. `task_407c053a` has no
+acceptance record and no worker effect, so it should read `pending`; whether
+the frontier withholds it, and why, is the one thing still unread.
+
+The next step is to run `#ready` against this database and print the facts it
+builds and the frontier it gets back. The state is still on disk. A scheduler
+that declines a dispatch should say so rather than return `worked: false`,
+which is the change this will most likely justify.
 so it can be.
 
 ## The browser suite fails a different test each run
