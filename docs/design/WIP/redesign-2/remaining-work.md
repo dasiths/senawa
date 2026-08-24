@@ -245,6 +245,39 @@ So the two halves are: the frontier must stop treating a cancelled attempt as a
 verdict on its task, and the driver must open a fresh attempt for a member whose
 turn ended empty. Neither is useful without the other, which is why this is one
 item and not two.
+
+### Why the member retry is not a one-line change
+
+Attempted and reverted before commit. The member selector reads a member as
+handled if *any* dispatch exists for its task, so a member whose only attempt
+was cancelled is never chosen again. Making it choose a member whose every
+attempt is spent — guarded on a terminal outcome, so a member still working is
+never disturbed — does make the driver retry:
+
+```text
+dispatched implement as dispatch_f0061c1fb174…
+dispatched implement as dispatch_f0061c1fb174…
+dispatched implement as dispatch_f0061c1fb174…
+stopped after the step limit
+```
+
+The same dispatch identity, every cycle. A dispatch id is derived from its
+content, so re-registering a member with unchanged content returns the dispatch
+that is already there, and the retry is a no-op that the driver mistakes for
+progress. That is what the original "has any dispatch" reading was quietly
+protecting against.
+
+A member retry therefore has to change the content, the way the phase-level
+retry does: it passes `attempt: nextAttempt` and a `priorRefusals` line saying
+the previous turn ended without submitting. Members cannot simply reuse that,
+because a fan-out already spends one ordinal per member and
+`attempt: memberIndex + 1` puts them at `1..N` in the space a retry increments
+into — the collision F-0xx already fixed once for phases.
+
+So the fix is: give a member attempt its own number, distinct from its position,
+and pass the empty-turn refusal so the retry's content differs. That is a change
+to how member dispatches are identified, not a predicate tweak, and it wants its
+own slice.
 so it can be.
 
 ## The browser suite fails a different test each run
