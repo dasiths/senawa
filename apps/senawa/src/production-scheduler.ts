@@ -49,6 +49,8 @@ export interface ProductionScheduleResult {
 
 export class ProductionScheduler {
   readonly #options: ProductionSchedulerOptions;
+  /** The last decline reported per run, so a stalled run says it once. */
+  readonly #declined = new Map<string, string>();
 
   constructor(options: ProductionSchedulerOptions) {
     this.#options = options;
@@ -147,9 +149,48 @@ export class ProductionScheduler {
     const ready = this.#ready(runtime, dispatches, snapshot.effects);
     const worked =
       binding.execution.workspaceMode === "repository"
-        ? this.#scheduleRepository(input, dispatches, ready)
-        : this.#scheduleWorktree(input, runtime, dispatches, ready);
+        ? this.#scheduleRepository(input, dispatches, ready.tasks)
+        : this.#scheduleWorktree(input, runtime, dispatches, ready.tasks);
+    this.#recordDecline(input, dispatches, ready, worked);
     return { worked, batchSize };
+  }
+
+  /**
+   * A run holding dispatches that none of them can be scheduled is a stall, and
+   * `worked: false` is what an idle run says too. Three wrong diagnoses came
+   * from not being able to tell those apart, so the frontier's reasoning is
+   * written down the first time it declines everything, and again only when the
+   * reason changes.
+   */
+  #recordDecline(
+    input: ProductionScheduleInput,
+    dispatches: readonly StoredDispatch[],
+    ready: { readonly tasks: ReadonlySet<string>; readonly facts: readonly TaskStatusFact[] },
+    worked: boolean,
+  ): void {
+    const key = `${input.repositoryId}\u0000${input.runId}`;
+    if (worked || dispatches.length === 0) {
+      this.#declined.delete(key);
+      return;
+    }
+    const held = dispatches
+      .filter(({ taskScope }) => !ready.tasks.has(taskScope.taskId))
+      .map(({ taskScope }) => {
+        const fact = ready.facts.find(({ taskId }) => taskId === taskScope.taskId);
+        return `${String(taskScope.taskId)} ${fact?.status ?? "unknown"}`;
+      })
+      .sort();
+    if (held.length === 0) return;
+    const reason = declineReason(held);
+    if (this.#declined.get(key) === reason) return;
+    this.#declined.set(key, reason);
+    this.#options.authority.appendLog({
+      recordedAt: input.currentTime,
+      level: "warn",
+      event: "schedule-declined",
+      message: reason,
+      fields: { repositoryId: input.repositoryId, runId: input.runId, held },
+    });
   }
 
   #configureRunner(
@@ -199,7 +240,7 @@ export class ProductionScheduler {
     runtime: RuntimeSchedulingSnapshot,
     dispatches: readonly StoredDispatch[],
     effects: ReturnType<SqliteRunnerAuthority["load"]>["effects"],
-  ): ReadonlySet<string> {
+  ): { readonly tasks: ReadonlySet<string>; readonly facts: readonly TaskStatusFact[] } {
     const accepted = new Map(
       runtime.acceptedTasks.map(
         (task) => [`${task.task.taskId}\0${task.task.definitionGeneration}`, task] as const,
@@ -245,11 +286,14 @@ export class ProductionScheduler {
         status,
       });
     }
-    return new Set(
-      deriveReadyTaskFrontier(runtime.graph, facts, this.#options.sha256).tasks.map(
-        ({ taskId }) => taskId,
+    return {
+      tasks: new Set(
+        deriveReadyTaskFrontier(runtime.graph, facts, this.#options.sha256).tasks.map(
+          ({ taskId }) => taskId,
+        ),
       ),
-    );
+      facts,
+    };
   }
 
   #scheduleRepository(
@@ -611,6 +655,17 @@ export function schedulableDispatches(
   if (dispatches === undefined) return undefined;
   const stale = new Set(requirements.map(({ historicalDispatchId }) => historicalDispatchId));
   return dispatches.filter((stored) => !stale.has(stored.dispatch.dispatchId));
+}
+
+/**
+ * What a stalled run is holding, named by task and by the status that held it.
+ *
+ * `worked: false` is what an idle run says too, so a run that holds dispatches
+ * none of which can be scheduled has to say which and why, or it is
+ * indistinguishable from one with nothing to do.
+ */
+export function declineReason(held: readonly string[]): string {
+  return `no dispatch is schedulable; the ready frontier holds ${held.join(", ")}`;
 }
 
 export function selectCurrentDispatches(
