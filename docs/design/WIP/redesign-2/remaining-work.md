@@ -347,6 +347,41 @@ storm the reverted fix caused. A run's state growing past a fixed wire ceiling
 is worth its own item, because a long run reaches it honestly.
 
 * [ ] A run's context state does not have to fit in one 256KB wire value
+
+### A task that is accepted and unfinished at the same time
+
+A clean run reproduces the original wedge exactly, which rules out the poisoned
+database as the cause. Of ten dispatches, nine reached the runner and one did
+not, and the decline log names the task it belongs to:
+
+```text
+no dispatch is schedulable; the ready frontier holds
+  task_1babea53… active, task_41c46d49… accepted, …
+implementor-work task_41c46d49…  enqueued: false
+```
+
+So the fan-in waits on a dispatch whose task the authority already calls
+accepted. The scheduler will never start it, because an accepted task is not in
+the frontier, and the phase therefore waits for a turn that cannot happen.
+
+Making the fan-in skip a member whose task is accepted looks like the fix and is
+not. The phase then tries to close and the candidate refuses:
+
+```text
+CandidateError: Task task_41c46d49… has no accepted accounting assessment
+```
+
+The same task is in `acceptedTasks` and has no accounting assessment. Those two
+cannot both be true of finished work, so one of them is wrong, and no predicate
+in the driver can decide which. The change turned a hang into a crash, which is
+worse, and was reverted.
+
+That contradiction is the item. Until it is settled — either `acceptedTasks`
+stops including a task with no assessment, or acceptance stops being recorded
+without one — the fan-in has nothing trustworthy to read.
+
+* [ ] Settle what makes a task accepted, so acceptance and the assessment agree
+* [ ] Only then decide what the fan-in should skip
 so it can be.
 
 ## The browser suite fails a different test each run
