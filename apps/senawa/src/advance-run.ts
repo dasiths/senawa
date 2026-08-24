@@ -259,31 +259,18 @@ async function step(
   // this the driver treats the member that just finished as the phase's live
   // work and tries to close a phase most of whose members never ran.
   const members = phase.executor?.kind === "task-frontier" ? phaseTasks(snapshot, phaseKey) : [];
-  const memberHandedIn = new Set(
-    state.completionOutbox.map((entry) => String(entry.fact.dispatchId)),
-  );
-  const memberDispatches = (task: unknown) => {
-    const taskId = String(
-      (task as { readonly definition: { readonly id: unknown } }).definition.id,
-    );
-    return state.dispatches.filter(
-      (candidate) => candidate.runId === input.runId && candidate.task.taskId === taskId,
-    );
-  };
   const pendingMember =
     members.length === 0
       ? undefined
-      : members.findIndex((task) => {
-          const own = memberDispatches(task);
-          if (own.length === 0) return true;
-          if (own.some((candidate) => memberHandedIn.has(String(candidate.dispatchId)))) {
-            return false;
-          }
-          if (own.length >= (phase.iteration?.maximumAttempts ?? 1)) return false;
-          // Only a terminal outcome says an attempt is over, so a member still
-          // working is never mistaken for one that needs another turn.
-          return own.every((candidate) => spentDispatch(input, String(candidate.dispatchId)));
-        });
+      : members.findIndex(
+          (task) =>
+            !state.dispatches.some(
+              (candidate) =>
+                candidate.runId === input.runId &&
+                candidate.task.taskId ===
+                  String((task as { readonly definition: { readonly id: unknown } }).definition.id),
+            ),
+        );
   if (pendingMember !== undefined && pendingMember >= 0) {
     // A member that reported it could not finish is one member's answer, not
     // the phase's. Under `continue` the rest are still worth running, and under
@@ -319,8 +306,6 @@ async function step(
     ) {
       return { kind: "rejected", phaseKey, reasons: blocked };
     }
-    const memberTask = members[pendingMember];
-    const memberRetry = memberTask !== undefined && memberDispatches(memberTask).length > 0;
     const dispatched = dispatchPhase({
       snapshot,
       dataflow: new RuntimeDataflowAuthority(
@@ -337,17 +322,8 @@ async function step(
       phaseKey,
       memberIndex: pendingMember,
       // Each member binds its own phase attempt, because each carries different
-      // content and the dataflow refuses to reuse an ordinal for a new one. A
-      // retry cannot reuse the member's position, which a sibling already
-      // holds, so it takes an ordinal the attempts say is free.
-      attempt: memberRetry ? nextPhaseAttemptOrdinal(input, scheduling.phase) : pendingMember + 1,
-      ...(memberRetry
-        ? {
-            priorRefusals: [
-              "Your previous turn ended without submitting a completion, so this is a fresh attempt. This is not a refusal of anything you sent.",
-            ],
-          }
-        : {}),
+      // content and the dataflow refuses to reuse an ordinal for a new one.
+      attempt: pendingMember + 1,
       workflowInput: input.workflowInput,
       upstream: upstreamOutputs(snapshot, phase, state, assets(supervisor, broker)),
       repositoryBase: input.repositoryBase,

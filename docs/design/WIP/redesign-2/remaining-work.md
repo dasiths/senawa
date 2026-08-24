@@ -350,38 +350,34 @@ is worth its own item, because a long run reaches it honestly.
 
 ### A task that is accepted and unfinished at the same time
 
-A clean run reproduces the original wedge exactly, which rules out the poisoned
-database as the cause. Of ten dispatches, nine reached the runner and one did
-not, and the decline log names the task it belongs to:
+A clean run reproduces the wedge, and the dispatches say why:
 
 ```text
-no dispatch is schedulable; the ready frontier holds
-  task_1babea53… active, task_41c46d49… accepted, …
-implementor-work task_41c46d49…  enqueued: false
+task_41c46d49…
+   ord 1  d95d32d48788  handed-in
+   ord 5  6581ebd7ee07  OPEN, never enqueued
 ```
 
-So the fan-in waits on a dispatch whose task the authority already calls
-accepted. The scheduler will never start it, because an accepted task is not in
-the frontier, and the phase therefore waits for a turn that cannot happen.
+Two dispatches for one member. The first ran, handed in, and the task was
+accepted. The second was created afterwards for a task that had already
+finished, and the fan-in has waited on it ever since.
 
-Making the fan-in skip a member whose task is accepted looks like the fix and is
-not. The phase then tries to close and the candidate refuses:
+The second dispatch is mine. The member retry guarded on `state.completionOutbox`
+to decide whether a member had handed in, and the outbox does not hold a
+completion that has already been delivered. So a finished member read as
+unfinished, took a retry it did not need, and produced a dispatch the scheduler
+will never start because the task is accepted.
 
-```text
-CandidateError: Task task_41c46d49… has no accepted accounting assessment
-```
+That is the wedge, and this is the second time a fix of mine has caused it. The
+member retry is reverted; the ordinal fix and the decline log it depended on are
+sound and stay.
 
-The same task is in `acceptedTasks` and has no accounting assessment. Those two
-cannot both be true of finished work, so one of them is wrong, and no predicate
-in the driver can decide which. The change turned a hang into a crash, which is
-worse, and was reverted.
+What is left of the original question is narrower than it looked. A member whose
+turn genuinely ends empty still needs another turn, and the signal for "has this
+member handed in" has to be the durable completion, not the outbox.
 
-That contradiction is the item. Until it is settled — either `acceptedTasks`
-stops including a task with no assessment, or acceptance stops being recorded
-without one — the fan-in has nothing trustworthy to read.
-
-* [ ] Settle what makes a task accepted, so acceptance and the assessment agree
-* [ ] Only then decide what the fan-in should skip
+* [ ] Read a member's completion from the durable record, not the outbox
+* [ ] Only then let a member whose turn ended empty take another
 so it can be.
 
 ## The browser suite fails a different test each run
