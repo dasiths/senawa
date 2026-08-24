@@ -672,6 +672,70 @@ the terminal, answer in the reply box, watch the phase close, read what it built
 * [x] Every question is answered from the portal, never the command line
 * [x] The graph states change as the run moves
 
+## Phase 12: a fan-out member finishes, or takes another turn
+
+Driving the run twice end to end left the portal work essentially done and the
+runner holding the whole remainder. Both runs stopped in the same place and for
+the same reason, and the reason is not in the portal at all.
+
+A phase closes when every member has handed in. A member whose turn ends without
+handing in never gets another one, so the phase waits for a turn that will not
+happen. Four attempts at this failed in four different ways, every one caught by
+driving the live run and none by a test:
+
+| Attempt | What it did |
+| --- | --- |
+| Wait on a missing runner command | Never released, because the absence is also what a declined dispatch leaves |
+| Retry on absence of an intent | Created dispatches for ever, ten for one task |
+| Retry with the member's own ordinal | Re-registered identical content, a no-op the driver read as progress |
+| Retry with the next ordinal above the dispatches | Collided with an attempt a gate had already spent |
+
+Two things came out of those that are worth keeping, and both landed: the
+scheduler now says which tasks are holding it rather than returning `worked:
+false` in silence, and a retry takes its ordinal from `phase_attempts` rather
+than guessing from dispatches.
+
+What is left is narrower than it looked. The signal for "has this member handed
+in" has to be the durable completion, not `state.completionOutbox`, which drops
+a completion once it is delivered. Reading the outbox is what made a finished
+member look unfinished and take a turn it did not need — the fourth failure, and
+the one that caused the wedge it was meant to fix.
+
+* [ ] A member's completion is read from the durable record, not the outbox
+* [ ] A member whose turn ended empty takes another, bounded by the phase's limit
+* [ ] A cancelled attempt stops disqualifying its task from the frontier
+* [ ] The two agree: nothing is dispatched for a task already accepted
+
+### A run that grows past what it can save
+
+The first live run reached a context state larger than one wire value and could
+no longer persist a dispatch:
+
+```text
+ProtocolValidationError: $ wire value exceeds 262144 bytes
+```
+
+Every dispatch a run has ever made lives in one canonical blob. A long run
+reaches that ceiling honestly, and a run that reaches it cannot record anything
+again, which is a worse failure than stopping.
+
+* [ ] A run's durable state does not have to fit in a single wire value
+
+### A suite that fails somewhere else each time
+
+Three full browser runs failed three different tests, each of which passes alone.
+That is interference between tests, not three defects, and three fixes aimed at
+the symptom were wrong for that reason.
+
+* [ ] The failure is captured with its error context rather than reasoned about
+* [ ] Whatever the tests share is isolated per test, or made quiescent
+* [ ] The suite passes five consecutive full runs
+
+### Proven the same way
+
+* [ ] A run reaches every phase closed with no command-line intervention
+* [ ] A run survives the supervisor being restarted mid-turn
+
 ## Log
 
 Findings and deviations are appended here as phases land.
