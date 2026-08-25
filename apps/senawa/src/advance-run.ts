@@ -456,8 +456,13 @@ async function step(
     nextPhaseAttemptOrdinal(input, scheduling.phase),
     Math.max(0, ...phaseDispatches.map((candidate) => candidate.ordinal)) + 1,
   );
+  // A turn that ended by asking a person is not a try, so it does not count
+  // against the ceiling. Counting it meant a run could exhaust its attempts
+  // without anything going wrong, purely by asking and being answered.
   const taskAttempts = phaseDispatches.filter(
-    (candidate) => String(candidate.task.taskId) === String(dispatch.task.taskId),
+    (candidate) =>
+      String(candidate.task.taskId) === String(dispatch.task.taskId) &&
+      digestOf(String(candidate.dispatchId))?.disposition !== "suspended",
   ).length;
   const steerings = supervisor.commandAuthority.listAgentSteerings(dispatchId);
   const abort = steerings.filter((entry) => entry.delivery === "abort-retry");
@@ -1042,14 +1047,21 @@ function closeEndedAttempts(
   scheduling: RuntimeSchedulingSnapshot,
   state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
 ): readonly RuntimeAttemptRecord[] {
-  const ended = new Map<string, "closed" | "fail">();
+  const ended = new Map<string, "closed" | "fail" | "suspended">();
   for (const entry of state.terminalCompletions) ended.set(String(entry.dispatchId), "closed");
   // An agent that asks is waiting for a person, and the answer reaches it on a
   // fresh dispatch. That turn is over even though the agent is well, and saying
   // so is what lets the resuming dispatch open an attempt at all.
+  //
+  // It is recorded as suspended rather than closed because it is not a try. A
+  // live run stopped at `research` after eight turns, every one of them ending
+  // by asking a person, and was rejected for handing no work in: the only
+  // record that a turn had asked was whether its question was still
+  // outstanding, so answering it converted a suspended turn into a spent
+  // attempt. What a turn did does not change when somebody answers.
   for (const question of state.questions) {
     const held = String(question.dispatchId);
-    if (!ended.has(held)) ended.set(held, "closed");
+    if (!ended.has(held)) ended.set(held, "suspended");
   }
   for (const dispatchId of returnedDispatchIds(input)) {
     if (!ended.has(dispatchId)) ended.set(dispatchId, "fail");
@@ -1324,7 +1336,7 @@ function recordAttempt(
     readonly dispatchId: string;
     readonly taskId: string;
     readonly definitionGeneration: number;
-    readonly disposition: "opened" | "closed" | "fail" | "refused";
+    readonly disposition: "opened" | "closed" | "fail" | "suspended" | "refused";
   },
 ): void {
   const attemptDigest = attemptDigestOf(input, attempt.dispatchId);

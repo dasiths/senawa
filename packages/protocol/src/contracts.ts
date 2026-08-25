@@ -136,7 +136,20 @@ export interface RecordPhaseAttemptTransitionPayload {
   /** The work the attempt is for, without which no per-task rule can be kept. */
   readonly taskId: string;
   readonly definitionGeneration: number;
-  readonly disposition: "opened" | "iterate" | "escalate" | "fail" | "closed" | "refused";
+  /**
+   * `suspended` is a turn that ended by asking a person, which is not a try.
+   * Recorded separately from `closed` because whether a question is still
+   * outstanding changes the moment somebody answers, and what the turn did
+   * does not.
+   */
+  readonly disposition:
+    | "opened"
+    | "iterate"
+    | "escalate"
+    | "fail"
+    | "closed"
+    | "suspended"
+    | "refused";
 }
 
 export interface ImportPlanPayload {

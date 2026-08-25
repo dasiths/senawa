@@ -872,6 +872,67 @@ describe("one phase in sequence", () => {
     expect(await advance(scenario)).toMatchObject({ kind: "gate-refused", phaseKey: "define" });
   });
 
+  // A live run stopped at its first phase after eight turns, every one of which
+  // ended by asking a person, and was rejected for handing no work in. Whether
+  // a turn had asked was read from whether its question was still outstanding,
+  // so answering the question converted the suspended turn into a spent
+  // attempt: the person unblocking the run was spending its attempts.
+  it("does not spend an attempt on a turn that ended by asking", async () => {
+    const scenario = await startScenario("asked-not-spent", { attempts: 2 });
+    let dispatchId = scenario.dispatchId;
+
+    // More rounds of ask-and-answer than the phase has attempts. None of them
+    // is a try, so none of them may exhaust the ceiling. The advance between
+    // the question and the answer is what a live driver does by polling, and
+    // it is where the turn is recorded as over.
+    for (const question of ["which endpoint?", "and which port?", "and which host?"]) {
+      await askThroughSink(scenario, dispatchId, question);
+      expect(await advance(scenario)).toMatchObject({ kind: "awaiting-agent" });
+      expect(
+        answerQuestion({
+          ...scenario.paths,
+          answer: "the first one",
+          currentTime: NOW,
+          dependencies,
+          principal: runtimePrincipal,
+          repositoryId: scenario.repositoryId,
+          runId: scenario.runId,
+        }),
+      ).toMatchObject({ exitCode: 0 });
+      const resumed = await advance(scenario);
+      expect(resumed, JSON.stringify(resumed)).toMatchObject({ kind: "dispatched" });
+      if (resumed.kind !== "dispatched") throw new Error("expected a fresh dispatch");
+      expect(resumed.dispatchId).not.toBe(dispatchId);
+      dispatchId = resumed.dispatchId;
+    }
+
+    // And the run is still able to finish: the attempts were never spent.
+    await agentTurn(scenario, dispatchId, canonicalValue({ definition: "x" }));
+    const outcome = await advance(scenario);
+    expect(outcome.kind, JSON.stringify(outcome)).not.toBe("rejected");
+
+    // The durable record is what the ceiling counts, and it says what each turn
+    // did rather than whether its question is still outstanding. Three turns
+    // ended by asking, and the run's own record says so after every one of them
+    // was answered.
+    const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+    try {
+      const row = database.prepare("SELECT records_json AS json FROM runs").get() as
+        | { readonly json: string }
+        | undefined;
+      const attempts = (
+        JSON.parse(row?.json ?? "{}") as {
+          readonly attempts?: readonly { readonly disposition: string }[];
+        }
+      ).attempts;
+      expect(
+        (attempts ?? []).filter(({ disposition }) => disposition === "suspended"),
+      ).toHaveLength(3);
+    } finally {
+      database.close();
+    }
+  }, 120_000);
+
   it("closes a phase whose second attempt passes", async () => {
     const scenario = await startScenario("retry-then-close", { attempts: 3, secondPhase: true });
     expect(

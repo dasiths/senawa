@@ -472,12 +472,23 @@ What a turn did is already recorded durably and does not change when somebody
 answers: the effect outcome's `workerStatus`. A turn that ended awaiting an
 answer ended awaiting an answer for ever.
 
-* [ ] An attempt that ended by asking a person is not counted against the
+* [x] An attempt that ended by asking a person is not counted against the
   attempt ceiling, whether or not its question has since been answered
-* [ ] A phase whose every attempt ended on a question is not rejected for
+* [x] A phase whose every attempt ended on a question is not rejected for
   handing no work in
 * [ ] The example completes its research phase with a person answering
   every question it asks
+
+A turn that ends by asking is now recorded as `suspended` rather than `closed`,
+which is a durable fact about what the turn did rather than a reading of what is
+currently outstanding. The ceiling counts everything except those.
+
+The scenario harness cannot reach the ceiling itself: it drives no runner, so no
+effect outcome ever returns, and only a returned dispatch or a question closes
+an attempt there. The test therefore holds the durable record — three turns that
+asked, all three answered, three `suspended` attempts — which is precisely the
+fact that was being lost. Breaking the disposition makes it fail; the live run
+is what holds the rest.
 
 ## Carried from the v1 plan
 

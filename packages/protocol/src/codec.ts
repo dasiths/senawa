@@ -424,7 +424,7 @@ export function decodeRecordPhaseAttemptTransitionPayload(
   identity(object.taskId, "$.taskId");
   positiveSequence(object.definitionGeneration, "$.definitionGeneration");
   if (
-    !["opened", "iterate", "escalate", "fail", "closed", "refused"].includes(
+    !["opened", "iterate", "escalate", "fail", "closed", "suspended", "refused"].includes(
       String(object.disposition),
     )
   ) {
