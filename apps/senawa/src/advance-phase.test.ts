@@ -16,6 +16,7 @@ const dependencies: RuntimeDependencies = {
   authorization: createRoleAuthorizationPolicy([
     { intent: "instantiate-run", roles: ["release-manager"] },
     { intent: "start-phase-attempt", roles: ["release-manager"] },
+    { intent: "record-phase-attempt-transition", roles: ["release-manager"] },
   ]),
 };
 const REPOSITORY_ID = "repository_advance";

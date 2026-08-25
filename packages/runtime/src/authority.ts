@@ -2759,6 +2759,7 @@ function parseRuntimeRunRecords(
       "closure",
       "integrationBarrier",
       "phaseLifecycles",
+      "openAttempts",
       "amendmentRecords",
       "amendmentEvents",
     ],

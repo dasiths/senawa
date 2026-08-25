@@ -42,6 +42,7 @@ export const dependencies: RuntimeDependencies = {
     { intent: "record-authority-decision", roles: ["release-manager"] },
     { intent: "close-phase", roles: ["release-manager"] },
     { intent: "start-phase-attempt", roles: ["release-manager"] },
+    { intent: "record-phase-attempt-transition", roles: ["release-manager"] },
     { intent: "create-escalation", roles: ["release-manager"] },
     { intent: "answer-question", roles: ["operator", "release-manager"] },
     { intent: "steer-agent", roles: ["operator", "release-manager"] },

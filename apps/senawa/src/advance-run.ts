@@ -329,6 +329,12 @@ async function step(
       repositoryBase: input.repositoryBase,
       currentTime: input.currentTime,
     });
+    recordAttempt(supervisor, input, snapshot.graph.revisionDigest, {
+      dispatchId: String(dispatched.dispatch.dispatchId),
+      taskId: String(dispatched.dispatch.task.taskId),
+      definitionGeneration: Number(dispatched.dispatch.task.definitionGeneration),
+      disposition: "opened",
+    });
     return { kind: "dispatched", phaseKey, dispatchId: dispatched.dispatch.dispatchId };
   }
 
@@ -392,6 +398,16 @@ async function step(
   const dispatchId = dispatch.dispatchId;
   const completed = state.terminalCompletions.some((entry) => entry.dispatchId === dispatchId);
   const published = state.phaseOutputOutbox.filter((entry) => entry.fact.dispatchId === dispatchId);
+  // A turn that handed in is over, whatever else the phase still needs. Closing
+  // it here is what lets the next attempt for this task be opened at all.
+  if (completed) {
+    recordAttempt(supervisor, input, snapshot.graph.revisionDigest, {
+      dispatchId: String(dispatchId),
+      taskId: String(dispatch.task.taskId),
+      definitionGeneration: Number(dispatch.task.definitionGeneration),
+      disposition: "closed",
+    });
+  }
 
   // A person who asked for the attempt to start again is not waiting for the
   // agent to finish first: that is the whole point of asking. The instruction is
@@ -1221,6 +1237,49 @@ function submitTolerating(
 }
 
 /** Submits one command and refuses to continue when the authority did not accept it. */
+/**
+ * Opens or closes the attempt a dispatch is, against the task it is for.
+ *
+ * The authority refuses a second open attempt for a task, so this is where the
+ * one-agent rule stops being a thing the driver remembers and starts being a
+ * thing the run records.
+ */
+function recordAttempt(
+  supervisor: SqliteSupervisorAuthority,
+  input: AdvanceRunInput,
+  graphRevision: string,
+  attempt: {
+    readonly dispatchId: string;
+    readonly taskId: string;
+    readonly definitionGeneration: number;
+    readonly disposition: "opened" | "closed";
+  },
+): void {
+  const attemptDigest = input.dependencies.sha256.digest(
+    canonicalBytes(canonicalValue({ dispatchId: attempt.dispatchId })),
+  );
+  submit(
+    supervisor,
+    input,
+    `attempt-${attempt.disposition}`,
+    "record-phase-attempt-transition",
+    graphRevision,
+    undefined,
+    {
+      attemptDigest,
+      transitionDigest: input.dependencies.sha256.digest(
+        canonicalBytes(canonicalValue({ dispatchId: attempt.dispatchId, of: attempt.disposition })),
+      ),
+      triggerDigest: input.dependencies.sha256.digest(
+        canonicalBytes(canonicalValue({ runId: input.runId, of: attempt.disposition })),
+      ),
+      taskId: attempt.taskId,
+      definitionGeneration: attempt.definitionGeneration,
+      disposition: attempt.disposition,
+    },
+  );
+}
+
 function submit(
   supervisor: SqliteSupervisorAuthority,
   input: AdvanceRunInput,
