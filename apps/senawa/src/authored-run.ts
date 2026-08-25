@@ -89,6 +89,64 @@ export function instantiateAuthoredRun(input: InstantiateAuthoredRunInput): Dura
 }
 
 /**
+ * Opens the attempt a dispatch is, against the task it is for.
+ *
+ * `senawa start` dispatches in its own process, before any driver exists. Its
+ * dispatch is an attempt like any other, and leaving it unrecorded left the
+ * one-agent rule blind to the first turn of every run.
+ */
+export function openPhaseAttempt(input: {
+  readonly authority: SqliteAuthority;
+  readonly repositoryId: string;
+  readonly runId: string;
+  readonly principal: AuthenticatedPrincipal;
+  readonly currentTime: string;
+  readonly dependencies: RuntimeDependencies;
+  readonly graphRevision: string;
+  readonly dispatchId: string;
+  readonly taskId: string;
+  readonly definitionGeneration: number;
+}): DurableReceipt {
+  const digest = (value: unknown): string =>
+    input.dependencies.sha256.digest(canonicalBytes(value as never));
+  const payload = {
+    attemptDigest: digest({ dispatchId: input.dispatchId }),
+    transitionDigest: digest({ dispatchId: input.dispatchId, of: "opened" }),
+    triggerDigest: digest({ runId: input.runId, of: "opened" }),
+    taskId: input.taskId,
+    definitionGeneration: input.definitionGeneration,
+    disposition: "opened",
+  };
+  const commandId = `command_attempt-opened-${digest({
+    runId: input.runId,
+    dispatchId: input.dispatchId,
+  }).slice(0, 24)}`;
+  let allocation = 0;
+  return input.authority.submit(
+    decodeCommandEnvelope({
+      apiVersion: PROTOCOL_VERSION,
+      commandId,
+      principal: input.principal,
+      transport: { kind: "cli", requestId: `request_${commandId}` },
+      repositoryId: input.repositoryId,
+      runId: input.runId,
+      intent: { type: "record-phase-attempt-transition" },
+      payload,
+      payloadDigest: input.dependencies.sha256.digest(canonicalBytes(payload)),
+      expectedGraphRevision: input.graphRevision,
+    } as never),
+    {
+      currentTime: input.currentTime,
+      facts: { source: "authored-run" },
+      allocateId: (kind: string) => {
+        allocation += 1;
+        return `${kind}_${commandId.slice(8).toLowerCase()}${allocation}`;
+      },
+    },
+  );
+}
+
+/**
  * The run's approval policy, derived from what the author asked for.
  *
  * The authority models approval per run while the authored surface states it

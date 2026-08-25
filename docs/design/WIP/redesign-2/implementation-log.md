@@ -4516,3 +4516,41 @@ a run nobody can drive should read as blocked rather than as idle.
 
 Proven by breaking the scheduling: with the deferred wake suppressed the timer
 is never asked and the run stays undriven.
+
+## The first turn of a run had no attempt
+
+The live run that was meant to confirm Phase 1 stalled instead, with one agent
+dispatched, nothing waiting on a person, and the mode still running. The record
+said why in three lines:
+
+```text
+schedule-declined  the ready frontier holds task_e30bb4a5 cancelled
+runner_effect_outcomes  1 row, status cancelled
+commands  1 row, instantiate-run
+```
+
+One command. No attempt transition anywhere. `senawa start` dispatches in its
+own process, before any driver exists, and that dispatch never opened an
+attempt. When the process exited mid-turn the effect was cancelled, and the
+driver then read a dispatch with no attempt record. Under the new rule absence
+means nothing is known, so the turn was neither open nor closed and the phase
+waited for an agent that was already gone. The old guess would have retried it.
+
+The rule was right and its reach was short. Two changes:
+
+* `senawa start` opens the attempt for the dispatch it makes, so the one-agent
+  rule is true from the first turn of a run.
+* A closure is recorded for any turn that ended, whether or not its opening was.
+  The opening is the driver's to record; the ending is the run's. Requiring both
+  made a missing opening permanent rather than recoverable.
+
+This is the third time on this branch that a live run found what the suites did
+not, and the second time the finding was in the seam between two processes
+rather than in either one.
+
+A false trail is worth recording. The first diagnosis was that the ready
+frontier derived a task's status from the oldest effect for any of its
+dispatches, so a retried task would keep reporting the turn it replaced. That
+reading was wrong: `selectCurrentDispatches` has already narrowed the list to
+one dispatch per task, so the derivation was reading the current attempt all
+along. The change and its test were reverted rather than kept as decoration.

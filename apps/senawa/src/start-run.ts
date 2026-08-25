@@ -12,7 +12,7 @@ import {
   SqliteCanonicalJsonAssetStore,
   SqliteContextBroker,
 } from "@senawa/storage-sqlite";
-import { instantiateAuthoredRun } from "./authored-run.js";
+import { instantiateAuthoredRun, openPhaseAttempt } from "./authored-run.js";
 import {
   configurationRuntimeSchemaValidator,
   runtimeSchemaContract,
@@ -133,6 +133,28 @@ export async function startAuthoredRun(input: StartAuthoredRunInput): Promise<St
       currentTime: input.currentTime,
       ...(input.maxAiCredits === undefined ? {} : { maxAiCredits: input.maxAiCredits }),
     });
+
+    // The first dispatch of a run is an attempt like any other. Recording it
+    // here is what makes the one-agent rule true from the first turn.
+    const opened = openPhaseAttempt({
+      authority,
+      repositoryId: input.repositoryId,
+      runId: input.runId,
+      principal: input.principal,
+      currentTime: input.currentTime,
+      dependencies: input.dependencies,
+      graphRevision: snapshot.graph.revisionDigest,
+      dispatchId: String(dispatched.dispatch.dispatchId),
+      taskId: String(dispatched.dispatch.task.taskId),
+      definitionGeneration: Number(dispatched.dispatch.task.definitionGeneration),
+    });
+    if (opened.status !== "completed") {
+      throw new Error(
+        `Opening the first attempt was ${opened.status}${
+          opened.error?.message === undefined ? "" : `: ${opened.error.message}`
+        }`,
+      );
+    }
 
     return {
       repositoryId: input.repositoryId,

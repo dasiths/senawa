@@ -1042,8 +1042,6 @@ function closeEndedAttempts(
   scheduling: RuntimeSchedulingSnapshot,
   state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
 ): readonly RuntimeAttemptRecord[] {
-  const open = scheduling.attempts.filter((entry) => entry.disposition === "opened");
-  if (open.length === 0) return scheduling.attempts;
   const ended = new Map<string, "closed" | "fail">();
   for (const entry of state.terminalCompletions) ended.set(String(entry.dispatchId), "closed");
   // An agent that asks is waiting for a person, and the answer reaches it on a
@@ -1056,17 +1054,26 @@ function closeEndedAttempts(
   for (const dispatchId of returnedDispatchIds(input)) {
     if (!ended.has(dispatchId)) ended.set(dispatchId, "fail");
   }
+  if (ended.size === 0) return scheduling.attempts;
+  const recorded = new Map(scheduling.attempts.map((entry) => [entry.attemptDigest, entry]));
   let closed = false;
-  for (const held of open) {
-    const disposition = [...ended].find(
-      ([dispatchId]) => attemptDigestOf(input, dispatchId) === held.attemptDigest,
+  for (const [dispatchId, disposition] of ended) {
+    // A closure is recorded for a turn whose opening was not, because the
+    // opening is the driver's to record and the ending is the run's. A dispatch
+    // made by `senawa start`, which runs in its own process before any driver
+    // exists, has no opened attempt, and refusing to close it left the phase
+    // waiting on a turn that was already over.
+    const held = recorded.get(attemptDigestOf(input, dispatchId));
+    if (held !== undefined && held.disposition !== "opened") continue;
+    const dispatch = state.dispatches.find(
+      (candidate) => String(candidate.dispatchId) === dispatchId,
     );
-    if (disposition === undefined) continue;
+    if (dispatch === undefined) continue;
     recordAttempt(supervisor, input, snapshot.graph.revisionDigest, {
-      dispatchId: disposition[0],
-      taskId: held.taskId,
-      definitionGeneration: held.definitionGeneration,
-      disposition: disposition[1],
+      dispatchId,
+      taskId: String(dispatch.task.taskId),
+      definitionGeneration: Number(dispatch.task.definitionGeneration),
+      disposition,
     });
     closed = true;
   }

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalValue, sha256Digest } from "@senawa/kernel";
 import { createRoleAuthorizationPolicy, type RuntimeDependencies } from "@senawa/runtime";
-import { SqliteContextBroker } from "@senawa/storage-sqlite";
+import { SqliteAuthority, SqliteContextBroker } from "@senawa/storage-sqlite";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { runtimeDependencies as productionDependencies } from "./daemon.js";
@@ -14,6 +14,7 @@ const dependencies: RuntimeDependencies = {
   sha256: productionDependencies.sha256,
   authorization: createRoleAuthorizationPolicy([
     { intent: "instantiate-run", roles: ["release-manager"] },
+    { intent: "record-phase-attempt-transition", roles: ["release-manager"] },
   ]),
 };
 const NOW = "2026-08-17T00:00:00.000Z";
@@ -61,6 +62,26 @@ describe("starting an authored run", () => {
       expect(stored[0]?.effect).toBeDefined();
     } finally {
       broker.close();
+    }
+
+    // The first dispatch of a run is an attempt like any other. Leaving it
+    // unrecorded left the one-agent rule blind to the first turn, and the
+    // driver could not tell a turn that was over from one that never started:
+    // the live run sat with one agent dispatched and nothing moving.
+    const authority = new SqliteAuthority({
+      databasePath: join(project, "authority.db"),
+      assetDirectory: join(project, "assets"),
+      dependencies,
+    });
+    try {
+      expect(authority.queryRunScheduling("repository_start", "run_start")?.attempts).toEqual([
+        expect.objectContaining({
+          taskId: expect.stringMatching(/^task_/u),
+          disposition: "opened",
+        }),
+      ]);
+    } finally {
+      authority.close();
     }
   });
 
