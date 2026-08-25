@@ -4711,3 +4711,36 @@ The control server now answers `/fixture-state` with the session clock offset
 and the ordered list of mutations taken, and every spec attaches it to a
 failing test. The next failure arrives with its history rather than with an
 invitation to guess.
+
+## The cross-checks were parsing the same two blobs four times
+
+Phase 6's decision, made and then acted on. Of the three routes, the first was
+right and the evidence was already in the code: `verifyAmendmentTables` opened
+the authority singleton and reparsed it, having been called from `verifyDatabase`
+which had just parsed it, and then opened the context singleton and reparsed
+that, having been called two lines after `verifyContextTables` which had just
+parsed it. Opening a record parsed the same two blobs four times.
+
+Each is now parsed once per pass and handed down. Measured on a 3 MB live record
+from the example, three runs each way:
+
+```text
+before  2071 ms  1968 ms  1808 ms
+after   1493 ms  1475 ms  1467 ms
+```
+
+About a quarter off `senawa status`, and the six tests that defend the
+tampered-mirror guarantee still pass, which is the point: the guarantee was
+never what cost the time. The earlier attempt weakened it for a smaller saving.
+
+## The browser suite passes, and can be trusted to mean it
+
+The shared fixture's one-way mutation is gone. The portal session clock only
+ever moved forward, so a test that expired a session expired every session after
+it; it is reset after every test, along with the mutation list. A failing test
+attaches what had been done to the fixture before it ran.
+
+First full run after the change: 54 passed, 1 skipped, six and a half minutes,
+with the machine otherwise idle. Four more consecutive runs are what the plan
+asks for, and they are what will decide whether the interference is gone or
+merely quiet.

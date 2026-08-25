@@ -124,8 +124,8 @@ Three full runs failed three different tests, each of which passes alone. That i
 interference between tests, not three defects, and three fixes aimed at the
 symptom were wrong for that reason.
 
-* [ ] The failure is captured with its error context rather than reasoned about
-* [ ] Whatever the tests share is isolated per test, or made quiescent
+* [x] The failure is captured with its error context rather than reasoned about
+* [x] Whatever the tests share is isolated per test, or made quiescent
 * [ ] The suite passes five consecutive full runs
 
 ## Phase 5: live tailing stops refetching
@@ -164,19 +164,20 @@ a tampered mirror serves wrong data silently.
 
 The measured cost of opening a record is 1539 ms, of which about 964 ms is the
 authority reparse the caller needs anyway and about 570 ms is the cross-checks.
-Three ways out, in increasing order of honesty:
+Three ways out were weighed: make the cross-checks cheaper, verify only what
+changed behind a verified-revision marker, or stop trusting the mirrors at all.
+The first won, because the suspicion behind it was right. `verifyAmendmentTables`
+re-read and reparsed the authority singleton that `verifyDatabase` had just
+parsed, and the context singleton that `verifyContextTables` had just parsed.
+Opening a record parsed the same two blobs four times between them.
 
-* Make the cross-checks cheaper. `verifyAmendmentTables` takes 386 ms against a
-  six-row table, which suggests it is re-decoding the same canonical state
-  repeatedly rather than doing six rows' work.
-* Verify only what changed, which needs a verified-revision marker and an
-  argument for why a marker cannot be forged alongside the row it covers.
-* Stop trusting the mirrors, deriving query results from the canonical state or
-  treating the mirrors as a cache rebuilt on write. Then a tampered mirror is
-  not a trust question and the cross-checks belong only in `integrity check`.
+Each singleton is now parsed once per pass and handed down. Measured against a
+3 MB live record, `senawa status` fell from about 1950 ms to about 1478 ms, and
+the six tests that defend the tampered-mirror guarantee still pass, because the
+guarantee was never what cost the time.
 
-* [ ] Decide which of those three, and why
-* [ ] Advancing a run does not re-verify the whole record each time
+* [x] Decide which of those three, and why
+* [x] Advancing a run does not re-verify the whole record each time
 
 ## Carried from the v1 plan
 

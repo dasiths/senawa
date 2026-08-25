@@ -10948,8 +10948,9 @@ export class SqliteContextBroker {
       throw new Error("SQLite context authority quick_check failed");
     if ((this.#database.pragma("foreign_key_check") as unknown[]).length > 0)
       throw new Error("SQLite context authority foreign_key_check failed");
-    verifyContextTables(this.#database, this.dependencies);
-    verifyAmendmentTables(this.#database, this.dependencies);
+    const shared = readVerificationState(this.#database, this.dependencies);
+    verifyContextTables(this.#database, this.dependencies, shared.context);
+    verifyAmendmentTables(this.#database, this.dependencies, shared.snapshot, shared.context);
   }
 
   #fault(point: SqliteContextBrokerFaultPoint): void {
@@ -12936,11 +12937,15 @@ function verifyDatabase(
     .get();
   if (state === undefined) throw new Error("SQLite authority singleton is missing");
   const authority = InMemoryAuthority.fromCanonicalJson(state.canonical_json, dependencies);
-  verifyNormalizedSnapshot(database, parseSnapshot(state.canonical_json), dependencies);
-  verifyContextTables(database, dependencies);
+  // Each cross-check used to read and reparse the durable singletons for
+  // itself, so opening a record parsed the authority state twice and the
+  // context state twice more. They are parsed once here and passed down.
+  const shared = readVerificationState(database, dependencies);
+  verifyNormalizedSnapshot(database, shared.snapshot, dependencies);
+  verifyContextTables(database, dependencies, shared.context);
   verifyPhaseDataflowTables(database, dependencies);
   verifyTaskFrontierTables(database, dependencies);
-  verifyAmendmentTables(database, dependencies);
+  verifyAmendmentTables(database, dependencies, shared.snapshot, shared.context);
   verifyParallelWorkspaceTables(database, dependencies);
   verifyHumanAuthorityTables(database, dependencies);
   verifyPortalRevisionTables(database);
@@ -13963,20 +13968,37 @@ function verifyHumanAuthorityTables(
   }
 }
 
-function verifyContextTables(
+/** The durable singletons a verification pass reads, parsed once and shared. */
+function readVerificationState(
   database: Database.Database,
   dependencies: Pick<RuntimeDependencies, "sha256">,
-): void {
-  const state = database
+): { readonly snapshot: AuthoritySnapshot; readonly context: InMemoryContextAuthority } {
+  const authorityRow = database
+    .prepare<[], AuthorityRow>(
+      "SELECT revision, canonical_json FROM authority_state WHERE singleton = 1",
+    )
+    .get();
+  if (authorityRow === undefined) throw new Error("SQLite authority singleton is missing");
+  const contextRow = database
     .prepare<[], ContextAuthorityStateRow>(
       "SELECT canonical_json FROM context_authority_state WHERE singleton = 1",
     )
     .get();
-  if (state === undefined) throw new Error("SQLite context authority singleton is missing");
-  const authority = InMemoryContextAuthority.fromDurableCanonicalJson(
-    state.canonical_json,
-    dependencies.sha256,
-  );
+  if (contextRow === undefined) throw new Error("SQLite context authority singleton is missing");
+  return {
+    snapshot: parseSnapshot(authorityRow.canonical_json),
+    context: InMemoryContextAuthority.fromDurableCanonicalJson(
+      contextRow.canonical_json,
+      dependencies.sha256,
+    ),
+  };
+}
+
+function verifyContextTables(
+  database: Database.Database,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+  authority: InMemoryContextAuthority,
+): void {
   verifyNormalizedContextAuthority(database, authority, dependencies.sha256);
   verifyAllContextAssetManifests(database, dependencies.sha256);
   verifyDurableContextReads(database, authority);
@@ -14373,14 +14395,10 @@ function assertCanonicalStorageRecord(serialized: string, value: unknown, label:
 function verifyAmendmentTables(
   database: Database.Database,
   dependencies: Pick<RuntimeDependencies, "sha256">,
+  snapshot: AuthoritySnapshot,
+  contextAuthority: InMemoryContextAuthority,
 ): void {
-  const authorityRow = database
-    .prepare<[], AuthorityRow>(
-      "SELECT revision, canonical_json FROM authority_state WHERE singleton = 1",
-    )
-    .get();
-  if (authorityRow === undefined) throw new Error("SQLite authority singleton is missing");
-  const expected = normalizeAmendmentRows(parseSnapshot(authorityRow.canonical_json));
+  const expected = normalizeAmendmentRows(snapshot);
   verifyNormalizedContextRows(
     "amendment_proposals",
     database
@@ -14448,16 +14466,6 @@ function verifyAmendmentTables(
     }
   }
 
-  const contextState = database
-    .prepare<[], ContextAuthorityStateRow>(
-      "SELECT canonical_json FROM context_authority_state WHERE singleton = 1",
-    )
-    .get();
-  if (contextState === undefined) throw new Error("SQLite context authority singleton is missing");
-  const contextAuthority = InMemoryContextAuthority.fromDurableCanonicalJson(
-    contextState.canonical_json,
-    dependencies.sha256,
-  );
   const normalizedContext = normalizeContextAuthority(contextAuthority, dependencies.sha256);
   for (const row of normalizedContext.taskScopes) {
     const current = requireTaskScopeCurrentness(database, row.run_key as string, {

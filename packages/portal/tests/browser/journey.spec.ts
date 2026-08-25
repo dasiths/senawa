@@ -1,5 +1,5 @@
 import { type Browser, expect, type Page, test } from "@playwright/test";
-import { reportFixtureStateOnFailure } from "./fixture-state.js";
+import { isolateSharedFixture } from "./shared-fixture.js";
 import {
   bootstrapPortal,
   controlOrigin,
@@ -10,7 +10,7 @@ import {
   selectRun,
 } from "./support.js";
 
-reportFixtureStateOnFailure();
+isolateSharedFixture();
 
 test.describe.configure({ mode: "serial" });
 test.setTimeout(120_000);

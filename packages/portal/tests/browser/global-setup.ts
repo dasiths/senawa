@@ -100,6 +100,13 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       sessionClockOffsetMs: sessionNow - Date.parse(NOW),
       mutations: [...mutations],
     }),
+    // The session clock only ever moved forward, so a test that expired a
+    // session expired every session after it. Each test now starts from the
+    // same moment.
+    resetFixture: () => {
+      sessionNow = Date.parse(NOW);
+      mutations.length = 0;
+    },
   });
   process.env.SENAWA_E2E_CONTROL_ORIGIN = control.origin;
   process.env.SENAWA_E2E_REPOSITORY_ID = repositoryForRun(RUNS.journey);
@@ -1128,6 +1135,7 @@ async function startControlServer(actions: {
   readonly advanceSession: () => void;
   readonly appendTranscript: () => string;
   readonly fixtureState: () => unknown;
+  readonly resetFixture: () => void;
 }): Promise<{ readonly origin: string; readonly server: Server }> {
   const server = createServer(async (request, response) => {
     try {
@@ -1143,6 +1151,10 @@ async function startControlServer(actions: {
       }
       if (request.method === "GET" && request.url === "/fixture-state") {
         return json(response, 200, actions.fixtureState());
+      }
+      if (request.method === "POST" && request.url === "/reset-fixture") {
+        actions.resetFixture();
+        return json(response, 204, {});
       }
       return json(response, 404, { error: "not-found" });
     } catch (error) {

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { reportFixtureStateOnFailure } from "./fixture-state.js";
+import { isolateSharedFixture } from "./shared-fixture.js";
 import {
   assertDocumentFits,
   assertHeaderControlContrast,
@@ -15,7 +15,7 @@ import {
   selectRun,
 } from "./support.js";
 
-reportFixtureStateOnFailure();
+isolateSharedFixture();
 
 test.describe.configure({ mode: "serial" });
 

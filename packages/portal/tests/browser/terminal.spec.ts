@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { reportFixtureStateOnFailure } from "./fixture-state.js";
+import { isolateSharedFixture } from "./shared-fixture.js";
 import {
   assertDocumentFits,
   bootstrapPortal,
@@ -11,7 +11,7 @@ import {
   selectRun,
 } from "./support.js";
 
-reportFixtureStateOnFailure();
+isolateSharedFixture();
 
 test("streams, follows, bounds, and exports the selected node agent output", async ({
   page,
