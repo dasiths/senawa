@@ -15,8 +15,10 @@ Prefer few, large tasks over many trivial ones. Between three and five is right
 for most requests. A task that cannot be verified on its own belongs merged into
 the one it depends on.
 
-The project is checked by running `node scripts/check.mjs`, which requires at
-least one test file and every test passing. Plan for that.
+The harness checks the project by finding every `*.test.js` file and running
+them all with Node's own test runner. It requires at least one, and every test
+passing. Plan for that. The harness supplies the runner, so no task should
+produce one.
 
 The project starts empty. The `decisions` in the research are what a person
 already settled when the researcher asked them; treat those as given and plan

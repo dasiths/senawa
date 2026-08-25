@@ -281,19 +281,43 @@ modes, and was being taken on trust. It is now held by a test that registers a
 dispatch, persists no intent, and asserts the next schedule pass queues its
 command.
 
-## Phase 9: the example gates on its own work
+## Phase 9: the gate the agent cannot see
 
-The nine agents produced thirty passing tests and a `scripts/check.mjs` that
-cannot run them: it invokes `node --test test/`, which this Node reads as a
-module path. The phase closed anyway, because the workflow's gate is `git diff
---check`.
+Written down first as "the workflow's gate is `git diff --check`", and that was
+wrong. Reading it out before changing anything found the gate has always been
+`node scripts/check.mjs`, a real executable sensor that refuses a project with
+no tests as loudly as one with failing tests, wired blocking on `implement`
+since the file was created. A red sensor already refuses to close a phase, and
+`brief-scenarios.test.ts` holds that with `sensorCommand: "false"`. Both
+criteria as written were already true, and ticking them would have recorded a
+measurement of the wrong thing.
 
-A gate that only checks whitespace teaches the example's reader the wrong thing
-about what a gate is for, and it let broken work through on the first run that
-produced any.
+What was actually observed survives the correction. The nine agents produced
+thirty passing tests *and* a `scripts/check.mjs` of their own that cannot run
+them: it invokes `node --test test/`, which this Node reads as a module path.
+Nothing noticed, because nothing runs it. The gate runs the example's script,
+from the project root; the agents' file sits in the workspace, dead.
 
-* [ ] The example's gate runs the produced project's own tests
-* [ ] A run whose produced tests fail does not close the phase
+They wrote it because they were told to. The implementor prompt says "The whole
+project is checked by `node scripts/check.mjs`", and that path resolves against
+the project root for the sensor and against the workspace for the agent. An
+agent reads the sentence, finds no such file where it is standing, and helpfully
+supplies one. The prompt names a path the agent can neither see nor reach, so it
+manufactures a second runner that rots on the first day.
+
+F-058 in the implementation log already recorded the cost without naming the
+cause: two runs in a row spent a question on "I'm attempting to create
+scripts/check.mjs but the workspace filesystem tools won't allow writing to a
+non-existent parent directory". The missing `mkdir` was fixed. The reason an
+agent was trying to write that file at all was not.
+
+A gate is described to an agent by what it requires, not by a command line the
+agent is standing in the wrong directory to run.
+
+* [x] The example's gate runs the produced project's own tests (already true)
+* [x] A run whose produced tests fail does not close the phase (already true)
+* [x] The implementor prompt describes the gate by what it requires, and names
+  no path the agent will try to satisfy by writing it
 
 ## Phase 10: a criterion is not a piece of work
 
