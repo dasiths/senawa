@@ -133,7 +133,10 @@ export interface RecordPhaseAttemptTransitionPayload {
   readonly attemptDigest: string;
   readonly transitionDigest: string;
   readonly triggerDigest: string;
-  readonly disposition: "iterate" | "escalate" | "fail" | "closed" | "refused";
+  /** The work the attempt is for, without which no per-task rule can be kept. */
+  readonly taskId: string;
+  readonly definitionGeneration: number;
+  readonly disposition: "opened" | "iterate" | "escalate" | "fail" | "closed" | "refused";
 }
 
 export interface ImportPlanPayload {

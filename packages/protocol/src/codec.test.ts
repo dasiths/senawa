@@ -208,6 +208,8 @@ describe("v1 command codec", () => {
       attemptDigest: DIGEST,
       transitionDigest: "b".repeat(64),
       triggerDigest: "c".repeat(64),
+      taskId: "task_iterate",
+      definitionGeneration: 1,
       disposition: "iterate",
     };
     expect(

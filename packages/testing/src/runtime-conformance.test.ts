@@ -253,6 +253,8 @@ describe("transport-independent runtime command conformance", () => {
           attemptDigest: "1".repeat(64),
           transitionDigest: "2".repeat(64),
           triggerDigest: "3".repeat(64),
+          taskId: "task_frontier",
+          definitionGeneration: 1,
           disposition: "iterate",
         },
       },
@@ -289,6 +291,61 @@ describe("transport-independent runtime command conformance", () => {
       );
       expect(receipt).toMatchObject({ status: "completed", result: command.payload });
     }
+  });
+
+  // A task may have one agent at a time. Nothing recorded whether that rule was
+  // kept, so the driver inferred it and opened a second dispatch against a
+  // member that was still working.
+  it("refuses a second attempt for a task while one is open, and permits the next once closed", () => {
+    const service = createService();
+    const instantiated = instantiate(service, "command_one-agent-instantiate");
+    const graphRevision = instantiated.graph.revisionDigest;
+    const transition = (
+      commandId: string,
+      disposition: string,
+      attemptDigest: string,
+    ): Parameters<typeof service.submit>[0] =>
+      runtimeCommand({
+        commandId,
+        intent: "record-phase-attempt-transition" as const,
+        expectedGraphRevision: graphRevision,
+        payload: {
+          attemptDigest,
+          transitionDigest: "2".repeat(64),
+          triggerDigest: "3".repeat(64),
+          taskId: "task_one_agent",
+          definitionGeneration: 1,
+          disposition,
+        },
+      });
+    const at = instantiated.admission.at();
+
+    expect(
+      service.submit(transition("command_open-one", "opened", "1".repeat(64)), at),
+    ).toMatchObject({ status: "completed" });
+    expect(
+      service.submit(transition("command_open-two", "opened", "4".repeat(64)), at),
+    ).toMatchObject({ status: "refused", error: { code: "attempt-already-open" } });
+    // The refusal has to be the one this test is about, not a revision or
+    // identity refusal that would pass whatever the rule did.
+    expect(
+      String(
+        (
+          service.submit(transition("command_open-four", "opened", "5".repeat(64)), at) as {
+            readonly error?: { readonly code?: unknown };
+          }
+        ).error?.code,
+      ),
+    ).toBe("attempt-already-open");
+
+    expect(service.submit(transition("command_close", "closed", "1".repeat(64)), at)).toMatchObject(
+      {
+        status: "completed",
+      },
+    );
+    expect(
+      service.submit(transition("command_open-three", "opened", "4".repeat(64)), at),
+    ).toMatchObject({ status: "completed" });
   });
 
   it("binds trusted integration barriers to worktree policy and exact gate authority", () => {

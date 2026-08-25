@@ -414,18 +414,28 @@ export function decodeRecordPhaseAttemptTransitionPayload(
     "attemptDigest",
     "transitionDigest",
     "triggerDigest",
+    "taskId",
+    "definitionGeneration",
     "disposition",
   ]);
   digest(object.attemptDigest, "$.attemptDigest");
   digest(object.transitionDigest, "$.transitionDigest");
   digest(object.triggerDigest, "$.triggerDigest");
-  if (!["iterate", "escalate", "fail", "closed", "refused"].includes(String(object.disposition))) {
+  identity(object.taskId, "$.taskId");
+  positiveSequence(object.definitionGeneration, "$.definitionGeneration");
+  if (
+    !["opened", "iterate", "escalate", "fail", "closed", "refused"].includes(
+      String(object.disposition),
+    )
+  ) {
     fail("invalid-value", "$.disposition", "must be a phase attempt transition disposition");
   }
   return Object.freeze({
     attemptDigest: object.attemptDigest as string,
     transitionDigest: object.transitionDigest as string,
     triggerDigest: object.triggerDigest as string,
+    taskId: object.taskId as string,
+    definitionGeneration: object.definitionGeneration as number,
     disposition: object.disposition as RecordPhaseAttemptTransitionPayload["disposition"],
   });
 }

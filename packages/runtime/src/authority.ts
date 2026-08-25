@@ -145,8 +145,16 @@ interface RuntimeRunRecords {
   readonly closure?: PhaseClosure;
   readonly integrationBarrier?: IntegrationBarrier;
   readonly phaseLifecycles?: readonly RuntimePhaseLifecycleRecords[];
+  /** The tasks with an attempt open, so the one-agent rule is kept rather than guessed. */
+  readonly openAttempts?: readonly RuntimeOpenAttempt[];
   readonly amendmentRecords?: readonly RuntimeAmendmentRecords[];
   readonly amendmentEvents?: readonly RuntimeAmendmentEvent[];
+}
+
+export interface RuntimeOpenAttempt {
+  readonly taskId: string;
+  readonly definitionGeneration: number;
+  readonly attemptDigest: string;
 }
 
 export interface RuntimeSchedulingSnapshot {
@@ -695,7 +703,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       case "start-phase-attempt":
         return this.startPhaseAttempt(command, run);
       case "record-phase-attempt-transition":
-        return canonicalValue(decodeRecordPhaseAttemptTransitionPayload(command.payload));
+        return this.recordPhaseAttemptTransition(command, run);
       case "import-plan":
         return canonicalValue(decodeImportPlanPayload(command.payload));
       case "record-fan-out-diff-decision":
@@ -1253,6 +1261,57 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
    * clears the per-phase records, because the next phase must build its own
    * candidate, evidence, and decision rather than inheriting them.
    */
+  /**
+   * Opens and closes an attempt against the task it is for.
+   *
+   * A task may have one agent at a time. Nothing recorded whether that rule was
+   * being kept, so the driver inferred it from the runner's effect log and got
+   * it wrong in ways that only a live run showed. The rule is now a record, and
+   * the refusal lives beside it.
+   */
+  private recordPhaseAttemptTransition(
+    command: CommandEnvelope,
+    run: RuntimeAuthorityRun,
+  ): JsonValue {
+    const records = requiredRecords(run);
+    const payload = decodeRecordPhaseAttemptTransitionPayload(command.payload);
+    const open = records.openAttempts ?? [];
+    const held = open.find(
+      (entry) =>
+        entry.taskId === payload.taskId &&
+        entry.definitionGeneration === payload.definitionGeneration,
+    );
+    if (payload.disposition === "opened") {
+      if (held !== undefined && held.attemptDigest !== payload.attemptDigest) {
+        throw new RuntimeRefusal(
+          "attempt-already-open",
+          "That task already has an attempt open, and a task may have one agent at a time",
+        );
+      }
+      run.records = Object.freeze({
+        ...records,
+        openAttempts: Object.freeze(
+          held === undefined
+            ? [
+                ...open,
+                {
+                  taskId: payload.taskId,
+                  definitionGeneration: payload.definitionGeneration,
+                  attemptDigest: payload.attemptDigest,
+                },
+              ]
+            : [...open],
+        ),
+      });
+      return canonicalValue(payload);
+    }
+    run.records = Object.freeze({
+      ...records,
+      openAttempts: Object.freeze(open.filter((entry) => entry !== held)),
+    });
+    return canonicalValue(payload);
+  }
+
   private startPhaseAttempt(command: CommandEnvelope, run: RuntimeAuthorityRun): JsonValue {
     const records = requiredRecords(run);
     this.assertGraphRevision(command, records);
