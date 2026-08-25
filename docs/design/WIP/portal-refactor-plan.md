@@ -797,7 +797,10 @@ of the four failed attempts above passed its tests.
   Answers went in from the command line on this run because the browser tool
   lost its port forward part way through. The portal path is proven separately,
   on the run before it.
-* [ ] A run survives the supervisor being restarted mid-turn
+* [x] A run survives the supervisor being restarted mid-turn — `run_cb70839b`,
+  killed forty-five seconds in while an agent was working. After restart the run
+  was still `running` and the agent's question arrived, so nothing was lost. It
+  later stalled on the duplicate-dispatch bug above, which is not about restarts.
 * [ ] After every item in this plan is done, the example is driven once more
   from a clean state root, end to end in a browser, and completes
 
