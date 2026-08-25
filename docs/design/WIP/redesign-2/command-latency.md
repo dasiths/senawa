@@ -154,9 +154,9 @@ and the numbers above are the record.
 
 `senawa status` opens the record once. `advance` opens it three times: a
 supervisor authority and a context broker to read the run, and a runner
-authority inside `spentDispatch`, which asks the effect log whether a turn ended
-without handing anything in. That third one is on the ordinary path — it is
-consulted every cycle a phase is waiting for an agent, which is most cycles.
+authority to ask the effect log which turns the agent has returned from. That
+third one is on the ordinary path — it is consulted every cycle a phase has an
+attempt open, which is most cycles.
 
 Two more opens exist on paths that are not ordinary: a portal query authority
 when a phase needs approval, which is the cheap kind, and a full authority in
@@ -166,9 +166,12 @@ rejected a candidate.
 This is worth saying plainly because the fix for it is not more measurement. The
 driver holds a record open for the length of a cycle and then opens it again
 from a helper. Passing what is already open into the helper costs nothing and
-removes a verification. `spentDispatch` is also the thing Phase 1 of the
-completion plan proposes to delete outright: if an attempt's opening and closing
-were recorded, no effect log would need to be read to guess at it.
+removes a verification.
+
+The runner open used to be two. `spentDispatch` asked whether a turn had ended
+empty and `startedDispatch` asked whether it had begun, each opening the record
+for itself. Recording the attempt replaced both with one pass that reads the
+effect log to write a closure down rather than to guess at one.
 
 ## The supervisor does not pay this
 

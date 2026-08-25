@@ -24,7 +24,11 @@ import {
   decodeCommandEnvelope,
   PROTOCOL_VERSION,
 } from "@senawa/protocol";
-import type { CanonicalJsonAssetPort } from "@senawa/runtime";
+import type {
+  CanonicalJsonAssetPort,
+  RuntimeAttemptRecord,
+  RuntimeSchedulingSnapshot,
+} from "@senawa/runtime";
 import { RuntimeDataflowAuthority, type RuntimeDependencies } from "@senawa/runtime";
 import {
   SqliteAuthority,
@@ -254,6 +258,42 @@ async function step(
 
   const state = broker.authority.snapshot();
 
+  // A turn ends when the agent returns, and the runner's outcome is the only
+  // record of that. Copying it into the run's own record here is what lets
+  // every decision below read one fact instead of inferring the same thing two
+  // ways, which is how a member ended up both still working and spent.
+  const attempts = closeEndedAttempts(input, supervisor, snapshot, scheduling, state);
+  const digestOf = (dispatchId: string) =>
+    attempts.find((entry) => entry.attemptDigest === attemptDigestOf(input, dispatchId));
+  /** Whether an agent currently holds the turn this dispatch is. */
+  const attemptOpen = (dispatchId: string): boolean =>
+    digestOf(dispatchId)?.disposition === "opened";
+  /**
+   * Whether this dispatch's turn is recorded as over.
+   *
+   * An attempt nobody opened is not closed, it is unknown, and a run whose
+   * dispatches predate this record must not be retried on sight.
+   */
+  const attemptClosed = (dispatchId: string): boolean => {
+    const held = digestOf(dispatchId);
+    return held !== undefined && held.disposition !== "opened";
+  };
+  // Every dispatch is an attempt. Opening it in one place rather than at the
+  // seven that dispatch is what makes the authority's refusal reachable: a
+  // dispatch that opened no attempt is one the one-agent rule cannot see.
+  const dispatchAttempt = (
+    request: Parameters<typeof dispatchPhase>[0],
+  ): ReturnType<typeof dispatchPhase> => {
+    const dispatched = dispatchPhase(request);
+    recordAttempt(supervisor, input, snapshot.graph.revisionDigest, {
+      dispatchId: String(dispatched.dispatch.dispatchId),
+      taskId: String(dispatched.dispatch.task.taskId),
+      definitionGeneration: Number(dispatched.dispatch.task.definitionGeneration),
+      disposition: "opened",
+    });
+    return dispatched;
+  };
+
   // A fan-out phase owns one task per member, and they run one at a time. The
   // next member is the first that nothing has been dispatched for yet. Without
   // this the driver treats the member that just finished as the phase's live
@@ -306,7 +346,7 @@ async function step(
     ) {
       return { kind: "rejected", phaseKey, reasons: blocked };
     }
-    const dispatched = dispatchPhase({
+    const dispatched = dispatchAttempt({
       snapshot,
       dataflow: new RuntimeDataflowAuthority(
         input.dependencies.sha256,
@@ -329,15 +369,8 @@ async function step(
       repositoryBase: input.repositoryBase,
       currentTime: input.currentTime,
     });
-    recordAttempt(supervisor, input, snapshot.graph.revisionDigest, {
-      dispatchId: String(dispatched.dispatch.dispatchId),
-      taskId: String(dispatched.dispatch.task.taskId),
-      definitionGeneration: Number(dispatched.dispatch.task.definitionGeneration),
-      disposition: "opened",
-    });
     return { kind: "dispatched", phaseKey, dispatchId: dispatched.dispatch.dispatchId };
   }
-
   // The latest attempt is the live one. An earlier attempt's dispatch is still
   // stored, and treating it as current would gate work the retry replaced.
   //
@@ -378,7 +411,7 @@ async function step(
         assets(supervisor, broker),
       );
     }
-    const dispatched = dispatchPhase({
+    const dispatched = dispatchAttempt({
       snapshot,
       dataflow,
       contextBroker: broker,
@@ -398,16 +431,6 @@ async function step(
   const dispatchId = dispatch.dispatchId;
   const completed = state.terminalCompletions.some((entry) => entry.dispatchId === dispatchId);
   const published = state.phaseOutputOutbox.filter((entry) => entry.fact.dispatchId === dispatchId);
-  // A turn that handed in is over, whatever else the phase still needs. Closing
-  // it here is what lets the next attempt for this task be opened at all.
-  if (completed) {
-    recordAttempt(supervisor, input, snapshot.graph.revisionDigest, {
-      dispatchId: String(dispatchId),
-      taskId: String(dispatch.task.taskId),
-      definitionGeneration: Number(dispatch.task.definitionGeneration),
-      disposition: "closed",
-    });
-  }
 
   // A person who asked for the attempt to start again is not waiting for the
   // agent to finish first: that is the whole point of asking. The instruction is
@@ -442,7 +465,18 @@ async function step(
     const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
     if (taskAttempts < maximumAttempts) {
       const instructions = abort.map((entry) => entry.instruction);
-      const retried = dispatchPhase({
+      // A person abandoning a live turn is the one case where the attempt ends
+      // without the agent returning. Saying so before the replacement opens is
+      // what keeps the task from briefly having two.
+      if (attemptOpen(String(dispatchId))) {
+        recordAttempt(supervisor, input, snapshot.graph.revisionDigest, {
+          dispatchId: String(dispatchId),
+          taskId: String(dispatch.task.taskId),
+          definitionGeneration: Number(dispatch.task.definitionGeneration),
+          disposition: "refused",
+        });
+      }
+      const retried = dispatchAttempt({
         snapshot,
         dataflow,
         contextBroker: broker,
@@ -501,11 +535,7 @@ async function step(
   // A member that is still working will hand in on its own. Giving it a turn to
   // carry the answer makes a second dispatch for the same task, and whichever
   // one loses is waited on for ever. Only a turn that is over needs replacing.
-  const memberStillWorking =
-    !taskAlreadyDone &&
-    !completed &&
-    !spentDispatch(input, dispatchId) &&
-    startedDispatch(input, dispatchId);
+  const memberStillWorking = !taskAlreadyDone && !completed && attemptOpen(String(dispatchId));
   if (answered.length > 0 && taskAlreadyDone) {
     for (const entry of answered) {
       supervisor.commandAuthority.satisfyFreshDispatchRequirement(
@@ -522,7 +552,7 @@ async function step(
         String((task as { readonly definition: { readonly id: unknown } }).definition.id) ===
         String(dispatch.task.taskId),
     );
-    const resumed = dispatchPhase({
+    const resumed = dispatchAttempt({
       snapshot,
       dataflow,
       contextBroker: broker,
@@ -560,13 +590,13 @@ async function step(
     // dispatches an agent with the same context, which asks the same question
     // again and spends an attempt doing it.
     const asked = state.questions.some((question) => String(question.dispatchId) === dispatchId);
-    // A dispatch that ended without handing anything in is a spent attempt, not
-    // work still in progress. Reporting it as awaiting the agent waits for a
-    // turn that is already over, which stalls the run until a person notices.
-    if (!asked && spentDispatch(input, dispatchId)) {
+    // A dispatch whose attempt is recorded as over is a spent attempt, not work
+    // still in progress. Reporting it as awaiting the agent waits for a turn
+    // that is already finished, which stalls the run until a person notices.
+    if (!asked && attemptClosed(dispatchId)) {
       const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
       if (taskAttempts < maximumAttempts) {
-        const retried = dispatchPhase({
+        const retried = dispatchAttempt({
           snapshot,
           dataflow,
           contextBroker: broker,
@@ -752,7 +782,7 @@ async function step(
     if (phase.iteration?.onGateRejected === "iterate" && taskAttempts < maximumAttempts) {
       // The next attempt is told what the last one failed, because a retry that
       // is not told what to change only spends an attempt.
-      const retried = dispatchPhase({
+      const retried = dispatchAttempt({
         snapshot,
         dataflow,
         contextBroker: broker,
@@ -805,7 +835,7 @@ async function step(
     const reasons = rejectionReasons(input) ?? ["a person rejected this phase"];
     const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
     if (phase.iteration?.onApprovalRejected === "iterate" && taskAttempts < maximumAttempts) {
-      const retried = dispatchPhase({
+      const retried = dispatchAttempt({
         snapshot,
         dataflow,
         contextBroker: broker,
@@ -989,8 +1019,66 @@ function nextPhaseAttemptOrdinal(
   }
 }
 
-/** Whether the runner holds an effect for this dispatch at all. */
-function startedDispatch(input: AdvanceRunInput, dispatchId: string): boolean {
+/**
+ * Records the end of every turn that is over.
+ *
+ * An attempt opens when a dispatch is created and closes when the turn ends,
+ * whether it handed work in, stopped to ask, or returned with nothing. Three
+ * facts say a turn ended, and none of them is the whole story on its own: the
+ * completion the agent handed in, the question it stopped on, and the runner's
+ * outcome, which is the only record of a turn that ended empty.
+ *
+ * They are read here, once, and turned into the run's own record rather than
+ * into a decision. Everything downstream asks the record. The driver used to
+ * ask the effect log twice per advance, once for whether the turn had started
+ * and once for whether it was spent, and the two answers could disagree: a
+ * member could be both still working and already finished, which is how a task
+ * ended up with two dispatches and a fan-in that waited for ever.
+ */
+function closeEndedAttempts(
+  input: AdvanceRunInput,
+  supervisor: SqliteSupervisorAuthority,
+  snapshot: ConfigurationSnapshot,
+  scheduling: RuntimeSchedulingSnapshot,
+  state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
+): readonly RuntimeAttemptRecord[] {
+  const open = scheduling.attempts.filter((entry) => entry.disposition === "opened");
+  if (open.length === 0) return scheduling.attempts;
+  const ended = new Map<string, "closed" | "fail">();
+  for (const entry of state.terminalCompletions) ended.set(String(entry.dispatchId), "closed");
+  // An agent that asks is waiting for a person, and the answer reaches it on a
+  // fresh dispatch. That turn is over even though the agent is well, and saying
+  // so is what lets the resuming dispatch open an attempt at all.
+  for (const question of state.questions) {
+    const held = String(question.dispatchId);
+    if (!ended.has(held)) ended.set(held, "closed");
+  }
+  for (const dispatchId of returnedDispatchIds(input)) {
+    if (!ended.has(dispatchId)) ended.set(dispatchId, "fail");
+  }
+  let closed = false;
+  for (const held of open) {
+    const disposition = [...ended].find(
+      ([dispatchId]) => attemptDigestOf(input, dispatchId) === held.attemptDigest,
+    );
+    if (disposition === undefined) continue;
+    recordAttempt(supervisor, input, snapshot.graph.revisionDigest, {
+      dispatchId: disposition[0],
+      taskId: held.taskId,
+      definitionGeneration: held.definitionGeneration,
+      disposition: disposition[1],
+    });
+    closed = true;
+  }
+  if (!closed) return scheduling.attempts;
+  return (
+    supervisor.commandAuthority.queryRunScheduling(input.repositoryId, input.runId)?.attempts ??
+    scheduling.attempts
+  );
+}
+
+/** The dispatches the runner has seen an agent return from, handed in or not. */
+function returnedDispatchIds(input: AdvanceRunInput): readonly string[] {
   const runner = new SqliteRunnerAuthority({
     databasePath: input.databasePath,
     dependencies: input.dependencies,
@@ -998,49 +1086,26 @@ function startedDispatch(input: AdvanceRunInput, dispatchId: string): boolean {
   try {
     return runner
       .load({ repositoryId: input.repositoryId, runId: input.runId })
-      .effects.some(({ intent }) => {
-        if (intent.command.kind !== "worker") return false;
-        const held = intent.command.input as { readonly dispatchId?: unknown } | null;
-        return held !== null && typeof held === "object" && String(held.dispatchId) === dispatchId;
+      .effects.flatMap((effect) => {
+        const outcome = effect.outcome;
+        if (outcome === undefined || outcome.status === "active" || outcome.status === "unknown") {
+          return [];
+        }
+        const details = outcome.details as { readonly dispatchId?: unknown } | undefined;
+        return details?.dispatchId === undefined ? [] : [String(details.dispatchId)];
       });
   } catch {
-    return false;
+    // A run whose work never went through the runner has no effect to read, so
+    // nothing has returned that way.
+    return [];
   } finally {
     runner.close();
   }
 }
 
-/**
- * Whether the dispatch's turn is over with nothing handed in.
- *
- * The runner records the outcome of the effect that ran the agent. Only that
- * record distinguishes a turn still running from one that ended empty, and the
- * context broker never learns the difference because an empty turn writes
- * nothing to it.
- */
-function spentDispatch(input: AdvanceRunInput, dispatchId: string): boolean {
-  const runner = new SqliteRunnerAuthority({
-    databasePath: input.databasePath,
-    dependencies: input.dependencies,
-  });
-  try {
-    return runner
-      .load({ repositoryId: input.repositoryId, runId: input.runId })
-      .effects.some((effect) => {
-        const outcome = effect.outcome;
-        if (outcome === undefined || outcome.status === "active" || outcome.status === "unknown") {
-          return false;
-        }
-        const details = outcome.details as { readonly dispatchId?: unknown } | undefined;
-        return String(details?.dispatchId) === dispatchId && outcome.status !== "completed";
-      });
-  } catch {
-    // A run whose work never went through the runner has no effect to read, so
-    // there is nothing saying this turn is over.
-    return false;
-  } finally {
-    runner.close();
-  }
+/** The identity of the attempt a dispatch is, derived from the dispatch itself. */
+function attemptDigestOf(input: AdvanceRunInput, dispatchId: string): string {
+  return input.dependencies.sha256.digest(canonicalBytes(canonicalValue({ dispatchId })));
 }
 
 function deliverFacts(
@@ -1252,12 +1317,10 @@ function recordAttempt(
     readonly dispatchId: string;
     readonly taskId: string;
     readonly definitionGeneration: number;
-    readonly disposition: "opened" | "closed";
+    readonly disposition: "opened" | "closed" | "fail" | "refused";
   },
 ): void {
-  const attemptDigest = input.dependencies.sha256.digest(
-    canonicalBytes(canonicalValue({ dispatchId: attempt.dispatchId })),
-  );
+  const attemptDigest = attemptDigestOf(input, attempt.dispatchId);
   submit(
     supervisor,
     input,

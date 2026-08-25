@@ -4441,3 +4441,45 @@ Recorded rather than fixed. The stop that caused it was mine, taken to run a
 diagnostic while a worker was mid-turn, so the trigger is understood and the run
 is not evidence of drift in normal operation. The fix belongs with the other
 recovery work rather than bolted onto a portal change.
+
+## An attempt is a record, not an inference
+
+The one-agent rule now lives in the run's own record. Every dispatch opens an
+attempt against the task it is for, every turn that ends closes one, and the
+authority refuses to open a second attempt for a task that already has one.
+
+Three things made this more than typing.
+
+**Opening in one place.** There are seven places that dispatch. Wiring two of
+them, which is where this started, would have left five dispatches the rule
+cannot see, and a rule that only sometimes applies is worse than none. Every
+call now goes through one wrapper that dispatches and opens, so a dispatch
+without an attempt is not expressible.
+
+**Closed attempts stay in the record.** Removing an entry on closure was the
+first shape, and it is wrong: it makes an attempt that finished
+indistinguishable from one nobody opened. The driver reads this to decide
+whether a turn is over, so under that shape every dispatch made before attempts
+were recorded would look finished and be retried on sight — the dispatch storm
+this branch already produced once, arriving by a different road. The record now
+keeps every attempt with the disposition it ended on, and absence means nothing
+is known.
+
+**A turn ends three ways.** `spentDispatch` asked the runner for a terminal
+outcome that was not `completed`, and `startedDispatch` asked whether the runner
+held an effect at all. Two questions to the same log, answered independently,
+could disagree: a member could be both still working and already spent. They are
+replaced by one pass that reads all three facts that end a turn — the completion
+it handed in, the question it stopped on, and the runner's outcome — and writes
+the closure down. Every decision downstream reads the record.
+
+The question is the one that was missing from the first attempt at this. An
+agent that asks has ended its turn: the answer reaches it on a fresh dispatch,
+which cannot open an attempt while the old one is held. Three fan-out scenarios
+caught that, and they caught it because the scenario harness never goes through
+the runner, so the runner outcome was the only closure and there was none.
+
+Proven by breaking both directions: with the refusal disabled the second open is
+admitted, and with the closure dropped from the record the attempt list comes
+back one entry short. Both required a rebuild first — cross-package tests import
+from `dist`, and a mutation that is not rebuilt passes against the old build.

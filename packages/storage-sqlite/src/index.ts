@@ -4483,7 +4483,6 @@ export class SqlitePortalQueryAuthority {
     validateOpaqueIdentity(runId);
     if (after !== undefined) validateOpaqueIdentity(after);
     validatePortalLimit(limit, PORTAL_LIMITS.maxAgentItems);
-    const runKey = canonicalStringify([repositoryId, runId]);
     const rows = this.#database
       .prepare<
         [string, string, string, number],

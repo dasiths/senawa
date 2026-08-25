@@ -145,16 +145,18 @@ interface RuntimeRunRecords {
   readonly closure?: PhaseClosure;
   readonly integrationBarrier?: IntegrationBarrier;
   readonly phaseLifecycles?: readonly RuntimePhaseLifecycleRecords[];
-  /** The tasks with an attempt open, so the one-agent rule is kept rather than guessed. */
-  readonly openAttempts?: readonly RuntimeOpenAttempt[];
+  /** Every attempt this run has opened, and what became of it. */
+  readonly attempts?: readonly RuntimeAttemptRecord[];
   readonly amendmentRecords?: readonly RuntimeAmendmentRecords[];
   readonly amendmentEvents?: readonly RuntimeAmendmentEvent[];
 }
 
-export interface RuntimeOpenAttempt {
+export interface RuntimeAttemptRecord {
   readonly taskId: string;
   readonly definitionGeneration: number;
   readonly attemptDigest: string;
+  /** `opened` means an agent has this task; anything else means the turn is over. */
+  readonly disposition: string;
 }
 
 export interface RuntimeSchedulingSnapshot {
@@ -167,6 +169,8 @@ export interface RuntimeSchedulingSnapshot {
     readonly accountingAssessmentDigest: Sha256Digest;
     readonly integrationBarrierDigest?: Sha256Digest;
   }[];
+  /** Every attempt the run has opened, so no reader has to infer who is working. */
+  readonly attempts: readonly RuntimeAttemptRecord[];
 }
 
 interface RuntimePhaseLifecycleRecords {
@@ -532,6 +536,7 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       graph: currentGraph(records, this.dependencies.sha256),
       phase: records.phase,
       closed: records.closure !== undefined,
+      attempts: Object.freeze([...(records.attempts ?? [])]),
       acceptedTasks: Object.freeze(
         records.assessments
           .map(({ assessment, assessmentDigest }) =>
@@ -1254,20 +1259,18 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
   }
 
   /**
-   * Moves the run to its next phase.
-   *
-   * Without this a run's phase was fixed at instantiation, so a workflow could
-   * only ever execute its first phase. Advancing archives the closed phase and
-   * clears the per-phase records, because the next phase must build its own
-   * candidate, evidence, and decision rather than inheriting them.
-   */
-  /**
    * Opens and closes an attempt against the task it is for.
    *
    * A task may have one agent at a time. Nothing recorded whether that rule was
    * being kept, so the driver inferred it from the runner's effect log and got
    * it wrong in ways that only a live run showed. The rule is now a record, and
    * the refusal lives beside it.
+   *
+   * A closed attempt stays in the record. Dropping it would make an attempt
+   * nobody ever opened indistinguishable from one that finished, and the driver
+   * reads this to decide whether a turn is over: absence has to mean nothing is
+   * known, or a run whose attempts predate this record would be retried on
+   * sight.
    */
   private recordPhaseAttemptTransition(
     command: CommandEnvelope,
@@ -1275,43 +1278,48 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
   ): JsonValue {
     const records = requiredRecords(run);
     const payload = decodeRecordPhaseAttemptTransitionPayload(command.payload);
-    const open = records.openAttempts ?? [];
-    const held = open.find(
-      (entry) =>
-        entry.taskId === payload.taskId &&
-        entry.definitionGeneration === payload.definitionGeneration,
-    );
+    const attempts = records.attempts ?? [];
+    const held = attempts.find((entry) => entry.attemptDigest === payload.attemptDigest);
     if (payload.disposition === "opened") {
-      if (held !== undefined && held.attemptDigest !== payload.attemptDigest) {
+      const working = attempts.find(
+        (entry) =>
+          entry.disposition === "opened" &&
+          entry.taskId === payload.taskId &&
+          entry.definitionGeneration === payload.definitionGeneration &&
+          entry.attemptDigest !== payload.attemptDigest,
+      );
+      if (working !== undefined) {
         throw new RuntimeRefusal(
           "attempt-already-open",
           "That task already has an attempt open, and a task may have one agent at a time",
         );
       }
-      run.records = Object.freeze({
-        ...records,
-        openAttempts: Object.freeze(
-          held === undefined
-            ? [
-                ...open,
-                {
-                  taskId: payload.taskId,
-                  definitionGeneration: payload.definitionGeneration,
-                  attemptDigest: payload.attemptDigest,
-                },
-              ]
-            : [...open],
-        ),
-      });
-      return canonicalValue(payload);
     }
+    const recorded = {
+      taskId: payload.taskId,
+      definitionGeneration: payload.definitionGeneration,
+      attemptDigest: payload.attemptDigest,
+      disposition: payload.disposition,
+    };
     run.records = Object.freeze({
       ...records,
-      openAttempts: Object.freeze(open.filter((entry) => entry !== held)),
+      attempts: Object.freeze(
+        held === undefined
+          ? [...attempts, recorded]
+          : attempts.map((entry) => (entry === held ? recorded : entry)),
+      ),
     });
     return canonicalValue(payload);
   }
 
+  /**
+   * Moves the run to its next phase.
+   *
+   * Without this a run's phase was fixed at instantiation, so a workflow could
+   * only ever execute its first phase. Advancing archives the closed phase and
+   * clears the per-phase records, because the next phase must build its own
+   * candidate, evidence, and decision rather than inheriting them.
+   */
   private startPhaseAttempt(command: CommandEnvelope, run: RuntimeAuthorityRun): JsonValue {
     const records = requiredRecords(run);
     this.assertGraphRevision(command, records);
@@ -2759,7 +2767,7 @@ function parseRuntimeRunRecords(
       "closure",
       "integrationBarrier",
       "phaseLifecycles",
-      "openAttempts",
+      "attempts",
       "amendmentRecords",
       "amendmentEvents",
     ],

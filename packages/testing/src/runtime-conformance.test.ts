@@ -346,6 +346,17 @@ describe("transport-independent runtime command conformance", () => {
     expect(
       service.submit(transition("command_open-three", "opened", "4".repeat(64)), at),
     ).toMatchObject({ status: "completed" });
+
+    // A closed attempt stays in the record. The driver reads this to tell a turn
+    // that is over from one nobody ever opened, and dropping the closure would
+    // make those two indistinguishable: every dispatch made before attempts were
+    // recorded would look finished and be retried on sight.
+    const attempts =
+      service.queryRunScheduling(runtimeFixture.repositoryId, runtimeFixture.runId)?.attempts ?? [];
+    expect(attempts).toEqual([
+      expect.objectContaining({ attemptDigest: "1".repeat(64), disposition: "closed" }),
+      expect.objectContaining({ attemptDigest: "4".repeat(64), disposition: "opened" }),
+    ]);
   });
 
   it("binds trusted integration barriers to worktree policy and exact gate authority", () => {

@@ -49,13 +49,13 @@ accepted, when it has a durable completion, and while the member's own turn is
 running. Each is correct and none is the creator, which is the argument for
 fixing the mechanism instead of the next instance.
 
-* [ ] Record an attempt as opened when a task is dispatched, and closed when the
+* [x] Record an attempt as opened when a task is dispatched, and closed when the
   worker returns, not when its cancellation is requested
-* [ ] Have the authority refuse to open a second attempt for a task while one is
+* [x] Have the authority refuse to open a second attempt for a task while one is
   open, so the one-agent rule is enforced rather than merely respected
-* [ ] Delete `spentDispatch`; the retry question becomes whether the attempt is
+* [x] Delete `spentDispatch`; the retry question becomes whether the attempt is
   closed
-* [ ] Prove a second dispatch against an open attempt is refused, and that a
+* [x] Prove a second dispatch against an open attempt is refused, and that a
   closed attempt permits the next one, by breaking both
 
 ### The obstacle, and the route through it
