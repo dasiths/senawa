@@ -4623,3 +4623,37 @@ the failing pump ends the service's working life.
 The expiry itself is still open. A holder that lets its own lease lapse is
 either doing too much work in one turn or renewing too late, and that is worth
 measuring rather than guessing at.
+
+## Opening a record verifies it, and that is not an accident
+
+Phase 6 says advancing should not re-verify the whole record. The obvious
+change — do the storage engine's checks and the authority reparse at open, and
+leave the cross-checks to `senawa integrity check` — was made and reverted
+within the hour.
+
+Six tests fail on it, and they are not incidental:
+
+```text
+refuses startup when normalized tables contain an altered row
+refuses startup when normalized tables contain an missing row
+refuses coordinated amendment projection and configuration snapshot corruption
+backs up and restores parallel authority and rejects coordinated corruption
+backs up and restores portal vectors and rejects coordinated revision corruption
+refuses reads and startup when committed asset bytes are missing
+```
+
+The durability documentation states the same guarantee. It is real: the mirror
+tables are what queries read, so a tampered mirror serves wrong answers with
+nothing to notice it. Verification at open is what makes the mirrors
+trustworthy, and the speed complaint is a complaint about the price of that
+trust, not about waste.
+
+So this is a decision, not a refactor, and the plan now says so with the three
+routes and their costs. The measurement that matters: 1539 ms to open, of which
+964 ms is the reparse the caller needs anyway and about 570 ms is the
+cross-checks. `verifyAmendmentTables` alone is 386 ms against a six-row table,
+which is the number that suggests the first route is worth trying before the
+other two.
+
+Recorded rather than done, because ticking this by weakening a guarantee six
+tests defend would be measuring the wrong thing.

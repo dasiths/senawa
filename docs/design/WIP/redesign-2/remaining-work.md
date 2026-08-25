@@ -143,6 +143,26 @@ seventeen seconds alone, because every `advance` opens and verifies the record.
 That is the latency of the phase-5 design showing up as a test one slow machine
 away from timing out.
 
+This one needs a decision before it needs code. Skipping the cross-checks at
+open was tried and reverted: six tests assert that a tampered mirror row is
+refused at startup, and the durability documentation states the same guarantee.
+It is a real property, not an accident — the mirrors are what queries read, so
+a tampered mirror serves wrong data silently.
+
+The measured cost of opening a record is 1539 ms, of which about 964 ms is the
+authority reparse the caller needs anyway and about 570 ms is the cross-checks.
+Three ways out, in increasing order of honesty:
+
+* Make the cross-checks cheaper. `verifyAmendmentTables` takes 386 ms against a
+  six-row table, which suggests it is re-decoding the same canonical state
+  repeatedly rather than doing six rows' work.
+* Verify only what changed, which needs a verified-revision marker and an
+  argument for why a marker cannot be forged alongside the row it covers.
+* Stop trusting the mirrors, deriving query results from the canonical state or
+  treating the mirrors as a cache rebuilt on write. Then a tampered mirror is
+  not a trust question and the cross-checks belong only in `integrity check`.
+
+* [ ] Decide which of those three, and why
 * [ ] Advancing a run does not re-verify the whole record each time
 
 ## Carried from the v1 plan
