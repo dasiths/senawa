@@ -724,7 +724,7 @@ that agent to hand in. Either it should never have been opened, or acceptance
 should close it. Which of those is right is the design question; that it must be
 one of them is not.
 
-### Two repairs tried against the stalled run, and what they showed
+### Three repairs tried against the stalled run, and what they showed
 
 The run's state was kept, so each was driven against the real stall rather than
 argued about. Both were reverted.
@@ -747,6 +747,32 @@ phase's live work, and every branch that follows is reasoning about a turn that
 should not be under consideration at all. The repair belongs where that dispatch
 is chosen, not in what is done with it afterwards.
 
+A third repair went there, at the one line that chooses it:
+
+```ts
+const dispatch =
+  phaseMembers.find((candidate) => !handedIn.has(String(candidate.dispatchId))) ??
+  phaseMembers.at(-1);
+```
+
+The tenth dispatch has no completion in the outbox, so `find` returns it. Adding
+"and its task is not accepted" makes `find` return nothing, and the fallback
+then picks the same dispatch again as the newest — so the run took the reject
+path instead. Making the fallback the last member that *did* hand in gets past
+both, and the run reaches the close and is refused by the kernel:
+
+```text
+Task task_a47d09b4… has no accepted accounting assessment
+```
+
+Which is a fourth thing, and a useful one: that task is listed in
+`acceptedTasks`, so "accepted" in the scheduling snapshot and "accepted" as the
+closing candidate requires are not the same acceptance. That is where this
+stops, reverted, with the state kept.
+
+Three repairs, each driven against the real stall, each reverted, each leaving
+the next one better aimed. None was committed on a guess.
+
 ### This corrects phase 8
 
 Phase 8's second item was exactly this: "a dispatch with no runner command and
@@ -765,7 +791,9 @@ The criterion measured the easy half and was ticked anyway. It is reopened.
 * [x] Answer why the ready frontier excluded that member: it did not. The task
   was accepted, and the phase was waiting on an attempt rather than on work
 * [ ] A dispatch on an accepted task is not selected as the phase's live work,
-  which is where both attempted repairs showed the fix belongs
+  which is where three attempted repairs showed the fix belongs
+* [ ] Reconcile the two acceptances: a task in `acceptedTasks` that the closing
+  candidate says has no accepted accounting assessment
 * [ ] An attempt on an accepted task is not waited on: nothing is left for that
   agent to hand in
 * [ ] A run that is waiting on an agent that was never started says so, naming
