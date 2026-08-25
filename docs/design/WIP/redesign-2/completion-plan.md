@@ -127,7 +127,8 @@ exhausts a budget can only be freed from the portal.
 ## Phase 3: clear the debts the run exposed
 
 These are recorded and unfixed. None blocks phase 2, and all of them cost a
-person something real.
+person something real. The open ones are carried into
+[the one open list](remaining-work.md).
 
 * [ ] A run does not survive its supervisor stopping. F-061, now diagnosed to
   the end: everything under the supervisor recovers, and there is a test for it.

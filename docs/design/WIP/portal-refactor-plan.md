@@ -728,31 +728,8 @@ first contact with a live run.
 
 ### Still open
 
-A member's task ends up with two dispatches, the later one never runs, and the
-fan-in waits on it. Four runs in a row show the same shape:
-
-```text
-task_5d0d691e   ord 1 OPEN | ord 5 handed-in | ord 6 OPEN
-```
-
-Ord 5 does the work. Ord 6 is created after it and can never be scheduled,
-because the task is accepted or waiting to be, and an accepted task is not in
-the ready frontier.
-
-Three guards on the answer path have not closed it: refusing when the task is
-accepted, refusing when it has a durable completion, and refusing while the
-member's own turn is still running. Each is right on its own terms and the
-duplicate still appears, so whatever creates ord 6 is not the answer path.
-
-The next step is to find the creator rather than guard more doors: log the
-dispatch identity and the branch that made it at the moment of registration, and
-run once. Every diagnosis in this phase that guessed the branch was wrong, and
-every one that read the record was right.
-
-* [ ] Find which branch creates the second dispatch for a member that has
-  already handed in
-* [ ] A member whose turn ends empty without asking anything takes another turn,
-  bounded by the phase's limit, keyed off the durable completion
+Carried into [the one open list](redesign-2/remaining-work.md), Phase 1, where
+it is treated as the mechanism it is rather than the next instance of it.
 
 ### A run that grows past what it can save
 
