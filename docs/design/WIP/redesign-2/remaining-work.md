@@ -504,6 +504,54 @@ asked, all three answered, three `suspended` attempts — which is precisely the
 fact that was being lost. Breaking the disposition makes it fail; the live run
 is what holds the rest.
 
+## Phase 13: a session out of credits is a budget, not a crash
+
+The condition run for phases 7 to 12, `run_c42fa12ae7a3f8fd5dc3532bf5c83f43`,
+stopped at `research` with eleven cancelled outcomes. Every one of them said:
+
+```text
+crashed Error: Request session.resume failed with message: This session has
+already used 30.41 AI credits. The session limit must be above 30.41.
+```
+
+That line is itself the phase 8 crash-reporting item earning its keep. Before
+it, this record read `crashed Error` and said nothing at all; the same stall on
+the previous run cost an hour of guessing.
+
+What it says is exact. The researcher's session is `run`-scoped, so one
+conversation carries across phases, and `credits: 30` is the default ceiling.
+The session spent 30.41, and every later turn asks the SDK to resume a session
+that is already over its own limit. The SDK refuses, for ever, identically.
+
+`maxAiCredits` is compiled into the route selection from the agent's authored
+`credits` and fixed at dispatch. The run's own allowance mechanism —
+`grant-allowance`, the `review-iteration` and `model-millidollars` units, the
+escalation a person answers — is a separate system that never touches it. This
+run granted an allowance while it was stalling: "review-iteration may now spend
+32". It made no difference, because nothing connects the two.
+
+So a run can be given more budget by a person and still be unable to take
+another turn, and the reason is reported as a crashed worker rather than as an
+exhausted budget. Nothing escalates, because nothing recognises it as a budget
+at all.
+
+Three things are wrong and only two of them are obvious:
+
+* It is retried identically eight times. A resume refused for a fixed, already
+  exceeded ceiling will be refused again, and each retry costs an attempt.
+* It is classified as a crash. Budget exhaustion has a mechanism — escalate,
+  a person grants, the work continues — and this never reaches it.
+* Whether a person granting credits *should* raise a session ceiling is a cost
+  decision, not an obvious repair. A fresh session would sidestep the ceiling
+  entirely and make it meaningless; raising it silently spends somebody's money.
+  This one needs deciding rather than implementing.
+
+* [ ] A turn that fails because its session is out of credits is not retried
+  against the same ceiling
+* [ ] That failure is reported as an exhausted budget, naming the session and
+  the ceiling, rather than as a crashed worker
+* [ ] What a person can do about it is written down where they will read it
+
 ## Carried from the v1 plan
 
 Neither blocks anything above, and neither is part of the condition below. The

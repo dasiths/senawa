@@ -12,10 +12,16 @@
 researcher:
   prompt: prompts/researcher.md
   model: claude-opus-5
+  # A run-scoped session carries one conversation across every turn this agent
+  # takes, and each question it asks costs another. Thirty credits ran out
+  # mid-phase, and a session over its own ceiling can never be resumed: every
+  # later turn is refused for the same reason, for ever.
+  credits: 90
 
 planner:
   prompt: prompts/planner.md
   model: claude-opus-5
+  credits: 60
 
 implementor:
   prompt: prompts/implementor.md
@@ -23,3 +29,4 @@ implementor:
   # Each piece of work is independent, so a member starts clean rather than
   # inheriting what a sibling was told.
   session: element
+  credits: 60
