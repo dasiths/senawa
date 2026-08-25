@@ -693,6 +693,17 @@ never ran; the dispatch never runs because the phase is waiting on the open
 attempt, and a task with an attempt open is not on the ready frontier that
 `#scheduleRepository` enqueues from.
 
+One more reading narrows where to look. The dispatch was not dropped by
+`selectCurrentDispatches` for want of an accepted scope — the snapshot holds
+exactly one scope for that task, `claimsAccepted: true`, generation 1, with the
+same `acceptedContextDigest` the dispatch names. It is current and selectable.
+
+What remains is `#ready`. A task with a dispatch and no worker effect is
+reported `pending`, and `deriveReadyTaskFrontier` then decides from
+dependencies. Why this member was excluded while its siblings ran is the last
+unanswered question, and it is a small one: the inputs are all durable and the
+run's state has been kept.
+
 ### This corrects phase 8
 
 Phase 8's second item was exactly this: "a dispatch with no runner command and
@@ -708,6 +719,7 @@ The criterion measured the easy half and was ticked anyway. It is reopened.
   changing anything
 * [x] Reproduce with the run driver traced: a cycle that takes the run as its
   target and reports no progress is the thing to explain, not the wake
+* [ ] Answer why the ready frontier excluded that member while its siblings ran
 * [ ] An attempt whose dispatch has no runner command and no effect is closed,
   rather than waited on for ever
 * [ ] A run that is waiting on an agent that was never started says so, naming
