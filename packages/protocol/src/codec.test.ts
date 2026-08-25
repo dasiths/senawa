@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import { GOLDEN_COMMAND_JSON, GOLDEN_RECEIPT_JSON } from "./fixtures/wire-v1.js";
 import {
   canonicalBytes,
+  canonicalStringify,
+  DURABLE_STATE_LIMITS,
   decodeAnswerQuestionPayload,
   decodeApplyApprovedAmendmentPayload,
   decodeAuthenticatedPrincipal,
   decodeCapabilityHandshake,
   decodeCommandEnvelope,
   decodeCommandSubmission,
+  decodeDurableJsonValue,
   decodeDurableReceipt,
   decodeErrorEnvelope,
   decodeEventReplayPage,
@@ -30,6 +33,7 @@ import {
   decodeTaskFrontierStatus,
   decodeTransportAttribution,
   decodeWithdrawAmendmentProposalPayload,
+  durableStringify,
   encodeAnswerQuestionPayload,
   encodeApplyApprovedAmendmentPayload,
   encodeAuthenticatedPrincipal,
@@ -327,6 +331,31 @@ describe("v1 command codec", () => {
     }
     expectProtocolError("oversized", expect.stringContaining("$.payload"), () =>
       decodeCommandEnvelope({ ...command, payload: deepPayload }),
+    );
+  });
+
+  // The wire ceilings bound what an untrusted peer may send in one message. A
+  // run's own durable state is neither a message nor untrusted, and holding it
+  // to those ceilings had a live consequence: a run that had made seventeen
+  // dispatches could no longer persist an eighteenth, which is a worse failure
+  // than stopping.
+  it("reads and writes durable state larger than one wire value", () => {
+    const dispatches = Array.from({ length: 40 }, (_unused, index) => ({
+      dispatchId: `dispatch_${String(index).padStart(4, "0")}`,
+      prompt: "x".repeat(8_192),
+    }));
+    const durable = { version: "durable", dispatches };
+    expectProtocolError("oversized", "$", () => canonicalStringify(durable));
+
+    const serialized = durableStringify(durable);
+    expect(new TextEncoder().encode(serialized).byteLength).toBeGreaterThan(
+      PROTOCOL_LIMITS.maxWireBytes,
+    );
+    expect(decodeDurableJsonValue(serialized)).toEqual(durable);
+
+    // It is still a bound, so an unreadable file cannot exhaust memory.
+    expectProtocolError("oversized", "$", () =>
+      decodeDurableJsonValue(`"${"x".repeat(DURABLE_STATE_LIMITS.maxBytes + 1)}"`),
     );
   });
 

@@ -1169,6 +1169,43 @@ export function decodeCanonicalJsonValue(input: string | unknown): JsonValue {
   return decodeWireValue(input);
 }
 
+/**
+ * Reads canonical JSON that a process wrote for itself.
+ *
+ * The wire ceilings bound what an untrusted peer may send in one message. A
+ * run's durable state is neither a message nor untrusted, and applying the wire
+ * ceilings to it was a category error with a live consequence: a run that had
+ * made seventeen dispatches could no longer persist an eighteenth, and a run
+ * that cannot record anything is a worse failure than one that stops.
+ *
+ * The bound is still a bound. An unreadable file must not be able to exhaust
+ * memory, so durable state gets ceilings of its own, sized for a long run
+ * rather than for a request.
+ */
+export function decodeDurableJsonValue(input: string): JsonValue {
+  return decodeValueWithin(input, DURABLE_STATE_LIMITS);
+}
+
+/** Serializes state a process is writing for itself, against the same ceilings. */
+export function durableStringify(input: unknown): string {
+  const value = snapshotJsonValue(input, "$", {
+    depth: 0,
+    nodes: 0,
+    maxNodes: DURABLE_STATE_LIMITS.maxJsonNodes,
+  });
+  const encoded = serialize(value);
+  if (utf8Length(encoded) > DURABLE_STATE_LIMITS.maxBytes) {
+    fail("oversized", "$", `durable value exceeds ${DURABLE_STATE_LIMITS.maxBytes} bytes`);
+  }
+  return encoded;
+}
+
+/** What one process may write for itself and read back. */
+export const DURABLE_STATE_LIMITS = Object.freeze({
+  maxBytes: 67_108_864,
+  maxJsonNodes: 4_000_000,
+});
+
 function authenticatedPrincipal(value: unknown, path: string): AuthenticatedPrincipal {
   const object = exactObject(value, path, ["issuer", "subject", "tenant", "assurance", "roles"]);
   boundedString(object.issuer, `${path}.issuer`, 1, 512);
@@ -1274,15 +1311,39 @@ function decodeWireValue(input: string | unknown): JsonValue {
   return value;
 }
 
+function decodeValueWithin(
+  input: string,
+  limits: { readonly maxBytes: number; readonly maxJsonNodes: number },
+): JsonValue {
+  if (utf8Length(input) > limits.maxBytes) {
+    fail("oversized", "$", `durable input exceeds ${limits.maxBytes} bytes`);
+  }
+  try {
+    const value = snapshotJsonValue(JSON.parse(input), "$", {
+      depth: 0,
+      nodes: 0,
+      maxNodes: limits.maxJsonNodes,
+    });
+    if (serialize(value) !== input) {
+      fail("invalid-json", "$", "must use canonical JSON encoding without duplicate keys");
+    }
+    return value;
+  } catch (error) {
+    if (error instanceof ProtocolValidationError) throw error;
+    fail("invalid-json", "$", "must contain one valid JSON value");
+  }
+}
+
 function snapshotJsonValue(
   value: unknown,
   path: string,
-  budget: { depth: number; nodes: number },
+  budget: { depth: number; nodes: number; maxNodes?: number },
   ancestors = new Set<object>(),
 ): JsonValue {
+  const maxNodes = budget.maxNodes ?? PROTOCOL_LIMITS.maxJsonNodes;
   budget.nodes += 1;
-  if (budget.nodes > PROTOCOL_LIMITS.maxJsonNodes) {
-    fail("oversized", path, `JSON value exceeds ${PROTOCOL_LIMITS.maxJsonNodes} nodes`);
+  if (budget.nodes > maxNodes) {
+    fail("oversized", path, `JSON value exceeds ${maxNodes} nodes`);
   }
   if (value === null || typeof value === "boolean") {
     return value;
@@ -1338,7 +1399,7 @@ function snapshotJsonValue(
 function snapshotArray(
   descriptors: PropertyDescriptorMap,
   path: string,
-  budget: { depth: number; nodes: number },
+  budget: { depth: number; nodes: number; maxNodes?: number },
   ancestors: Set<object>,
 ): JsonValue {
   const length = descriptors.length?.value;

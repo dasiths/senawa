@@ -4554,3 +4554,42 @@ dispatches, so a retried task would keep reporting the turn it replaced. That
 reading was wrong: `selectCurrentDispatches` has already narrowed the list to
 one dispatch per task, so the derivation was reading the current attempt all
 along. The change and its test were reverted rather than kept as decoration.
+
+## A run's own state is not a message
+
+`ProtocolValidationError: $ wire value exceeds 262144 bytes`, raised while
+persisting a dispatch. The run could no longer record anything, which is worse
+than stopping, and it had done nothing wrong: it had simply worked for long
+enough.
+
+The ceiling was the wire ceiling. `canonicalStringify` refuses any value over
+256 KiB and `decodeCanonicalJsonValue` refuses any input over it, and the
+context authority serialized its whole durable state through both. That is a
+category error. The wire ceiling bounds what an untrusted peer may put in one
+message; a run's durable state is neither a message nor untrusted.
+
+Durable state now has ceilings of its own — 64 MiB and four million nodes —
+declared beside the wire ones so the difference is visible rather than implied.
+It is still a bound: an unreadable file must not be able to exhaust memory.
+
+Measured on the live run, so the sizing is not a guess:
+
+| dispatches | durable context state |
+| --- | --- |
+| 3 | 59,709 bytes |
+| 5 | 107,718 bytes |
+| 7 | 146,678 bytes |
+| 9 | 221,686 bytes |
+
+About 20 KB per dispatch, of which the dispatches themselves are 78%. The run
+that raised the error was at seventeen. The example's own workflow reaches nine
+before its fan-out has finished.
+
+Two things this does not fix, recorded rather than bundled:
+
+* The state is rewritten whole on every change, so a run does O(n) work per
+  dispatch and O(n²) overall. At 64 MiB that is a real cliff, further away.
+* `context_dispatches` already holds every dispatch as its own row. The blob
+  duplicates the tables it mirrors. Loading dispatches from the mirror the way
+  task scope currentness is already loaded would remove most of the growth, and
+  is the honest fix rather than the larger box.

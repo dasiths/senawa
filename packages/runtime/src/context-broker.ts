@@ -25,8 +25,10 @@ import {
   decodeAssetReadRequest,
   decodeCanonicalJsonValue,
   decodeContextGrantEnvelope,
+  decodeDurableJsonValue,
   decodePersistedContextGrantEnvelope,
   decodeWorkerSubmission,
+  durableStringify,
   type JsonValue,
   PROTOCOL_VERSION,
   type WorkerSubmission,
@@ -670,7 +672,10 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
   }
 
   toDurableCanonicalJson(): string {
-    return canonicalStringify(this.durableSnapshot());
+    // The state a run writes for itself is not a message, so it is not held to
+    // the ceiling that bounds one. A live run reached that ceiling and could no
+    // longer persist a dispatch at all.
+    return durableStringify(this.durableSnapshot());
   }
 
   durableSnapshot(): DurableContextAuthoritySnapshot {
@@ -719,7 +724,11 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
   }
 
   static fromDurableCanonicalJson(serialized: string, sha256: Sha256): InMemoryContextAuthority {
-    const decoded = decodeCanonicalJsonValue(serialized);
+    // A run's own state is not a message from anyone, so it is read against the
+    // ceilings for durable state rather than the ones that bound a request. A
+    // live run reached the wire ceiling at seventeen dispatches and could no
+    // longer persist an eighteenth, which is a worse failure than stopping.
+    const decoded = decodeDurableJsonValue(serialized);
     const hasTaskScopes =
       decoded !== null &&
       typeof decoded === "object" &&
