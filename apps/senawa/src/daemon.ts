@@ -549,11 +549,11 @@ export async function startSenawaService(
       listSchedulableRuns: () => productionScheduler.listRuns(),
       driveRunOnce:
         composition.driveRunOnce ??
-        driveRun(projectDirectory, paths, dependencies, (repositoryId, runId, reason) => {
+        driveRun(projectDirectory, paths, dependencies, (repositoryId, runId, event, reason) => {
           authority.appendLog({
             recordedAt: new Date().toISOString(),
             level: "error",
-            event: "run.drive-failed",
+            event,
             message: reason,
             fields: { repositoryId, runId },
           });
@@ -717,12 +717,14 @@ function driveRun(
   projectRoot: string,
   paths: ReturnType<typeof resolveSenawaServicePaths>,
   dependencies: RuntimeDependencies,
-  report: (repositoryId: string, runId: string, reason: string) => void,
+  report: (repositoryId: string, runId: string, event: string, reason: string) => void,
 ): (input: {
   readonly repositoryId: string;
   readonly runId: string;
   readonly currentTime: string;
 }) => Promise<boolean> {
+  /** The last stop reported per run, so a stopped run says it once. */
+  const stopped = new Map<string, string>();
   return async ({ repositoryId, runId, currentTime }) => {
     try {
       const outcome = await advanceRun({
@@ -740,6 +742,22 @@ function driveRun(
           treeDigest: sha256Digest("0".repeat(64)),
         },
       });
+      // A run that has stopped for a reason says the reason. `rejected` and
+      // `gate-refused` are the driver giving up on a phase, and reporting them
+      // as "no work" made a live run that had crashed its worker eight times
+      // and spent its attempt ceiling indistinguishable from an idle one: the
+      // pump stopped, `senawa status` said running, and the record said nothing
+      // a person could act on.
+      const key = `${repositoryId}\u0000${runId}`;
+      if (outcome.kind === "rejected" || outcome.kind === "gate-refused") {
+        const reason = `${outcome.kind} at ${outcome.phaseKey}: ${outcome.reasons.join("; ")}`;
+        if (stopped.get(key) !== reason) {
+          stopped.set(key, reason);
+          report(repositoryId, runId, "run.stopped", reason);
+        }
+      } else {
+        stopped.delete(key);
+      }
       return classifyOutcome(outcome) === "progress" && outcome.kind !== "finished";
     } catch (error) {
       // A workflow that no longer compiles, or a run this service was not
@@ -749,7 +767,7 @@ function driveRun(
       // person looks, and on this service it is not kept at all, so the reason
       // goes where the rest of the run's history is.
       const reason = error instanceof Error ? error.message : String(error);
-      report(repositoryId, runId, reason);
+      report(repositoryId, runId, "run.drive-failed", reason);
       process.stderr.write(
         `drive-run-failed ${repositoryId} ${runId}: ${
           error instanceof Error ? (error.stack ?? error.message) : String(error)

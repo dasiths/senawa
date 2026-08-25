@@ -69,6 +69,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   const journeyDispatchId = seedAuthority({ databasePath, assetDirectory, dependencies });
 
   let sessionNow = Date.parse(NOW);
+  /** Everything a test has done to the shared fixture, in order. */
+  const mutations: string[] = [];
   const started = await startSenawaService(environment, {
     runtimeDependencies: dependencies,
     portalSessionClock: { now: () => sessionNow },
@@ -85,8 +87,19 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     bootstrap: async () => `${origin}${(await ipc.createPortalSession()).path}`,
     advanceSession: () => {
       sessionNow += 9 * 60 * 60 * 1_000;
+      mutations.push("advance-session");
     },
-    appendTranscript: () => appendJourneyTranscript(databasePath),
+    appendTranscript: () => {
+      mutations.push("append-transcript");
+      return appendJourneyTranscript(databasePath);
+    },
+    // Three full suite runs failed three different tests, each of which passes
+    // alone. That is interference, and the suite could not say what had been
+    // done to the fixture before the test that failed. Now it can.
+    fixtureState: () => ({
+      sessionClockOffsetMs: sessionNow - Date.parse(NOW),
+      mutations: [...mutations],
+    }),
   });
   process.env.SENAWA_E2E_CONTROL_ORIGIN = control.origin;
   process.env.SENAWA_E2E_REPOSITORY_ID = repositoryForRun(RUNS.journey);
@@ -1114,6 +1127,7 @@ async function startControlServer(actions: {
   readonly bootstrap: () => Promise<string>;
   readonly advanceSession: () => void;
   readonly appendTranscript: () => string;
+  readonly fixtureState: () => unknown;
 }): Promise<{ readonly origin: string; readonly server: Server }> {
   const server = createServer(async (request, response) => {
     try {
@@ -1126,6 +1140,9 @@ async function startControlServer(actions: {
       }
       if (request.method === "POST" && request.url === "/append-transcript") {
         return json(response, 200, { text: actions.appendTranscript() });
+      }
+      if (request.method === "GET" && request.url === "/fixture-state") {
+        return json(response, 200, actions.fixtureState());
       }
       return json(response, 404, { error: "not-found" });
     } catch (error) {

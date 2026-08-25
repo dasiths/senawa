@@ -1,4 +1,5 @@
 import { type Browser, expect, type Page, test } from "@playwright/test";
+import { reportFixtureStateOnFailure } from "./fixture-state.js";
 import {
   bootstrapPortal,
   controlOrigin,
@@ -8,6 +9,8 @@ import {
   runs,
   selectRun,
 } from "./support.js";
+
+reportFixtureStateOnFailure();
 
 test.describe.configure({ mode: "serial" });
 test.setTimeout(120_000);

@@ -4677,3 +4677,37 @@ Reading the code before changing it showed otherwise, on both sides:
 Ticked as verified rather than implemented, and the plan now carries the
 evidence instead of the claim. The item was written from a memory of an earlier
 design; the code moved and the plan did not.
+
+## A run that gives up says nothing
+
+Eight dispatches for one task, all `cancelled`, seven of them `workerStatus:
+"crashed"`. The plan agent's worker died on every attempt, the driver spent the
+attempt ceiling, and then the run went quiet: `senawa status` said running with
+twelve agents dispatched and nothing waiting on a person, and the record's last
+word was a scheduler decline.
+
+The driver knew. `advanceRun` returned `rejected` with the reason on every
+cycle, and the daemon translated that into `worked: false` and threw the reason
+away, because only the throwing path reported anything. A phase the driver has
+given up on now writes `run.stopped` with the phase and the reasons, once per
+changed reason, the way the scheduler's decline already does.
+
+The crashes themselves are not the system's fault as far as this run shows: the
+machine was running the full suite, two builds, and twelve agents at once. What
+is the system's fault is that a run which had stopped for a knowable reason read
+exactly like an idle one.
+
+## The browser suite can now say what was done to it before it failed
+
+Phase 4's first item, done before the diagnosis rather than after it. The suite
+shares one service, one database, and two runs, and two of its mutations are
+one-way: `advance-session` moves the portal session clock forward nine hours and
+never moves it back, and `append-transcript` adds a durable line to the journey
+run. Three full runs failed three different tests, each passing alone, and the
+report offered an assertion and a screenshot with no way to see what an earlier
+test had done.
+
+The control server now answers `/fixture-state` with the session clock offset
+and the ordered list of mutations taken, and every spec attaches it to a
+failing test. The next failure arrives with its history rather than with an
+invitation to guess.

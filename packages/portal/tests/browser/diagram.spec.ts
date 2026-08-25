@@ -1,6 +1,9 @@
 import { expect, type Page, test } from "@playwright/test";
+import { reportFixtureStateOnFailure } from "./fixture-state.js";
 import { PHASE_EXECUTION_ORDER } from "./global-setup.js";
 import { assertDocumentFits, bootstrapPortal, navigate, runs, selectRun } from "./support.js";
+
+reportFixtureStateOnFailure();
 
 test("reads the workflow as bands of phases carrying cards of work", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);

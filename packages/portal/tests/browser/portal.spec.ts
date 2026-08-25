@@ -1,5 +1,8 @@
 import { expect, test } from "@playwright/test";
+import { reportFixtureStateOnFailure } from "./fixture-state.js";
 import { bootstrapPortal } from "./support.js";
+
+reportFixtureStateOnFailure();
 
 test("boots the built portal through a one-time authenticated URL", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page);
