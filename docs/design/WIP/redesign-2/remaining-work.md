@@ -58,6 +58,35 @@ fixing the mechanism instead of the next instance.
 * [ ] Prove a second dispatch against an open attempt is refused, and that a
   closed attempt permits the next one, by breaking both
 
+### The obstacle, and the route through it
+
+`record-phase-attempt-transition` cannot carry the rule as declared:
+
+```text
+attemptDigest      a digest
+transitionDigest   a digest
+triggerDigest      a digest
+disposition        iterate | escalate | fail | closed | refused
+```
+
+There is no task in it, so it cannot enforce "one open attempt per task".
+`start-phase-attempt` is not the answer either: it refuses with
+`phase-already-current`, so it moves between phases rather than opening an
+attempt within one.
+
+Nor can the context broker enforce it alone. It knows its own dispatches and
+their terminal completions, but not whether a worker is still running — that
+lives in the runner, on the other side of a boundary the architecture keeps
+deliberately.
+
+So the route is a protocol change: the attempt transition names the task it
+belongs to, the authority records open and closed against it, and the refusal
+lives where the record does. That is a breaking change to a declared payload,
+which this branch permits, and it should be made deliberately rather than
+approximated by a fourth guard in the driver.
+
+* [ ] The attempt transition payload names its task
+
 Finished when a live run reaches every phase closed without a member holding two
 dispatches.
 
