@@ -21,10 +21,24 @@ For every phase below:
 1. Implement, with a test that fails against the old behaviour.
 2. `npx tsc -b`, `npx vitest run`, `npx biome check .`,
    `node scripts/check-boundaries.mjs`, `node scripts/check-markdown-links.mjs`.
-3. `senawa hard-reset` the example, start it fresh, and drive it **through the
-   portal in a browser** until it stops or finishes.
+3. Clear the example's state root, start it fresh, and drive it **end to end
+   through the portal in a browser** until every phase has closed.
 4. Read the run's own record for what happened, not the driver's message.
 5. Commit, push, and only then start the next phase.
+
+Step 3 is the acceptance test for the phase, and it is not satisfied by a run
+that merely survives. It has to reach `every phase has closed`, watched in the
+portal, from a state root that had nothing in it.
+
+Two of those runs are fixed points rather than per-phase checks:
+
+* [ ] A baseline run before Phase 7 begins, so a later failure can be told apart
+  from one already present
+* [ ] A final run after Phase 11 is done, which is the condition for the whole
+  plan
+
+A run before the first change and a run after the last one bracket the work.
+Everything between them tells which change broke what.
 
 ## Phase 1: an attempt is recorded, not inferred
 
@@ -293,10 +307,39 @@ criteria: [{ key: `${item.key}-produced`, ... }]     // explicit items, distinct
 So every member of a fan-out owes a criterion with one shared name, and a reader
 cannot tell which task any of the four boxes belongs to.
 
-* [ ] A criterion is shown as a condition on its task, not as a card beside it
+### What a criterion should look like
+
+A criterion belongs to the node that had to satisfy it, so it is drawn inside
+that node's card rather than beside it: a row of small marks on the task, one
+per criterion, each dark while the task still owes it and lit once the task has
+produced it. The criterion's name is the mark's accessible name, so four
+identically named criteria on four different tasks stop being four anonymous
+boxes and become one mark on each of the four cards that owes it.
+
+That also answers the count and the state pill without a separate rule. A mark
+is not a member, so the band counts pieces of work; and a mark is lit or unlit
+rather than `done`, so nothing claims a criterion ran.
+
+The mark stays selectable, because the detail pane already renders a criterion
+correctly as an `exit condition` and that reading should stay reachable.
+
+```text
+◆ implement  done  4 pieces of work
+  implement-work-0778519c6a4a4bc8   implementor claude-sonnet-5   done  ●produced
+  implement-work-0b9b3bee3b85e1d7   implementor claude-sonnet-5   done  ●produced
+  implement-work-dcb6f9ee98240a30   implementor claude-sonnet-5   done  ●produced
+  implement-work-df4e935387280642   implementor claude-sonnet-5   done  ●produced
+```
+
+* [ ] A criterion is a mark inside the card of the node that had to satisfy it,
+  lit when that node has produced it and dark while it is still owed
+* [ ] The mark carries the criterion's name, and selecting it still opens the
+  criterion in the detail pane
 * [ ] A phase's member count counts pieces of work
-* [ ] A criterion does not display a run state, because it did not run
+* [ ] A criterion displays no run state, because it did not run
 * [ ] A fan-out member's criterion is named after the member, not the phase
+* [ ] A criterion whose task is not in the band is still reachable, which is the
+  regression the current flattening exists to avoid
 
 ## Phase 11: a run that has finished is in a finished state
 
