@@ -26,6 +26,21 @@ export interface SupervisorRunControllerOptions {
   readonly deliverAmendmentProposalOutboxOnce?: () => boolean;
   readonly timer?: SupervisorTimer;
   readonly runnerBatchSize?: number;
+  /**
+   * Says what happened to a lease this controller holds.
+   *
+   * Under load a live service let its own lease expire beneath it and then
+   * failed on the fence, and nothing anywhere recorded that the holder had
+   * fallen behind its own renewal window. A holder renews in time or says why
+   * it could not.
+   */
+  readonly reportLease?: (input: {
+    readonly repositoryId: string;
+    readonly runId: string;
+    readonly event: "lease.renewal-late" | "lease.renewal-failed";
+    readonly reason: string;
+    readonly fields: Readonly<Record<string, string | number>>;
+  }) => void;
   readonly failurePolicyForRun?: (
     repositoryId: string,
     runId: string,
@@ -93,6 +108,7 @@ export class SupervisorRunController {
     | undefined;
   readonly #scheduleBeforeEffects: SupervisorRunControllerOptions["scheduleBeforeEffects"];
   readonly #driveRunOnce: SupervisorRunControllerOptions["driveRunOnce"];
+  readonly #reportLease: SupervisorRunControllerOptions["reportLease"];
 
   constructor(options: SupervisorRunControllerOptions) {
     this.authority = options.authority;
@@ -117,6 +133,7 @@ export class SupervisorRunController {
     this.#timer = options.timer ?? systemTimer;
     this.#runnerBatchSize = options.runnerBatchSize ?? 1;
     this.#runnerAuthority = options.runnerAuthority;
+    this.#reportLease = options.reportLease;
     this.#failurePolicyForRun = options.failurePolicyForRun;
     this.#scheduleBeforeEffects = options.scheduleBeforeEffects;
     this.#driveRunOnce = options.driveRunOnce;
@@ -226,16 +243,35 @@ export class SupervisorRunController {
       const now = input.currentTime();
       const remaining = Date.parse(lease.expiresAt) - Date.parse(now);
       const delay = Math.max(0, Math.min(LEASE_RENEWAL_WINDOW_MS, remaining - 1));
+      const dueAt = Date.parse(now) + delay;
       renewalTimer = this.#timer.schedule(delay, () => {
+        const renewedAt = input.currentTime();
+        const lateBy = Date.parse(renewedAt) - dueAt;
+        const expiredBy = Date.parse(renewedAt) - Date.parse(lease.expiresAt);
+        if (expiredBy >= 0) {
+          this.#reportLease?.({
+            repositoryId: input.repositoryId,
+            runId: input.runId,
+            event: "lease.renewal-late",
+            reason: "the lease expired before its own renewal ran",
+            fields: { owner: input.ownerId, lateByMs: lateBy, expiredByMs: expiredBy },
+          });
+        }
         try {
-          const renewedAt = input.currentTime();
           lease = this.authority.renewRunLease(
             lease,
             renewedAt,
             addMilliseconds(renewedAt, LEASE_DURATION_MS),
           );
           scheduleRenewal();
-        } catch {
+        } catch (error) {
+          this.#reportLease?.({
+            repositoryId: input.repositoryId,
+            runId: input.runId,
+            event: "lease.renewal-failed",
+            reason: error instanceof Error ? error.message : String(error),
+            fields: { owner: input.ownerId, fence: lease.fence, lateByMs: lateBy },
+          });
           renewalFailed = true;
           abortController.abort();
         }

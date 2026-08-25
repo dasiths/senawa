@@ -133,6 +133,7 @@ describe("SupervisorRunController async lease loop", () => {
     let started: (() => void) | undefined;
     let startedCount = 0;
     let abortedCount = 0;
+    const reports: { event: string; reason: string; fields: unknown }[] = [];
     const hostStarted = new Promise<void>((resolve) => {
       started = resolve;
     });
@@ -165,6 +166,7 @@ describe("SupervisorRunController async lease loop", () => {
       asyncEffectHost: host,
       timer: fixture.timer,
       runnerBatchSize: 2,
+      reportLease: ({ event, reason, fields }) => reports.push({ event, reason, fields }),
     });
     const pending = controller.runOnceAsync({
       repositoryId,
@@ -178,6 +180,18 @@ describe("SupervisorRunController async lease loop", () => {
     fixture.timer.fire();
 
     await expect(pending).rejects.toBeInstanceOf(AsyncRunnerCancelledError);
+    // A live service let its own lease expire beneath it and then failed on the
+    // fence, and nothing recorded that the holder had fallen behind. It renews
+    // in time or it says why it could not.
+    expect(reports.map(({ event }) => event)).toEqual([
+      "lease.renewal-late",
+      "lease.renewal-failed",
+    ]);
+    expect(reports[0]).toMatchObject({
+      reason: "the lease expired before its own renewal ran",
+      fields: { owner: "owner_controller", lateByMs: 21_000, expiredByMs: 1_000 },
+    });
+    expect(String(reports[1]?.reason)).not.toHaveLength(0);
     expect(abortedCount).toBe(2);
     expect(fixture.runner.load({ repositoryId, runId }).effects).toHaveLength(2);
     expect(

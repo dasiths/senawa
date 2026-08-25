@@ -114,15 +114,48 @@ export class ProductionScheduler {
     if (runtime === undefined || runtimeBinding === undefined) {
       return { worked: false, batchSize: 1 };
     }
+    const stored = this.#options.contextBroker.listWorkerDispatches(
+      input.repositoryId,
+      input.runId,
+    );
     const dispatches = schedulableDispatches(
       selectCurrentDispatches(
         runtime,
         this.#options.contextBroker.authority.snapshot().taskScopes,
-        this.#options.contextBroker.listWorkerDispatches(input.repositoryId, input.runId),
+        stored,
       ),
       outstanding,
     );
-    if (dispatches === undefined || dispatches.length === 0) {
+    // A dispatch is only schedulable through its registered effect, and one
+    // stored without an effect is dropped from the current set without a word.
+    // It has no runner command and no completion, so nothing will ever start
+    // it, and no recovery keys off it. It cannot be enqueued -- there is no
+    // command to enqueue -- so the honest repair is to name it.
+    const stranded = stored
+      .filter(({ effect }) => effect === undefined)
+      .map(({ dispatch }) => String(dispatch.dispatchId))
+      .sort();
+    if (stranded.length > 0) {
+      this.#report(
+        input,
+        "dispatch-stranded",
+        "a stored dispatch registered no effect, so nothing can ever start it",
+        { stranded },
+      );
+    }
+    if (dispatches === undefined) {
+      // An ambiguity stops the run scheduling anything at all, and returning
+      // here skipped the decline log, so it reported exactly what an idle cycle
+      // reports.
+      this.#report(
+        input,
+        "schedule-ambiguous",
+        "no dispatch is schedulable; the run has more than one current dispatch or accepting" +
+          " scope for a task",
+      );
+      return { worked: false, batchSize: 1 };
+    }
+    if (dispatches.length === 0) {
       return { worked: false, batchSize: 1 };
     }
     this.#configureRunner(input, dispatches, runtimeBinding.execution.maxWriterConcurrency);
@@ -181,15 +214,25 @@ export class ProductionScheduler {
       })
       .sort();
     if (held.length === 0) return;
-    const reason = declineReason(held);
+    this.#report(input, "schedule-declined", declineReason(held), { held });
+  }
+
+  /** Says a stall once, and again only when its reason changes. */
+  #report(
+    input: ProductionScheduleInput,
+    event: string,
+    reason: string,
+    fields: Readonly<Record<string, unknown>> = {},
+  ): void {
+    const key = `${input.repositoryId}\u0000${input.runId}`;
     if (this.#declined.get(key) === reason) return;
     this.#declined.set(key, reason);
     this.#options.authority.appendLog({
       recordedAt: input.currentTime,
       level: "warn",
-      event: "schedule-declined",
+      event,
       message: reason,
-      fields: { repositoryId: input.repositoryId, runId: input.runId, held },
+      fields: { repositoryId: input.repositoryId, runId: input.runId, ...fields },
     });
   }
 

@@ -252,9 +252,34 @@ because they all key off an intent that was never persisted. Recovery has to key
 off the dispatch: one with no runner command and no completion has not started,
 and the honest repair is to enqueue it.
 
-* [ ] A lease holder renews in time, or says why it could not
-* [ ] A dispatch with no runner command and no completion is enqueued rather
+Reading that one out found a second dispatch-shaped hole beside it. A dispatch
+is only schedulable through its registered effect, and `selectCurrentDispatches`
+drops one stored without an effect from the current set without a word. It has
+no runner command, no completion, and no path to either. It cannot be enqueued,
+because there is no command to enqueue, so the repair is to name it.
+
+And a third, found while reading the first two. `selectCurrentDispatches`
+returns `undefined` when a task has more than one current dispatch or more than
+one accepting scope, and `schedule` turns that into `worked: false` and returns
+before `#recordDecline` can say anything. An ambiguity that stops a run from
+scheduling anything at all is reported as an idle cycle.
+
+* [x] A lease holder renews in time, or says why it could not
+* [x] A dispatch with no runner command and no completion is enqueued rather
   than waited on
+* [x] A dispatch that registered no effect is named rather than dropped
+* [x] A run that cannot decide which dispatches are current says so, rather than
+  reporting the same silence an idle run reports
+
+The lease holder now measures its own renewal against when that renewal was due.
+A renewal that runs after the lease it renews has already expired says how late
+it was and by how much, and a renewal that throws says what it threw. Both reach
+`supervisor_logs` through the service.
+
+Recovery keying off the dispatch turned out to be already true in both workspace
+modes, and was being taken on trust. It is now held by a test that registers a
+dispatch, persists no intent, and asserts the next schedule pass queues its
+command.
 
 ## Phase 9: the example gates on its own work
 

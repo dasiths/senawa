@@ -244,7 +244,7 @@ export class CopilotSerialWorkerAdapter {
       }
     } catch (error) {
       status = "crashed";
-      failure = adapterFailure(error);
+      failure = adapterFailure(error, input.grantTokens.values());
     } finally {
       scope.active = false;
       if (session !== undefined) {
@@ -395,18 +395,27 @@ function sessionEndedNote(
 }
 
 /**
- * What class of thing the adapter failed with.
+ * What the adapter failed with, without the secrets it was handed.
  *
- * Not the message: an SDK failure can carry whatever it was handed, including a
- * credential, and a test holds that line. The name and a code-shaped `code` are
- * structured enough to be safe and enough to tell one failure from another.
+ * A live run crashed eight times and recorded only `Error`, which is a class
+ * and not a reason. The message is what a reader needs, and an SDK failure can
+ * carry whatever it was given — so the exact grant tokens this turn was issued
+ * are removed by value, which is precise where a pattern would be a guess.
  */
-function adapterFailure(error: unknown): string | undefined {
-  if (!(error instanceof Error)) return undefined;
-  const code = (error as { readonly code?: unknown }).code;
-  const identifier = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
-  const name = identifier.test(error.name) ? error.name : "Error";
-  return typeof code === "string" && identifier.test(code) ? `${name} (${code})` : name;
+function adapterFailure(error: unknown, secrets: Iterable<string>): string {
+  const name = error instanceof Error ? error.name : "Error";
+  const message = error instanceof Error ? error.message : String(error);
+  let text = message;
+  for (const secret of secrets) {
+    if (secret.length > 0) text = text.replaceAll(secret, "[redacted]");
+  }
+  const code = (error as { readonly code?: unknown } | null)?.code;
+  const detail = typeof code === "string" ? `${name} (${code})` : name;
+  const cleaned = text
+    .replaceAll(/[\u0000-\u001f\u007f]+/gu, " ")
+    .trim()
+    .slice(0, 240);
+  return cleaned.length === 0 ? detail : `${detail}: ${cleaned}`;
 }
 
 function transcriptNoteSink(

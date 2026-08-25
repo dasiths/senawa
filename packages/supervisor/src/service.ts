@@ -192,6 +192,13 @@ export class SupervisorService {
             deliverAmendmentProposalOutboxOnce: options.deliverAmendmentProposalOutboxOnce,
           }),
       ...(options.timer === undefined ? {} : { timer: options.timer }),
+      reportLease: (report) => {
+        this.#log("warn", report.event, report.reason, {
+          repositoryId: report.repositoryId,
+          runId: report.runId,
+          ...report.fields,
+        });
+      },
       ...(options.runnerBatchSize === undefined
         ? {}
         : { runnerBatchSize: options.runnerBatchSize }),

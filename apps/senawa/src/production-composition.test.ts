@@ -1018,6 +1018,157 @@ describe("production worker composition", () => {
     await service.drain();
     await service.stop();
   });
+
+  // Between writing a dispatch at the context layer and enqueuing its runner
+  // command there is a window, and a process that dies inside it leaves work no
+  // recovery keyed off an intent can see. Recovery has to key off the dispatch.
+  it.each([
+    ["enqueues a dispatch that has no runner command and no completion", "enqueue"],
+    ["names a dispatch registered with no effect, which nothing can ever start", "stranded"],
+    ["says a run cannot decide which dispatches are current", "ambiguous"],
+  ] as const)("%s", (_name, mode) => {
+    const root = mkdtempSync(join(tmpdir(), "senawa-dispatch-recovery-"));
+    roots.add(root);
+    const databasePath = join(root, "authority.db");
+    const authority = new SqliteSupervisorAuthority({
+      databasePath,
+      assetDirectory: join(root, "assets"),
+      dependencies,
+    });
+    const broker = new SqliteContextBroker({
+      databasePath,
+      dependencies: {
+        sha256: deterministicSha256,
+        currentTime: () => runtimeFixture.currentTime,
+        issueGrantToken: () => new Uint8Array(32).fill(7),
+      },
+    });
+    const graph = createRuntimeGraph();
+    const worker = createWorkerExecutionFixture(graph);
+    const effectSeed = (fixture: typeof worker) => ({
+      input: decodeCanonicalJsonValue({
+        dispatchId: fixture.dispatch.dispatchId,
+        routeSelection: fixture.routeSelection,
+        timeoutMs: 1_000,
+        grantPolicy: {
+          expiresAfterMs: 2_000,
+          maxOperations: 4,
+          maxBytes: 4_096,
+          maxChunkBytes: 1_024,
+        },
+      }),
+      budgetReservation: { unit: "model-millidollars", amount: 2_000 } as const,
+    });
+    broker.registerDispatch({
+      context: worker.context,
+      dispatch: worker.dispatch,
+      completionRequirements: worker.completionRequirements,
+      taskScope: workerTaskScope(worker),
+      ...(mode === "stranded" ? {} : { effect: effectSeed(worker) }),
+    });
+    if (mode === "ambiguous") {
+      // A second dispatch on the same context and the same accepting scope.
+      // Nothing can say which of them is current.
+      const twin = createWorkerExecutionFixture(graph, ["worker.submit.completion"], 2);
+      broker.registerDispatch({
+        context: twin.context,
+        dispatch: twin.dispatch,
+        completionRequirements: twin.completionRequirements,
+        taskScope: workerTaskScope(twin),
+        effect: effectSeed(twin),
+      });
+    }
+    let allocation = 0;
+    expect(
+      authority.commandAuthority.submit(
+        runtimeCommand({
+          commandId: "command_dispatch-recovery-instantiate",
+          intent: "instantiate-run",
+          payload: {
+            workflowId: runtimeFixture.workflowId,
+            configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+            execution: runtimeFixture.execution,
+            graph,
+            phase: runtimeFixture.phase,
+            approvalPolicy: { policy: "no-approval" },
+            escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+            allowancePolicy: runtimeFixture.allowancePolicy,
+          },
+        }),
+        {
+          currentTime: runtimeFixture.currentTime,
+          facts: { source: "dispatch-recovery-test" },
+          allocateId: () => {
+            allocation += 1;
+            return `stream-event-dispatch-recovery-${allocation}`;
+          },
+        },
+      ),
+    ).toMatchObject({ status: "completed" });
+    const runnerAuthority = new SqliteRunnerAuthority({ databasePath, dependencies });
+    const workspaceAuthority = new SqliteWorkspaceIntegrationAuthority({
+      databasePath,
+      dependencies,
+    });
+    const scheduler = new ProductionScheduler({
+      authority,
+      runnerAuthority,
+      workspaceAuthority,
+      contextBroker: broker,
+      supervisorWriterLimit: 4,
+      hostWriterLimit: 4,
+      sha256: deterministicSha256,
+    });
+    const scheduleInput = {
+      repositoryId: worker.dispatch.repositoryId,
+      runId: worker.dispatch.runId,
+      lease: { owner: "owner_recovery", fence: 1, expiresAt: "2026-08-12T12:00:30.000Z" },
+      currentTime: runtimeFixture.currentTime,
+    } as const;
+
+    // Nothing has enqueued a command for this dispatch, and the run has no
+    // record of one anywhere.
+    expect(runnerAuthority.isConfigured(scheduleInput.repositoryId, scheduleInput.runId)).toBe(
+      false,
+    );
+    const result = scheduler.schedule(scheduleInput);
+    const reported = (event: string) =>
+      authority.queryLogs().items.filter((entry) => entry.event === event);
+
+    if (mode === "enqueue") {
+      expect(result.worked).toBe(true);
+      // The command is queued off the dispatch alone. No intent existed to key
+      // recovery off, which is the state a process that died in the window
+      // leaves behind.
+      expect(
+        runnerAuthority.load(scheduleInput).queuedCommands.map(({ kind, input: queued }) => ({
+          kind,
+          dispatchId: (queued as { readonly dispatchId?: string }).dispatchId,
+        })),
+      ).toEqual([{ kind: "worker", dispatchId: worker.dispatch.dispatchId }]);
+      expect(runnerAuthority.load(scheduleInput).effects).toHaveLength(0);
+      expect(reported("dispatch-stranded")).toHaveLength(0);
+    } else if (mode === "stranded") {
+      // It cannot be enqueued, because there is no command to enqueue. Saying
+      // so is the whole repair: it was dropped from the current set silently,
+      // and the run went quiet with no error anywhere.
+      expect(result.worked).toBe(false);
+      expect(reported("dispatch-stranded")).toHaveLength(1);
+      expect(reported("dispatch-stranded")[0]?.fields).toMatchObject({
+        stranded: [worker.dispatch.dispatchId],
+      });
+    } else {
+      // An ambiguity stops the run scheduling anything at all, and returning
+      // early skipped the decline log, so it reported exactly what an idle
+      // cycle reports.
+      expect(result.worked).toBe(false);
+      expect(reported("schedule-ambiguous")).toHaveLength(1);
+    }
+    runnerAuthority.close();
+    workspaceAuthority.close();
+    broker.close();
+    authority.close();
+  });
 });
 
 function workerTaskScope(worker: ReturnType<typeof createWorkerExecutionFixture>) {
