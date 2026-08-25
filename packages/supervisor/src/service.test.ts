@@ -500,9 +500,9 @@ describe("SupervisorService lifecycle", () => {
     expect(scheduled).toHaveLength(1);
     expect(scheduled[0]?.delay).toBeGreaterThan(29_000);
     // A run nobody can drive says so rather than looking idle.
-    expect(authority.queryLogs(0, 200).items.some((entry) => entry.event === "run.lease-held")).toBe(
-      true,
-    );
+    expect(
+      authority.queryLogs(0, 200).items.some((entry) => entry.event === "run.lease-held"),
+    ).toBe(true);
 
     // A second refusal before the first retry fires must not stack another
     // wake: the earliest pending retry already covers it.

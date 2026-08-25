@@ -11,15 +11,15 @@
 
 researcher:
   prompt: prompts/researcher.md
-  model: claude-haiku-4.5
+  model: claude-opus-5
 
 planner:
   prompt: prompts/planner.md
-  model: claude-haiku-4.5
+  model: claude-opus-5
 
 implementor:
   prompt: prompts/implementor.md
-  model: claude-haiku-4.5
+  model: claude-sonnet-5
   # Each piece of work is independent, so a member starts clean rather than
   # inheriting what a sibling was told.
   session: element
