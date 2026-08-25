@@ -552,6 +552,66 @@ Three things are wrong and only two of them are obvious:
   the ceiling, rather than as a crashed worker
 * [ ] What a person can do about it is written down where they will read it
 
+## Phase 14: a failed pump stops driving and cannot be restarted
+
+The second condition run, `run_2e9eff74f8b383b69351a5eb39e1dc46`, got much
+further than any before it. Research and plan both closed, the fan-out opened
+four members, six worker effects completed, and the agents wrote real code into
+the workspace. Then it stopped, and nothing said so.
+
+The last thing the run recorded, at 21:49:41:
+
+```text
+error  service.wake-pump-failed  Supervisor background work failed
+       reason: Lease runner:2e48d770...bc1d1 no longer accepts fence 32
+```
+
+Ten minutes later the record was unchanged. The state was completely quiet:
+
+```text
+intents 9 | unsettled 0 | queued commands 9 | pending wakes 1
+last log 21:49:41 service.wake-pump-failed
+```
+
+Nothing was in flight, one wake was pending, and the phase was not closed. The
+service process was alive and answering: `senawa status` returned promptly and
+`make portal` minted tokens.
+
+Then the part that makes this a defect rather than a stall. Asking the running
+supervisor to drive the run, explicitly, by hand:
+
+```text
+$ senawa advance repository_rpi-workflow run_2e9eff74f8b383b69351a5eb39e1dc46
+asked the running supervisor to drive run_2e9eff74f8b383b69351a5eb39e1dc46
+```
+
+That request was accepted and produced nothing. No log line, no state change,
+no dispatch. A service that has stopped driving a run cannot be restarted by
+asking it to, and it does not say that it has stopped.
+
+Phase 3 fixed the neighbouring case: a failed pump now defers a wake rather than
+assuming another notification will arrive, and `service.ts` says so at length.
+That deferral is five seconds, it fired, and the run still did not move — so the
+wake is being consumed without the work being done, or the pump is failing
+identically and silently, or `listPendingWakes` and the pending row disagree.
+Which of those it is has not been established, and guessing is what the plan
+exists to stop.
+
+* [ ] Establish which of the three it is, from the run's own record, before
+  changing anything
+* [ ] A supervisor that has stopped driving a run says so, rather than looking
+  idle
+* [ ] `senawa advance` on a running supervisor either drives the run or reports
+  why it did not
+* [ ] A pump that fails repeatedly on the same reason escalates rather than
+  retrying silently for ever
+
+This is the condition run's blocker. Phases 7 to 12 are all separately
+validated — the criterion marks and the corrected member count were read live in
+the browser on this very run, and the crash reason that unblocked phase 13 came
+from the run before it — but "the example completes" is not met while this
+stands.
+
 ## Carried from the v1 plan
 
 Neither blocks anything above, and neither is part of the condition below. The
@@ -572,8 +632,8 @@ A run driven before the last change proves that change against the state it
 happened to find. A run driven after everything proves the plan.
 
 Phases 1 to 6 met that condition on `run_57b67ffdcd2a1f4c06af1d3bc6c6e1a2`.
-Phases 7 to 12 were added afterwards from findings that run and its predecessors
+Phases 7 to 14 were added afterwards from findings that run and its predecessors
 produced, so they carry the condition again:
 
-* [ ] With phases 7 to 12 done, the example is driven once more from a clean
+* [ ] With phases 7 to 14 done, the example is driven once more from a clean
   state root, end to end in a browser, and completes with its own tests passing
