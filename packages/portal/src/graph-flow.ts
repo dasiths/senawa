@@ -61,7 +61,9 @@ function phaseIsOpen(
 
 function foldSummary(members: readonly PortalGraphNode[]): string {
   if (members.length === 0) return "no work yet";
-  const parts = [members.length === 1 ? "1 piece of work" : `${String(members.length)} members`];
+  const parts = [
+    members.length === 1 ? "1 piece of work" : `${String(members.length)} pieces of work`,
+  ];
   const asking = members.filter((member) => member.humanNeedCount > 0).length;
   const failed = members.filter((member) => member.runState === "failed").length;
   if (asking > 0) parts.push(`${String(asking)} asks`);
@@ -69,32 +71,85 @@ function foldSummary(members: readonly PortalGraphNode[]): string {
   return parts.join(" \u00b7 ");
 }
 
+/**
+ * What a node still owes, drawn on the node that owes it.
+ *
+ * A criterion is how a piece of work is allowed to finish, not another piece of
+ * work, and drawing it as a peer card made four tasks look like eight members
+ * and gave a thing that never ran a green `done` pill. A mark is lit once the
+ * node has produced what it owed and dark while it is still owed, so it reports
+ * possession rather than execution. It stays selectable because the detail pane
+ * already reads a criterion correctly as an exit condition.
+ */
+function criterionMarks(
+  criteria: readonly PortalGraphNode[],
+  selectedNodeId: string | undefined,
+  actions: GraphFlowActions,
+): HTMLElement {
+  const marks = element("span", "g-marks");
+  for (const criterion of criteria) {
+    const mark = document.createElement("button");
+    mark.type = "button";
+    const produced = criterion.runState === "accepted";
+    mark.className = `g-mark ${produced ? "is-produced" : "is-owed"}`;
+    mark.dataset.node = criterion.nodeId;
+    mark.dataset.focusKey = criterion.nodeId;
+    // Four members of one fan-out owe criteria with the same name, so the name
+    // alone does not say which task is owed. Saying which node it sits on is
+    // what the mark adds over the card it used to be.
+    mark.setAttribute(
+      "aria-label",
+      `${criterion.title}: ${produced ? "produced" : "not produced yet"}`,
+    );
+    mark.title = criterion.title;
+    if (criterion.nodeId === selectedNodeId) mark.setAttribute("aria-current", "true");
+    mark.append(
+      textElement("span", "g-mark-dot", nodeMark("criterion")),
+      textElement("span", "g-mark-name", criterion.title),
+    );
+    mark.addEventListener("click", (event) => {
+      event.stopPropagation();
+      actions.select(criterion.nodeId);
+    });
+    marks.append(mark);
+  }
+  return marks;
+}
+
 function memberCard(
   node: PortalGraphNode,
+  criteria: readonly PortalGraphNode[],
   selected: boolean,
+  selectedNodeId: string | undefined,
   extras: GraphFlowNodeExtras,
   actions: GraphFlowActions,
 ): HTMLElement {
-  const card = document.createElement("button");
-  card.type = "button";
-  card.className = `gnode kind-${node.kind} ${stateTone(node.runState)}`;
+  // The card holds the node and everything the node owes, so it is a container
+  // rather than a control; the control that opens the node fills it.
+  const card = element("div", `gnode kind-${node.kind} ${stateTone(node.runState)}`);
   card.dataset.node = node.nodeId;
-  card.dataset.focusKey = node.nodeId;
   if (selected) card.setAttribute("aria-current", "true");
-  card.append(textElement("span", "g-name", node.title));
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "g-open";
+  open.dataset.focusKey = node.nodeId;
+  open.append(textElement("span", "g-name", node.title));
   if (extras.who !== undefined) {
     const meta = element("span", "g-meta");
     meta.append(extras.who);
-    card.append(meta);
+    open.append(meta);
   }
   const foot = element("span", "g-foot");
   foot.append(statePill(node.runState));
   for (const control of extras.foot ?? []) foot.append(control);
-  card.append(foot);
-  card.addEventListener("click", (event) => {
-    if (event.target !== card && (event.target as HTMLElement).closest("button") !== card) return;
-    actions.select(node.nodeId);
-  });
+  open.append(foot);
+  open.addEventListener("click", () => actions.select(node.nodeId));
+  card.append(open);
+  if (criteria.length > 0) card.append(criterionMarks(criteria, selectedNodeId, actions));
+  // The whole card still selects the node, including the padding around the
+  // control and the space beside the marks. A mark stops its own click, so the
+  // only thing that reaches here is the card itself.
+  card.addEventListener("click", () => actions.select(node.nodeId));
   return card;
 }
 
@@ -116,15 +171,19 @@ export function graphFlowView(options: GraphFlowOptions): HTMLElement {
   const phases = nodes.filter((node) => node.kind === "phase");
   // A phase owns its tasks, and a task owns what it had to produce. Matching on
   // the direct parent alone left every criterion out of its own band and piled
-  // them all under the last one.
-  const membersOf = (phaseId: string): readonly PortalGraphNode[] => {
-    const ordered: PortalGraphNode[] = [];
-    for (const member of nodes.filter((node) => node.parentNodeId === phaseId)) {
-      ordered.push(member, ...nodes.filter((node) => node.parentNodeId === member.nodeId));
-    }
-    return ordered;
-  };
-  const placed = new Set(phases.flatMap((phase) => membersOf(phase.nodeId).map((n) => n.nodeId)));
+  // them all under the last one, so what a task owes travels with the task.
+  const owedBy = (nodeId: string): readonly PortalGraphNode[] =>
+    nodes.filter((node) => node.parentNodeId === nodeId && node.kind === "criterion");
+  const membersOf = (phaseId: string): readonly PortalGraphNode[] =>
+    nodes.filter((node) => node.parentNodeId === phaseId && node.kind !== "criterion");
+  const placed = new Set(
+    phases.flatMap((phase) =>
+      membersOf(phase.nodeId).flatMap((member) => [
+        member.nodeId,
+        ...owedBy(member.nodeId).map((criterion) => criterion.nodeId),
+      ]),
+    ),
+  );
   const orphans = nodes.filter(
     (node) => node.kind !== "phase" && node.kind !== "workflow" && !placed.has(node.nodeId),
   );
@@ -150,7 +209,16 @@ export function graphFlowView(options: GraphFlowOptions): HTMLElement {
     band.append(summary);
     const body = element("div", "band-body");
     for (const member of members) {
-      body.append(memberCard(member, member.nodeId === selectedNodeId, decorate(member), actions));
+      body.append(
+        memberCard(
+          member,
+          owedBy(member.nodeId),
+          member.nodeId === selectedNodeId,
+          selectedNodeId,
+          decorate(member),
+          actions,
+        ),
+      );
     }
     if (members.length === 0)
       body.append(textElement("p", "empty-state", "Nothing has been dispatched here yet."));
@@ -179,8 +247,19 @@ export function graphFlowView(options: GraphFlowOptions): HTMLElement {
 
   if (orphans.length > 0) {
     const loose = element("div", "band-body");
+    // A criterion whose task is not in the band still has to be reachable, so
+    // it keeps a card of its own here rather than disappearing with its task.
     for (const node of orphans)
-      loose.append(memberCard(node, node.nodeId === selectedNodeId, decorate(node), actions));
+      loose.append(
+        memberCard(
+          node,
+          owedBy(node.nodeId),
+          node.nodeId === selectedNodeId,
+          selectedNodeId,
+          decorate(node),
+          actions,
+        ),
+      );
     flow.append(loose);
   }
 

@@ -386,15 +386,30 @@ correctly as an `exit condition` and that reading should stay reachable.
   implement-work-df4e935387280642   implementor claude-sonnet-5   done  ●produced
 ```
 
-* [ ] A criterion is a mark inside the card of the node that had to satisfy it,
+* [x] A criterion is a mark inside the card of the node that had to satisfy it,
   lit when that node has produced it and dark while it is still owed
-* [ ] The mark carries the criterion's name, and selecting it still opens the
+* [x] The mark carries the criterion's name, and selecting it still opens the
   criterion in the detail pane
-* [ ] A phase's member count counts pieces of work
-* [ ] A criterion displays no run state, because it did not run
-* [ ] A fan-out member's criterion is named after the member, not the phase
-* [ ] A criterion whose task is not in the band is still reachable, which is the
+* [x] A phase's member count counts pieces of work
+* [x] A criterion displays no run state, because it did not run
+* [~] A fan-out member's criterion is named after the member, not the phase
+* [x] A criterion whose task is not in the band is still reachable, which is the
   regression the current flattening exists to avoid
+
+The naming item was dropped, and this is the reason rather than an oversight.
+It existed to answer "a reader cannot tell which task any of the four boxes
+belongs to", and placing the mark inside the card answers that completely: the
+card the mark sits on *is* which task owes it. Renaming on top of that would put
+`implement-work-0778519c6a4a4bc8-produced` inside the card titled
+`implement-work-0778519c6a4a4bc8`, which is longer, no clearer, and repeats what
+the reader is already looking at. The key is also a template's, shared by every
+member by construction, so making it per-member means deriving a fresh consumer
+key at fan-out import for a label that would then be redundant.
+
+The card stopped being a control and became a container: a `<button>` inside a
+`<button>` is not valid HTML, and the mark has to be selectable. The node's own
+control now fills the card, which keeps `.gnode`, its selection state, and every
+locator that reads it exactly as they were.
 
 ## Phase 11: a run that has finished is in a finished state
 
@@ -425,6 +440,45 @@ translates that into "no work" rather than into a state.
   in the past tense
 * [ ] `senawa status` does not report `running` for a run that has finished
 
+## Phase 12: a turn that stopped to ask has not spent an attempt
+
+Phase 8's live run, `run_f961d4199a40ffe9b51dffb95193810e`, never reached
+`plan`. It stopped at `research` with
+
+```text
+run.stopped  rejected at research: no attempt handed any work in after 8 tries
+```
+
+and eight cancelled worker outcomes, every one of them carrying
+`workerStatus: "awaiting-answer"`. Not one turn failed. Not one crashed. Every
+single one ended by asking a person something, and the run was rejected for
+never handing work in.
+
+`advance-run.ts` already states the rule and gets it right in the moment:
+
+```ts
+// A turn that stopped to ask is waiting for a person, not spent.
+const asked = state.questions.some((q) => String(q.dispatchId) === dispatchId);
+if (!asked && attemptClosed(dispatchId)) { /* counts as a try */ }
+```
+
+The flaw is that `asked` reads the *present* — whether a question from that
+dispatch is still outstanding. Answer the question and it is no longer
+outstanding, so the very act of unblocking the agent converts its suspended
+turn into a spent attempt, retroactively. A person who answers promptly burns
+the run's attempts faster than one who ignores it.
+
+What a turn did is already recorded durably and does not change when somebody
+answers: the effect outcome's `workerStatus`. A turn that ended awaiting an
+answer ended awaiting an answer for ever.
+
+* [ ] An attempt that ended by asking a person is not counted against the
+  attempt ceiling, whether or not its question has since been answered
+* [ ] A phase whose every attempt ended on a question is not rejected for
+  handing no work in
+* [ ] The example completes its research phase with a person answering
+  every question it asks
+
 ## Carried from the v1 plan
 
 Neither blocks anything above, and neither is part of the condition below. The
@@ -445,8 +499,8 @@ A run driven before the last change proves that change against the state it
 happened to find. A run driven after everything proves the plan.
 
 Phases 1 to 6 met that condition on `run_57b67ffdcd2a1f4c06af1d3bc6c6e1a2`.
-Phases 7 to 11 were added afterwards from findings that run and its predecessors
+Phases 7 to 12 were added afterwards from findings that run and its predecessors
 produced, so they carry the condition again:
 
-* [ ] With phases 7 to 11 done, the example is driven once more from a clean
+* [ ] With phases 7 to 12 done, the example is driven once more from a clean
   state root, end to end in a browser, and completes with its own tests passing

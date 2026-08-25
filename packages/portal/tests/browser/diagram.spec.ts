@@ -43,10 +43,18 @@ test("reads a criterion through the work that had to satisfy it", async ({ page 
   await page.getByRole("tab", { name: "Graph", exact: true }).click();
 
   // A criterion is something a task had to produce, not something that ran, so
-  // reading one on its own left the pane with nothing in it at all.
-  await page.locator(".gnode.kind-criterion").first().click();
+  // reading one on its own left the pane with nothing in it at all. It is a
+  // mark on the card of the node that owed it, and it is still selectable.
+  const mark = page.locator(".g-mark").first();
+  await expect(mark).toHaveCount(1);
+  // The mark sits inside the card of the node that had to satisfy it.
+  await expect(page.locator(".gnode:not(.kind-criterion) .g-mark")).not.toHaveCount(0);
+  await mark.click();
   await expect(page.locator(".agent-terminal-scope")).not.toHaveText("no agent selected");
   await expect(page.locator(".agent-terminal-scope")).not.toHaveText("every agent");
+
+  // Nothing claims a criterion ran, and nothing counts it as a piece of work.
+  await expect(page.locator(".g-mark .state-pill")).toHaveCount(0);
 
   expect(diagnostics.severe()).toEqual([]);
 });

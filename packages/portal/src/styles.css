@@ -537,6 +537,70 @@ textarea {
   cursor: pointer;
 }
 
+/* The card holds the node and everything the node owes, so the control that
+   opens the node fills the card rather than being the card. */
+.g-open {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* A criterion is how a piece of work is allowed to finish, not another piece
+   of work. It is lit when the node has produced it and dark while still owed,
+   which reports possession rather than a run that never happened. */
+.g-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--rule);
+}
+
+.g-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--surface);
+  padding: 1px 7px 1px 5px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.g-mark.is-produced {
+  border-color: var(--green);
+  color: var(--ink);
+}
+
+.g-mark.is-produced .g-mark-dot {
+  color: var(--green);
+}
+
+.g-mark:hover {
+  border-color: var(--rule-strong);
+}
+
+.g-mark[aria-current="true"] {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.g-mark-name {
+  overflow-wrap: anywhere;
+}
+
 .gnode:hover {
   border-color: var(--rule-strong);
 }
