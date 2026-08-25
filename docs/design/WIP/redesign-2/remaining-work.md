@@ -191,7 +191,7 @@ first is a feature the phase model does not yet have; the second is done.
 
 ## The condition for the whole plan
 
-* [ ] With every phase above done, the example is driven once more from a clean
+* [x] With every phase above done, the example is driven once more from a clean
   state root, end to end in a browser, and completes
 
 A run driven before the last change proves that change against the state it

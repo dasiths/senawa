@@ -4796,3 +4796,40 @@ Proven by breaking: with the capture removed the crash reports no class at all.
 
 The plan-level live run is blocked on this failure, not on anything the plan
 changed. The next run will say what it is.
+
+## The run the plan is for
+
+`run_57b67ffdcd2a1f4c06af1d3bc6c6e1a2`, from a clean state root, on the build
+with every phase in it, driven and watched in a browser.
+
+```text
+every phase has closed: this run has finished its work
+3 of 3 phases closed   research done · plan done · implement done
+agents dispatched      9
+waiting on you         0
+```
+
+The run's own record, which is what the plan asked to be read rather than the
+driver's message:
+
+```text
+attempts 9   open 0   doubled 0
+outcomes     6 completed, 3 cancelled
+dispatches   task_e30bb4a5 1,2,3,4*   every other task exactly one
+context state 216,985 bytes
+```
+
+Nine attempts, none left open, and no task ever holding two. The research task's
+three earlier ordinals are its question rounds, each closed before the next
+opened, which is the mechanism Phase 1 built working on a real run.
+
+The nine agents produced a tic-tac-toe engine, an unbeatable opponent, a CLI,
+and thirty tests, and the thirty pass. Their own `check.mjs` does not: it runs
+`node --test test/`, which this Node reads as a module path. That is the agents'
+bug in the work, not the system's in running them, and it is the sort of thing
+the gate would catch if the workflow gated on the project's tests rather than on
+`git diff --check`.
+
+The failure that stopped the previous attempt did not recur, and the previous
+attempt is why this one could be diagnosed at all: `run.stopped` named the
+rejection, and the crashed turn would now name its class.
