@@ -130,11 +130,24 @@ symptom were wrong for that reason.
 
 ## Phase 5: live tailing stops refetching
 
-The transcript is rebuilt from persisted events on every poll. It is correct and
-wasteful. Deltas tail the live edge; the durable rebuild stays the source of
-truth, because a delta stream cannot be replayed.
+Already true. Read before writing, and the code disagreed with the plan:
 
-* [ ] Live tailing appends deltas rather than refetching the whole transcript
+* `PortalTranscriptPage` carries `nextAfter`, and `mergeTranscriptPage` merges
+  by `(owner, sequence)` while advancing that cursor.
+* `#performTranscriptSync` sends `state.ui.transcript.nextAfter`, so a poll asks
+  only for what it has not seen.
+* The store reads `WHERE sequence > ? ORDER BY sequence LIMIT ?` and appends a
+  line durably as the agent streams it, rather than deriving the transcript from
+  events on read.
+* A poll re-syncs only when the transcript revision moved, so a run with no new
+  agent output costs nothing.
+* `terminal.spec.ts` already asserts the delta path end to end: one durable
+  append raises the line count by exactly one while the assembly stays fresh.
+
+The durable rebuild is still available from sequence zero, which is what the
+plan wanted preserved.
+
+* [x] Live tailing appends deltas rather than refetching the whole transcript
 
 ## Phase 6: a slow test that is really a slow feature
 

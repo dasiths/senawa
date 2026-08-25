@@ -4657,3 +4657,23 @@ other two.
 
 Recorded rather than done, because ticking this by weakening a guarantee six
 tests defend would be measuring the wrong thing.
+
+## Phase 5 was already done
+
+The plan said the transcript is rebuilt from persisted events on every poll.
+Reading the code before changing it showed otherwise, on both sides:
+
+* The client sends `state.ui.transcript.nextAfter` and merges the returned page
+  by `(owner, sequence)`, advancing the cursor. It asks only for what it has not
+  seen.
+* The store reads `WHERE sequence > ? ORDER BY sequence LIMIT ?` and appends
+  each line durably as the agent streams it. Nothing is derived from events on
+  read.
+* A poll re-syncs only when the transcript revision moved, so a run with no new
+  agent output costs one comparison.
+* `terminal.spec.ts` already asserts it end to end: a durable append raises the
+  rendered line count by exactly one while the bounded assembly stays fresh.
+
+Ticked as verified rather than implemented, and the plan now carries the
+evidence instead of the claim. The item was written from a memory of an earlier
+design; the code moved and the plan did not.
