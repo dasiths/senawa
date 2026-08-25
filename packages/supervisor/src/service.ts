@@ -33,6 +33,14 @@ const DEFAULT_STARTUP_CYCLE_LIMIT = 1_024;
  */
 const LEASE_RETRY_MARGIN_MILLISECONDS = 250;
 
+/**
+ * How long after a failed pump to look again.
+ *
+ * Long enough that a persistent failure does not spin, short enough that a run
+ * whose lease was taken is picked up before a person notices it has stopped.
+ */
+const FAILED_PUMP_RETRY_MILLISECONDS = 5_000;
+
 const serviceTimer: SupervisorTimer = Object.freeze({
   schedule(delayMilliseconds: number, callback: () => void): SupervisorTimerHandle {
     const handle = setTimeout(callback, delayMilliseconds);
@@ -268,7 +276,15 @@ export class SupervisorService {
       })
       .finally(() => {
         this.#pump = undefined;
-        if (failed) return;
+        if (failed) {
+          // "Let the next wake retry" assumed a next wake. A live run lost its
+          // lease and died on the fence, and because nothing else wrote to the
+          // record afterwards there was no notification to wake on: the pump
+          // stopped for good with three agents' work unaccepted. A failure is a
+          // reason to look again shortly, not a reason to stop.
+          this.#deferWake(FAILED_PUMP_RETRY_MILLISECONDS);
+          return;
+        }
         if (this.#state === "running" && this.authority.listPendingWakes().length > 0) this.wake();
       });
   }
@@ -510,6 +526,16 @@ export class SupervisorService {
     if (error.expiresAt === undefined) return;
     const at = Date.parse(error.expiresAt) + LEASE_RETRY_MARGIN_MILLISECONDS;
     if (!Number.isFinite(at)) return;
+    this.#deferWakeUntil(at);
+  }
+
+  /** Looks again in a while, unless something is already going to look sooner. */
+  #deferWake(delayMilliseconds: number): void {
+    this.#deferWakeUntil(Date.parse(this.#now()) + delayMilliseconds);
+  }
+
+  #deferWakeUntil(at: number): void {
+    if (this.#state !== "running" && this.#state !== "starting") return;
     if (this.#deferredWakeAt !== undefined && this.#deferredWakeAt <= at) return;
     this.#deferredWake?.cancel();
     this.#deferredWakeAt = at;

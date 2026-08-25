@@ -116,7 +116,7 @@ ProtocolValidationError: $ wire value exceeds 262144 bytes
 A run that cannot record anything is a worse failure than one that stops, and a
 long run reaches this honestly.
 
-* [ ] A run's durable context state is not bounded by one wire value
+* [x] A run's durable context state is not bounded by one wire value
 
 ## Phase 4: the browser suite means what it says
 

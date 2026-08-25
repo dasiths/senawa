@@ -43,10 +43,17 @@ describe("SupervisorService lifecycle", () => {
       assetDirectory: join(root, "assets"),
       dependencies,
     });
+    const scheduled: { delay: number; run: () => void }[] = [];
     const service = new SupervisorService({
       authority,
       clock: { now: () => Date.parse(runtimeFixture.currentTime) },
       ownerId: "owner_wake-failure",
+      timer: {
+        schedule: (delayMilliseconds, callback) => {
+          scheduled.push({ delay: delayMilliseconds, run: callback });
+          return { cancel: () => {} };
+        },
+      },
     });
     await service.start();
 
@@ -66,6 +73,12 @@ describe("SupervisorService lifecycle", () => {
       await new Promise((resolve) => setImmediate(resolve));
       expect(rejections).toEqual([]);
       expect(await service.status()).toMatchObject({ lifecycle: "running" });
+      // "Let the next wake retry" assumed a next wake. A live run lost its lease
+      // and died on the fence, and nothing wrote to the record afterwards, so
+      // there was no notification to wake on: the pump stopped for good with
+      // three agents' work unaccepted.
+      expect(scheduled).toHaveLength(1);
+      expect(scheduled[0]?.delay).toBeGreaterThan(0);
     } finally {
       process.off("unhandledRejection", capture);
       vi.restoreAllMocks();

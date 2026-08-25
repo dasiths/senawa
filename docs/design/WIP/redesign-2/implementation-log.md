@@ -4593,3 +4593,33 @@ Two things this does not fix, recorded rather than bundled:
   duplicates the tables it mirrors. Loading dispatches from the mirror the way
   task scope currentness is already loaded would remove most of the growth, and
   is the honest fix rather than the larger box.
+
+## A pump that fails has no next wake
+
+The live run stopped again, and this time the record named it exactly:
+
+```text
+service.wake-pump-failed  Lease runner:db2fd407… no longer accepts fence 30
+leases                    fence 30, expires_at 07:01:50
+last cycle                07:01:56
+```
+
+The service held its own runner lease, let it expire under itself, and then
+failed on the fence when it next tried to use it. The pump caught the failure,
+logged it, and stopped. Its comment said "let the next wake retry", and that was
+the assumption that failed: a wake comes from something writing to the record,
+and nothing else was going to write. Nine dispatches in, six turns complete and
+three of them unaccepted, the run sat still with one supervisor alive and
+nothing wrong with it.
+
+This is the same shape as F-061 wearing a different error. Phase 2 gave the
+service a way to look again at a time it chooses; a failed pump now uses it, at
+a fixed short delay rather than an expiry, because the failure does not say when
+it will clear.
+
+Proven by breaking: with the deferred retry removed the timer is never asked and
+the failing pump ends the service's working life.
+
+The expiry itself is still open. A holder that lets its own lease lapse is
+either doing too much work in one turn or renewing too late, and that is worth
+measuring rather than guessing at.
