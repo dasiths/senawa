@@ -265,7 +265,7 @@ before `#recordDecline` can say anything. An ambiguity that stops a run from
 scheduling anything at all is reported as an idle cycle.
 
 * [x] A lease holder renews in time, or says why it could not
-* [x] A dispatch with no runner command and no completion is enqueued rather
+* [ ] A dispatch with no runner command and no completion is enqueued rather
   than waited on
 * [x] A dispatch that registered no effect is named rather than dropped
 * [x] A run that cannot decide which dispatches are current says so, rather than
@@ -280,6 +280,11 @@ Recovery keying off the dispatch turned out to be already true in both workspace
 modes, and was being taken on trust. It is now held by a test that registers a
 dispatch, persists no intent, and asserts the next schedule pass queues its
 command.
+
+That test, and this item, only cover the case where the task is ready. Phase 14
+found the case that deadlocks: when the task is not ready because its own
+attempt is open, nothing enqueues the command and nothing closes the attempt.
+The item is reopened there rather than left ticked here.
 
 ## Phase 9: the gate the agent cannot see
 
@@ -659,25 +664,58 @@ task_1babea…`, which is a task the frontier did not consider ready.
 That is where the next reproduction should look, and it is a different place
 from where this phase started.
 
-An attempted repair — arming a wake from the CLI before nudging — was written
-and reverted. Opening the authority from the CLI while the service holds it put
-the failure inside the same `try` that means "nothing is listening", so a
-failure to arm silently fell through to driving the run in-process, alongside
-the running supervisor. That is the one thing the surrounding comment exists to
-prevent. It would also not have helped, given the fallback above.
+### What it actually is
+
+The run's state survived, so it was reproduced rather than reasoned about.
+Driving it in-process, with no service holding the lease:
+
+```text
+$ senawa advance repository_rpi-workflow run_2e9eff74f8b383b69351a5eb39e1dc46
+waiting for the agent working on implement
+```
+
+`awaiting-agent`, with every effect settled. The records say why:
+
+```text
+attempts 10, of which exactly 1 is opened  -> task_a47d09b4…
+dispatches 10, intents 9                   -> exactly 1 dispatch has no intent
+that dispatch: task_a47d09b4… | has an effect seed | 0 queued runner commands
+```
+
+The open attempt and the dispatch that never ran are the same task. A dispatch
+was created for an `implement` member, its attempt was opened, and its runner
+command was never enqueued. Nothing will ever close that attempt:
+`closeEndedAttempts` closes on a terminal completion, on a question, or on a
+dispatch whose effect returned, and a dispatch that never ran has no effect.
+
+So the run deadlocks against itself. The attempt is open because the dispatch
+never ran; the dispatch never runs because the phase is waiting on the open
+attempt, and a task with an attempt open is not on the ready frontier that
+`#scheduleRepository` enqueues from.
+
+### This corrects phase 8
+
+Phase 8's second item was exactly this: "a dispatch with no runner command and
+no completion is enqueued rather than waited on". It was ticked on a test that
+registers such a dispatch and asserts the next schedule pass queues its command
+— which is true, and only when the task is ready. The live run supplies the half
+the test did not: when the task is *not* ready, because its own attempt is open,
+nothing enqueues the command and nothing closes the attempt.
+
+The criterion measured the easy half and was ticked anyway. It is reopened.
 
 * [x] Establish which of the three it is, from the run's own record, before
   changing anything
-* [ ] Reproduce with the run driver traced: a cycle that takes the run as its
+* [x] Reproduce with the run driver traced: a cycle that takes the run as its
   target and reports no progress is the thing to explain, not the wake
-* [ ] A supervisor that has stopped driving a run says so, rather than looking
-  idle
-* [ ] `senawa advance` on a running supervisor either drives the run or reports
-  why it did not, and never drives it from two processes at once
-* [ ] A pump that fails repeatedly on the same reason escalates rather than
-  retrying silently for ever
+* [ ] An attempt whose dispatch has no runner command and no effect is closed,
+  rather than waited on for ever
+* [ ] A run that is waiting on an agent that was never started says so, naming
+  the dispatch, rather than reporting `awaiting-agent` indefinitely
+* [ ] Phase 8's dispatch-recovery test covers the case where the task is not
+  ready, which is the one that deadlocks
 
-This is the condition run's blocker. Phases 7 to 12 are all separately
+This was the condition run's blocker. Phases 7 to 12 are otherwise separately
 validated — the criterion marks and the corrected member count were read live in
 the browser on this very run, and the crash reason that unblocked phase 13 came
 from the run before it — but "the example completes" is not met while this
