@@ -693,16 +693,36 @@ never ran; the dispatch never runs because the phase is waiting on the open
 attempt, and a task with an attempt open is not on the ready frontier that
 `#scheduleRepository` enqueues from.
 
-One more reading narrows where to look. The dispatch was not dropped by
-`selectCurrentDispatches` for want of an accepted scope — the snapshot holds
-exactly one scope for that task, `claimsAccepted: true`, generation 1, with the
-same `acceptedContextDigest` the dispatch names. It is current and selectable.
+One more reading narrows where to look, and then overturns everything above it.
+The dispatch was not dropped by `selectCurrentDispatches` for want of an
+accepted scope — the snapshot holds exactly one scope for that task,
+`claimsAccepted: true`, generation 1, with the same `acceptedContextDigest` the
+dispatch names.
 
-What remains is `#ready`. A task with a dispatch and no worker effect is
-reported `pending`, and `deriveReadyTaskFrontier` then decides from
-dependencies. Why this member was excluded while its siblings ran is the last
-unanswered question, and it is a small one: the inputs are all durable and the
-run's state has been kept.
+Then the scheduling snapshot itself:
+
+```text
+tasks 6, accepted 4
+  task_a47d09b4…  implement-work-a47d09b4d0a9f0e3  deps: []
+  task_ad473bd4…  implement-work-ad473bd48a5e9af2  deps: []
+  task_c6fa4d94…  implement-work-c6fa4d942a668edc  deps: []
+  task_df4e9353…  implement-work-df4e935387280642  deps: []
+acceptedTaskIds  a47d09b4, ad473bd4, c6fa4d94, df4e9353
+```
+
+All four `implement` members are **accepted**, including the one with the open
+attempt. No member depends on another. The phase's work is finished.
+
+So this was never a scheduling problem and never a readiness problem. A tenth
+dispatch was created for a task that was already accepted, its attempt was
+opened, its runner command was never enqueued, and `advanceRun` waits on that
+open attempt for ever — reporting "waiting for the agent working on implement"
+about a phase whose every member is done.
+
+An attempt on an accepted task cannot be waited on: there is nothing left for
+that agent to hand in. Either it should never have been opened, or acceptance
+should close it. Which of those is right is the design question; that it must be
+one of them is not.
 
 ### This corrects phase 8
 
@@ -719,9 +739,10 @@ The criterion measured the easy half and was ticked anyway. It is reopened.
   changing anything
 * [x] Reproduce with the run driver traced: a cycle that takes the run as its
   target and reports no progress is the thing to explain, not the wake
-* [ ] Answer why the ready frontier excluded that member while its siblings ran
-* [ ] An attempt whose dispatch has no runner command and no effect is closed,
-  rather than waited on for ever
+* [x] Answer why the ready frontier excluded that member: it did not. The task
+  was accepted, and the phase was waiting on an attempt rather than on work
+* [ ] An attempt on an accepted task is not waited on: nothing is left for that
+  agent to hand in
 * [ ] A run that is waiting on an agent that was never started says so, naming
   the dispatch, rather than reporting `awaiting-agent` indefinitely
 * [ ] Phase 8's dispatch-recovery test covers the case where the task is not
