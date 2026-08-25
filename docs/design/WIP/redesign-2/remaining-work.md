@@ -591,18 +591,49 @@ asking it to, and it does not say that it has stopped.
 
 Phase 3 fixed the neighbouring case: a failed pump now defers a wake rather than
 assuming another notification will arrive, and `service.ts` says so at length.
-That deferral is five seconds, it fired, and the run still did not move — so the
-wake is being consumed without the work being done, or the pump is failing
-identically and silently, or `listPendingWakes` and the pending row disagree.
-Which of those it is has not been established, and guessing is what the plan
-exists to stop.
+That deferral is five seconds, it fired, and the run still did not move.
 
-* [ ] Establish which of the three it is, from the run's own record, before
+### Which of the three it is
+
+Established, from the run's own record rather than by guessing. The wake row:
+
+```text
+generation 6 | ack_generation 6 | not_before 21:47:16 | reasons ["command-accepted"]
+supervisor_commands: 6 terminal, 0 anything else
+```
+
+`listPendingWakes` returns a run when `generation > ack_generation` or when some
+command is not terminal. Neither holds, so it returns nothing, and the service
+is right: there is no pending wake. The pump is not failing silently and no wake
+is being lost. **Nothing arms a wake for the work that was left.**
+
+A wake is armed when a command is accepted and acknowledged when the cycle that
+handled it finishes. The remaining work was neither a command nor an effect: six
+effects had completed and what was owed was to deliver their completions, close
+the phase, and dispatch what came next. That work is done by `driveRunOnce`
+inside a cycle, and a cycle only happens on a wake. A run whose last command has
+gone terminal therefore has no wake, and nothing will ever give it one.
+
+`senawa advance` looks like the escape hatch and is not. It calls
+`wakeRunningSupervisor`, which sends a bare `wake()` and discards the run id
+entirely — the id appears only in the message it prints. The pump starts, finds
+no pending wake, does nothing, and the command reports success.
+
+An attempted repair — arming a wake from the CLI before nudging — was written
+and reverted. Opening the authority from the CLI while the service holds it put
+the failure inside the same `try` that means "nothing is listening", so a
+failure to arm silently fell through to driving the run in-process, alongside
+the running supervisor. That is the one thing the surrounding comment exists to
+prevent. The direction is right; where the wake is armed is not.
+
+* [x] Establish which of the three it is, from the run's own record, before
   changing anything
+* [ ] A run with work left has a wake that will fire, whether or not a command
+  was involved
 * [ ] A supervisor that has stopped driving a run says so, rather than looking
   idle
 * [ ] `senawa advance` on a running supervisor either drives the run or reports
-  why it did not
+  why it did not, and never drives it from two processes at once
 * [ ] A pump that fails repeatedly on the same reason escalates rather than
   retrying silently for ever
 
