@@ -434,11 +434,25 @@ driving — is told it is still going.
 The driver already knows: `advanceRun` returns `finished`, and the daemon
 translates that into "no work" rather than into a state.
 
-* [ ] A run whose every phase has closed reaches a terminal mode without a
+* [x] A run whose every phase has closed reaches a terminal mode without a
   person asking
-* [ ] The portal offers no run controls on a run that has finished, and says so
+* [x] The portal offers no run controls on a run that has finished, and says so
   in the past tense
-* [ ] `senawa status` does not report `running` for a run that has finished
+* [x] `senawa status` does not report `running` for a run that has finished
+
+A finished run now goes `running` to `ended` directly, recorded as a run control
+event with no command and no principal behind it, because nobody decided it: the
+run had nothing left to do. A paused or ending run is somewhere a person put it,
+and finishing does not overrule that.
+
+`ended` was reused rather than a new mode added. A separate `finished` mode
+would have to pass the two SQL check constraints, the mode union, the codecs,
+the portal and the CLI, to record a distinction — over versus ended by a person
+— that the control event's own history already carries.
+
+The portal and the CLI needed nothing for two of the three: both already read
+the mode, and `terminal` is already `mode === "ended"`. Only the graph's closing
+line was written in the future tense regardless.
 
 ## Phase 12: a turn that stopped to ask has not spent an attempt
 

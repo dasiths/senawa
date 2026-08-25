@@ -938,6 +938,43 @@ describe("SQLite Phase 11B portal query authority", () => {
     fixture.dispose();
   });
 
+  // `ended` was only reachable from `ending`, and only a person requests that,
+  // so a run that closed every phase stayed `running` for ever: the portal
+  // offered Pause and End run on it and `senawa status` called it running.
+  it("ends a run that finished its own work, once, and leaves a paused one alone", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    const { repositoryId, runId } = runtimeFixture;
+    expect(authority.queryRunControl(repositoryId, runId)?.mode).toBe("running");
+
+    expect(authority.recordRunFinished(repositoryId, runId, "2026-08-14T12:00:00.000Z")).toBe(true);
+    expect(authority.queryRunControl(repositoryId, runId)).toMatchObject({
+      mode: "ended",
+      revision: 1,
+    });
+    // Every cycle asks, so it has to record the event exactly once.
+    expect(authority.recordRunFinished(repositoryId, runId, "2026-08-14T12:00:01.000Z")).toBe(
+      false,
+    );
+    expect(authority.queryRunControl(repositoryId, runId)?.revision).toBe(1);
+
+    // A paused run is somewhere a person put it, and finishing does not
+    // overrule that.
+    const paused = createFixture();
+    const other = new SqliteAuthority(paused.options);
+    instantiate(other);
+    expect(
+      other.submit(runControlCommand("pause-run", "command_pause", 0), admission()),
+    ).toMatchObject({ status: "completed" });
+    expect(other.recordRunFinished(repositoryId, runId, "2026-08-14T12:00:00.000Z")).toBe(false);
+    expect(other.queryRunControl(repositoryId, runId)?.mode).toBe("paused");
+    other.close();
+    paused.dispose();
+    authority.close();
+    fixture.dispose();
+  });
+
   it("lists artifacts in artifact order, whatever order they were submitted in", () => {
     const fixture = createFixture();
     const authority = new SqliteAuthority(fixture.options);

@@ -549,15 +549,22 @@ export async function startSenawaService(
       listSchedulableRuns: () => productionScheduler.listRuns(),
       driveRunOnce:
         composition.driveRunOnce ??
-        driveRun(projectDirectory, paths, dependencies, (repositoryId, runId, event, reason) => {
-          authority.appendLog({
-            recordedAt: new Date().toISOString(),
-            level: "error",
-            event,
-            message: reason,
-            fields: { repositoryId, runId },
-          });
-        }),
+        driveRun(
+          projectDirectory,
+          paths,
+          dependencies,
+          (repositoryId, runId, event, reason, level) => {
+            authority.appendLog({
+              recordedAt: new Date().toISOString(),
+              level,
+              event,
+              message: reason,
+              fields: { repositoryId, runId },
+            });
+          },
+          (repositoryId, runId, currentTime) =>
+            authority.commandAuthority.recordRunFinished(repositoryId, runId, currentTime),
+        ),
       deliverCompletionOutboxOnce: () => contextBroker.deliverCompletionOutboxOnce(),
       deliverAmendmentProposalOutboxOnce: () => amendmentBridge.deliverOnce(),
       ...(remoteConnector === undefined ? {} : { remoteConnectorStatuses: [remoteConnector] }),
@@ -717,7 +724,15 @@ function driveRun(
   projectRoot: string,
   paths: ReturnType<typeof resolveSenawaServicePaths>,
   dependencies: RuntimeDependencies,
-  report: (repositoryId: string, runId: string, event: string, reason: string) => void,
+  report: (
+    repositoryId: string,
+    runId: string,
+    event: string,
+    reason: string,
+    level: "info" | "error",
+  ) => void,
+  /** Records that a run finished its own work. Returns whether this ended it. */
+  recordFinished: (repositoryId: string, runId: string, currentTime: string) => boolean,
 ): (input: {
   readonly repositoryId: string;
   readonly runId: string;
@@ -753,10 +768,23 @@ function driveRun(
         const reason = `${outcome.kind} at ${outcome.phaseKey}: ${outcome.reasons.join("; ")}`;
         if (stopped.get(key) !== reason) {
           stopped.set(key, reason);
-          report(repositoryId, runId, "run.stopped", reason);
+          report(repositoryId, runId, "run.stopped", reason, "error");
         }
       } else {
         stopped.delete(key);
+      }
+      // A run that has finished has no more work, and saying "no work" is not
+      // the same as being over. `ended` was only reachable from `ending`, which
+      // only a person requests, so a run that closed every phase stayed
+      // `running` for ever and the portal went on offering to end it.
+      if (outcome.kind === "finished" && recordFinished(repositoryId, runId, currentTime)) {
+        report(
+          repositoryId,
+          runId,
+          "run.finished",
+          "every phase has closed; the run is over",
+          "info",
+        );
       }
       return classifyOutcome(outcome) === "progress" && outcome.kind !== "finished";
     } catch (error) {
@@ -767,7 +795,7 @@ function driveRun(
       // person looks, and on this service it is not kept at all, so the reason
       // goes where the rest of the run's history is.
       const reason = error instanceof Error ? error.message : String(error);
-      report(repositoryId, runId, "run.drive-failed", reason);
+      report(repositoryId, runId, "run.drive-failed", reason, "error");
       process.stderr.write(
         `drive-run-failed ${repositoryId} ${runId}: ${
           error instanceof Error ? (error.stack ?? error.message) : String(error)

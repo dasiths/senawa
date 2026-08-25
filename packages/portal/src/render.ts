@@ -894,6 +894,7 @@ function graphFlow(
     edges,
     selectedNodeId: state.ui.focusedRecord,
     unfolded: state.ui.unfoldedNodes,
+    terminal: selectedOverview(state)?.terminal === true,
     handedOn,
     decorate: (node: PortalGraphNode) => {
       const working = agents.filter((agent) => String(agent.taskId) === node.nodeId);

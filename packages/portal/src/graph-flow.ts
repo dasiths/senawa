@@ -28,6 +28,8 @@ export interface GraphFlowOptions {
   readonly selectedNodeId: string | undefined;
   /** Phases a reader opened by hand, which outrank the automatic rule. */
   readonly unfolded: readonly string[];
+  /** Whether the run is over, so the flow does not describe it in future tense. */
+  readonly terminal?: boolean;
   /** What each task handed on, keyed by node id. */
   readonly handedOn: ReadonlyMap<string, { readonly name: string; readonly size: string }>;
   readonly decorate: (node: PortalGraphNode) => GraphFlowNodeExtras;
@@ -268,7 +270,13 @@ export function graphFlowView(options: GraphFlowOptions): HTMLElement {
     "finish",
     phases.length === 0
       ? "nothing has been compiled yet"
-      : "the run finishes when every phase is accepted",
+      : // A run that is over has finished. Saying what it will do when every
+        // phase is accepted, to a reader looking at a run where every phase
+        // already is, describes something that has happened as something that
+        // is going to.
+        options.terminal === true
+        ? "every phase was accepted, and the run finished"
+        : "the run finishes when every phase is accepted",
   );
   end.dataset.node = "end";
   end.dataset.from = previous;

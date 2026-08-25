@@ -229,10 +229,10 @@ import {
   type RuntimeQueryPort,
   readCanonicalJsonPointer,
   type SerializableAuthorityPort,
+  type StoredDispatch,
   type SubmissionAdmissionInput,
   type SubmissionAdmissionResult,
   selectEffectAttemptAction,
-  type StoredDispatch,
   type TaskScopeCurrentness,
   type TrustedHumanAuthorityDecision,
   type TrustedRuntimeCommandFacts,
@@ -1157,6 +1157,64 @@ export class SqliteAuthority
           revision: row.revision,
           changedAt: row.changed_at,
         });
+  }
+
+  /**
+   * Records that a run finished its own work, without a person asking.
+   *
+   * `ended` was only reachable from `ending`, and only a person requests that,
+   * so a run that closed every phase stayed `running` for ever: the portal
+   * offered Pause and End run on it, `senawa status` called it running, and
+   * anything deciding whether a run was worth driving was told it was still
+   * going. A run with nothing left to do is over, and that is a fact about the
+   * run rather than a decision anyone has to take.
+   *
+   * Returns whether this call is the one that ended it, so a caller that runs
+   * on every cycle records the event exactly once.
+   */
+  recordRunFinished(repositoryId: string, runId: string, currentTime: string): boolean {
+    validateOpaqueIdentity(repositoryId);
+    validateOpaqueIdentity(runId);
+    const runKey = canonicalStringify([repositoryId, runId]);
+    const state = this.#database
+      .prepare<[string], { mode: RunControlMode; revision: number }>(
+        "SELECT mode, revision FROM run_control_state WHERE run_key = ?",
+      )
+      .get(runKey);
+    // A paused or ending run is somewhere a person put it, and finishing does
+    // not overrule that.
+    if (state === undefined || state.mode !== "running") return false;
+    const revision = state.revision + 1;
+    const event = {
+      eventId: `run-finished-${this.dependencies.sha256.digest(canonicalBytes({ runKey, revision }))}`,
+      priorMode: "running",
+      resultMode: "ended",
+      revision,
+      occurredAt: currentTime,
+    };
+    const changed = this.#database
+      .prepare(
+        `UPDATE run_control_state SET mode = 'ended', revision = ?, changed_at = ?
+         WHERE run_key = ? AND mode = 'running' AND revision = ?`,
+      )
+      .run(revision, currentTime, runKey, state.revision);
+    if (changed.changes === 0) return false;
+    this.#database
+      .prepare(
+        `INSERT INTO run_control_events(
+           run_key, revision, event_id, command_id, prior_mode, result_mode,
+           principal_digest, canonical_event, occurred_at
+         ) VALUES (?, ?, ?, NULL, 'running', 'ended', ?, ?, ?)`,
+      )
+      .run(
+        runKey,
+        revision,
+        event.eventId,
+        this.dependencies.sha256.digest(canonicalBytes(event)),
+        canonicalStringify(event),
+        currentTime,
+      );
+    return true;
   }
 
   /**

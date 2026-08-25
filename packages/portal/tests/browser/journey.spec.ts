@@ -423,6 +423,15 @@ test("reviews pause, resume, and permanent end, then exposes ending and ended mo
   await endDialog.getByRole("button", { name: "Confirm permanent end" }).click();
   await expect(page.locator(".run-head .state", { hasText: /^ended$/u })).toBeVisible();
   await expect(page.locator(".run-controls button")).toHaveCount(0);
+
+  // A run that is over has finished. Telling a reader what it will do when
+  // every phase is accepted describes something that has happened as something
+  // that is going to.
+  await page.getByRole("tab", { name: "Workflow", exact: true }).click();
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
+  await expect(page.locator(".finish").last()).toHaveText(
+    "every phase was accepted, and the run finished",
+  );
   expect(diagnostics.severe()).toEqual([]);
   await main.context.close();
 });
