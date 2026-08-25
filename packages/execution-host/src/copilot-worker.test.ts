@@ -916,7 +916,10 @@ describe("CopilotSerialWorkerAdapter", () => {
 
     expect(result).toMatchObject({
       status: "crashed",
-      error: { code: "copilot-worker-failed" },
+      // A live run crashed eight times and recorded only that it crashed, so
+      // nothing anywhere said what class of failure it was. The name is safe to
+      // carry; the message is not, and the assertion below is why.
+      error: { code: "copilot-worker-failed", message: "Error" },
     });
     expect(JSON.stringify(result)).not.toContain(GRANT_TOKEN);
     expect(required(sdk.sessions.get(fixture.dispatch.dispatchId)).disconnectCalls).toBe(1);

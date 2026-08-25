@@ -213,6 +213,11 @@ export class CopilotWorkerEffectHost implements AsyncEffectHost {
       workerStatus: result.status,
       completionStatus: acceptedCompletion ? "accepted" : "missing",
       submissionIds: result.submissions.map(({ submissionId }) => submissionId),
+      // A crashed turn used to record only that it crashed. Eight identical
+      // crashes then left no reason anywhere a reader could find one.
+      ...(result.status === "crashed" && result.error.message !== undefined
+        ? { workerFailure: result.error.message }
+        : {}),
       ...(result.transcriptRefusals === undefined
         ? {}
         : { transcriptRefusals: result.transcriptRefusals }),

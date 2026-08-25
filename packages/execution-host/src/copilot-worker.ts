@@ -109,7 +109,10 @@ export type CopilotWorkerRunResult =
       readonly dispatchId: string;
       readonly submissions: readonly SubmissionAdmissionResult[];
       readonly transcriptRefusals?: number;
-      readonly error: Readonly<{ readonly code: "copilot-worker-failed" }>;
+      readonly error: Readonly<{
+        readonly code: "copilot-worker-failed";
+        readonly message?: string;
+      }>;
     };
 
 export class CopilotSerialWorkerAdapter {
@@ -167,6 +170,7 @@ export class CopilotSerialWorkerAdapter {
     scope.note("session started");
     let session: CopilotSdkSessionPort | undefined;
     let status: CopilotWorkerRunResult["status"] = "missing-completion";
+    let failure: string | undefined;
     try {
       const tools = createTools(
         input,
@@ -238,8 +242,9 @@ export class CopilotSerialWorkerAdapter {
         // fences its own task, which is what made its question unanswerable.
         status = "awaiting-answer";
       }
-    } catch {
+    } catch (error) {
       status = "crashed";
+      failure = adapterFailure(error);
     } finally {
       scope.active = false;
       if (session !== undefined) {
@@ -255,7 +260,7 @@ export class CopilotSerialWorkerAdapter {
       await Promise.allSettled([...scope.pending]);
       this.#activeDispatchId = undefined;
       this.#activeSession = undefined;
-      scope.note(sessionEndedNote(status));
+      scope.note(sessionEndedNote(status, failure));
     }
     const base = {
       status,
@@ -264,7 +269,14 @@ export class CopilotSerialWorkerAdapter {
       ...(state.transcriptRefusals === 0 ? {} : { transcriptRefusals: state.transcriptRefusals }),
     };
     return status === "crashed"
-      ? Object.freeze({ ...base, status, error: Object.freeze({ code: "copilot-worker-failed" }) })
+      ? Object.freeze({
+          ...base,
+          status,
+          error: Object.freeze({
+            code: "copilot-worker-failed" as const,
+            ...(failure === undefined ? {} : { message: failure }),
+          }),
+        })
       : Object.freeze({ ...base, status });
   }
 
@@ -366,7 +378,10 @@ interface RunScope {
  * crash, and "missing-completion" reads like a bug in senawa rather than an
  * agent that submitted nothing.
  */
-function sessionEndedNote(status: CopilotWorkerRunResult["status"] | "crashed"): string {
+function sessionEndedNote(
+  status: CopilotWorkerRunResult["status"] | "crashed",
+  failure?: string,
+): string {
   const endings: Readonly<Record<string, string>> = {
     completed: "session ended: the agent finished and submitted its work",
     blocked: "session ended: the agent reported it cannot continue",
@@ -375,7 +390,23 @@ function sessionEndedNote(status: CopilotWorkerRunResult["status"] | "crashed"):
     aborted: "session ended: the agent was cancelled",
     crashed: "session ended: the agent failed with an error",
   };
-  return endings[status] ?? `session ended ${status}`;
+  const ending = endings[status] ?? `session ended ${status}`;
+  return failure === undefined ? ending : `${ending}: ${failure}`;
+}
+
+/**
+ * What class of thing the adapter failed with.
+ *
+ * Not the message: an SDK failure can carry whatever it was handed, including a
+ * credential, and a test holds that line. The name and a code-shaped `code` are
+ * structured enough to be safe and enough to tell one failure from another.
+ */
+function adapterFailure(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const code = (error as { readonly code?: unknown }).code;
+  const identifier = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
+  const name = identifier.test(error.name) ? error.name : "Error";
+  return typeof code === "string" && identifier.test(code) ? `${name} (${code})` : name;
 }
 
 function transcriptNoteSink(

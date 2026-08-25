@@ -4771,3 +4771,28 @@ the type it is a value of, and the test asks for it by name.
 What remains carried is D-025, per-member gates and approval policy, which needs
 the phase model rather than a helper. It is out of the plan's condition and says
 so.
+
+## Eight crashes and no reason
+
+The plan phase's agent failed eight times in a row, each time within the same
+second of starting, and the whole record of it was one line:
+
+```text
+session ended: the agent failed with an error
+```
+
+`catch { status = "crashed"; }` — the error was discarded where it was caught.
+Nothing downstream could say more because nothing upstream kept anything.
+
+The message itself cannot be echoed: an SDK failure can carry whatever it was
+handed, and a test already holds that line by throwing a grant token as an error
+message and asserting the result does not contain it. So the turn now records
+the failure's *class* — the error name, and a `code` if it has one that looks
+like a code — in the transcript line and in the effect outcome's
+`workerFailure`. Structured enough to be safe, and enough to tell one failure
+from another.
+
+Proven by breaking: with the capture removed the crash reports no class at all.
+
+The plan-level live run is blocked on this failure, not on anything the plan
+changed. The next run will say what it is.
