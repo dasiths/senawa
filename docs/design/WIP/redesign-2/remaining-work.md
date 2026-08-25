@@ -643,6 +643,22 @@ That is a hypothesis, not a finding. It has not been confirmed against the
 running process, and the run has since been reset, so confirming it needs a
 fresh reproduction with the service's own state visible.
 
+And it is weakened by one more reading. `status()` runs through
+`#enqueueOperation`, the same serialized queue as `runCycle`, so a cycle that
+never resolved would hang every later status call. Status answered promptly
+throughout, and `make portal` kept minting tokens. Nothing was stuck in that
+queue, which means the pump was clearing and cycles were running.
+
+So cycles ran, took the stalled run as their target through `schedulable`,
+called `runOnceAsync`, and it reported `worked: false` every time. The silence
+is then not the service's at all: `advanceRun` decided there was nothing to do
+for a phase that was open with six completed effects. The last thing it said
+before going quiet was `schedule-declined … the ready frontier holds
+task_1babea…`, which is a task the frontier did not consider ready.
+
+That is where the next reproduction should look, and it is a different place
+from where this phase started.
+
 An attempted repair — arming a wake from the CLI before nudging — was written
 and reverted. Opening the authority from the CLI while the service holds it put
 the failure inside the same `try` that means "nothing is listening", so a
@@ -652,8 +668,8 @@ prevent. It would also not have helped, given the fallback above.
 
 * [x] Establish which of the three it is, from the run's own record, before
   changing anything
-* [ ] Confirm or refute the pump hypothesis against a running service, with its
-  state and `#pump` visible, before changing anything
+* [ ] Reproduce with the run driver traced: a cycle that takes the run as its
+  target and reports no progress is the thing to explain, not the wake
 * [ ] A supervisor that has stopped driving a run says so, rather than looking
   idle
 * [ ] `senawa advance` on a running supervisor either drives the run or reports
