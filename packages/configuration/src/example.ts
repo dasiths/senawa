@@ -144,6 +144,71 @@ export function createExampleWorkflowConfiguration(): WorkflowConfigurationDocum
   }) as unknown as WorkflowConfigurationDocument;
 }
 
+/**
+ * The example with two tasks in one worktree phase, each owing evidence.
+ *
+ * A consumer acceptance test wanting this shape had to import the document type
+ * and rebuild the phase by hand, which made the test a second author of the
+ * schema. The variant lives here, beside the type it is a value of.
+ */
+export function createWorktreeFanOutWorkflowConfiguration(input: {
+  readonly integrationRef: string;
+  readonly evidenceKind: unknown;
+  readonly tasks: readonly { readonly key: string; readonly instruction: string }[];
+}): WorkflowConfigurationDocument {
+  const base = createExampleWorkflowConfiguration() as unknown as ExampleDocument;
+  const phase = base.phases[0];
+  if (phase === undefined) throw new Error("The example workflow must declare one phase");
+  const original = phase.executor.work?.[0];
+  if (original === undefined) {
+    throw new Error("The example workflow must declare one task-set phase with one task");
+  }
+  const completionPolicy = {
+    ...original.completionPolicy,
+    completionEvidencePolicy: {
+      mode: "task",
+      requirements: [{ kind: input.evidenceKind, minimumCount: 1 }],
+    },
+  };
+  return canonicalValue({
+    ...base,
+    execution: {
+      workspaceMode: "worktree",
+      maxWriterConcurrency: 2,
+      failurePolicy: "continue",
+      integrationRef: input.integrationRef,
+    },
+    phases: [
+      {
+        ...phase,
+        executor: {
+          kind: "task-set",
+          work: input.tasks.map(({ key, instruction }) => ({
+            ...original,
+            key,
+            input: { instruction },
+            completionPolicy,
+          })),
+        },
+      },
+    ],
+  }) as unknown as WorkflowConfigurationDocument;
+}
+
+interface ExampleDocument {
+  readonly phases: readonly {
+    readonly executor: {
+      readonly kind: string;
+      readonly work?: readonly ExampleTask[];
+    };
+  }[];
+}
+
+interface ExampleTask {
+  readonly key: string;
+  readonly completionPolicy: Readonly<Record<string, unknown>>;
+}
+
 export function createExampleWorkflowResources(): Readonly<Record<string, string>> {
   return canonicalValue({
     "prompts/worker.md": "Complete the assigned instruction: ${{ input.instruction }}\n",

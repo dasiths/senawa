@@ -4744,3 +4744,30 @@ First full run after the change: 54 passed, 1 skipped, six and a half minutes,
 with the machine otherwise idle. Four more consecutive runs are what the plan
 asks for, and they are what will decide whether the interference is gone or
 merely quiet.
+
+## Five consecutive clean browser runs
+
+```text
+run 1  54 passed  1 skipped  6.6m
+run 2  54 passed  1 skipped  6.5m
+run 3  54 passed  1 skipped  6.3m
+run 4  54 passed  1 skipped  6.2m
+run 5  54 passed  1 skipped  6.3m
+```
+
+Phase 4 closed. The interference was the shared session clock, which only ever
+moved forward; resetting it after every test, and attaching the fixture's
+mutation history to a failure, was the whole fix. Three earlier fixes aimed at
+the three symptoms would have been three wrong answers.
+
+## The acceptance test stopped being a second author of the schema
+
+The last carried v1 item. `no-credit-acceptance.test.ts` imported
+`WorkflowConfigurationDocument` and rebuilt the example's phase by hand to get
+two worktree tasks that owe evidence. The shape now lives in
+`@senawa/configuration` as `createWorktreeFanOutWorkflowConfiguration`, beside
+the type it is a value of, and the test asks for it by name.
+
+What remains carried is D-025, per-member gates and approval policy, which needs
+the phase model rather than a helper. It is out of the plan's condition and says
+so.

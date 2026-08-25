@@ -126,7 +126,7 @@ symptom were wrong for that reason.
 
 * [x] The failure is captured with its error context rather than reasoned about
 * [x] Whatever the tests share is isolated per test, or made quiescent
-* [ ] The suite passes five consecutive full runs
+* [x] The suite passes five consecutive full runs
 
 ## Phase 5: live tailing stops refetching
 
@@ -156,11 +156,10 @@ seventeen seconds alone, because every `advance` opens and verifies the record.
 That is the latency of the phase-5 design showing up as a test one slow machine
 away from timing out.
 
-This one needs a decision before it needs code. Skipping the cross-checks at
-open was tried and reverted: six tests assert that a tampered mirror row is
-refused at startup, and the durability documentation states the same guarantee.
-It is a real property, not an accident — the mirrors are what queries read, so
-a tampered mirror serves wrong data silently.
+Skipping the cross-checks at open was tried and reverted: six tests assert that a
+tampered mirror row is refused at startup, and the durability documentation
+states the same guarantee. It is a real property, not an accident — the mirrors
+are what queries read, so a tampered mirror serves wrong data silently.
 
 The measured cost of opening a record is 1539 ms, of which about 964 ms is the
 authority reparse the caller needs anyway and about 570 ms is the cross-checks.
@@ -181,17 +180,18 @@ guarantee was never what cost the time.
 
 ## Carried from the v1 plan
 
-Neither blocks anything above.
+Neither blocks anything above, and neither is part of the condition below. The
+first is a feature the phase model does not yet have; the second is done.
 
 * [ ] Give each member its own gates, approval and attempt policy, which is the
   D-025 deviation. Members run and the phase closes over all of them; per-member
   policy still needs the phase model
-* [ ] No consumer acceptance test has to write `WorkflowConfigurationDocument`
+* [x] No consumer acceptance test has to write `WorkflowConfigurationDocument`
   directly
 
 ## The condition for the whole plan
 
-* [ ] With every item above done, the example is driven once more from a clean
+* [ ] With every phase above done, the example is driven once more from a clean
   state root, end to end in a browser, and completes
 
 A run driven before the last change proves that change against the state it

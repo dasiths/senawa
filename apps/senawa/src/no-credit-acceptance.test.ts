@@ -6,10 +6,9 @@ import { fileURLToPath } from "node:url";
 import {
   compileWorkflowAmendment,
   compileWorkflowConfiguration,
-  createExampleWorkflowConfiguration,
   createExampleWorkflowResources,
+  createWorktreeFanOutWorkflowConfiguration,
   WORKFLOW_AMENDMENT_API_VERSION,
-  type WorkflowConfigurationDocument,
 } from "@senawa/configuration";
 import {
   createEd25519FixtureKeyPair,
@@ -150,7 +149,14 @@ describe("Phase 14F no-credit acceptance", () => {
         },
       );
 
-      const workflow = configuredWorkflow(createExampleWorkflowConfiguration(), fixture.targetRef);
+      const workflow = createWorktreeFanOutWorkflowConfiguration({
+        integrationRef: fixture.targetRef,
+        evidenceKind,
+        tasks: [
+          { key: "alpha", instruction: "Write alpha.txt" },
+          { key: "beta", instruction: "Write beta.txt" },
+        ],
+      });
       await writeExampleResources(fixture.repositoryRoot);
       await writeFile(workflowPath, `${JSON.stringify(workflow, null, 2)}\n`, { mode: 0o600 });
       expect(await runCli(["doctor", workflowPath], createNodeCliDependencies())).toEqual({
@@ -609,53 +615,6 @@ const dependencies: RuntimeDependencies = Object.freeze({
     { intent: "pause-run", roles: ["operator", "release-manager"] },
   ]),
 });
-
-function configuredWorkflow(
-  input: WorkflowConfigurationDocument,
-  integrationRef: string,
-): WorkflowConfigurationDocument {
-  const phase = required(input.phases[0]);
-  if (phase.executor.kind !== "task-set") throw new Error("Acceptance requires task-set executor");
-  const original = required(phase.executor.work[0]);
-  const completionPolicy = {
-    ...original.completionPolicy,
-    completionEvidencePolicy: {
-      mode: "task" as const,
-      requirements: [{ kind: evidenceKind, minimumCount: 1 }],
-    },
-  };
-  return {
-    ...input,
-    execution: {
-      workspaceMode: "worktree",
-      maxWriterConcurrency: 2,
-      failurePolicy: "continue",
-      integrationRef,
-    },
-    phases: [
-      {
-        ...phase,
-        executor: {
-          kind: "task-set",
-          work: [
-            {
-              ...original,
-              key: "alpha",
-              input: { instruction: "Write alpha.txt" },
-              completionPolicy,
-            },
-            {
-              ...original,
-              key: "beta",
-              input: { instruction: "Write beta.txt" },
-              completionPolicy,
-            },
-          ],
-        },
-      },
-    ],
-  };
-}
 
 function admission() {
   return {
