@@ -616,20 +616,44 @@ gone terminal therefore has no wake, and nothing will ever give it one.
 
 `senawa advance` looks like the escape hatch and is not. It calls
 `wakeRunningSupervisor`, which sends a bare `wake()` and discards the run id
-entirely — the id appears only in the message it prints. The pump starts, finds
-no pending wake, does nothing, and the command reports success.
+entirely — the id appears only in the message it prints. The pump starts, and
+what it does next is the part that is still open.
+
+### Where that explanation stops
+
+Reading further contradicts the tidy version above, so it is recorded rather
+than tidied away. `#runCycle` does not only look at pending wakes:
+
+```ts
+const target = wake ?? amendmentProposal ?? amendmentRecovery ?? runnable ?? schedulable;
+```
+
+`schedulable` comes from `listSchedulableRuns`, which the daemon fills from the
+scheduler's own list of every run holding a dispatch. The stalled run was in it.
+So a cycle *should* have taken it as its target with no wake at all, and the
+missing wake alone does not explain the silence.
+
+Which leaves the pump itself. `wake()` returns immediately if `#pump !== undefined`
+or if the state is not `running`, and a `#pump` that is never cleared, or a state
+that moved off `running` after the fence error, would make every later wake a
+no-op for ever — which is exactly the observed behaviour, including `advance`
+being accepted and doing nothing.
+
+That is a hypothesis, not a finding. It has not been confirmed against the
+running process, and the run has since been reset, so confirming it needs a
+fresh reproduction with the service's own state visible.
 
 An attempted repair — arming a wake from the CLI before nudging — was written
 and reverted. Opening the authority from the CLI while the service holds it put
 the failure inside the same `try` that means "nothing is listening", so a
 failure to arm silently fell through to driving the run in-process, alongside
 the running supervisor. That is the one thing the surrounding comment exists to
-prevent. The direction is right; where the wake is armed is not.
+prevent. It would also not have helped, given the fallback above.
 
 * [x] Establish which of the three it is, from the run's own record, before
   changing anything
-* [ ] A run with work left has a wake that will fire, whether or not a command
-  was involved
+* [ ] Confirm or refute the pump hypothesis against a running service, with its
+  state and `#pump` visible, before changing anything
 * [ ] A supervisor that has stopped driving a run says so, rather than looking
   idle
 * [ ] `senawa advance` on a running supervisor either drives the run or reports
