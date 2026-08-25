@@ -85,7 +85,7 @@ lives where the record does. That is a breaking change to a declared payload,
 which this branch permits, and it should be made deliberately rather than
 approximated by a fourth guard in the driver.
 
-* [ ] The attempt transition payload names its task
+* [x] The attempt transition payload names its task
 
 Finished when a live run reaches every phase closed without a member holding two
 dispatches.
@@ -100,8 +100,8 @@ nothing revisits the run when that lease expires a minute later.
 The remedy is a scheduled wake at the expiry the authority already knows, which
 changes how the service decides when to wake and should be made on purpose.
 
-* [ ] The service wakes at a lease expiry it already knows about
-* [ ] A run left by a dead owner resumes without a person restarting anything
+* [x] The service wakes at a lease expiry it already knows about
+* [x] A run left by a dead owner resumes without a person restarting anything
 
 ## Phase 3: a run's state does not have to fit in one value
 

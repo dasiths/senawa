@@ -430,6 +430,100 @@ describe("SupervisorService lifecycle", () => {
     ]);
   });
 
+  // A supervisor that stops mid-turn leaves a claim naming an owner that no
+  // longer exists. Everything below the supervisor recovers once that owner's
+  // lease expires, but the service is wake-driven with no clock of its own: the
+  // cycle that found the run reported no work, the pump stopped, and nothing
+  // asked again a minute later. The run was runnable in principle and unreached
+  // in practice, and in the live case it sat that way indefinitely.
+  it("looks at a run again when the lease blocking it runs out", async () => {
+    const root = mkdtempSync(join(tmpdir(), "senawa-lease-retry-"));
+    roots.add(root);
+    const authority = new SqliteSupervisorAuthority({
+      databasePath: join(root, "authority.db"),
+      assetDirectory: join(root, "assets"),
+      dependencies,
+    });
+    const command = runtimeCommand({
+      commandId: "command_lease-retry",
+      intent: "instantiate-run",
+      payload: {
+        workflowId: runtimeFixture.workflowId,
+        configurationSnapshotDigest: runtimeFixture.configurationSnapshotDigest,
+        execution: runtimeFixture.execution,
+        graph: createRuntimeGraph(),
+        phase: runtimeFixture.phase,
+        approvalPolicy: { policy: "approval-required", authority: runtimePrincipal },
+        escalationPolicyDigest: runtimeFixture.escalationPolicyDigest,
+        allowancePolicy: runtimeFixture.allowancePolicy,
+      },
+    });
+    const scheduled: { delay: number; run: () => void }[] = [];
+    let now = Date.parse(runtimeFixture.currentTime);
+    const service = new SupervisorService({
+      authority,
+      clock: { now: () => now },
+      ownerId: "owner_lease-retry",
+      timer: {
+        schedule: (delayMilliseconds, callback) => {
+          scheduled.push({ delay: delayMilliseconds, run: callback });
+          return { cancel: () => {} };
+        },
+      },
+    });
+    await service.start();
+
+    // Another owner holds the run, and its lease has thirty seconds to live.
+    const liveExpiry = "2026-08-12T12:00:30.000Z";
+    authority.acquireRunLease(
+      runtimeFixture.repositoryId,
+      runtimeFixture.runId,
+      "owner_dead",
+      runtimeFixture.currentTime,
+      liveExpiry,
+    );
+    authority.accept({
+      envelope: command,
+      createAdmission: () => ({
+        currentTime: runtimeFixture.currentTime,
+        facts: { source: "lease-retry-test" },
+        allocations: [1, 2, 3].map((index) => ({
+          kind: "stream-event" as const,
+          id: `stream-event-lease-retry-${index}`,
+        })),
+      }),
+    });
+
+    expect(await service.runCycle()).toMatchObject({ worked: false });
+    // The retry is scheduled at the expiry the authority already knows, not
+    // immediately: retrying against a live lease spins until it dies.
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0]?.delay).toBeGreaterThan(29_000);
+    // A run nobody can drive says so rather than looking idle.
+    expect(authority.queryLogs(0, 200).items.some((entry) => entry.event === "run.lease-held")).toBe(
+      true,
+    );
+
+    // A second refusal before the first retry fires must not stack another
+    // wake: the earliest pending retry already covers it.
+    expect(await service.runCycle()).toMatchObject({ worked: false });
+    expect(scheduled).toHaveLength(1);
+
+    // The command is still waiting, because nothing has driven the run.
+    expect(authority.queryLatest(command.commandId)).not.toMatchObject({ status: "terminal" });
+
+    // Time passes and the retry fires. Nobody restarted anything, and the run
+    // that was runnable in principle is now driven in practice.
+    now = Date.parse(liveExpiry) + 1_000;
+    scheduled[0]?.run();
+    await vi.waitFor(() =>
+      expect(authority.queryLatest(command.commandId)).toMatchObject({ status: "terminal" }),
+    );
+
+    await service.drain();
+    await service.stop();
+  });
+
   it("refuses direct recovery under a live owner and succeeds at a higher fence after expiry", async () => {
     const root = mkdtempSync(join(tmpdir(), "senawa-direct-recovery-"));
     roots.add(root);

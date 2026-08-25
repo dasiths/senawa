@@ -4483,3 +4483,36 @@ Proven by breaking both directions: with the refusal disabled the second open is
 admitted, and with the closure dropped from the record the attempt list comes
 back one entry short. Both required a rebuild first — cross-package tests import
 from `dist`, and a mutation that is not rebuilt passes against the old build.
+
+## The service now knows that time passes
+
+F-061's last mile. Everything under the supervisor recovers from an owner that
+died mid-turn: the transition scheduler offers a `reconcile` plan for the
+abandoned intent, `listRunnableRuns` counts the run, and a successor may claim
+it once the dead owner's lease expires. What failed was above all of that. The
+successor started while the lease was still live, `acquireRunLease` refused, the
+cycle caught the refusal and reported no work, and a cycle that reports no work
+stops the pump. The supervisor is wake-driven and had no clock of its own, so
+nothing revisited the run when the lease died a minute later. Runnable in
+principle, unreached in practice.
+
+Re-enqueuing a wake on the refusal is the obvious patch and the wrong one: it
+retries immediately and spins until the lease expires. The retry has to land at
+the expiry, which means the refusal has to carry it. `LeaseUnavailableError` now
+does, read from the row the authority compared against, and the service
+schedules one deferred wake through the timer it already accepts.
+
+Three things the shape had to get right:
+
+* The earliest pending retry wins. A second refusal before the first fires
+  cannot serve an earlier expiry, so it is dropped rather than stacked.
+* A margin past the expiry. Waking exactly on it races the comparison the
+  authority makes, and a retry one millisecond early is a retry wasted.
+* Draining cancels it. A retry that fires after the service stopped driving
+  would wake a pump that is not allowed to run.
+
+The run also says so now. `run.lease-held` names the run and the expiry, because
+a run nobody can drive should read as blocked rather than as idle.
+
+Proven by breaking the scheduling: with the deferred wake suppressed the timer
+is never asked and the run stays undriven.

@@ -18,9 +18,33 @@ import {
   SupervisorRunController,
   type SupervisorRunControllerOptions,
   type SupervisorTimer,
+  type SupervisorTimerHandle,
 } from "./run-controller.js";
 
 const DEFAULT_STARTUP_CYCLE_LIMIT = 1_024;
+
+/**
+ * How long after a lease expiry to look again.
+ *
+ * The expiry is the earliest moment a successor could take over, and waking
+ * exactly on it races the clock the authority compares against. A short margin
+ * makes the retry land after the lease is genuinely dead rather than one
+ * millisecond before.
+ */
+const LEASE_RETRY_MARGIN_MILLISECONDS = 250;
+
+const serviceTimer: SupervisorTimer = Object.freeze({
+  schedule(delayMilliseconds: number, callback: () => void): SupervisorTimerHandle {
+    const handle = setTimeout(callback, delayMilliseconds);
+    // A pending retry must not be the reason the process stays alive.
+    handle.unref?.();
+    return Object.freeze({
+      cancel: () => {
+        clearTimeout(handle);
+      },
+    });
+  },
+});
 
 export type SupervisorLifecycleState =
   | "stopped"
@@ -95,6 +119,7 @@ export class SupervisorService {
   readonly #controller: SupervisorRunController;
   readonly #runnerAuthority: SqliteRunnerAuthority | undefined;
   readonly #listSchedulableRuns: SupervisorServiceOptions["listSchedulableRuns"];
+  readonly #timer: SupervisorTimer;
   readonly #startedAt: string;
   #listeners: readonly SupervisorListenerStatus[] = [];
   #startedListeners: SupervisorListener[] = [];
@@ -104,6 +129,8 @@ export class SupervisorService {
   #operation: Promise<void> = Promise.resolve();
   #pump: Promise<void> | undefined;
   #stopOperation: Promise<void> | undefined;
+  #deferredWake: SupervisorTimerHandle | undefined;
+  #deferredWakeAt: number | undefined;
   #closed = false;
 
   constructor(options: SupervisorServiceOptions) {
@@ -126,6 +153,7 @@ export class SupervisorService {
     this.#effectHostConfigured =
       options.effectHost !== undefined || options.asyncEffectHost !== undefined;
     this.#listSchedulableRuns = options.listSchedulableRuns;
+    this.#timer = options.timer ?? serviceTimer;
     this.#runnerAuthority =
       options.effectHost === undefined && options.asyncEffectHost === undefined
         ? undefined
@@ -263,6 +291,12 @@ export class SupervisorService {
     this.authority.setMode("draining", this.#now());
     this.#transition("draining");
     this.#log("info", "service.draining", "Supervisor service is draining", {});
+    // A retry that fires after the service has stopped driving would wake a
+    // pump that is no longer allowed to run, so the deferred work is dropped
+    // here rather than left to be ignored later.
+    this.#deferredWake?.cancel();
+    this.#deferredWake = undefined;
+    this.#deferredWakeAt = undefined;
     const drainResults = await Promise.allSettled(
       this.#drainables.map((drainable) => drainable.drain()),
     );
@@ -444,10 +478,47 @@ export class SupervisorService {
       };
     } catch (error) {
       if (error instanceof LeaseUnavailableError) {
+        this.#deferUntilLeaseExpires(target, error);
         return { worked: false, pendingWakeCount: wakes.length };
       }
       throw error;
     }
+  }
+
+  /**
+   * Looks at this run again when the lease that blocked it runs out.
+   *
+   * A supervisor that stops mid-turn leaves a claim naming an owner that no
+   * longer exists. Everything below recovers once that owner's lease expires,
+   * but the service is wake-driven with no clock of its own: the cycle that
+   * found the run reported no work, the pump stopped, and nothing asked again a
+   * minute later. The run was runnable in principle and unreached in practice.
+   *
+   * Retrying immediately would spin against a lease that is still live, so the
+   * retry is scheduled at the expiry the authority already knows. The earliest
+   * pending retry wins, because a later one cannot serve an earlier expiry.
+   */
+  #deferUntilLeaseExpires(
+    target: { readonly repositoryId: string; readonly runId: string },
+    error: LeaseUnavailableError,
+  ): void {
+    this.#log("info", "run.lease-held", "Run is blocked by a lease another owner holds", {
+      repositoryId: target.repositoryId,
+      runId: target.runId,
+      ...(error.expiresAt === undefined ? {} : { expiresAt: error.expiresAt }),
+    });
+    if (error.expiresAt === undefined) return;
+    const at = Date.parse(error.expiresAt) + LEASE_RETRY_MARGIN_MILLISECONDS;
+    if (!Number.isFinite(at)) return;
+    if (this.#deferredWakeAt !== undefined && this.#deferredWakeAt <= at) return;
+    this.#deferredWake?.cancel();
+    this.#deferredWakeAt = at;
+    const delay = Math.max(0, at - Date.parse(this.#now()));
+    this.#deferredWake = this.#timer.schedule(delay, () => {
+      this.#deferredWake = undefined;
+      this.#deferredWakeAt = undefined;
+      this.wake();
+    });
   }
 
   async #runPump(): Promise<void> {

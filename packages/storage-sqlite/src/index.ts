@@ -794,9 +794,13 @@ export class StaleAuthorityRevisionError extends Error {
 }
 
 export class LeaseUnavailableError extends Error {
-  constructor(resourceKey: string) {
+  /** When the live owner's lease runs out, so a waiter can try again then. */
+  readonly expiresAt: string | undefined;
+
+  constructor(resourceKey: string, expiresAt?: string) {
     super(`Lease ${resourceKey} is held by another live owner`);
     this.name = "LeaseUnavailableError";
+    this.expiresAt = expiresAt;
   }
 }
 
@@ -9134,7 +9138,7 @@ function acquireLeaseTransaction(
         current.owner_id !== input.ownerId &&
         Date.parse(current.expires_at) > Date.parse(input.currentTime)
       ) {
-        throw new LeaseUnavailableError(input.resourceKey);
+        throw new LeaseUnavailableError(input.resourceKey, current.expires_at);
       }
       fence = current.fence + 1;
       database
