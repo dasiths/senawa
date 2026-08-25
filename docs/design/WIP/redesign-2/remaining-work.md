@@ -250,6 +250,83 @@ produced any.
 * [ ] The example's gate runs the produced project's own tests
 * [ ] A run whose produced tests fail does not close the phase
 
+## Phase 10: a criterion is not a piece of work
+
+The `implement` band of the finished run reads:
+
+```text
+◆ implement  done  8 members
+  implement-work-0778519c6a4a4bc8   implementor claude-sonnet-5   done
+  implement-produced                                              done
+  implement-work-0b9b3bee3b85e1d7   implementor claude-sonnet-5   done
+  implement-produced                                              done
+  implement-work-dcb6f9ee98240a30   implementor claude-sonnet-5   done
+  implement-produced                                              done
+  implement-work-df4e935387280642   implementor claude-sonnet-5   done
+  implement-produced                                              done
+```
+
+Four pieces of work, and the phase says eight members. `implement-produced` is
+the required completion criterion each task is judged against, drawn as a card
+beside the task it belongs to.
+
+The portal already knows what a criterion is somewhere else. `render.ts` labels
+the kind `exit condition` and carries two comments that the graph contradicts:
+"A criterion is how a phase is allowed to finish, not a sibling of the phase",
+and "A criterion did not run; the task that had to satisfy it did". The graph
+gives it a peer card, a member count, and a green `done` pill.
+
+`graph-flow.ts` flattens task and criterion into one list on purpose — matching
+on the direct parent alone left every criterion out of its band and piled them
+under the last one — so the fix is to place a criterion *within* its task rather
+than to unflatten and regress that.
+
+The identical names are upstream of the portal, in the authoring lowering. A
+fan-out member's criterion is named after the phase; an explicitly authored
+item's is named after the item:
+
+```ts
+criteria: [{ key: `${phase.name}-produced`, ... }]   // taskTemplates, every member
+criteria: [{ key: `${item.key}-produced`, ... }]     // explicit items, distinct
+```
+
+So every member of a fan-out owes a criterion with one shared name, and a reader
+cannot tell which task any of the four boxes belongs to.
+
+* [ ] A criterion is shown as a condition on its task, not as a card beside it
+* [ ] A phase's member count counts pieces of work
+* [ ] A criterion does not display a run state, because it did not run
+* [ ] A fan-out member's criterion is named after the member, not the phase
+
+## Phase 11: a run that has finished is in a finished state
+
+The finished run says two things at once:
+
+```text
+mode: running
+every phase has closed: this run has finished its work
+```
+
+And the portal, on the same run, offers `Pause` and `End run`, and ends the
+graph with "the run finishes when every phase is accepted" — future tense about
+something already done.
+
+`ended` exists as a mode. It is only reachable from `ending`, which only a
+person requests: `advanceRunControlToEndedIfQuiescent` selects
+`WHERE mode = 'ending'` and does nothing otherwise. A run that finishes on its
+own therefore stays `running` for ever, and every consumer that reads the mode —
+the portal's controls, an operator, anything deciding whether a run is worth
+driving — is told it is still going.
+
+The driver already knows: `advanceRun` returns `finished`, and the daemon
+translates that into "no work" rather than into a state.
+
+* [ ] A run whose every phase has closed reaches a terminal mode without a
+  person asking
+* [ ] The portal offers no run controls on a run that has finished, and says so
+  in the past tense
+* [ ] `senawa status` does not report `running` for a run that has finished
+
 ## Carried from the v1 plan
 
 Neither blocks anything above, and neither is part of the condition below. The
@@ -270,8 +347,8 @@ A run driven before the last change proves that change against the state it
 happened to find. A run driven after everything proves the plan.
 
 Phases 1 to 6 met that condition on `run_57b67ffdcd2a1f4c06af1d3bc6c6e1a2`.
-Phases 7 to 9 were added afterwards from findings that run and its predecessors
+Phases 7 to 11 were added afterwards from findings that run and its predecessors
 produced, so they carry the condition again:
 
-* [ ] With phases 7 to 9 done, the example is driven once more from a clean
+* [ ] With phases 7 to 11 done, the example is driven once more from a clean
   state root, end to end in a browser, and completes with its own tests passing
