@@ -4833,3 +4833,36 @@ the gate would catch if the workflow gated on the project's tests rather than on
 The failure that stopped the previous attempt did not recur, and the previous
 attempt is why this one could be diagnosed at all: `run.stopped` named the
 rejection, and the crashed turn would now name its class.
+
+## A dispatch is stored once
+
+Phase 7. `context_dispatches` already held one row per dispatch, written from
+the canonical blob as a mirror, and the blob held them too. The blob is
+rewritten whole on every change, so recording the hundred and first dispatch
+meant writing the first hundred again.
+
+The route was the one task scope currentness already takes: leave them out of
+the serialized snapshot and hand them back on load. Two things made it honest
+rather than a shortcut.
+
+**The table had to carry everything.** A row held the dispatch, its context and
+its completion requirements, but not its task scope or its effect seed. Both are
+columns now.
+
+**The store's dispatches go through the same validation as the snapshot's.**
+The first attempt installed them after parsing, which failed immediately and
+usefully: `grants[0] references an unknown dispatch`. The referential checks are
+woven through the parse, and skipping them for the dispatchless form would have
+traded a size problem for a trust problem. `fromDurableCanonicalJson` now takes
+the store's dispatches as an argument and feeds them through the same loop, so
+not one check is skipped.
+
+The snapshot carries its form in its version, `context-authority-dispatchless/v1`,
+and the reader accepts both.
+
+Measured by a test rather than asserted: after six dispatches the blob rewritten
+on every change is smaller than a single dispatch row, and what remains grows
+with the tasks a run has rather than the bytes each dispatch carries.
+
+One reader had to move with it. `#dispatchRoutes` read the chosen model out of
+the blob with `json_each(canonical_json, '$.dispatches')`; it reads the row.

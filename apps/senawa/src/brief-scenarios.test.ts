@@ -589,16 +589,17 @@ describe("what an author can state", () => {
     const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
     let state: string;
     try {
-      const row = database
-        .prepare(`SELECT canonical_json AS json FROM context_authority_state`)
-        .get() as { readonly json: string };
-      state = row.json;
+      // A dispatch lives in its own table; the authority snapshot leaves it
+      // there rather than keeping a second copy it rewrites on every change.
+      const rows = database
+        .prepare(`SELECT canonical_effect AS json FROM context_dispatches`)
+        .all() as unknown as readonly { readonly json: string | null }[];
+      state = rows.map((row) => row.json ?? "").join("\n");
     } finally {
       database.close();
     }
 
-    const selection = JSON.parse(state) as Record<string, unknown>;
-    const found = JSON.stringify(selection);
+    const found = state;
 
     // The authored route declares 7 turns, 3 submissions, and 250 spend. Those
     // have to be the limits carried into the dispatch rather than the defaults,
@@ -1280,9 +1281,9 @@ describe("falling back to another model", () => {
     let command: string;
     try {
       const rows = dispatched
-        .prepare("SELECT canonical_json AS json FROM context_authority_state")
-        .all() as unknown as readonly { readonly json: string }[];
-      command = rows.map((row) => row.json).join("\n");
+        .prepare("SELECT canonical_effect AS json FROM context_dispatches")
+        .all() as unknown as readonly { readonly json: string | null }[];
+      command = rows.map((row) => row.json ?? "").join("\n");
     } finally {
       dispatched.close();
     }

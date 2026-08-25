@@ -16,6 +16,7 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import {
   type AccountingAssessment,
@@ -68,6 +69,7 @@ import {
   FakeGrantTokenIssuer,
   FakeTrustedClock,
   initializeContextBrokerHarness,
+  registerAnotherDispatch,
   registerContextBrokerConformance,
 } from "@senawa/testing/context-broker-conformance";
 import {
@@ -505,6 +507,43 @@ describe("SQLite parallel workspace authority", () => {
 });
 
 describe("SQLite context broker durability", () => {
+  // The snapshot is rewritten whole on every change, and dispatches were about
+  // four fifths of it, so recording one dispatch cost writing every dispatch a
+  // run had ever made. They live in their own table now, and the snapshot no
+  // longer grows with them.
+  it("does not grow its rewritten snapshot as a run makes more dispatches", () => {
+    const harness = createSqliteContextBrokerHarness();
+    const broker = harness.broker as SqliteContextBroker;
+    const scalar = (sql: string): number => {
+      const database = new DatabaseSync(broker.databasePath, { readOnly: true });
+      try {
+        return (database.prepare(sql).get() as { readonly value: number }).value;
+      } finally {
+        database.close();
+      }
+    };
+    const snapshotBytes = () =>
+      scalar(
+        "SELECT length(canonical_json) AS value FROM context_authority_state WHERE singleton = 1",
+      );
+
+    const one = snapshotBytes();
+    for (let ordinal = 2; ordinal <= 6; ordinal += 1) registerAnotherDispatch(harness, ordinal);
+    const six = snapshotBytes();
+    const oneDispatch = scalar(
+      "SELECT length(canonical_dispatch) + length(canonical_context) AS value" +
+        " FROM context_dispatches d JOIN context_bases b ON b.context_id = d.context_id LIMIT 1",
+    );
+
+    expect(scalar("SELECT COUNT(*) AS value FROM context_dispatches")).toBe(6);
+    // Six dispatches, and the blob rewritten on every change is smaller than
+    // one of them. It used to hold all six.
+    expect(six).toBeLessThan(oneDispatch);
+    // What is left grows with the tasks a run has, not with the bytes each
+    // dispatch carries: a task scope, not a dispatch.
+    expect(six - one).toBeLessThan(oneDispatch);
+  });
+
   it("replays exact read bytes after reopen with one charge and no raw token on disk", async () => {
     const harness = createSqliteContextBrokerHarness();
     const broker = harness.broker as SqliteContextBroker;

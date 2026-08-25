@@ -232,6 +232,7 @@ import {
   type SubmissionAdmissionInput,
   type SubmissionAdmissionResult,
   selectEffectAttemptAction,
+  type StoredDispatch,
   type TaskScopeCurrentness,
   type TrustedHumanAuthorityDecision,
   type TrustedRuntimeCommandFacts,
@@ -4894,13 +4895,13 @@ export class SqlitePortalQueryAuthority {
         [string, string],
         { dispatch_id: string | null; model: string | null; route: number | null }
       >(
-        `SELECT json_extract(e.value, '$.dispatch.dispatchId') AS dispatch_id,
-                json_extract(e.value, '$.effect.input.routeSelection.modelPolicy.model') AS model,
-                json_extract(e.value, '$.effect.input.routeSelection.modelPolicy.routeIndex')
+        `SELECT dispatch_id,
+                json_extract(canonical_effect, '$.input.routeSelection.modelPolicy.model')
+                  AS model,
+                json_extract(canonical_effect, '$.input.routeSelection.modelPolicy.routeIndex')
                   AS route
-           FROM context_authority_state s, json_each(s.canonical_json, '$.dispatches') e
-          WHERE json_extract(e.value, '$.dispatch.repositoryId') = ?
-            AND json_extract(e.value, '$.dispatch.runId') = ?`,
+           FROM context_dispatches
+          WHERE repository_id = ? AND run_id = ?`,
       )
       .all(repositoryId, runId)) {
       if (row.dispatch_id === null || row.model === null) continue;
@@ -6729,6 +6730,7 @@ function fenceRunForEnding(
   const authority = InMemoryContextAuthority.fromDurableCanonicalJson(
     state.canonical_json,
     dependencies.sha256,
+    storedContextDispatches(database),
   );
   overlayContextTaskScopeCurrentness(database, authority);
   const contextScopes = authority
@@ -6751,7 +6753,7 @@ function fenceRunForEnding(
     });
     database
       .prepare("UPDATE context_authority_state SET canonical_json = ? WHERE singleton = 1")
-      .run(authority.toDurableCanonicalJson());
+      .run(authority.toDurableCanonicalJsonWithoutDispatches());
     synchronizeContextTaskScopes(
       database,
       normalizeContextAuthority(authority, dependencies.sha256).taskScopes,
@@ -10075,7 +10077,9 @@ export class SqliteContextBroker {
       snapshot: () => this.#loadAuthority().snapshot(),
       projection: () => this.#loadAuthority().projection(),
       toCanonicalJson: () => this.#loadAuthority().toCanonicalJson(),
-      toDurableCanonicalJson: () => this.#readContextState(),
+      // The stored form leaves dispatches to their table, so a caller wanting
+      // one self-contained value gets it rebuilt rather than read raw.
+      toDurableCanonicalJson: () => this.#loadAuthority().toDurableCanonicalJson(),
       installTaskScopeFences: (input) => this.installTaskScopeFences(input),
     });
   }
@@ -10687,13 +10691,14 @@ export class SqliteContextBroker {
     const authority = InMemoryContextAuthority.fromDurableCanonicalJson(
       this.#readContextState(),
       this.dependencies.sha256,
+      storedContextDispatches(this.#database),
     );
     overlayContextTaskScopeCurrentness(this.#database, authority);
     return authority;
   }
 
   #persistContextAuthority(authority: InMemoryContextAuthority): void {
-    const serialized = authority.toDurableCanonicalJson();
+    const serialized = authority.toDurableCanonicalJsonWithoutDispatches();
     this.#database
       .prepare("UPDATE context_authority_state SET canonical_json = ? WHERE singleton = 1")
       .run(serialized);
@@ -10736,8 +10741,9 @@ export class SqliteContextBroker {
         .prepare(
           `INSERT INTO context_dispatches(
              dispatch_id, repository_id, run_id, context_id, prompt_pack_digest,
-             canonical_dispatch, canonical_completion_requirements
-           ) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(dispatch_id) DO NOTHING`,
+             canonical_dispatch, canonical_completion_requirements,
+             canonical_task_scope, canonical_effect
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(dispatch_id) DO NOTHING`,
         )
         .run(
           row.dispatch_id,
@@ -10747,6 +10753,8 @@ export class SqliteContextBroker {
           row.prompt_pack_digest,
           row.canonical_dispatch,
           row.canonical_completion_requirements,
+          row.canonical_task_scope,
+          row.canonical_effect,
         );
     }
     for (const row of normalized.bindings)
@@ -11720,6 +11728,7 @@ function installDurableTaskScopeFences(
   const contextAuthority = InMemoryContextAuthority.fromDurableCanonicalJson(
     contextState.canonical_json,
     dependencies.sha256,
+    storedContextDispatches(database),
   );
   overlayContextTaskScopeCurrentness(database, contextAuthority);
   const contextInstallations = installations.filter((installation) =>
@@ -11776,7 +11785,7 @@ function installDurableTaskScopeFences(
     contextAuthority.installTaskScopeFences({ ...input, fences: contextInstallations });
     database
       .prepare("UPDATE context_authority_state SET canonical_json = ? WHERE singleton = 1")
-      .run(contextAuthority.toDurableCanonicalJson());
+      .run(contextAuthority.toDurableCanonicalJsonWithoutDispatches());
   }
   if (amendmentId !== undefined) {
     for (const record of fencedDispatches) {
@@ -11798,6 +11807,54 @@ function installDurableTaskScopeFences(
     }
   }
   return Object.freeze(installed);
+}
+
+/**
+ * The dispatches from the table that holds them, in the snapshot's own shape.
+ *
+ * The durable snapshot leaves them out, because it is rewritten whole on every
+ * change and they are about four fifths of it. They go back through the same
+ * validation the snapshot's own dispatches take.
+ */
+function storedContextDispatches(database: Database.Database): readonly unknown[] {
+  const rows = database
+    .prepare<
+      [],
+      {
+        canonical_dispatch: string;
+        canonical_completion_requirements: string;
+        canonical_task_scope: string;
+        canonical_effect: string | null;
+        context_id: string;
+      }
+    >(
+      `SELECT canonical_dispatch, canonical_completion_requirements,
+              canonical_task_scope, canonical_effect, context_id
+       FROM context_dispatches ORDER BY dispatch_id`,
+    )
+    .all();
+  if (rows.length === 0) return [];
+  const contexts = new Map(
+    database
+      .prepare<[], { context_id: string; canonical_context: string }>(
+        "SELECT context_id, canonical_context FROM context_bases",
+      )
+      .all()
+      .map((row) => [row.context_id, row.canonical_context] as const),
+  );
+  return rows.map((row) => {
+    const context = contexts.get(row.context_id);
+    if (context === undefined) throw new Error("Context dispatch names an absent context base");
+    return {
+      context: JSON.parse(context) as unknown,
+      dispatch: JSON.parse(row.canonical_dispatch) as unknown,
+      completionRequirements: JSON.parse(row.canonical_completion_requirements) as unknown,
+      taskScope: JSON.parse(row.canonical_task_scope) as unknown,
+      ...(row.canonical_effect === null
+        ? {}
+        : { effect: JSON.parse(row.canonical_effect) as unknown }),
+    };
+  });
 }
 
 function overlayContextTaskScopeCurrentness(
@@ -13985,13 +14042,12 @@ function readVerificationState(
     )
     .get();
   if (contextRow === undefined) throw new Error("SQLite context authority singleton is missing");
-  return {
-    snapshot: parseSnapshot(authorityRow.canonical_json),
-    context: InMemoryContextAuthority.fromDurableCanonicalJson(
-      contextRow.canonical_json,
-      dependencies.sha256,
-    ),
-  };
+  const context = InMemoryContextAuthority.fromDurableCanonicalJson(
+    contextRow.canonical_json,
+    dependencies.sha256,
+    storedContextDispatches(database),
+  );
+  return { snapshot: parseSnapshot(authorityRow.canonical_json), context };
 }
 
 function verifyContextTables(
@@ -15154,11 +15210,8 @@ function normalizeContextAuthority(
 ) {
   const snapshot = authority.snapshot();
   const durable = authority.durableSnapshot();
-  const completionRequirements = new Map(
-    durable.dispatches.map((record) => [
-      record.dispatch.dispatchId,
-      canonicalStringify(record.completionRequirements),
-    ]),
+  const storedByDispatch = new Map(
+    durable.dispatches.map((record) => [record.dispatch.dispatchId, record]),
   );
   return {
     taskScopes: durable.taskScopes.map((scope) => {
@@ -15189,19 +15242,23 @@ function normalizeContextAuthority(
       context_digest: context.contextDigest,
       canonical_context: canonicalStringify(context),
     })),
-    dispatches: snapshot.dispatches.map((dispatch) => ({
-      dispatch_id: dispatch.dispatchId,
-      repository_id: dispatch.repositoryId,
-      run_id: dispatch.runId,
-      context_id: dispatch.contextId,
-      prompt_pack_digest: dispatch.promptPackDigest,
-      canonical_dispatch: canonicalStringify(dispatch),
-      canonical_completion_requirements:
-        completionRequirements.get(dispatch.dispatchId) ??
-        (() => {
-          throw new Error("Context dispatch normalization is missing completion requirements");
-        })(),
-    })),
+    dispatches: snapshot.dispatches.map((dispatch) => {
+      const stored = storedByDispatch.get(dispatch.dispatchId);
+      if (stored === undefined) {
+        throw new Error("Context dispatch normalization is missing its durable record");
+      }
+      return {
+        dispatch_id: dispatch.dispatchId,
+        repository_id: dispatch.repositoryId,
+        run_id: dispatch.runId,
+        context_id: dispatch.contextId,
+        prompt_pack_digest: dispatch.promptPackDigest,
+        canonical_dispatch: canonicalStringify(dispatch),
+        canonical_completion_requirements: canonicalStringify(stored.completionRequirements),
+        canonical_task_scope: canonicalStringify(stored.taskScope),
+        canonical_effect: stored.effect === undefined ? null : canonicalStringify(stored.effect),
+      };
+    }),
     bindings: snapshot.contexts
       .flatMap((context) =>
         context.assets.map((binding) => ({
@@ -15354,7 +15411,8 @@ function verifyNormalizedContextAuthority(
     database
       .prepare(
         `SELECT dispatch_id, repository_id, run_id, context_id, prompt_pack_digest,
-                canonical_dispatch, canonical_completion_requirements
+                canonical_dispatch, canonical_completion_requirements,
+                canonical_task_scope, canonical_effect
          FROM context_dispatches ORDER BY dispatch_id`,
       )
       .all(),

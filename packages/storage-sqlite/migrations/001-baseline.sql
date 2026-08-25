@@ -273,6 +273,8 @@ CREATE TABLE context_dispatches (
   prompt_pack_digest TEXT NOT NULL CHECK (length(prompt_pack_digest) = 64),
   canonical_dispatch TEXT NOT NULL,
   canonical_completion_requirements TEXT NOT NULL,
+  canonical_task_scope TEXT NOT NULL,
+  canonical_effect TEXT,
   UNIQUE (repository_id, run_id, dispatch_id)
 ) STRICT;
 

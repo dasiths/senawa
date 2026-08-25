@@ -476,7 +476,9 @@ export interface DurableRead {
 }
 
 export interface DurableContextAuthoritySnapshot {
-  readonly version: "senawa.dev/context-authority-durable/v1";
+  readonly version:
+    | "senawa.dev/context-authority-durable/v1"
+    | "senawa.dev/context-authority-dispatchless/v1";
   readonly taskScopes: readonly TaskScopeCurrentness[];
   readonly dispatches: readonly StoredDispatch[];
   readonly grants: readonly StoredGrant[];
@@ -546,6 +548,9 @@ export interface ContextAuthorityPort {
   toCanonicalJson(): string;
   projection(): ContextBrokerProjection;
 }
+
+/** A snapshot whose dispatches live in the store's own table rather than in it. */
+const DISPATCHLESS_DURABLE_VERSION = "senawa.dev/context-authority-dispatchless/v1";
 
 export class InMemoryContextAuthority implements ContextAuthorityPort {
   readonly contexts = new Map<string, WorkerContextBase>();
@@ -678,6 +683,23 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
     return durableStringify(this.durableSnapshot());
   }
 
+  /**
+   * The same state with the dispatches left out, for a store that holds them.
+   *
+   * They are about four fifths of the snapshot and the snapshot is rewritten
+   * whole on every change, so a store with its own dispatch table was paying to
+   * write every dispatch a run had ever made in order to record one more. Such
+   * a store hands them back to `fromDurableCanonicalJson`, which validates them
+   * exactly as it validates the ones it reads for itself.
+   */
+  toDurableCanonicalJsonWithoutDispatches(): string {
+    return durableStringify({
+      ...this.durableSnapshot(),
+      version: DISPATCHLESS_DURABLE_VERSION,
+      dispatches: [],
+    });
+  }
+
   durableSnapshot(): DurableContextAuthoritySnapshot {
     return deepFreeze({
       version: "senawa.dev/context-authority-durable/v1",
@@ -723,7 +745,11 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
     });
   }
 
-  static fromDurableCanonicalJson(serialized: string, sha256: Sha256): InMemoryContextAuthority {
+  static fromDurableCanonicalJson(
+    serialized: string,
+    sha256: Sha256,
+    storedDispatches: readonly unknown[] = [],
+  ): InMemoryContextAuthority {
     // A run's own state is not a message from anyone, so it is read against the
     // ceilings for durable state rather than the ones that bound a request. A
     // live run reached the wire ceiling at seventeen dispatches and could no
@@ -750,10 +776,16 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
       "events",
       "cursor",
     ]);
-    if (parsed.version !== "senawa.dev/context-authority-durable/v1")
+    if (
+      parsed.version !== "senawa.dev/context-authority-durable/v1" &&
+      parsed.version !== DISPATCHLESS_DURABLE_VERSION
+    )
       throw new TypeError("Unsupported durable context authority version");
     assertNoGrantTokenField(parsed, "snapshot");
-    const dispatchRecords = durableArray(parsed.dispatches, "dispatches");
+    const dispatchRecords = [
+      ...durableArray(parsed.dispatches, "dispatches"),
+      ...storedDispatches,
+    ];
     if (!hasTaskScopes && dispatchRecords.length > 0)
       durableFailure("nonempty context authority snapshots require taskScopes");
     const taskScopeRecords = hasTaskScopes ? durableArray(parsed.taskScopes, "taskScopes") : [];

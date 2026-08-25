@@ -234,6 +234,21 @@ export function initializeContextBrokerHarness(
   };
 }
 
+/** Another dispatch on the same broker, for measuring what recording one costs. */
+export function registerAnotherDispatch(
+  harness: ContextBrokerHarness,
+  ordinal: number,
+): WorkerDispatch {
+  return registerBoundDispatch(
+    harness.broker,
+    harness.assetPort,
+    harness.bytes,
+    ordinal,
+    "a",
+    ALL_CAPABILITIES,
+  ).dispatch;
+}
+
 export function registerContextBrokerConformance(
   name: string,
   factory: () => ContextBrokerHarness = createContextBrokerHarness,

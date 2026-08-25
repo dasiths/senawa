@@ -497,8 +497,8 @@ function seedRestrictedWorkerAsset(databasePath: string): void {
     .prepare(
       `INSERT INTO context_dispatches(
          dispatch_id, repository_id, run_id, context_id, prompt_pack_digest,
-         canonical_dispatch, canonical_completion_requirements
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         canonical_dispatch, canonical_completion_requirements, canonical_task_scope
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       "dispatch_restricted-summary",
@@ -506,6 +506,7 @@ function seedRestrictedWorkerAsset(databasePath: string): void {
       runtimeFixture.runId,
       "context_restricted-summary",
       "2".repeat(64),
+      "{}",
       "{}",
       "{}",
     );
