@@ -16,29 +16,35 @@ ceremony: in this branch, four consecutive attempts at one defect each passed
 their tests and failed the run. A suite proves the change does what I meant; a
 run proves I meant the right thing.
 
+The loop is one phase wide. A phase is not started until the phase before it has
+been proved by a run, and a phase is not proved by anything else.
+
+```text
+for each phase:
+    write the phase into this document, with what is wrong and what would fix it
+    implement it, correcting this document wherever the code disagrees with it
+    drive the example end to end through the portal in a browser
+    read the run's own record, not the driver's message
+    commit and push
+```
+
 For every phase below:
 
-1. Implement, with a test that fails against the old behaviour.
-2. `npx tsc -b`, `npx vitest run`, `npx biome check .`,
+1. Write the phase down first: the symptom, the evidence, and the items. A
+   finding that only exists in the implementation log is a finding nobody will
+   act on.
+2. Implement, with a test that fails against the old behaviour.
+3. `npx tsc -b`, `npx vitest run`, `npx biome check .`,
    `node scripts/check-boundaries.mjs`, `node scripts/check-markdown-links.mjs`.
-3. Clear the example's state root, start it fresh, and drive it **end to end
-   through the portal in a browser** until every phase has closed.
-4. Read the run's own record for what happened, not the driver's message.
-5. Commit, push, and only then start the next phase.
+4. Reset the example's state root, start it fresh, and drive it **through the
+   portal in a browser** until it stops or finishes.
+5. Read the run's own record for what happened, not the driver's message.
+6. Update this document to match what was actually built, then commit, push, and
+   only then start the next phase.
 
-Step 3 is the acceptance test for the phase, and it is not satisfied by a run
-that merely survives. It has to reach `every phase has closed`, watched in the
-portal, from a state root that had nothing in it.
-
-Two of those runs are fixed points rather than per-phase checks:
-
-* [ ] A baseline run before Phase 7 begins, so a later failure can be told apart
-  from one already present
-* [ ] A final run after Phase 11 is done, which is the condition for the whole
-  plan
-
-A run before the first change and a run after the last one bracket the work.
-Everything between them tells which change broke what.
+A run that stops rather than finishes is not a failed phase. It is the next
+phase's evidence, and it gets written down before anything is changed in
+response to it — which is where phases 7 to 11 came from.
 
 ## Phase 1: an attempt is recorded, not inferred
 
