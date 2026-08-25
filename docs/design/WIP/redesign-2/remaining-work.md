@@ -178,6 +178,78 @@ guarantee was never what cost the time.
 * [x] Decide which of those three, and why
 * [x] Advancing a run does not re-verify the whole record each time
 
+## Phase 7: a run's state stops growing with the run
+
+Phase 3 stopped a long run breaking. It did not stop a long run getting slower,
+and the two findings behind that were recorded rather than bundled into it.
+
+Every dispatch a run has ever made lives in one canonical blob that is rewritten
+whole on every change. A run that has made a hundred dispatches rewrites all
+hundred to record the hundred and first, so the work is O(n) per dispatch and
+O(n²) over the run. Measured on the live example, the blob grows about 20 KB per
+dispatch and the dispatches themselves are 78% of it:
+
+| dispatches | durable context state |
+| --- | --- |
+| 3 | 59,709 bytes |
+| 5 | 107,718 bytes |
+| 7 | 146,678 bytes |
+| 9 | 221,686 bytes |
+
+The blob also duplicates a table that already exists. `context_dispatches` holds
+one row per dispatch, written from the blob as a mirror, so the same content is
+stored twice and only one of the two costs anything to write.
+
+The route is the one task scope currentness already takes: keep the dispatches
+in the table, leave them out of the serialized snapshot, and overlay them when
+the authority is loaded. `overlayContextTaskScopeCurrentness` is the shape to
+follow. It needs two columns the mirror does not carry yet — the task scope and
+the effect seed — and a durable snapshot version that reads both the old form
+and the new.
+
+The 64 MiB ceiling is what makes this a performance question rather than an
+outage, so it is worth doing properly rather than quickly.
+
+* [ ] A dispatch is stored once, in the table that already holds it
+* [ ] The durable snapshot reads both the form that carries dispatches and the
+  form that does not
+* [ ] Recording a dispatch does not cost work proportional to the run's history,
+  proven by a growth measurement rather than by a passing test
+
+## Phase 8: the two recovery gaps a live run found
+
+Both were reproduced once, understood, and left. Neither is a guess.
+
+A supervisor can let its own lease expire under itself. Under load the service
+held its runner lease, did not renew it in time, and then failed on the fence
+when it next used it. It recovers now, because a failed pump looks again, but
+nothing has measured why a holder got that far behind its own renewal window.
+
+A dispatch can be created and never enqueued. The window is between writing the
+dispatch at the context layer and enqueuing the runner command for it. A process
+that dies inside it leaves work that every recovery mechanism is blind to,
+because they all key off an intent that was never persisted. Recovery has to key
+off the dispatch: one with no runner command and no completion has not started,
+and the honest repair is to enqueue it.
+
+* [ ] A lease holder renews in time, or says why it could not
+* [ ] A dispatch with no runner command and no completion is enqueued rather
+  than waited on
+
+## Phase 9: the example gates on its own work
+
+The nine agents produced thirty passing tests and a `scripts/check.mjs` that
+cannot run them: it invokes `node --test test/`, which this Node reads as a
+module path. The phase closed anyway, because the workflow's gate is `git diff
+--check`.
+
+A gate that only checks whitespace teaches the example's reader the wrong thing
+about what a gate is for, and it let broken work through on the first run that
+produced any.
+
+* [ ] The example's gate runs the produced project's own tests
+* [ ] A run whose produced tests fail does not close the phase
+
 ## Carried from the v1 plan
 
 Neither blocks anything above, and neither is part of the condition below. The
@@ -196,3 +268,10 @@ first is a feature the phase model does not yet have; the second is done.
 
 A run driven before the last change proves that change against the state it
 happened to find. A run driven after everything proves the plan.
+
+Phases 1 to 6 met that condition on `run_57b67ffdcd2a1f4c06af1d3bc6c6e1a2`.
+Phases 7 to 9 were added afterwards from findings that run and its predecessors
+produced, so they carry the condition again:
+
+* [ ] With phases 7 to 9 done, the example is driven once more from a clean
+  state root, end to end in a browser, and completes with its own tests passing
