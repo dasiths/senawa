@@ -435,6 +435,9 @@ async function step(
   }
 
   const dispatchId = dispatch.dispatchId;
+  // Every retry below is for this member, not for the phase's first one.
+  const retryMember = memberIndexOf(snapshot, phaseKey, String(dispatch.task.taskId));
+  const retryMemberIndex = retryMember === undefined ? {} : { memberIndex: retryMember };
   const completed = state.terminalCompletions.some((entry) => entry.dispatchId === dispatchId);
   const published = state.phaseOutputOutbox.filter((entry) => entry.fact.dispatchId === dispatchId);
 
@@ -501,6 +504,7 @@ async function step(
         repositoryBase: input.repositoryBase,
         currentTime: input.currentTime,
         attempt: nextAttempt,
+        ...retryMemberIndex,
         priorRefusals: instructions,
       });
       return {
@@ -621,6 +625,7 @@ async function step(
           repositoryBase: input.repositoryBase,
           currentTime: input.currentTime,
           attempt: nextAttempt,
+          ...retryMemberIndex,
           priorRefusals: [
             "Your previous turn ended without submitting a completion, so this is a fresh attempt. This is not a refusal of anything you sent.",
           ],
@@ -807,6 +812,7 @@ async function step(
         repositoryBase: input.repositoryBase,
         currentTime: input.currentTime,
         attempt: nextAttempt,
+        ...retryMemberIndex,
         priorRefusals: reasons,
       });
       return {
@@ -860,6 +866,7 @@ async function step(
         repositoryBase: input.repositoryBase,
         currentTime: input.currentTime,
         attempt: nextAttempt,
+        ...retryMemberIndex,
         priorRefusals: reasons,
       });
       return {
@@ -1544,6 +1551,28 @@ export function currentPhaseDispatches(
     }
   }
   return [...byTask.values()];
+}
+
+/**
+ * Where a task sits among the phase's members, so a retry re-runs that member.
+ *
+ * The dispatch driver takes `phaseTasks[memberIndex ?? 0]`, and both retry
+ * paths used to pass nothing: every retry in a fan-out re-ran the first member
+ * whatever had actually failed. When that member was already accepted the retry
+ * became a dispatch for finished work, which is the shadow that deadlocked two
+ * live runs -- both of them on the first member, which is the tell.
+ */
+function memberIndexOf(
+  snapshot: ConfigurationSnapshot,
+  phaseKey: string,
+  taskId: string,
+): number | undefined {
+  const index = phaseTasks(snapshot, phaseKey).findIndex(
+    (candidate) =>
+      String((candidate as { readonly definition: { readonly id: unknown } }).definition.id) ===
+      taskId,
+  );
+  return index < 0 ? undefined : index;
 }
 
 function phaseValue(snapshot: ConfigurationSnapshot, key: string): SnapshotPhase {

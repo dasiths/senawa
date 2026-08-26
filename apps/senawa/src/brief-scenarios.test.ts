@@ -413,6 +413,66 @@ describe("running every member of a fan-out", () => {
     expect(await advance(scenario)).toMatchObject({ kind: "retrying", phaseKey: "implement" });
   });
 
+  // The dispatch driver takes `phaseTasks[memberIndex ?? 0]`, and every retry
+  // path passed nothing, so a retry in a fan-out re-ran the first member
+  // whatever had actually failed. When that member was already accepted the
+  // retry became a dispatch for finished work, which is the shadow that
+  // deadlocked two live runs -- both of them on member zero, which is the tell.
+  it("retries the member that failed, not the phase's first one", async () => {
+    const scenario = await startScenario("fanout-retry-member", {
+      fanOut: "complete",
+      memberAttempts: 2,
+    });
+    await agentTurn(
+      scenario,
+      scenario.dispatchId,
+      canonicalValue({ tasks: [{ id: "one" }, { id: "two" }] }),
+    );
+    await advance(scenario);
+    await advance(scenario);
+    const first = await advance(scenario);
+    if (first.kind !== "dispatched") throw new Error(`first member: ${first.kind}`);
+    const second = await advance(scenario);
+    if (second.kind !== "dispatched") throw new Error(`second member: ${second.kind}`);
+    await agentTurn(scenario, first.dispatchId, canonicalValue({ verified: true }));
+
+    expect(
+      steerAgent({
+        assetDirectory: scenario.paths.assetDirectory,
+        currentTime: NOW,
+        databasePath: scenario.paths.databasePath,
+        delivery: "abort-retry",
+        dependencies,
+        instruction: "start over and read the schema first",
+        principal: runtimePrincipal,
+        repositoryId: scenario.repositoryId,
+        runId: scenario.runId,
+      }),
+    ).toMatchObject({ exitCode: 0 });
+    const retried = await advance(scenario);
+    if (retried.kind !== "retrying") throw new Error(`expected a retry, got ${retried.kind}`);
+
+    const taskOf = (dispatchId: string) => {
+      const database = new DatabaseSync(scenario.paths.databasePath, { readOnly: true });
+      try {
+        const row = database
+          .prepare(
+            "SELECT canonical_dispatch AS json FROM context_dispatches WHERE dispatch_id = ?",
+          )
+          .get(dispatchId) as { readonly json: string } | undefined;
+        return String(
+          (JSON.parse(row?.json ?? "{}") as { readonly task?: { readonly taskId?: unknown } }).task
+            ?.taskId,
+        );
+      } finally {
+        database.close();
+      }
+    };
+
+    expect(taskOf(retried.dispatchId)).toBe(taskOf(second.dispatchId));
+    expect(taskOf(retried.dispatchId)).not.toBe(taskOf(first.dispatchId));
+  });
+
   it("closes the phase once every member has finished", async () => {
     const scenario = await startScenario("fanout-close", { fanOut: "complete" });
     await agentTurn(

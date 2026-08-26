@@ -864,7 +864,7 @@ The criterion measured the easy half and was ticked anyway. It is reopened.
   wait nobody can end is not anonymous
 * [x] Phase 8's dispatch-recovery item is closed here, and its "not ready"
   framing corrected: the blocker was acceptance, not readiness
-* [ ] Nothing creates a dispatch for a task that is already accepted, which is
+* [x] Nothing creates a dispatch for a task that is already accepted, which is
   what makes a shadow in the first place
 
 ### Fixed, and proved on a second independent stall
@@ -890,9 +890,23 @@ retrying implement, attempt 20: tests did not pass
 Which is the gate doing exactly its job, and the first time any run has got far
 enough to be judged by it.
 
-The shadow itself is still unexplained. Something creates a dispatch for a task
-that is already accepted, and the fixes make the run survive that rather than
-stop it happening, so the last item above stays open.
+### Where the shadow came from
+
+The dispatch driver takes `phaseTasks[input.memberIndex ?? 0]`, and of the seven
+places that dispatch, only two passed a member index. Neither was a retry. So
+every retry in a fan-out re-ran **member zero** whatever had actually failed, and
+when member zero was already accepted that retry was a dispatch for finished
+work.
+
+The tell was there in both stalls and went unread twice: each shadow sat on the
+first member of its fan-out. Confirmed against the surviving run rather than
+assumed -- the graph lists `task_78805357cb4` at index `[0]` of `implement`, and
+that is exactly the task that carried the shadow and the open attempt.
+
+All four retry paths now pass the member the dispatch belongs to. A test drives
+a fan-out, steers the *second* member into a retry, and asserts the retry is for
+the second member's task; it fails against the old behaviour by re-running the
+first.
 
 ### Found beyond it: a wire ceiling on a much-retried phase
 
