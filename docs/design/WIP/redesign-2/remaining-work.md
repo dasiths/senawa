@@ -796,6 +796,35 @@ stops, reverted, with the state kept.
 Three repairs, each driven against the real stall, each reverted, each leaving
 the next one better aimed. None was committed on a guess.
 
+### One cause, all three symptoms
+
+The two acceptances are not two. `currentPhaseDispatches` keeps the
+**highest-ordinal** dispatch per task:
+
+```ts
+if (held === undefined || candidate.ordinal >= held.ordinal) byTask.set(key, candidate);
+```
+
+The tenth dispatch has the highest ordinal for its task, so it *replaces* the
+earlier dispatch that ran, completed, and was accepted. Everything downstream
+reads that map, and every symptom follows from the one substitution:
+
+* the phase's live work is the first current dispatch with no completion, and
+  the shadow has none — "waiting for the agent working on implement";
+* the closing assessments are filtered to current dispatch ids, so the real
+  completion's assessment is excluded — "has no accepted accounting assessment";
+* `deliverFacts` is handed the same filtered set, so the completion that would
+  close the phase is never delivered.
+
+The task really is accepted. The dispatch that earned that acceptance has simply
+been hidden behind one that never ran. That is also why each repair moved the
+failure rather than fixing it: all three were downstream of the substitution.
+
+The rule has to keep a retry superseding an earlier attempt — a fresh dispatch
+with no completion yet *is* the current work — while stopping a dispatch on an
+already-accepted task from superseding anything. Acceptance separates them: a
+retry is for a task still owed, and an accepted task is owed nothing.
+
 ### This corrects phase 8
 
 Phase 8's second item was exactly this: "a dispatch with no runner command and

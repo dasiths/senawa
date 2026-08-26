@@ -15,7 +15,7 @@ import {
 } from "@senawa/storage-sqlite";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { advanceRun } from "./advance-run.js";
+import { advanceRun, currentPhaseDispatches } from "./advance-run.js";
 import { runtimeDependencies as productionDependencies } from "./daemon.js";
 import { runtimeSchemaContract } from "./dataflow-composition.js";
 import { startAuthoredRun } from "./start-run.js";
@@ -272,6 +272,46 @@ describe("advancing a run", () => {
         repositoryBase: BASE,
       }),
     ).rejects.toThrow(/run_absent: no such run/u);
+  });
+
+  // A live run made a tenth dispatch for a member that was already accepted.
+  // Because the map keyed on the highest ordinal, that dispatch replaced the one
+  // that had actually run, and one substitution produced three symptoms: the
+  // phase waited on an agent that never started, its close was refused for a
+  // task with no accepted assessment, and the completion that would have closed
+  // it was never delivered.
+  it("does not let a dispatch on an accepted task supersede the one that ran", () => {
+    const snapshot = {
+      graph: {
+        nodes: [
+          { kind: "phase", definition: { id: "phase_1", key: "build" } },
+          { kind: "task", definition: { id: "task_a", parentId: "phase_1" } },
+        ],
+      },
+    } as unknown as Parameters<typeof currentPhaseDispatches>[0];
+    const dispatch = (dispatchId: string, ordinal: number) => ({
+      dispatchId,
+      ordinal,
+      runId: "run_1",
+      task: { taskId: "task_a", definitionGeneration: 1 },
+    });
+    const state = {
+      dispatches: [dispatch("dispatch_ran", 1), dispatch("dispatch_never-ran", 2)],
+      completionOutbox: [{ fact: { dispatchId: "dispatch_ran" } }],
+    } as unknown as Parameters<typeof currentPhaseDispatches>[1];
+
+    // Accepted: the later dispatch is not a retry, because an accepted task is
+    // owed nothing, and the one that handed work in stays current.
+    expect(
+      currentPhaseDispatches(snapshot, state, "run_1", "build", new Set(["task_a"])).map(
+        ({ dispatchId }) => dispatchId,
+      ),
+    ).toEqual(["dispatch_ran"]);
+
+    // Not accepted: a fresh dispatch is exactly what the phase is waiting on.
+    expect(
+      currentPhaseDispatches(snapshot, state, "run_1", "build").map(({ dispatchId }) => dispatchId),
+    ).toEqual(["dispatch_never-ran"]);
   });
 });
 

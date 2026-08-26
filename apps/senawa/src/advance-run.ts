@@ -381,9 +381,10 @@ async function step(
   // working, on every cycle, for ever. Whichever member has not handed work in is
   // the phase's business until none is left. That is the fan-in the fan-out
   // never had, and it waits on exactly what closing the phase needs.
-  const phaseMembers = [...currentPhaseDispatches(snapshot, state, input.runId, phaseKey)].sort(
-    (left, right) => left.ordinal - right.ordinal,
-  );
+  const acceptedTaskIds = new Set(scheduling.acceptedTasks.map(({ task }) => String(task.taskId)));
+  const phaseMembers = [
+    ...currentPhaseDispatches(snapshot, state, input.runId, phaseKey, acceptedTaskIds),
+  ].sort((left, right) => left.ordinal - right.ordinal);
   const handedIn = new Set(state.completionOutbox.map((entry) => String(entry.fact.dispatchId)));
   const dispatch =
     phaseMembers.find((candidate) => !handedIn.has(String(candidate.dispatchId))) ??
@@ -675,8 +676,8 @@ async function step(
   // latest one is the phase's current work: an earlier attempt's completion was
   // assessed against an earlier context and is stale by construction.
   const phaseDispatchIds = new Set(
-    currentPhaseDispatches(snapshot, state, input.runId, phaseKey).map((candidate) =>
-      String(candidate.dispatchId),
+    currentPhaseDispatches(snapshot, state, input.runId, phaseKey, acceptedTaskIds).map(
+      (candidate) => String(candidate.dispatchId),
     ),
   );
   const assessments = state.completionOutbox
@@ -1481,12 +1482,23 @@ function acceptedPhaseTasks(
  * retried phase select one task twice, and then refuse its own candidate for
  * carrying an assessment from a context it no longer names.
  */
-function currentPhaseDispatches(
+export function currentPhaseDispatches(
   snapshot: ConfigurationSnapshot,
   state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
   runId: string,
   phaseKey: string,
+  /**
+   * Tasks the run has already accepted. A later dispatch on one of these is not
+   * a retry, because an accepted task is owed nothing, and letting it supersede
+   * hides the dispatch that earned the acceptance -- along with its completion
+   * and its assessment. A live run made a tenth dispatch for an accepted member
+   * and then waited for its agent for ever, could not close because the real
+   * completion was filtered out of the candidate, and never delivered the fact
+   * that would have closed it. One substitution, three symptoms.
+   */
+  accepted: ReadonlySet<string> = new Set(),
 ): readonly ReturnType<SqliteContextBroker["authority"]["snapshot"]>["dispatches"][number][] {
+  const handedIn = new Set(state.completionOutbox.map((entry) => String(entry.fact.dispatchId)));
   const byTask = new Map<
     string,
     ReturnType<SqliteContextBroker["authority"]["snapshot"]>["dispatches"][number]
@@ -1496,7 +1508,22 @@ function currentPhaseDispatches(
     if (phaseKeyByTask(snapshot, candidate.task.taskId) !== phaseKey) continue;
     const key = String(candidate.task.taskId);
     const held = byTask.get(key);
-    if (held === undefined || candidate.ordinal >= held.ordinal) byTask.set(key, candidate);
+    if (held === undefined) {
+      byTask.set(key, candidate);
+      continue;
+    }
+    // A retry supersedes on ordinal alone, because a fresh dispatch with no
+    // completion yet is exactly what the phase is now waiting on.
+    if (!accepted.has(key)) {
+      if (candidate.ordinal >= held.ordinal) byTask.set(key, candidate);
+      continue;
+    }
+    const candidateHandedIn = handedIn.has(String(candidate.dispatchId));
+    if (candidateHandedIn === handedIn.has(String(held.dispatchId))) {
+      if (candidate.ordinal >= held.ordinal) byTask.set(key, candidate);
+    } else if (candidateHandedIn) {
+      byTask.set(key, candidate);
+    }
   }
   return [...byTask.values()];
 }
