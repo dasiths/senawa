@@ -66,6 +66,8 @@ const dependencies: RuntimeDependencies = {
   authorization: createRoleAuthorizationPolicy([
     { intent: "instantiate-run", roles: ["release-manager"] },
     { intent: "submit-completion", roles: ["engine"] },
+    { intent: "end-run", roles: ["release-manager"] },
+    { intent: "pause-run", roles: ["release-manager"] },
   ]),
 };
 
@@ -1160,6 +1162,32 @@ describe("production worker composition", () => {
       ).toEqual([{ kind: "worker", dispatchId: worker.dispatch.dispatchId }]);
       expect(runnerAuthority.load(scheduleInput).effects).toHaveLength(0);
       expect(reported("dispatch-stranded")).toHaveLength(0);
+
+      // Its dispatch outlives the run, so a run nobody can schedule was still
+      // offered to the supervisor for ever. Each cycle then paid to decode the
+      // whole broker state to be told there was nothing to do, and every read
+      // sharing that process waited behind it.
+      expect(scheduler.listRuns()).toEqual([
+        { repositoryId: scheduleInput.repositoryId, runId: scheduleInput.runId },
+      ]);
+      expect(
+        authority.commandAuthority.submit(
+          runtimeCommand({
+            commandId: "command_dispatch-recovery-pause",
+            intent: "pause-run",
+            payload: { expectedRunModeRevision: 0 },
+          }),
+          {
+            currentTime: runtimeFixture.currentTime,
+            facts: { source: "dispatch-recovery-test" },
+            allocateId: () => {
+              allocation += 1;
+              return `stream-event-dispatch-recovery-${allocation}`;
+            },
+          },
+        ),
+      ).toMatchObject({ status: "completed" });
+      expect(scheduler.listRuns()).toEqual([]);
     } else if (mode === "stranded") {
       // It cannot be enqueued, because there is no command to enqueue. Saying
       // so is the whole repair: it was dropped from the current set silently,

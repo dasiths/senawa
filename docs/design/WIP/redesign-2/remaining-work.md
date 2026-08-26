@@ -1302,6 +1302,115 @@ all, so it does not even get the indent `.tree-group` gives the workflow tree.
   detail view to that try
 * [ ] The scope is in the route, so a phase view can be linked
 
+### Found while reading it live: the console times out on a busy run
+
+Reading a live run in the browser while its implement phase was fanning out, the
+portal reported `Connection offline` and `Data stale`, and the request that
+failed was its own `overview`, aborted by the client's ten second ceiling.
+
+The database is not the reason. Timed against the same live file from another
+process:
+
+```text
+getRunOverview   207ms
+listHumanNeeds    22ms
+getGraphSummary  188ms
+listArtifacts     12ms
+```
+
+Over loopback HTTP from the same machine, the same overview took 0.84s, 0.86s,
+0.84s, 0.85s -- and then 3.5s. The portal is served by the supervisor process,
+and a run cycle's synchronous work sits on the event loop it answers from, so
+the answer waits for whatever the cycle is doing.
+
+This is the same disease as the operation queue this morning, one layer down:
+the console fails at exactly the moment somebody opens it. Reads were taken off
+the queue; they are still behind the event loop.
+
+Raising the client's ceiling to forty-five seconds stops the console calling a
+busy server dead, but it does not make the server answer. That is phase 19.
+
+## Phase 19: the supervisor stops paying for the whole run on every read
+
+Performance is not a polish item here. Every symptom this plan has chased in the
+last two phases -- `service status` timing out, `portal` timing out, the console
+reporting `Connection offline` on a healthy run -- is the same cause seen from a
+different angle, and phase 15 and 18 each treated a symptom.
+
+Measured on `run_fe515d0b79fa7c2c8f96e6bc31e145d0`, which is a **small** run:
+three phases, eleven dispatches, one hundred and eight transcript lines.
+
+```text
+supervisor process, run already ended    51.6% CPU, sustained
+```
+
+Half a core, for ever, on a run with nothing left to do.
+
+### What a read costs
+
+Timed directly against that database from another process:
+
+```text
+getRunOverview                    207ms
+getGraphSummary                   188ms
+listHumanNeeds                     22ms
+listArtifacts                      12ms
+```
+
+The same reads over loopback HTTP, served by the supervisor, with the run
+finished and idle:
+
+```text
+overview      5.5s
+graph         4.2s
+artifacts     4.2s
+```
+
+And from the browser while the implement phase was working, `graph` took 8.1s.
+The queries are not the problem. The process serving them is.
+
+### Where the time goes
+
+Three costs, each paid far more often than it needs to be.
+
+**Constructing an authority replays the run.** `new SqliteAuthority` runs
+`verifyDatabase`, which calls `InMemoryAuthority.fromCanonicalJson` and replays
+every command through `submitWithTrustedFacts`. That took **360ms** on this run.
+`advanceRun` constructs `SqliteSupervisorAuthority` -- and so a `SqliteAuthority`
+-- on every call, and the driver calls it every cycle. The integrity guarantee is
+worth keeping; paying for it per cycle is not.
+
+**The broker snapshot decodes everything, every time.** `context_authority_state`
+holds **129,239 bytes** of canonical JSON, and
+`contextBroker.authority.snapshot()` takes **106ms**, then **114ms** when called
+again immediately -- there is no cache. `listRuns()` called it on every schedule.
+
+**The run record is rewritten whole on every command.** `runs.records_json` is
+**238,913 bytes** on this run, so its cost is quadratic in its own size. Phase 14
+noted this and did not fix it. `#humanNeeds`, `getRunOverview` and the record
+readers all decode it in full.
+
+A run that had ended was still offered to the scheduler for ever, because
+`listRuns()` returned every run that had ever held a dispatch with no regard for
+its mode. That one is fixed here; it is the cheapest of the three and the least
+of the cost.
+
+### What has to become true
+
+* [ ] A supervisor with nothing to do uses no measurable CPU
+* [ ] Driving a run once does not replay the run's whole command history
+* [ ] The broker's snapshot is not decoded more than once per change
+* [ ] A run's records are not rewritten whole on every command
+* [ ] A portal read is served without waiting for a run cycle
+* [ ] The example's own run is read in a browser while its agents work, and
+  every view answers in under a second
+
+### Not to be traded away
+
+The tampered-mirror guarantee, the canonical encoding, and the refusal to trust
+a projection are the reasons this system is worth anything. Speed comes from
+paying for them once rather than from paying for them less.
+
 ## Carried from the v1 plan
 
 Neither blocks anything above, and neither is part of the condition below. The

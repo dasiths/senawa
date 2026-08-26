@@ -65,6 +65,14 @@ export class ProductionScheduler {
           const key = `${dispatch.repositoryId}\0${dispatch.runId}`;
           if (keys.has(key)) return [];
           keys.add(key);
+          // Every run that ever held a dispatch was offered for ever, so a
+          // finished one kept the supervisor cycling over a record it could do
+          // nothing with, and everything sharing that process waited behind it.
+          const control = this.#options.authority.commandAuthority.queryRunControl(
+            dispatch.repositoryId,
+            dispatch.runId,
+          );
+          if (control !== undefined && control.mode !== "running") return [];
           return [{ repositoryId: dispatch.repositoryId, runId: dispatch.runId }];
         })
         .sort((left, right) =>
