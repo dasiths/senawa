@@ -506,7 +506,7 @@ answer ended awaiting an answer for ever.
   attempt ceiling, whether or not its question has since been answered
 * [x] A phase whose every attempt ended on a question is not rejected for
   handing no work in
-* [ ] The example completes its research phase with a person answering
+* [x] The example completes its research phase with a person answering
   every question it asks
 
 A turn that ends by asking is now recorded as `suspended` rather than `closed`,
@@ -1233,5 +1233,32 @@ Phases 1 to 6 met that condition on `run_57b67ffdcd2a1f4c06af1d3bc6c6e1a2`.
 Phases 7 to 14 were added afterwards from findings that run and its predecessors
 produced, so they carry the condition again:
 
-* [ ] With phases 7 to 14 done, the example is driven once more from a clean
+* [x] With phases 7 to 17 done, the example is driven once more from a clean
   state root, end to end in a browser, and completes with its own tests passing
+
+Met on `run_c4bc6d1647b51608cc43116bc8d90a6a`:
+
+```text
+run: run_c4bc6d1647b51608cc43116bc8d90a6a
+mode: ended
+phases: 3
+every phase has closed: this run has finished its work
+agents dispatched: 10
+waiting on you: 0
+```
+
+The project the run wrote, on its own terms:
+
+```text
+1..36
+# pass 36
+# fail 0
+```
+
+Read in a browser on the same run: `Connection live`, `ended`, `3 of 3 phases
+closed`, research, plan and implement each `done` and carrying their output,
+and `every phase was accepted, and the run finished`.
+
+Every question the researcher and planner asked was answered by a person while
+the run was live, which is the other open item above. Nothing was restarted,
+steered, or repaired by hand.
