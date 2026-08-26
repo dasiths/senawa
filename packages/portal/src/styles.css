@@ -645,24 +645,90 @@ textarea {
   flex-wrap: wrap;
 }
 
-/* An artifact on the edge between two phases: what actually moved. */
-.chip {
+/* What a phase produced, read inside the phase that produced it. */
+.band-produced {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--rule);
+}
+
+.band-produced-label {
+  color: var(--faint);
+  font-size: 11px;
+  text-transform: lowercase;
+}
+
+.band-produced-item {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
-  padding: 4px 10px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.band-produced-item b {
+  color: var(--ink);
+  font-weight: 570;
+}
+
+/* A phase is a thing to read, not only a thing to fold. */
+.band-read {
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 2px 8px;
+  color: var(--muted);
+  font-size: 11px;
   cursor: pointer;
 }
 
-.chip b {
+.band-read[aria-current="true"] {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+/* Where the reader is, and the way back out. */
+.scope-trail {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px 0;
+}
+
+.scope-step,
+.row-scope {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+
+.scope-step[aria-current="true"] {
   color: var(--ink);
   font-weight: 570;
+  text-decoration: none;
+  cursor: default;
+}
+
+.scope-sep {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.row-where {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
 }
 
 .fan {
@@ -1275,6 +1341,27 @@ textarea {
 
 .tree-group {
   padding-left: 20px;
+}
+
+/* An agent hangs from the phase it works in, and the tree says so. */
+.agent-roster .tree-children {
+  margin: 0;
+  padding: 0 0 0 18px;
+  list-style: none;
+  border-left: 1px dotted var(--rule);
+}
+
+.agent-roster .agent-entry > .node {
+  position: relative;
+}
+
+.agent-roster .agent-entry > .node::before {
+  content: "";
+  position: absolute;
+  left: -18px;
+  top: 50%;
+  width: 12px;
+  border-top: 1px dotted var(--rule);
 }
 
 .workflow-node {

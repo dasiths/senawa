@@ -974,7 +974,9 @@ export class PortalApplication {
       setReplyTarget: (needId) => this.#dispatch({ type: "reply-target", needId }),
       toggleRecord: (recordKey) => this.#dispatch({ type: "record-disclosure", recordKey }),
       focusRecord: (recordId) => {
-        this.#dispatch({ type: "focus-record", recordId });
+        this.#dispatch(
+          recordId === undefined ? { type: "focus-record" } : { type: "focus-record", recordId },
+        );
         void this.#syncTranscript();
       },
       openNeed: (need, triggerId) => void this.#openNeed(need, triggerId),

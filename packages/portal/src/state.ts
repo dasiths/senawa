@@ -147,7 +147,13 @@ export interface PortalReplyState {
   readonly message?: string;
 }
 
-export const DETAIL_TABS = Object.freeze(["live", "answers", "produced", "about"] as const);
+export const DETAIL_TABS = Object.freeze([
+  "live",
+  "answers",
+  "produced",
+  "checks",
+  "about",
+] as const);
 export type DetailTab = (typeof DETAIL_TABS)[number];
 
 export interface PortalAssetOverlayState {

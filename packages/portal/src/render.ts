@@ -77,7 +77,7 @@ export interface PortalRenderActions {
   readonly setGraphViewport: (viewport: PortalGraphViewport) => void;
   readonly unfoldNode: (nodeId: string) => void;
   readonly toggleRecord: (recordKey: string) => void;
-  readonly focusRecord: (recordId: string) => void;
+  readonly focusRecord: (recordId: string | undefined) => void;
   readonly openNeed: (need: PortalHumanNeed, triggerId: string) => void;
   readonly openRunControl: (kind: "pause" | "resume" | "end", triggerId: string) => void;
   readonly openAgentAction: (
@@ -834,27 +834,8 @@ function renderWorkflow(state: PortalState, actions: PortalRenderActions): HTMLE
   const split = element("div", state.ui.graphMode === "diagram" ? "split is-wide" : "split");
   split.append(section);
   const focused = nodes.find(({ nodeId }) => nodeId === state.ui.focusedRecord);
-  split.append(
-    focused === undefined
-      ? runWideDetail(state, actions, "Select a piece of work to narrow this to one agent.")
-      : graphDetail(focused, state, actions, nodes, edges),
-  );
+  split.append(graphDetail(focused, state, actions, nodes, edges));
   return split;
-}
-
-/** With nothing selected the reader wants the whole run talking, not a prompt. */
-function runWideDetail(
-  state: PortalState,
-  actions: PortalRenderActions,
-  narrow: string,
-): HTMLElement {
-  const detail = element("section", "card detail detail-panel");
-  const head = element("header", "detail-head");
-  const title = element("div", "detail-title");
-  title.append(textElement("h2", "", "Every agent"), textElement("p", "detail-sub", narrow));
-  head.append(title);
-  detail.append(head, livePane(state, actions));
-  return detail;
 }
 
 function graphBody(
@@ -1100,39 +1081,121 @@ function needChipLabel(need: PortalHumanNeed): string {
 }
 
 /**
+ * What the detail view is looking at.
+ *
+ * A criterion is how a piece of work is allowed to finish and does none of its
+ * own, so it reads as the node that owes it. Nothing selected is the run, which
+ * is a scope with content rather than a prompt to pick something.
+ */
+type DetailScope =
+  | { readonly level: "run" }
+  | { readonly level: "phase" | "task"; readonly node: PortalGraphNode };
+
+function detailScope(
+  node: PortalGraphNode | undefined,
+  nodes: readonly PortalGraphNode[],
+): DetailScope {
+  if (node === undefined) return { level: "run" };
+  const worked =
+    node.kind === "criterion"
+      ? (nodes.find(({ nodeId }) => nodeId === node.parentNodeId) ?? node)
+      : node;
+  return { level: worked.kind === "phase" ? "phase" : "task", node: worked };
+}
+
+/** The tasks a scope covers, or nothing at all when it covers the whole run. */
+function scopedTaskIds(
+  scope: DetailScope,
+  nodes: readonly PortalGraphNode[],
+): ReadonlySet<string> | undefined {
+  if (scope.level === "run") return undefined;
+  const owned = new Set<string>([scope.node.nodeId]);
+  if (scope.level === "phase")
+    for (const member of nodes)
+      if (member.parentNodeId === scope.node.nodeId) owned.add(member.nodeId);
+  return owned;
+}
+
+/**
+ * Where the reader is, and the way back out.
+ *
+ * Three controls used to do this one job: the transcript's own run-or-node
+ * toggle, the agents view's own selection, and a workflow selection that was
+ * always a node, so a phase could not be read at all.
+ */
+function scopeTrail(
+  scope: DetailScope,
+  state: PortalState,
+  actions: PortalRenderActions,
+  nodes: readonly PortalGraphNode[],
+): HTMLElement {
+  const trail = element("nav", "scope-trail");
+  trail.setAttribute("aria-label", "What this is scoped to");
+  const steps: { readonly label: string; readonly nodeId: string | undefined }[] = [
+    { label: selectedIds(state)?.runId ?? "This run", nodeId: undefined },
+  ];
+  if (scope.level !== "run") {
+    const parent = nodes.find(({ nodeId }) => nodeId === scope.node.parentNodeId);
+    if (scope.level === "task" && parent !== undefined)
+      steps.push({ label: parent.title, nodeId: parent.nodeId });
+    steps.push({ label: scope.node.title, nodeId: scope.node.nodeId });
+  }
+  for (const [index, step] of steps.entries()) {
+    if (index > 0) trail.append(textElement("span", "scope-sep", "\u203a"));
+    const last = index === steps.length - 1;
+    const button = commandButton(step.label, () => actions.focusRecord(step.nodeId));
+    button.className = "scope-step";
+    if (last) button.setAttribute("aria-current", "true");
+    trail.append(button);
+  }
+  return trail;
+}
+
+/**
  * One detail surface, whatever the reader arrived from. What the agent is doing
  * now leads; what it was told, what it made, and what it is sit behind it.
  */
 function graphDetail(
-  node: PortalGraphNode,
+  node: PortalGraphNode | undefined,
   state: PortalState,
   actions: PortalRenderActions,
   nodes: readonly PortalGraphNode[],
   edges: readonly PortalGraphEdge[],
 ): HTMLElement {
+  const scope = detailScope(node, nodes);
   const ids = selectedIds(state);
   const key = ids === undefined ? undefined : runKey(ids.repositoryId, ids.runId);
   const agents = key === undefined ? [] : (state.caches.agents[key]?.agents ?? []);
-  const working = agents.filter((agent) => String(agent.taskId) === node.nodeId);
+  const working =
+    scope.level === "task"
+      ? agents.filter((agent) => String(agent.taskId) === scope.node.nodeId)
+      : [];
   const latest = [...working].sort((left, right) => left.attempt - right.attempt).at(-1);
   const detail = element("section", "card detail detail-panel");
   const header = element("header", "");
   const title = element("div", "detail-title");
-  title.append(textElement("h2", "compact-heading", node.title));
-  const parent = nodes.find(({ nodeId }) => nodeId === node.parentNodeId);
-  const where = [
-    parent?.title,
-    latest === undefined
-      ? (NODE_KIND_ROLE[node.kind] ?? node.kind)
-      : `${latest.persona}${latest.model === undefined ? "" : ` on ${latest.model}`}`,
-    latest === undefined ? undefined : `attempt ${String(latest.attempt)}`,
-  ].filter((part): part is string => part !== undefined);
-  title.append(textElement("span", "where", where.join(" \u00b7 ")));
+  title.append(
+    textElement("h2", "compact-heading", scope.level === "run" ? "This run" : scope.node.title),
+  );
+  if (scope.level !== "run") {
+    const parent = nodes.find(({ nodeId }) => nodeId === scope.node.parentNodeId);
+    const where = [
+      parent?.title,
+      latest === undefined
+        ? (NODE_KIND_ROLE[scope.node.kind] ?? scope.node.kind)
+        : `${latest.persona}${latest.model === undefined ? "" : ` on ${latest.model}`}`,
+      latest === undefined ? undefined : `attempt ${String(latest.attempt)}`,
+    ].filter((part): part is string => part !== undefined);
+    title.append(textElement("span", "where", where.join(" \u00b7 ")));
+  }
   header.append(title);
-  const toolbar = nodeToolbarView({
-    nodeId: node.nodeId,
-    actions: nodeActions(node, state, actions, nodes, edges),
-  });
+  if (scope.level !== "run")
+    header.append(
+      nodeToolbarView({
+        nodeId: scope.node.nodeId,
+        actions: nodeActions(scope.node, state, actions, nodes, edges),
+      }),
+    );
   // Redirecting an agent is the card's action, not another node control.
   const agentActions = element("div", "detail-actions");
   if (
@@ -1148,9 +1211,9 @@ function graphDetail(
     hasCapability(state, "portal-write-override-member")
   )
     agentActions.append(agentActionButton("override", "Accept anyway", latest, actions));
-  header.append(toolbar);
   if (agentActions.childElementCount > 0) header.append(agentActions);
   detail.append(header);
+  detail.append(scopeTrail(scope, state, actions, nodes));
   const tabs = element("div", "detail-tabs");
   tabs.setAttribute("role", "tablist");
   for (const tab of DETAIL_TABS) {
@@ -1162,44 +1225,60 @@ function graphDetail(
   }
   detail.append(tabs);
   const pane = element("div", "pane");
-  // Live, Answers and Produced are about work. A criterion is how a piece of
-  // work is allowed to finish and does none of its own, so those three read the
-  // node that owes it. About is about the record, so it reads the record.
-  const worked =
-    node.kind === "criterion"
-      ? (nodes.find(({ nodeId }) => nodeId === node.parentNodeId) ?? node)
-      : node;
   switch (state.ui.detailTab) {
     case "live":
-      pane.append(livePane(state, actions, worked));
+      pane.append(livePane(state, actions, scope.level === "run" ? undefined : scope.node));
       break;
     case "answers":
-      pane.append(answersPane(state, worked, nodes));
+      pane.append(answersPane(state, scope, nodes, actions));
       break;
     case "produced":
-      pane.append(producedPane(state, worked, nodes));
+      pane.append(producedPane(state, scope, nodes, actions));
       break;
-    case "about": {
-      const facts = element("dl", "kv dense-facts");
-      appendFact(facts, "Identity", node.nodeId);
-      appendFact(facts, "Source", node.sourcePointer ?? "Not supplied");
-      appendFact(facts, "Superseded by", node.supersededBy ?? "No successor");
-      pane.append(facts);
-      if (node.normalizedInput !== undefined)
-        pane.append(renderJson(node.normalizedInput, "Input as given"));
-      if (node.completionPolicy !== undefined)
-        pane.append(renderJson(node.completionPolicy, "Completion policy"));
+    case "checks":
+      pane.append(checksPane(state, scope, nodes, actions));
       break;
-    }
+    case "about":
+      pane.append(aboutPane(state, node, scope));
+      break;
   }
   detail.append(pane);
   return detail;
+}
+
+/** What this is, as records rather than as work. */
+function aboutPane(
+  state: PortalState,
+  node: PortalGraphNode | undefined,
+  scope: DetailScope,
+): HTMLElement {
+  const facts = element("dl", "kv dense-facts");
+  const holder = element("div", "");
+  if (node === undefined || scope.level === "run") {
+    const overview = selectedOverview(state);
+    appendFact(facts, "Run", selectedIds(state)?.runId ?? "None selected");
+    appendFact(facts, "Mode", overview?.mode ?? "Unknown");
+    appendFact(facts, "Graph revision", overview?.sync.graphRevision ?? "Unknown");
+    appendFact(facts, "Phases", String(overview?.counts.phases ?? 0));
+    holder.append(facts);
+    return holder;
+  }
+  appendFact(facts, "Identity", node.nodeId);
+  appendFact(facts, "Source", node.sourcePointer ?? "Not supplied");
+  appendFact(facts, "Superseded by", node.supersededBy ?? "No successor");
+  holder.append(facts);
+  if (node.normalizedInput !== undefined)
+    holder.append(renderJson(node.normalizedInput, "Input as given"));
+  if (node.completionPolicy !== undefined)
+    holder.append(renderJson(node.completionPolicy, "Completion policy"));
+  return holder;
 }
 
 const DETAIL_TAB_LABELS: Readonly<Record<DetailTab, string>> = {
   live: "Live",
   answers: "Answers",
   produced: "Produced",
+  checks: "Checks",
   about: "About",
 };
 
@@ -1234,35 +1313,76 @@ function livePane(
 /** Questions this work has already been answered on. */
 function answersPane(
   state: PortalState,
-  node: PortalGraphNode,
+  scope: DetailScope,
   nodes: readonly PortalGraphNode[],
+  actions: PortalRenderActions,
 ): HTMLElement {
   const list = element("ul", "answered");
   const ids = selectedIds(state);
   const key = ids === undefined ? undefined : runKey(ids.repositoryId, ids.runId);
   const questions = key === undefined ? [] : (state.caches.questions[key]?.questions ?? []);
   // A question names the task that asked it. Listing every answer in the run
-  // meant the pane said the same thing whatever was selected, which is not an
-  // answer about this node at all.
-  const owned = new Set<string>([node.nodeId]);
-  if (node.kind === "phase")
-    for (const member of nodes) if (member.parentNodeId === node.nodeId) owned.add(member.nodeId);
+  // whatever was selected said the same thing at every scope, and named each
+  // one by event type rather than by what was asked.
+  const owned = scopedTaskIds(scope, nodes);
   for (const question of questions) {
-    if (!owned.has(String(question.source.taskId))) continue;
+    const taskId = String(question.source.taskId);
+    if (owned !== undefined && !owned.has(taskId)) continue;
     if (question.answer === undefined) continue;
     const item = element("li", "");
     item.append(
       textElement("p", "a-q", question.prompt),
       textElement("p", "a-a", answerText(question.answer.answer)),
-      textElement("p", "a-when", question.answer.answeredAt),
     );
+    const foot = element("p", "a-when");
+    foot.append(document.createTextNode(question.answer.answeredAt));
+    const where = whereTrail(taskId, scope, nodes, actions);
+    if (where !== undefined) foot.append(where);
+    item.append(foot);
     list.append(item);
   }
   if (list.childElementCount === 0)
     list.append(
-      textElement("li", "empty-state", `Nothing has been answered on ${node.title} yet.`),
+      textElement(
+        "li",
+        "empty-state",
+        `Nothing has been answered in ${scopeName(scope, state)} yet.`,
+      ),
     );
   return list;
+}
+
+/** What a reader calls the thing they are looking at. */
+function scopeName(scope: DetailScope, state: PortalState): string {
+  return scope.level === "run" ? (selectedIds(state)?.runId ?? "this run") : scope.node.title;
+}
+
+/**
+ * The part of a row's path that the current scope does not already say.
+ *
+ * Repeating the phase on every row inside that phase is the same fact told
+ * twice, and at a task there is nothing left to say at all.
+ */
+function whereTrail(
+  taskId: string,
+  scope: DetailScope,
+  nodes: readonly PortalGraphNode[],
+  actions: PortalRenderActions,
+): HTMLElement | undefined {
+  if (scope.level === "task") return undefined;
+  const task = nodes.find(({ nodeId }) => nodeId === taskId);
+  if (task === undefined) return undefined;
+  const phase = nodes.find(({ nodeId }) => nodeId === task.parentNodeId);
+  const steps = scope.level === "phase" ? [task] : [phase, task];
+  const trail = element("span", "row-where");
+  for (const step of steps) {
+    if (step === undefined) continue;
+    if (trail.childElementCount > 0) trail.append(textElement("span", "scope-sep", "\u203a"));
+    const button = commandButton(step.title, () => actions.focusRecord(step.nodeId));
+    button.className = "row-scope";
+    trail.append(button);
+  }
+  return trail.childElementCount === 0 ? undefined : trail;
 }
 
 /** An answer is a JSON value; a reader wants the sentence inside it. */
@@ -1275,11 +1395,12 @@ function answerText(answer: JsonValue): string {
   return JSON.stringify(answer);
 }
 
-/** What this work handed on. */
+/** What this work handed on, and which try it came from. */
 function producedPane(
   state: PortalState,
-  node: PortalGraphNode,
+  scope: DetailScope,
   nodes: readonly PortalGraphNode[],
+  actions: PortalRenderActions,
 ): HTMLElement {
   const ids = selectedIds(state);
   const key = ids === undefined ? undefined : runKey(ids.repositoryId, ids.runId);
@@ -1287,21 +1408,104 @@ function producedPane(
   // An artifact names the task that produced it. A phase produces through its
   // members, so a phase that read only its own id showed nothing however much
   // its members had handed on.
-  const owned = new Set<string>([node.nodeId]);
-  if (node.kind === "phase")
-    for (const member of nodes) if (member.parentNodeId === node.nodeId) owned.add(member.nodeId);
-  const mine = artifacts.filter((artifact) => owned.has(String(artifact.taskId)));
-  if (mine.length === 0)
-    return textElement("p", "empty-state", `${node.title} has produced nothing yet.`);
-  return summaryTable(
-    ["What", "Size", "Where it is"],
-    mine.map((artifact) => [
-      artifact.summary,
-      formatBytes(artifact.byteLength),
-      artifact.availability,
-    ]),
-    `What ${node.title} produced`,
+  const owned = scopedTaskIds(scope, nodes);
+  const mine = artifacts.filter(
+    (artifact) => owned === undefined || owned.has(String(artifact.taskId)),
   );
+  if (mine.length === 0)
+    return textElement("p", "empty-state", `${scopeName(scope, state)} has produced nothing yet.`);
+  const table = element("table", "summary-table");
+  const head = element("tr", "");
+  for (const column of ["What", "Version", "Size", "Where it is", "Where"])
+    head.append(textElement("th", "", column));
+  table.append(head);
+  for (const artifact of mine) {
+    const row = element("tr", "");
+    row.append(
+      textElement("td", "", artifact.summary),
+      textElement("td", "", artifactVersion(artifact)),
+      textElement("td", "", formatBytes(artifact.byteLength)),
+      textElement("td", "", artifact.availability),
+    );
+    const where = element("td", "");
+    const trail = whereTrail(String(artifact.taskId), scope, nodes, actions);
+    if (trail !== undefined) where.append(trail);
+    row.append(where);
+    table.append(row);
+  }
+  return table;
+}
+
+/**
+ * Which try produced it.
+ *
+ * An artifact is named by its content, so two attempts that produced identical
+ * bytes are one artifact. Without the attempt a retried phase reads as though it
+ * produced one thing once.
+ */
+function artifactVersion(artifact: PortalArtifactMetadata): string {
+  return artifact.definitionGeneration === undefined
+    ? "\u2014"
+    : `generation ${String(artifact.definitionGeneration)}`;
+}
+
+/** What had to be true, and whether it was. */
+function checksPane(
+  state: PortalState,
+  scope: DetailScope,
+  nodes: readonly PortalGraphNode[],
+  actions: PortalRenderActions,
+): HTMLElement {
+  const holder = element("div", "checks-pane");
+  if (scope.level === "task") {
+    const criteria = nodes.filter(({ parentNodeId }) => parentNodeId === scope.node.nodeId);
+    if (criteria.length === 0)
+      return textElement("p", "empty-state", `${scope.node.title} owes no exit condition.`);
+    const list = element("ul", "answered");
+    for (const criterion of criteria) {
+      const item = element("li", "");
+      item.append(
+        textElement("p", "a-q", criterion.title),
+        textElement(
+          "p",
+          "a-a",
+          criterion.runState === "accepted" ? "produced" : "not produced yet",
+        ),
+      );
+      list.append(item);
+    }
+    holder.append(list);
+    return holder;
+  }
+  // A gate is a phase record the driver produced, not an agent's work, and it is
+  // the thing that refuses a run. It had no surface at all, so diagnosing a
+  // refusal meant reading the database.
+  const phases = scope.level === "phase" ? [scope.node] : nodes.filter((n) => n.kind === "phase");
+  const list = element("ul", "answered");
+  for (const phase of phases) {
+    const item = element("li", "");
+    item.append(textElement("p", "a-q", phase.title));
+    item.append(textElement("p", "a-a", `phase is ${phase.runState}`));
+    const foot = element("p", "a-when");
+    const trail = element("span", "row-where");
+    const button = commandButton(phase.title, () => actions.focusRecord(phase.nodeId));
+    button.className = "row-scope";
+    if (scope.level === "run") {
+      trail.append(button);
+      foot.append(trail);
+    }
+    item.append(foot);
+    list.append(item);
+  }
+  holder.append(list);
+  holder.append(
+    textElement(
+      "p",
+      "empty-state",
+      "A gate's rule, its reading and its decision are recorded on the phase but are not served to the portal yet.",
+    ),
+  );
+  return holder;
 }
 
 /**
@@ -1900,7 +2104,7 @@ function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLEle
   card.append(header);
   if (agents.length === 0) {
     card.append(textElement("p", "empty-note", "No agent has been dispatched yet."));
-    split.append(card, runWideDetail(state, actions, "Nothing is working yet."));
+    split.append(card, graphDetail(undefined, state, actions, nodes, edges));
     return split;
   }
   const list = element("ul", "workflow-tree agent-roster");
@@ -1923,7 +2127,21 @@ function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLEle
     if (held === undefined) byPhase.set(phase, [group]);
     else held.push(group);
   }
-  for (const [phase, groups] of byPhase) {
+  // Both graph views rank with executionOrdered; this one grouped from a map
+  // built in arrival order, so its phases came out in whatever order the first
+  // agent of each happened to be paged in.
+  const phaseRank = new Map(
+    executionOrdered(
+      nodes.filter((node) => node.kind === "phase"),
+      edges,
+    ).map((node, index) => [node.title, index] as const),
+  );
+  const branches = [...byPhase].sort(
+    ([left], [right]) =>
+      (phaseRank.get(left) ?? Number.MAX_SAFE_INTEGER) -
+      (phaseRank.get(right) ?? Number.MAX_SAFE_INTEGER),
+  );
+  for (const [phase, groups] of branches) {
     const branch = element("li", "tree-item workflow-node kind-phase");
     branch.setAttribute("role", "treeitem");
     branch.setAttribute("aria-level", "1");
@@ -1978,11 +2196,7 @@ function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLEle
   card.append(list);
   split.append(card);
   const focused = nodes.find(({ nodeId }) => nodeId === state.ui.focusedRecord);
-  split.append(
-    focused === undefined
-      ? runWideDetail(state, actions, "Select an agent to narrow this to one agent.")
-      : graphDetail(focused, state, actions, nodes, edges),
-  );
+  split.append(graphDetail(focused, state, actions, nodes, edges));
   return split;
 }
 

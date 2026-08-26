@@ -21,9 +21,11 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   await page.getByRole("tab", { name: "Graph", exact: true }).click();
   await expect(page.locator(".gnode")).not.toHaveCount(0);
 
-  // Nothing is selected yet, so the one detail surface says what to do rather
-  // than showing an empty terminal.
-  await expect(page.locator(".detail")).toContainText("Select a piece of work");
+  // Nothing is selected yet, so the one detail surface is the run: what a
+  // reader arrives wanting is what is happening, not an instruction to go and
+  // find it. It used to say "Select a piece of work".
+  await expect(page.locator(".scope-trail .scope-step")).toHaveCount(1);
+  await expect(page.locator(".agent-terminal-scope")).toHaveText("every agent");
 
   // Repository mode records no workspace row, so the node's own current dispatch
   // is the only owner the writer and the pane can agree on. It is labelled by the
@@ -164,9 +166,10 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   await expect(status).not.toContainText("Authority changed during bounded assembly");
   await expect(page.locator(".tree-item")).not.toHaveCount(0);
 
-  // The explicit run-wide option merges every owner of the run in one scope and
-  // still names the owner that produced each line.
-  await page.getByRole("button", { name: "All agents", exact: true }).click();
+  // The run step of the breadcrumb merges every owner of the run in one scope
+  // and still names the owner that produced each line. It used to be a toggle
+  // of the transcript's own, which is the same control told twice.
+  await page.locator(".scope-trail .scope-step").first().click();
   await expect(page.locator(".agent-terminal-scope")).toHaveText("every agent");
   await expect.poll(async () => (await snapshot(page)).lineCount).toBe(145 + beforeAppend + 1);
   await expect(page.locator(".agent-terminal-log")).toContainText("journey task output line 1");
@@ -185,10 +188,7 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
     ).size,
   ).toBe(2);
   expect((await snapshot(page)).plainText).toContain(`\tphase phase_delivery\t`);
-  await page.getByRole("button", { name: "This agent", exact: true }).click();
-  await expect(page.locator(".agent-terminal-scope")).toHaveText("phase phase_delivery");
-  await expect(page.locator(".agent-terminal-owner")).toHaveCount(0);
-  await expect.poll(async () => (await snapshot(page)).lineCount).toBe(beforeAppend + 1);
+  await expect(page.locator(".scope-trail .scope-step")).toHaveCount(1);
 
   await assertDocumentFits(page);
 
@@ -197,7 +197,7 @@ test("streams, follows, bounds, and exports the selected node agent output", asy
   await page.getByRole("tab", { name: "Graph", exact: true }).click();
   // With nothing selected the pane carries the whole run, because what a reader
   // arrives wanting is what is happening, not an instruction to go and find it.
-  await expect(page.locator(".detail-title")).toContainText("Every agent");
+  await expect(page.locator(".detail-title")).toContainText("This run");
   await expect(page.locator(".agent-terminal-scope")).toHaveText("every agent");
   await page.locator('.gnode[data-node="task_verify"]').click();
   await expect(page.locator(".agent-terminal-scope")).toHaveText("dispatch dispatch-browser");

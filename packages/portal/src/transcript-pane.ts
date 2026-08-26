@@ -89,15 +89,6 @@ function bar(
     ),
   );
   const controls = element("div", "agent-terminal-controls");
-  const runWide = commandButton(scope === "run" ? "This agent" : "All agents", () =>
-    actions.setTranscriptScope(scope === "run" ? "node" : "run"),
-  );
-  runWide.className = "command agent-terminal-run-scope";
-  // Narrowing to one agent means nothing until a reader has said which one, and
-  // a pressed control that cannot act reads as a state the pane is already in.
-  runWide.disabled = scope === "run" && !narrowable;
-  runWide.setAttribute("aria-pressed", scope === "node" ? "true" : "false");
-  controls.append(runWide);
   const copy = commandButton("Copy", () => {
     const clipboard = navigator.clipboard as Clipboard | undefined;
     if (clipboard !== undefined) void clipboard.writeText(plainText).catch(() => undefined);

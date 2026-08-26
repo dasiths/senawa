@@ -212,6 +212,20 @@ export function graphFlowView(options: GraphFlowOptions): HTMLElement {
       event.preventDefault();
       actions.toggleFold(phase.nodeId);
     });
+    const read = document.createElement("button");
+    read.type = "button";
+    read.className = "band-read";
+    read.dataset.focusKey = phase.nodeId;
+    read.textContent = "Read this phase";
+    if (phase.nodeId === selectedNodeId) read.setAttribute("aria-current", "true");
+    read.addEventListener("click", (event) => {
+      // The summary folds, so without this a phase could not be read at all and
+      // the artifact chip on the connector was the only way to reach one.
+      event.preventDefault();
+      event.stopPropagation();
+      actions.select(phase.nodeId);
+    });
+    summary.append(read);
     band.append(summary);
     const body = element("div", "band-body");
     for (const member of members) {
@@ -228,27 +242,27 @@ export function graphFlowView(options: GraphFlowOptions): HTMLElement {
     }
     if (members.length === 0)
       body.append(textElement("p", "empty-state", "Nothing has been dispatched here yet."));
+    // What a phase produced belongs inside the phase, not on the line leaving
+    // it. A chip out there named the first artifact of the first member that
+    // had one, so a phase of three read as though it produced one small file.
+    const produced = members
+      .map((member) => handedOn.get(member.nodeId))
+      .filter(
+        (entry): entry is { readonly name: string; readonly size: string } => entry !== undefined,
+      );
+    if (produced.length > 0) {
+      const strip = element("div", "band-produced");
+      strip.append(textElement("span", "band-produced-label", "produced"));
+      for (const entry of produced) {
+        const item = element("span", "band-produced-item");
+        item.append(textElement("b", "", entry.name), textElement("span", "fan", entry.size));
+        strip.append(item);
+      }
+      body.append(strip);
+    }
     band.append(body);
     flow.append(band);
     previous = phase.nodeId;
-    // What a phase handed on is the reason the next phase could start.
-    const carried = members
-      .map((member) => handedOn.get(member.nodeId))
-      .find((v) => v !== undefined);
-    if (carried !== undefined) {
-      const chip = document.createElement("button");
-      chip.type = "button";
-      chip.className = "chip";
-      chip.dataset.node = `artifact-${phase.nodeId}`;
-      chip.dataset.from = phase.nodeId;
-      // The line between two phases is where a reader looks for what crossed
-      // it, and the phase's own name is already on the band above.
-      const name = textElement("b", "", carried.name);
-      chip.append(name, textElement("span", "fan", carried.size));
-      chip.addEventListener("click", () => actions.select(phase.nodeId));
-      flow.append(chip);
-      previous = `artifact-${phase.nodeId}`;
-    }
   }
 
   if (orphans.length > 0) {

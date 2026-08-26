@@ -37,6 +37,50 @@ test("reads the workflow as bands of phases carrying cards of work", async ({ pa
   expect(diagnostics.severe()).toEqual([]);
 });
 
+test("scopes the detail view to the run, a phase, and one piece of work", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await navigate(page, "Workflow");
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
+
+  // Nothing selected is the run, not a prompt to select something. The old
+  // placeholder said "Select an agent to narrow this to one agent".
+  const trail = page.locator(".scope-trail");
+  await expect(trail).toBeVisible();
+  await expect(trail.locator(".scope-step")).toHaveCount(1);
+  await expect(trail.locator('.scope-step[aria-current="true"]')).toHaveText(/run_/u);
+
+  // A phase can be read. Its summary folds, so before this the only way to
+  // reach one was the artifact chip on the connector.
+  await page.locator(".band-read").first().click();
+  await expect(trail.locator(".scope-step")).toHaveCount(2);
+
+  // And one piece of work narrows again, with the phase left behind it.
+  await page.locator(".gnode .g-open").first().click();
+  await expect(trail.locator(".scope-step")).toHaveCount(3);
+
+  // Clicking the run step widens back out.
+  await trail.locator(".scope-step").first().click();
+  await expect(trail.locator(".scope-step")).toHaveCount(1);
+
+  expect(diagnostics.severe()).toEqual([]);
+});
+
+test("reads what a phase produced inside the phase", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await navigate(page, "Workflow");
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
+
+  // The chip on the connector showed the first artifact of the first member
+  // that had one, so a phase of three read as though it produced one file.
+  await expect(page.locator(".chip")).toHaveCount(0);
+  const produced = page.locator(".band-produced").first();
+  if ((await page.locator(".band-produced").count()) > 0) {
+    await expect(produced.locator(".band-produced-item b").first()).not.toHaveText("");
+  }
+
+  expect(diagnostics.severe()).toEqual([]);
+});
+
 test("reads a criterion through the work that had to satisfy it", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
