@@ -1144,7 +1144,7 @@ function artifactMetadata(value: unknown, path: string): PortalArtifactMetadata 
     value,
     path,
     ["artifactId", "source", "contentDigest", "byteLength", "mediaType", "summary", "availability"],
-    ["taskId", "definitionGeneration", "criterionId"],
+    ["taskId", "definitionGeneration", "criterionId", "attempt", "accepted"],
   );
   identity(object.artifactId, `${path}.artifactId`);
   oneOf(object.source, `${path}.source`, ASSET_SOURCES);
@@ -1163,6 +1163,15 @@ function artifactMetadata(value: unknown, path: string): PortalArtifactMetadata 
     path,
   );
   optional(object, "criterionId", identity, path);
+  optional(object, "attempt", (entry, entryPath) => integer(entry, entryPath, 1), path);
+  optional(
+    object,
+    "accepted",
+    (entry, entryPath) => {
+      if (typeof entry !== "boolean") fail("invalid-value", entryPath, "must be a boolean");
+    },
+    path,
+  );
   return Object.freeze(object) as unknown as PortalArtifactMetadata;
 }
 

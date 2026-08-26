@@ -1445,9 +1445,11 @@ function producedPane(
  * produced one thing once.
  */
 function artifactVersion(artifact: PortalArtifactMetadata): string {
-  return artifact.definitionGeneration === undefined
-    ? "\u2014"
-    : `generation ${String(artifact.definitionGeneration)}`;
+  if (artifact.attempt === undefined)
+    return artifact.definitionGeneration === undefined
+      ? "\u2014"
+      : `generation ${String(artifact.definitionGeneration)}`;
+  return `attempt ${String(artifact.attempt)}${artifact.accepted === true ? " \u00b7 accepted" : ""}`;
 }
 
 /** What had to be true, and whether it was. */

@@ -4,7 +4,11 @@ import { DatabaseSync } from "node:sqlite";
 import { loadAuthoredWorkflow } from "@senawa/execution-host";
 import { type CanonicalValue, canonicalBytes, canonicalValue, sha256Digest } from "@senawa/kernel";
 import { decodeCommandEnvelope, PROTOCOL_VERSION } from "@senawa/protocol";
-import { SqliteAuthority, SqliteCanonicalJsonAssetStore } from "@senawa/storage-sqlite";
+import {
+  SqliteAuthority,
+  SqliteCanonicalJsonAssetStore,
+  SqlitePortalQueryAuthority,
+} from "@senawa/storage-sqlite";
 import { SqliteSupervisorAuthority } from "@senawa/supervisor";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
@@ -976,6 +980,20 @@ describe("one phase in sequence", () => {
     expect(await boundUpstreamValue(scenario, next.dispatchId)).toEqual({
       definition: "second",
     });
+
+    // A reader of the same run sees which try each output came from, and which
+    // one the phase kept. Without it a retried phase reads as though it
+    // produced one thing once.
+    const portal = new SqlitePortalQueryAuthority({ ...scenario.paths, dependencies });
+    try {
+      const produced = portal
+        .listArtifacts(scenario.repositoryId, scenario.runId)
+        .artifacts.filter(({ attempt }) => attempt !== undefined);
+      expect(produced.length).toBeGreaterThan(0);
+      expect(produced.some(({ accepted }) => accepted === true)).toBe(true);
+    } finally {
+      portal.close();
+    }
   });
 
   it("retries a refused phase with the reasons the gate gave", async () => {

@@ -373,6 +373,10 @@ export interface PortalArtifactMetadata {
   readonly taskId?: OpaqueIdentity;
   readonly definitionGeneration?: number;
   readonly criterionId?: OpaqueIdentity;
+  /** The phase attempt that produced it, for output a retried phase republished. */
+  readonly attempt?: number;
+  /** Whether the phase closed over this publication rather than a later one. */
+  readonly accepted?: boolean;
 }
 
 export interface PortalArtifactPage {

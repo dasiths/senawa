@@ -4428,6 +4428,7 @@ export class SqlitePortalQueryAuthority {
     // submission handed back a page whose own contract refused it, so the whole
     // view answered five hundred for every run that made more than one thing.
     const byIdentity = new Map<string, PortalArtifactMetadata>();
+    const publications = this.#publishedAttempts(repositoryId, runId);
     for (const { canonical_submission } of rows) {
       const submission = requiredJsonRecord(
         decodeCanonicalJsonValue(canonical_submission),
@@ -4451,7 +4452,11 @@ export class SqlitePortalQueryAuthority {
       .filter((artifact) => after === undefined || artifact.artifactId > after)
       .sort((left, right) =>
         left.artifactId < right.artifactId ? -1 : left.artifactId > right.artifactId ? 1 : 0,
-      );
+      )
+      .map((artifact) => {
+        const published = publications.get(artifact.contentDigest);
+        return published === undefined ? artifact : { ...artifact, ...published };
+      });
     const artifacts = ordered.slice(0, limit);
     return decodePortalArtifactPage({
       apiVersion: PROTOCOL_VERSION,
@@ -5010,8 +5015,75 @@ export class SqlitePortalQueryAuthority {
     return graph;
   }
 
-  /** The gate evidence each phase was judged by, named so a reader can fetch it. */
-  #phaseGateDigests(repositoryId: string, runId: string): ReadonlyMap<string, string> {
+  /**
+   * Which attempt published each output, and whether its phase closed over it.
+   *
+   * An artifact is named by its content, so a retried phase that republished the
+   * same bytes is one artifact. The attempt is what tells a reader which try it
+   * came from, and the acceptance which one the phase actually kept.
+   */
+  #publishedAttempts(
+    repositoryId: string,
+    runId: string,
+  ): ReadonlyMap<string, { readonly attempt: number; readonly accepted: boolean }> {
+    const accepted = this.#acceptedPublicationDigests(repositoryId, runId);
+    const found = new Map<string, { readonly attempt: number; readonly accepted: boolean }>();
+    for (const row of this.#database
+      .prepare<
+        [string],
+        { content_digest: string; publication_digest: string; attempt_ordinal: number }
+      >(
+        `SELECT p.content_digest, p.publication_digest, a.attempt_ordinal
+         FROM phase_output_publications p
+         JOIN phase_attempts a ON a.attempt_digest = p.attempt_digest
+         WHERE p.run_key = ? ORDER BY a.attempt_ordinal`,
+      )
+      .all(canonicalStringify([repositoryId, runId]))) {
+      const held = found.get(row.content_digest);
+      // The same bytes can be published by more than one attempt. The accepted
+      // one is the answer; failing that, the latest.
+      if (held !== undefined && (held.accepted || held.attempt > row.attempt_ordinal)) continue;
+      found.set(row.content_digest, {
+        attempt: row.attempt_ordinal,
+        accepted: accepted.has(row.publication_digest),
+      });
+    }
+    return found;
+  }
+
+  /**
+   * The publications a phase closed over.
+   *
+   * A closure records them on the run, which is where the driver writes them.
+   * The acceptance table is filled by a consumer that hands the closure back,
+   * and a driven run never does.
+   */
+  #acceptedPublicationDigests(repositoryId: string, runId: string): ReadonlySet<string> {
+    const accepted = new Set<string>();
+    const row = this.#runtimeRecordRow(repositoryId, runId);
+    if (row === undefined) return accepted;
+    const records = requiredJsonRecord(
+      decodeDurableJsonValue(row.records_json),
+      "Portal runtime records",
+    );
+    for (const lifecycle of runtimeLifecycleRecords(records)) {
+      const closure = optionalJsonRecord(lifecycle.closure);
+      const acceptances = Array.isArray(closure?.outputAcceptances)
+        ? closure.outputAcceptances
+        : [];
+      for (const entry of acceptances) {
+        const acceptance = optionalJsonRecord(entry);
+        if (typeof acceptance?.publicationDigest === "string")
+          accepted.add(acceptance.publicationDigest);
+      }
+    }
+    return accepted;
+  }
+
+  /** The gate evidence each phase was judged by, named so a reader can fetch it. */ #phaseGateDigests(
+    repositoryId: string,
+    runId: string,
+  ): ReadonlyMap<string, string> {
     const digests = new Map<string, string>();
     const row = this.#runtimeRecordRow(repositoryId, runId);
     if (row === undefined) return digests;
