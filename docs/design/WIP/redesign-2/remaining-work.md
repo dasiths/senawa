@@ -682,11 +682,12 @@ That is a hypothesis, not a finding. It has not been confirmed against the
 running process, and the run has since been reset, so confirming it needs a
 fresh reproduction with the service's own state visible.
 
-And it is weakened by one more reading. `status()` runs through
-`#enqueueOperation`, the same serialized queue as `runCycle`, so a cycle that
-never resolved would hang every later status call. Status answered promptly
-throughout, and `make portal` kept minting tokens. Nothing was stuck in that
-queue, which means the pump was clearing and cycles were running.
+And it is weakened by one more reading, though not for the reason first given
+here. The original note said `status()` answered promptly so nothing was stuck
+in the operation queue. That inference was wrong: `senawa status` reads the
+database directly and never touches the supervisor. What it showed was only that
+the *database* was readable. The conclusion held for other reasons, but the step
+did not, and it is corrected rather than left standing.
 
 So cycles ran, took the stalled run as their target through `schedulable`,
 called `runOnceAsync`, and it reported `worked: false` every time. The silence
@@ -907,6 +908,28 @@ All four retry paths now pass the member the dispatch belongs to. A test drives
 a fan-out, steers the *second* member into a retry, and asserts the retry is for
 the second member's task; it fails against the old behaviour by re-running the
 first.
+
+### Found beside it: the supervisor answers nobody while an agent works
+
+Measured on the validation run, while agents were working:
+
+```text
+senawa status <repo> <run>   2.5s   (reads the database)
+senawa service status        15s    (times out over IPC)
+senawa portal                15s    (times out over IPC)
+```
+
+Every request that reaches the supervisor is enqueued on the same serialized
+operation queue as `runCycle`, and a cycle awaits a whole agent turn. So for the
+minutes an agent is working, the supervisor answers nothing: a person cannot
+open the console, read health, or drain. When the same run was stalled with no
+agent working, `make portal` minted tokens immediately.
+
+The console is exactly what a person reaches for while agents are working, which
+is the only time it does not answer.
+
+* [ ] A read of the supervisor's own state does not queue behind a run cycle
+* [ ] Minting a portal credential does not queue behind a run cycle
 
 ### Found beyond it: the run's own record held to a message's ceiling
 
