@@ -342,7 +342,6 @@ The bounded live probe requires all of these variables:
 ```bash
 export SENAWA_COPILOT_ACKNOWLEDGE_COST_AND_DATA=1
 export SENAWA_COPILOT_MODEL=<model>
-export SENAWA_COPILOT_MAX_AI_CREDITS=<positive number>
 export SENAWA_COPILOT_TIMEOUT_MS=<positive integer>
 pnpm test:live-worker
 ```
@@ -362,8 +361,8 @@ With a positive timeout set and no acknowledgement, it refuses next:
 Error: Live worker testing can spend AI credits and send data. Set SENAWA_COPILOT_ACKNOWLEDGE_COST_AND_DATA=1 with the bounded live probe variables to continue.
 ```
 
-`SENAWA_COPILOT_MODEL` and `SENAWA_COPILOT_MAX_AI_CREDITS` are read by the
-Vitest lane the runner spawns, so their absence surfaces after both checks pass.
+`SENAWA_COPILOT_MODEL` is read by the
+Vitest lane the runner spawns, so its absence surfaces after both checks pass.
 
 Live worker operation also requires `@github/copilot-sdk` version `1.0.9` to be
 available separately and a repository worker configured through

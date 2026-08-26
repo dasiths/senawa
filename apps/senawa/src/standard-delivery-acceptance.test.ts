@@ -588,7 +588,6 @@ describe("Phase 14F standard delivery acceptance", () => {
       for (const name of [
         "SENAWA_COPILOT_LIVE",
         "SENAWA_COPILOT_MODEL",
-        "SENAWA_COPILOT_MAX_AI_CREDITS",
         "SENAWA_COPILOT_ACKNOWLEDGE_COST_AND_DATA",
       ])
         expect(process.env[name]).toBeUndefined();

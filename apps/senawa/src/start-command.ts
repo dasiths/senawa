@@ -20,7 +20,6 @@ export interface StartCommandOptions {
   readonly requestPath: string;
   readonly repositoryId: string;
   readonly runId?: string;
-  readonly maxAiCredits?: number;
   /** Return as soon as the first phase is dispatched instead of driving the run. */
   readonly detach?: boolean;
 }
@@ -68,7 +67,6 @@ export async function runStartCommand(
         commitDigest: sha256Digest("0".repeat(64)),
         treeDigest: sha256Digest("0".repeat(64)),
       },
-      ...(options.maxAiCredits === undefined ? {} : { maxAiCredits: options.maxAiCredits }),
     });
     return {
       output: [

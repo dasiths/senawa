@@ -169,7 +169,6 @@ Each top-level key names an agent.
 | `models` | One of two | Ordered route list | None |
 | `provider` | No | Provider name | `github-copilot` |
 | `session` | No | `run`, `phase`, or `element` | `run` |
-| `credits` | No | Positive number | 1 |
 
 Declaring both `model` and `models` is refused. A route in `models` is an object,
 never a bare string:

@@ -260,7 +260,6 @@ describe("worker model route selections", () => {
         maxTurns: 4,
         maxSubmissions: 3,
         maxMillidollars: 2_000,
-        maxAiCredits: 1.25,
       },
     });
     expect(
@@ -324,12 +323,6 @@ describe("worker model route selections", () => {
       },
     ],
     [
-      "AI credits",
-      (value: MutableRouteSelection) => {
-        value.limits.maxAiCredits += 1;
-      },
-    ],
-    [
       "digest",
       (value: MutableRouteSelection) => {
         value.selectionDigest = digest("e");
@@ -360,9 +353,6 @@ describe("worker model route selections", () => {
     { ...routeSelectionInput(), maxTurns: 0 },
     { ...routeSelectionInput(), maxSubmissions: 0 },
     { ...routeSelectionInput(), maxMillidollars: 0 },
-    { ...routeSelectionInput(), maxAiCredits: 0 },
-    { ...routeSelectionInput(), maxAiCredits: 1e-20 },
-    { ...routeSelectionInput(), maxAiCredits: Number.POSITIVE_INFINITY },
   ])("rejects invalid route input %#", (input) => {
     const context = createWorkerContextBase(contextInput("software"), deterministicSha256);
     const dispatch = createWorkerDispatch(dispatchInput(), context, deterministicSha256);
@@ -610,7 +600,6 @@ function routeSelectionInput() {
     maxTurns: 4,
     maxSubmissions: 3,
     maxMillidollars: 2_000,
-    maxAiCredits: 1.25,
   };
 }
 
@@ -628,7 +617,6 @@ interface MutableRouteSelection {
     maxTurns: number;
     maxSubmissions: number;
     maxMillidollars: number;
-    maxAiCredits: number;
   };
 }
 

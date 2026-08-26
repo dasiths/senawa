@@ -243,7 +243,7 @@ Error: Live worker testing can spend AI credits and send data. Set SENAWA_COPILO
 ```
 
 The probe then prints a cost and data warning and starts the Vitest lane, which
-requires `SENAWA_COPILOT_MODEL` and a positive `SENAWA_COPILOT_MAX_AI_CREDITS`.
+requires `SENAWA_COPILOT_MODEL`.
 Live tests are excluded from default and packaging validation.
 
 Model routes carry their own `maxTurns`, `maxSubmissions`, and

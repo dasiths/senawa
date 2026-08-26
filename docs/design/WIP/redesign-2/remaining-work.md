@@ -509,7 +509,7 @@ asked, all three answered, three `suspended` attempts — which is precisely the
 fact that was being lost. Breaking the disposition makes it fail; the live run
 is what holds the rest.
 
-## Phase 13: a session out of credits is a budget, not a crash
+## Phase 13: the AI credit ceiling is removed
 
 The condition run for phases 7 to 12, `run_c42fa12ae7a3f8fd5dc3532bf5c83f43`,
 stopped at `research` with eleven cancelled outcomes. Every one of them said:
@@ -551,11 +551,34 @@ Three things are wrong and only two of them are obvious:
   entirely and make it meaningless; raising it silently spends somebody's money.
   This one needs deciding rather than implementing.
 
-* [ ] A turn that fails because its session is out of credits is not retried
-  against the same ceiling
-* [ ] That failure is reported as an exhausted budget, naming the session and
-  the ceiling, rather than as a crashed worker
-* [ ] What a person can do about it is written down where they will read it
+### Decided: the ceiling is removed
+
+The third one was put to a person, which is what it was written down for, and
+the answer was to delete the whole mechanism rather than to repair it.
+
+That answers the other two by removing what they were about. There is no
+per-session credit ceiling to exceed, so no resume is refused for one, so
+nothing is retried against it and nothing needs reporting as an exhausted
+budget. A ceiling that stops a run dead and cannot be raised without stopping
+the run to raise it is not a budget; it is a fuse.
+
+What went is the ceiling and only the ceiling: the authored `credits` key, its
+compiled `maxAiCredits`, the route selection's fourth limit, the
+`sessionLimits` handed to the SDK, the `SENAWA_COPILOT_MAX_AI_CREDITS`
+variable, and the reporting that copied it. The route still carries `maxTurns`,
+`maxSubmissions` and `maxMillidollars`, and the run still carries its own
+allowance policy with the escalation a person answers — which is the budget
+that was always doing the work.
+
+Cost warnings stay. Every "this spends AI credits" in the guides and probes is
+true and unrelated to the ceiling.
+
+* [x] A turn that fails because its session is out of credits is not retried
+  against the same ceiling — there is no ceiling
+* [x] That failure is reported as an exhausted budget rather than a crashed
+  worker — the failure no longer happens
+* [x] What a person can do about it is written down where they will read it —
+  nothing is left for them to do
 
 ## Phase 14: a failed pump stops driving and cannot be restarted
 

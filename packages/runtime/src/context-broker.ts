@@ -782,10 +782,7 @@ export class InMemoryContextAuthority implements ContextAuthorityPort {
     )
       throw new TypeError("Unsupported durable context authority version");
     assertNoGrantTokenField(parsed, "snapshot");
-    const dispatchRecords = [
-      ...durableArray(parsed.dispatches, "dispatches"),
-      ...storedDispatches,
-    ];
+    const dispatchRecords = [...durableArray(parsed.dispatches, "dispatches"), ...storedDispatches];
     if (!hasTaskScopes && dispatchRecords.length > 0)
       durableFailure("nonempty context authority snapshots require taskScopes");
     const taskScopeRecords = hasTaskScopes ? durableArray(parsed.taskScopes, "taskScopes") : [];

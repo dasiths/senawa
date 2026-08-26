@@ -33,7 +33,6 @@ export interface StartAuthoredRunInput {
     readonly commitDigest: Sha256Digest;
     readonly treeDigest: Sha256Digest;
   };
-  readonly maxAiCredits?: number;
   readonly configurationDirectory?: string;
 }
 
@@ -131,7 +130,6 @@ export async function startAuthoredRun(input: StartAuthoredRunInput): Promise<St
       workflowInput: { bindingDigest: binding.bindingDigest, value: input.input },
       repositoryBase: input.repositoryBase,
       currentTime: input.currentTime,
-      ...(input.maxAiCredits === undefined ? {} : { maxAiCredits: input.maxAiCredits }),
     });
 
     // The first dispatch of a run is an attempt like any other. Recording it

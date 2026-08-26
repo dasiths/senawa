@@ -313,8 +313,6 @@ export interface ModelRouteDeclaration {
   readonly maxTurns: number;
   readonly maxSubmissions: number;
   readonly maxMillidollars: number;
-  /** AI credits one turn may spend. The host refuses a session below its floor. */
-  readonly maxAiCredits?: number;
 }
 
 export interface SensorDeclaration {

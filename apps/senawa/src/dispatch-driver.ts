@@ -83,7 +83,6 @@ interface SnapshotModelPolicy {
     readonly maxTurns: number;
     readonly maxSubmissions: number;
     readonly maxMillidollars: number;
-    readonly maxAiCredits?: number;
   }[];
 }
 
@@ -127,8 +126,6 @@ export interface DispatchPhaseInput {
   };
   readonly currentTime: string;
   readonly timeoutMs?: number;
-  /** Credit ceiling for this dispatch. The compiler has no route field for it. */
-  readonly maxAiCredits?: number;
   /** Where session continuity is read and recorded. Omitted, every dispatch is fresh. */
   readonly sessionLedger?: AgentSessionLedgerPort;
 }
@@ -422,8 +419,6 @@ export function dispatchPhase(input: DispatchPhaseInput): DispatchPhaseResult {
       maxTurns: route.maxTurns,
       maxSubmissions: route.maxSubmissions,
       maxMillidollars: route.maxMillidollars,
-      // The authored route is the answer unless a caller overrides it.
-      maxAiCredits: input.maxAiCredits ?? route.maxAiCredits ?? 1,
     },
     context,
     dispatch,

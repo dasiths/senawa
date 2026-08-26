@@ -79,7 +79,6 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
     "admits one bounded completion-only dispatch",
     async () => {
       const model = requiredEnvironment("SENAWA_COPILOT_MODEL");
-      const maxAiCredits = positiveNumberEnvironment("SENAWA_COPILOT_MAX_AI_CREDITS");
       if (process.env.SENAWA_COPILOT_ACKNOWLEDGE_COST_AND_DATA !== "1") {
         throw new Error("Live Copilot probe requires explicit cost and data acknowledgement");
       }
@@ -195,7 +194,6 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
             maxTurns: 1,
             maxSubmissions: 1,
             maxMillidollars: 1,
-            maxAiCredits,
           },
           context,
           dispatch,
@@ -253,7 +251,6 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
     "submits one bounded schema-validated phase output",
     async () => {
       const model = requiredEnvironment("SENAWA_COPILOT_MODEL");
-      const maxAiCredits = positiveNumberEnvironment("SENAWA_COPILOT_MAX_AI_CREDITS");
       if (process.env.SENAWA_COPILOT_ACKNOWLEDGE_COST_AND_DATA !== "1") {
         throw new Error("Live Copilot probe requires explicit cost and data acknowledgement");
       }
@@ -370,7 +367,6 @@ describe.skipIf(!liveEnabled)("Copilot live worker", () => {
             maxTurns: 2,
             maxSubmissions: 2,
             maxMillidollars: 1,
-            maxAiCredits,
           },
           context,
           dispatch,

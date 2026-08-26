@@ -25,7 +25,6 @@ const AGENTS = `
 planner:
   prompt: prompts/planner.md
   model: ${model}
-  credits: 40
 `;
 
 const WORKFLOW = `

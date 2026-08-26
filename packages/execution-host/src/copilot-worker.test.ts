@@ -190,12 +190,10 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect(sdk.resumeCalls[0]?.config.continuePendingWork).toBe(false);
     const config = required(sdk.createCalls[0]);
     expect(config.model).toBe("gpt-5-mini");
-    expect(config.sessionLimits).toEqual({ maxAiCredits: 1.25 });
     expect(first.selection.limits).toEqual({
       maxTurns: 4,
       maxSubmissions: 8,
       maxMillidollars: 2_000,
-      maxAiCredits: 1.25,
     });
     expect(config).toMatchObject({
       excludedTools: ["builtin:*", "mcp:*"],
@@ -824,7 +822,7 @@ describe("CopilotSerialWorkerAdapter", () => {
     },
   );
 
-  it("enforces the Senawa submission ceiling without treating it as AI credits", async () => {
+  it("enforces the Senawa submission ceiling", async () => {
     const sdk = new FakeSdkPort();
     const fixture = harness(sdk, { maxSubmissions: 1 });
     const outputs: CopilotSdkToolResult[] = [];
@@ -841,7 +839,6 @@ describe("CopilotSerialWorkerAdapter", () => {
     expect(result.status).toBe("awaiting-answer");
     expect(fixture.broker.submissions).toHaveLength(1);
     expect(outputs.map(({ resultType }) => resultType)).toEqual(["success", "failure"]);
-    expect(required(sdk.createCalls[0]).sessionLimits).toEqual({ maxAiCredits: 1.25 });
   });
 
   it("rejects a prompt digest mismatch before contacting the SDK", async () => {
@@ -1611,7 +1608,6 @@ function harness(
       maxTurns: 4,
       maxSubmissions: options.maxSubmissions ?? 8,
       maxMillidollars: 2_000,
-      maxAiCredits: 1.25,
     },
     context,
     dispatch,

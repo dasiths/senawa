@@ -251,7 +251,6 @@ export interface WorkerModelRouteSelectionInput {
   readonly maxTurns: number;
   readonly maxSubmissions: number;
   readonly maxMillidollars: number;
-  readonly maxAiCredits: number;
 }
 
 export interface WorkerModelRouteSelection {
@@ -269,7 +268,6 @@ export interface WorkerModelRouteSelection {
     readonly maxTurns: number;
     readonly maxSubmissions: number;
     readonly maxMillidollars: number;
-    readonly maxAiCredits: number;
   }>;
   readonly selectionDigest: Sha256Digest;
 }
@@ -578,7 +576,7 @@ export function validateWorkerModelRouteSelection(
   assertExactKeys(
     snapshot.limits,
     "worker model route selection limits",
-    ["maxTurns", "maxSubmissions", "maxMillidollars", "maxAiCredits"],
+    ["maxTurns", "maxSubmissions", "maxMillidollars"],
     "invalid-route-selection",
   );
   const recompiled = compileWorkerModelRouteSelection(
@@ -589,7 +587,6 @@ export function validateWorkerModelRouteSelection(
       maxTurns: snapshot.limits.maxTurns,
       maxSubmissions: snapshot.limits.maxSubmissions,
       maxMillidollars: snapshot.limits.maxMillidollars,
-      maxAiCredits: snapshot.limits.maxAiCredits,
     },
     context,
     dispatch,
@@ -903,15 +900,7 @@ function compileWorkerModelRouteSelection(
   assertExactKeys(
     value,
     "worker model route selection input",
-    [
-      "routeIndex",
-      "provider",
-      "model",
-      "maxTurns",
-      "maxSubmissions",
-      "maxMillidollars",
-      "maxAiCredits",
-    ],
+    ["routeIndex", "provider", "model", "maxTurns", "maxSubmissions", "maxMillidollars"],
     "invalid-route-selection",
   );
   if (!isNonNegativeSafeInteger(value.routeIndex)) {
@@ -932,18 +921,6 @@ function compileWorkerModelRouteSelection(
       fail("invalid-route-selection", `${name} must be a positive safe integer`);
     }
   }
-  if (
-    typeof value.maxAiCredits !== "number" ||
-    !Number.isFinite(value.maxAiCredits) ||
-    value.maxAiCredits <= 0 ||
-    Math.round(value.maxAiCredits * 1_000_000_000) < 1 ||
-    !Number.isSafeInteger(Math.round(value.maxAiCredits * 1_000_000_000))
-  ) {
-    fail(
-      "invalid-route-selection",
-      "maxAiCredits must round to a positive safe integer nano-credit ceiling",
-    );
-  }
   const content = {
     apiVersion: WORKER_MODEL_ROUTE_SELECTION_API_VERSION,
     dispatchId: dispatch.dispatchId,
@@ -959,7 +936,6 @@ function compileWorkerModelRouteSelection(
       maxTurns: value.maxTurns,
       maxSubmissions: value.maxSubmissions,
       maxMillidollars: value.maxMillidollars,
-      maxAiCredits: value.maxAiCredits,
     },
   };
   const selectionDigest = canonicalDigest(canonicalValue(content), sha256);

@@ -151,7 +151,6 @@ interface ParsedModelRoute {
   readonly maxTurns: number;
   readonly maxSubmissions: number;
   readonly maxMillidollars: number;
-  readonly maxAiCredits?: number;
 }
 
 interface ParsedSensor {
@@ -1468,7 +1467,7 @@ function parseModelRoute(
     value,
     pointer,
     ["provider", "model", "maxTurns", "maxSubmissions", "maxMillidollars"],
-    ["maxAiCredits"],
+    [],
     collector,
   );
   if (object === undefined) return undefined;
@@ -1493,9 +1492,6 @@ function parseModelRoute(
     `${pointer}/maxMillidollars`,
     collector,
   );
-  const maxAiCredits = Object.hasOwn(object, "maxAiCredits")
-    ? parsePositiveInteger(object.maxAiCredits, `${pointer}/maxAiCredits`, collector)
-    : undefined;
   return provider === undefined ||
     model === undefined ||
     provider === "auto" ||
@@ -1510,7 +1506,6 @@ function parseModelRoute(
         maxTurns,
         maxSubmissions,
         maxMillidollars,
-        ...(maxAiCredits === undefined ? {} : { maxAiCredits }),
       };
 }
 

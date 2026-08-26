@@ -41,7 +41,6 @@ export interface CopilotSdkPreToolUseResult {
 export interface CopilotSdkSessionConfig {
   readonly sessionId?: string;
   readonly model: string;
-  readonly sessionLimits: Readonly<{ readonly maxAiCredits: number }>;
   readonly tools: readonly CopilotSdkTool[];
   readonly availableTools: readonly string[];
   readonly excludedTools: readonly ["builtin:*", "mcp:*"];

@@ -245,7 +245,6 @@ export function createWorkerExecutionFixture(
       maxTurns: 4,
       maxSubmissions: 4,
       maxMillidollars: 2_000,
-      maxAiCredits: 1,
     },
     context,
     dispatch,

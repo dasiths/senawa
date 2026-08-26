@@ -529,7 +529,6 @@ describe("Phase 14I structured output acceptance", () => {
       for (const name of [
         "SENAWA_COPILOT_LIVE",
         "SENAWA_COPILOT_MODEL",
-        "SENAWA_COPILOT_MAX_AI_CREDITS",
         "SENAWA_COPILOT_TIMEOUT_MS",
         "SENAWA_COPILOT_ACKNOWLEDGE_COST_AND_DATA",
       ]) {
@@ -874,7 +873,6 @@ function buildFixture(): Fixture {
       maxTurns: 4,
       maxSubmissions: 8,
       maxMillidollars: 2_000,
-      maxAiCredits: 1.25,
     },
     context,
     dispatch,

@@ -911,7 +911,6 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
           max_turns: number | null;
           max_submissions: number | null;
           max_millidollars: number | null;
-          max_ai_credits: string | null;
         }
       >(
         `SELECT command_id,
@@ -924,8 +923,7 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
                 json_extract(canonical_command, '$.input.routeSelection.modelPolicy.model') AS model,
                 json_extract(canonical_command, '$.input.routeSelection.limits.maxTurns') AS max_turns,
                 json_extract(canonical_command, '$.input.routeSelection.limits.maxSubmissions') AS max_submissions,
-                json_extract(canonical_command, '$.input.routeSelection.limits.maxMillidollars') AS max_millidollars,
-                CAST(json_extract(canonical_command, '$.input.routeSelection.limits.maxAiCredits') AS TEXT) AS max_ai_credits
+                json_extract(canonical_command, '$.input.routeSelection.limits.maxMillidollars') AS max_millidollars
          FROM runner_commands WHERE run_key = ?
            AND json_extract(canonical_command, '$.kind') = 'worker'
          ORDER BY command_id`,
@@ -939,7 +937,6 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
           digest: row.selection_digest,
           references: [reference("related", "runner-command", row.command_id)],
           scalars: scalars({
-            maxAiCredits: row.max_ai_credits,
             maxMillidollars: row.max_millidollars,
             maxSubmissions: row.max_submissions,
             maxTurns: row.max_turns,
@@ -958,7 +955,6 @@ export class SqliteReportingSnapshotAuthority implements ReportingSnapshotPort {
           identity: row.selection_digest,
           references: [reference("related", "model-selection", row.selection_digest)],
           scalars: scalars({
-            maxAiCredits: row.max_ai_credits,
             maxMillidollars: row.max_millidollars,
             maxSubmissions: row.max_submissions,
             maxTurns: row.max_turns,

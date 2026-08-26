@@ -473,7 +473,6 @@ function sessionConfig(
   const knownTools = new Set(availableTools);
   const config: CopilotSdkSessionConfig = {
     model: selection.modelPolicy.model,
-    sessionLimits: Object.freeze({ maxAiCredits: selection.limits.maxAiCredits }),
     tools,
     availableTools,
     excludedTools: Object.freeze(["builtin:*", "mcp:*"] as const),

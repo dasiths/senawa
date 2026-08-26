@@ -264,7 +264,6 @@ function commonConfig(
   return {
     clientName: "senawa",
     model: config.model,
-    sessionLimits: config.sessionLimits,
     tools: config.tools.map((tool) => {
       if (defineTool === undefined) {
         throw new TypeError("Copilot SDK tools require the loaded production adapter");
