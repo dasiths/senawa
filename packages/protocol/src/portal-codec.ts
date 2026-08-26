@@ -986,6 +986,7 @@ function portalGraphNode(value: unknown, path: string): PortalGraphNode {
       "supersededBy",
       "attempt",
       "roleKey",
+      "gateDigest",
       "dispatchId",
     ],
   );
@@ -1006,6 +1007,7 @@ function portalGraphNode(value: unknown, path: string): PortalGraphNode {
   optional(object, "supersededBy", identity, path);
   optional(object, "attempt", (entry, entryPath) => integer(entry, entryPath, 1), path);
   optional(object, "roleKey", consumerKey, path);
+  optional(object, "gateDigest", digest, path);
   optional(object, "dispatchId", identity, path);
   return Object.freeze({
     ...object,

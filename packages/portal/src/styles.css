@@ -691,6 +691,37 @@ textarea {
   color: var(--ink);
 }
 
+/* What a gate asked of a phase, and what it read. */
+.gate-reading {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.gate-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.gate-phase {
+  color: var(--ink);
+  font-weight: 570;
+}
+
+.gate-decision {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.gate-decision.is-rejected {
+  color: var(--bad, #b4232c);
+}
+
+.gate-decision.is-accepted {
+  color: var(--good, #1f7a35);
+}
+
 /* Where the reader is, and the way back out. */
 .scope-trail {
   display: flex;

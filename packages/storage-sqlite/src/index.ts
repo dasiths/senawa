@@ -3864,7 +3864,11 @@ export class SqlitePortalQueryAuthority {
     const projection = this.#database
       .transaction(() => {
         const graph = this.#requiredGraphRevision(repositoryId, runId, graphRevision);
-        return { graph, statuses: this.#graphNodeStatuses(repositoryId, runId, graph) };
+        return {
+          graph,
+          statuses: this.#graphNodeStatuses(repositoryId, runId, graph),
+          gates: this.#phaseGateDigests(repositoryId, runId),
+        };
       })
       .deferred();
     const graph = projection.graph;
@@ -3900,6 +3904,9 @@ export class SqlitePortalQueryAuthority {
           ...(status.attempt === undefined ? {} : { attempt: status.attempt }),
           ...(status.roleKey === undefined ? {} : { roleKey: status.roleKey }),
           ...(status.dispatchId === undefined ? {} : { dispatchId: status.dispatchId }),
+          ...(node.kind === "phase" && projection.gates.has(definition.id)
+            ? { gateDigest: projection.gates.get(definition.id) }
+            : {}),
           humanNeedCount: status.humanNeedCount,
           evidenceCount: status.evidenceCount,
         };
@@ -5001,6 +5008,26 @@ export class SqlitePortalQueryAuthority {
       throw new PageQueryError("cursor-ahead", "Portal graph revision is stale");
     }
     return graph;
+  }
+
+  /** The gate evidence each phase was judged by, named so a reader can fetch it. */
+  #phaseGateDigests(repositoryId: string, runId: string): ReadonlyMap<string, string> {
+    const digests = new Map<string, string>();
+    const row = this.#runtimeRecordRow(repositoryId, runId);
+    if (row === undefined) return digests;
+    const records = requiredJsonRecord(
+      decodeDurableJsonValue(row.records_json),
+      "Portal runtime records",
+    );
+    for (const lifecycle of runtimeLifecycleRecords(records)) {
+      const phase = optionalJsonRecord(lifecycle.phase);
+      const gate = optionalJsonRecord(lifecycle.gateEvidence);
+      const evaluation = gate === undefined ? undefined : optionalJsonRecord(gate.evaluation);
+      if (typeof phase?.phaseId !== "string") continue;
+      if (typeof evaluation?.evaluationDigest !== "string") continue;
+      digests.set(phase.phaseId, evaluation.evaluationDigest);
+    }
+    return digests;
   }
 
   #graphNodeStatuses(

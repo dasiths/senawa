@@ -88,6 +88,7 @@ export interface PortalRenderActions {
   readonly closeDialog: () => void;
   readonly submitDialog: (kind: DialogKind, values: Readonly<Record<string, string>>) => void;
   readonly loadArtifact: (artifact: PortalArtifactMetadata) => void;
+  readonly loadGate: (digest: string) => void;
   readonly pageActivity: (kind: "events" | "receipts", before: number) => void;
   readonly toggleRightRail: (open: boolean) => void;
   readonly setTranscriptPinned: (pinned: boolean) => void;
@@ -1481,31 +1482,122 @@ function checksPane(
   // the thing that refuses a run. It had no surface at all, so diagnosing a
   // refusal meant reading the database.
   const phases = scope.level === "phase" ? [scope.node] : nodes.filter((n) => n.kind === "phase");
-  const list = element("ul", "answered");
   for (const phase of phases) {
-    const item = element("li", "");
-    item.append(textElement("p", "a-q", phase.title));
-    item.append(textElement("p", "a-a", `phase is ${phase.runState}`));
-    const foot = element("p", "a-when");
-    const trail = element("span", "row-where");
+    holder.append(gateReading(state, phase, scope, actions));
+  }
+  if (holder.childElementCount === 0)
+    holder.append(textElement("p", "empty-state", "No phase has been gated yet."));
+  return holder;
+}
+
+/** What one phase's gate asked of it, and what it read. */
+function gateReading(
+  state: PortalState,
+  phase: PortalGraphNode,
+  scope: DetailScope,
+  actions: PortalRenderActions,
+): HTMLElement {
+  const holder = element("section", "gate-reading");
+  const head = element("div", "gate-head");
+  if (scope.level === "run") {
     const button = commandButton(phase.title, () => actions.focusRecord(phase.nodeId));
     button.className = "row-scope";
-    if (scope.level === "run") {
-      trail.append(button);
-      foot.append(trail);
-    }
-    item.append(foot);
-    list.append(item);
+    head.append(button);
+  } else head.append(textElement("span", "gate-phase", phase.title));
+  const digest = phase.gateDigest;
+  if (digest === undefined) {
+    head.append(textElement("span", "gate-decision", "no gate has been evaluated"));
+    holder.append(head);
+    return holder;
   }
-  holder.append(list);
-  holder.append(
-    textElement(
-      "p",
-      "empty-state",
-      "A gate's rule, its reading and its decision are recorded on the phase but are not served to the portal yet.",
-    ),
-  );
+  const record = state.caches.gates[digest];
+  if (record === undefined) {
+    actions.loadGate(digest);
+    head.append(textElement("span", "gate-decision", "reading\u2026"));
+    holder.append(head);
+    return holder;
+  }
+  const body = optionalRecord(record.body);
+  const evaluation = optionalRecord(body?.evaluation);
+  const decision = typeof evaluation?.decision === "string" ? evaluation.decision : "unknown";
+  head.append(textElement("span", `gate-decision is-${decision}`, decision));
+  holder.append(head);
+  const rules = Array.isArray(evaluation?.blocking) ? evaluation.blocking : [];
+  const definition = optionalRecord(body?.definition);
+  const declared = Array.isArray(definition?.blocking) ? definition.blocking : [];
+  const table = element("table", "summary-table");
+  const headRow = element("tr", "");
+  for (const column of ["Rule", "Asked", "Read", "Result"])
+    headRow.append(textElement("th", "", column));
+  table.append(headRow);
+  for (const rule of rules) {
+    const outcome = optionalRecord(rule);
+    const key = typeof outcome?.key === "string" ? outcome.key : "";
+    const declaredRule = optionalRecord(
+      declared.find((entry) => optionalRecord(entry)?.key === key),
+    );
+    const condition = optionalRecord(declaredRule?.condition);
+    const accessor = optionalRecord(condition?.accessor);
+    const sensorKey = typeof accessor?.sensorKey === "string" ? accessor.sensorKey : key;
+    const pointer = typeof accessor?.pointer === "string" ? accessor.pointer : "";
+    const row = element("tr", "");
+    row.append(
+      textElement("td", "", `${sensorKey}${pointer}`),
+      textElement(
+        "td",
+        "",
+        `${String(condition?.operator ?? "equals")} ${JSON.stringify(condition?.expected ?? null)}`,
+      ),
+      textElement("td", "", gateReadingValue(body, sensorKey, pointer)),
+      textElement("td", "", outcome?.result === "true" ? "passed" : "failed"),
+    );
+    table.append(row);
+  }
+  if (rules.length > 0) holder.append(table);
+  const printed = gateOutput(body);
+  if (printed !== undefined) holder.append(renderJson(printed, "What the sensor printed"));
   return holder;
+}
+
+function optionalRecord(value: unknown): Readonly<Record<string, JsonValue>> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Readonly<Record<string, JsonValue>>)
+    : undefined;
+}
+
+/** The value a rule's pointer selected, read back out of the reading it judged. */
+function gateReadingValue(
+  body: Readonly<Record<string, JsonValue>> | undefined,
+  sensorKey: string,
+  pointer: string,
+): string {
+  const readings = Array.isArray(body?.readings) ? body.readings : [];
+  const reading = optionalRecord(
+    readings.find((entry) => optionalRecord(entry)?.sensorKey === sensorKey),
+  );
+  if (reading === undefined) return "\u2014";
+  let current: JsonValue | undefined = reading.data;
+  for (const segment of pointer.split("/").filter((part) => part.length > 0)) {
+    const held = optionalRecord(current);
+    if (held === undefined) return "\u2014";
+    current = held[segment];
+  }
+  return current === undefined ? "\u2014" : JSON.stringify(current);
+}
+
+/** What the sensors printed, which is the part a person can act on. */
+function gateOutput(body: Readonly<Record<string, JsonValue>> | undefined): JsonValue | undefined {
+  const readings = Array.isArray(body?.readings) ? body.readings : [];
+  const printed = readings
+    .map((entry) => optionalRecord(entry))
+    .filter((entry): entry is Readonly<Record<string, JsonValue>> => entry !== undefined)
+    .map((entry) => ({
+      sensor: entry.sensorKey ?? null,
+      outcome: entry.outcome ?? null,
+      ...(entry.data === undefined ? {} : { data: entry.data }),
+      ...(entry.error === undefined ? {} : { error: entry.error }),
+    }));
+  return printed.length === 0 ? undefined : (printed as unknown as JsonValue);
 }
 
 /**

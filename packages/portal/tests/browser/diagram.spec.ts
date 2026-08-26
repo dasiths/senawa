@@ -65,6 +65,23 @@ test("scopes the detail view to the run, a phase, and one piece of work", async 
   expect(diagnostics.severe()).toEqual([]);
 });
 
+test("reads a phase's gate: what it asked, what it read, and what it decided", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await navigate(page, "Workflow");
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
+  await page.locator(".band-read").first().click();
+  await page.getByRole("tab", { name: "Checks", exact: true }).click();
+
+  // A gate is a phase record the driver produced, and it is the thing that
+  // refuses a run. It had no surface at all, so diagnosing a refusal meant
+  // reading the database.
+  const reading = page.locator(".gate-reading").first();
+  await expect(reading).toBeVisible();
+  await expect(reading.locator(".gate-decision")).not.toHaveText("");
+
+  expect(diagnostics.severe()).toEqual([]);
+});
+
 test("reads what a phase produced inside the phase", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");

@@ -1280,23 +1280,23 @@ to arrive, because it groups from `byWork.values()` while both graph views rank
 with `executionOrdered`. It also emits `ul.tree-children`, which has no style at
 all, so it does not even get the indent `.tree-group` gives the workflow tree.
 
-* [ ] The detail view is scoped by run, phase or task, and a breadcrumb above
+* [x] The detail view is scoped by run, phase or task, and a breadcrumb above
   the tabs shows and sets the level
-* [ ] A run is the default scope, so there is no unselected state and no
+* [x] A run is the default scope, so there is no unselected state and no
   `Select an agent` prompt
-* [ ] The transcript's `every agent` / `this agent` toggle is gone, because the
+* [x] The transcript's `every agent` / `this agent` toggle is gone, because the
   breadcrumb is that control
-* [ ] Live, Answers, Produced and About each render at all three levels
-* [ ] A Checks tab shows the gate's rule, reading and decision at a phase, and a
+* [x] Live, Answers, Produced and About each render at all three levels
+* [x] A Checks tab shows the gate's rule, reading and decision at a phase, and a
   node's criteria at a task
-* [ ] A table shows the part of the path below the current scope, and clicking
+* [x] A table shows the part of the path below the current scope, and clicking
   it scopes there
 * [ ] Produced names the attempt each artifact came from and which one the phase
   accepted
-* [ ] A phase band names what it produced and how its gate read, and the chip on
+* [x] A phase band names what it produced and how its gate read, and the chip on
   the connector is gone
-* [ ] A phase band's name selects the phase; its disclosure control folds it
-* [ ] The Agents tree orders phases by execution order and draws its own
+* [x] A phase band's name selects the phase; its disclosure control folds it
+* [x] The Agents tree orders phases by execution order and draws its own
   containment
 * [ ] The Agents tree opens a member's attempts, and an attempt scopes the
   detail view to that try

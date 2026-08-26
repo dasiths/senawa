@@ -847,6 +847,27 @@ export class PortalApplication {
     }
   }
 
+  /** Gate evidence is fetched when a reader asks to see it, and kept by digest. */
+  async #loadGate(digest: string): Promise<void> {
+    const identity = this.#selectedIdentity();
+    if (identity === undefined || this.#state.caches.gates[digest] !== undefined) return;
+    try {
+      const record = await this.#client.record(
+        identity.repositoryId,
+        identity.runId,
+        "gate",
+        digest,
+      );
+      this.#dispatch({ type: "cache", cache: "gates", key: digest, value: record });
+    } catch (error) {
+      this.#dispatch({
+        type: "freshness",
+        resource: "workflow",
+        freshness: { status: "failed", message: safeMessage(error, "Gate evidence failed") },
+      });
+    }
+  }
+
   async #pageActivity(kind: "events" | "receipts", before: number): Promise<void> {
     const identity = this.#selectedIdentity();
     if (identity === undefined) return;
@@ -985,6 +1006,7 @@ export class PortalApplication {
       closeDialog: () => this.#closeDialog(),
       submitDialog: (kind, values) => void this.#submitDialog(kind, values),
       loadArtifact: (artifact) => void this.#loadArtifact(artifact.artifactId),
+      loadGate: (digest) => void this.#loadGate(digest),
       pageActivity: (kind, before) => void this.#pageActivity(kind, before),
       toggleRightRail: (open) => this.#dispatch({ type: "right-rail", open }),
       setTranscriptPinned: (pinned) => this.#dispatch({ type: "transcript-pin", pinned }),

@@ -10,6 +10,7 @@ import type {
   PortalGraphNodePage,
   PortalGraphSummary,
   PortalHumanNeed,
+  PortalImmutableRecord,
   PortalIntegrationPage,
   PortalQuestionPage,
   PortalReceiptWindow,
@@ -99,6 +100,8 @@ export interface PortalCaches {
   readonly delivery: Readonly<Record<string, PortalDeliveryPage>>;
   readonly artifactContent: Readonly<Record<string, PortalArtifactContent>>;
   readonly questions: Readonly<Record<string, PortalQuestionPage>>;
+  /** Gate evidence already fetched, keyed by its evaluation digest. */
+  readonly gates: Readonly<Record<string, PortalImmutableRecord>>;
   readonly agents: Readonly<Record<string, PortalAgentPage>>;
   readonly workspaces: Readonly<Record<string, PortalWorkspacePage>>;
   readonly integrations: Readonly<Record<string, PortalIntegrationPage>>;
@@ -271,6 +274,7 @@ const emptyCaches: PortalCaches = Object.freeze({
   delivery: Object.freeze({}),
   artifactContent: Object.freeze({}),
   questions: Object.freeze({}),
+  gates: Object.freeze({}),
   workspaces: Object.freeze({}),
   integrations: Object.freeze({}),
   records: Object.freeze({}),
@@ -671,6 +675,7 @@ function clearRunCaches(caches: PortalCaches): PortalCaches {
     artifacts: Object.freeze({}),
     artifactContent: Object.freeze({}),
     questions: Object.freeze({}),
+    gates: Object.freeze({}),
     workspaces: Object.freeze({}),
     integrations: Object.freeze({}),
     records: Object.freeze({}),

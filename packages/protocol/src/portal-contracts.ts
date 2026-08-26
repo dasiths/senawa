@@ -148,6 +148,8 @@ export interface PortalGraphNode {
   readonly supersededBy?: OpaqueIdentity;
   readonly attempt?: number;
   readonly roleKey?: string;
+  /** The gate evidence that judged this phase, when one has been recorded. */
+  readonly gateDigest?: string;
   /** The dispatch currently executing this node, when authority records one. */
   readonly dispatchId?: OpaqueIdentity;
   readonly humanNeedCount: number;
