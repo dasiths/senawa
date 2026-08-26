@@ -1067,6 +1067,19 @@ function closeEndedAttempts(
   for (const dispatchId of returnedDispatchIds(input)) {
     if (!ended.has(dispatchId)) ended.set(dispatchId, "fail");
   }
+  // An accepted task has nothing left for an agent to hand in, so an attempt
+  // still open on one cannot be waited on. A dispatch made for a task that was
+  // already accepted never runs, so no effect ever returns for it and nothing
+  // else here would ever close it: the phase waits on an agent that was never
+  // started, and the one-agent rule then refuses the dispatch that would
+  // replace it.
+  const accepted = new Set(scheduling.acceptedTasks.map(({ task }) => String(task.taskId)));
+  for (const dispatch of state.dispatches) {
+    if (dispatch.runId !== input.runId) continue;
+    if (!accepted.has(String(dispatch.task.taskId))) continue;
+    const dispatchId = String(dispatch.dispatchId);
+    if (!ended.has(dispatchId)) ended.set(dispatchId, "closed");
+  }
   if (ended.size === 0) return scheduling.attempts;
   const recorded = new Map(scheduling.attempts.map((entry) => [entry.attemptDigest, entry]));
   let closed = false;
