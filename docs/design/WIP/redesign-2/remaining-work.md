@@ -1210,6 +1210,98 @@ stays accepted for the rest of the run, and the snapshot now says so.
 * [x] A dispatch belonging to a closed phase does not hold the ready frontier
 * [x] A task accepted by a closed phase is still accepted for the run
 
+## Phase 18: the detail view is scoped, and the scope is one thing
+
+Reading a finished run in the browser found three controls doing one job badly.
+The transcript has its own `every agent` / `this agent` toggle. The Agents tab
+has its own idea of a selection, and says `Select an agent to narrow this to one
+agent` until you make one. The workflow's own selection is always a node, so a
+phase cannot be selected from the graph at all -- its band folds instead, and
+the only route to a phase's detail is the artifact chip on the connector, which
+is a strange job for something that names a file.
+
+Underneath them is one idea nobody had written down: what a reader is looking at
+is a **scope**, and it has three levels.
+
+```text
+run  ›  phase  ›  task
+```
+
+Every tab answers the same question at whichever level is current, and a
+breadcrumb above the tabs both says where you are and moves you:
+
+| Tab | Run | Phase | Task |
+| --- | --- | --- | --- |
+| Live | every agent's lines, owner-named | the phase's members' lines | this member's lines |
+| Answers | every question answered | questions this phase asked | questions this member asked |
+| Produced | every artifact | the phase output and its members' artifacts | this member's artifacts |
+| Checks | each phase's gate decision | the gate: rule, reading, decision | this node's criteria |
+| About | run identity and revisions | phase identity and policies | task identity and policy |
+
+Two rules hold it together. **Scope narrows reading, never acting**: the
+attention rail stays run-wide whatever is scoped, which is a property
+`replyBox` already argues for and would lose if needs followed the selection.
+And **a criterion is not a level**: clicking one narrows to the node that owes
+it, which is what phase 16 made it do.
+
+### Checks, which nothing shows today
+
+A gate is a phase-level record -- a definition, its readings, and a decision --
+produced by the driver rather than by any agent. It is the thing that refuses a
+run, and diagnosing this morning's refusal meant reading the database because
+the portal has no surface for it at all. It is a tab, not a footnote.
+
+### An attempt is a version, not a fourth level
+
+Every dispatch names a task, so an agent is a task at one attempt. That makes
+attempts a second axis rather than a deeper scope, and gives the Agents tab a
+job nothing else has: Workflow answers *where in the run*, Agents answers
+*which try, and by whom*. The same axis is what the Produced table needs to stop
+being ambiguous about a retried phase -- an artifact is named by its content, so
+two attempts that produced identical bytes are one artifact, which is exactly
+what broke the artifact query in phase 16.
+
+### What the flow view loses and gains
+
+The chip on the connector goes. It showed the first artifact of the first member
+that had one, so it reported `394 B` for a phase that produced three outputs,
+and clicking it selected the phase without opening anything about the artifact
+it named. What it was reaching for -- that the line between phases is where a
+reader looks for what crossed it -- moves inside the band, where a phase can say
+what it produced and how its gate read.
+
+The band's name then selects the phase and its disclosure control folds it,
+which is the gap that made the chip load-bearing in the first place.
+
+### The Agents tree
+
+Its phase branches come out in the order the first agent of each phase happened
+to arrive, because it groups from `byWork.values()` while both graph views rank
+with `executionOrdered`. It also emits `ul.tree-children`, which has no style at
+all, so it does not even get the indent `.tree-group` gives the workflow tree.
+
+* [ ] The detail view is scoped by run, phase or task, and a breadcrumb above
+  the tabs shows and sets the level
+* [ ] A run is the default scope, so there is no unselected state and no
+  `Select an agent` prompt
+* [ ] The transcript's `every agent` / `this agent` toggle is gone, because the
+  breadcrumb is that control
+* [ ] Live, Answers, Produced and About each render at all three levels
+* [ ] A Checks tab shows the gate's rule, reading and decision at a phase, and a
+  node's criteria at a task
+* [ ] A table shows the part of the path below the current scope, and clicking
+  it scopes there
+* [ ] Produced names the attempt each artifact came from and which one the phase
+  accepted
+* [ ] A phase band names what it produced and how its gate read, and the chip on
+  the connector is gone
+* [ ] A phase band's name selects the phase; its disclosure control folds it
+* [ ] The Agents tree orders phases by execution order and draws its own
+  containment
+* [ ] The Agents tree opens a member's attempts, and an attempt scopes the
+  detail view to that try
+* [ ] The scope is in the route, so a phase view can be linked
+
 ## Carried from the v1 plan
 
 Neither blocks anything above, and neither is part of the condition below. The
@@ -1262,3 +1354,10 @@ and `every phase was accepted, and the run finished`.
 Every question the researcher and planner asked was answered by a person while
 the run was live, which is the other open item above. Nothing was restarted,
 steered, or repaired by hand.
+
+Phase 18 was found by reading that finished run in the browser, so it carries
+the condition once more:
+
+* [ ] With phase 18 done, the example is driven once more from a clean state
+  root, read end to end in a browser at every scope, and completes with its own
+  tests passing
