@@ -1308,8 +1308,8 @@ Reading a live run in the browser while its implement phase was fanning out, the
 portal reported `Connection offline` and `Data stale`, and the request that
 failed was its own `overview`, aborted by the client's ten second ceiling.
 
-The database is not the reason. Timed against the same live file from another
-process:
+The database is not the reason -- or so the first reading said. Timed against
+the same live file from another process:
 
 ```text
 getRunOverview   207ms
@@ -1317,6 +1317,11 @@ listHumanNeeds    22ms
 getGraphSummary  188ms
 listArtifacts     12ms
 ```
+
+That reading is wrong: the script it came from had an incomplete authority
+dependency, so `getRunOverview` and `getGraphSummary` threw partway and the
+timer recorded how long it took to fail. Both genuinely cost 1.3 seconds. See
+phase 19.
 
 Over loopback HTTP from the same machine, the same overview took 0.84s, 0.86s,
 0.84s, 0.85s -- and then 3.5s. The portal is served by the supervisor process,
@@ -1327,8 +1332,8 @@ This is the same disease as the operation queue this morning, one layer down:
 the console fails at exactly the moment somebody opens it. Reads were taken off
 the queue; they are still behind the event loop.
 
-Raising the client's ceiling to forty-five seconds stops the console calling a
-busy server dead, but it does not make the server answer. That is phase 19.
+Raising the client's ceiling stops the console calling a busy server dead, but
+it does not make the server answer. That is phase 19.
 
 ## Phase 19: the supervisor stops paying for the whole run on every read
 
@@ -1414,16 +1419,39 @@ the cost.
 
 * [x] A supervisor with nothing to do uses no measurable CPU
 * [x] A portal read does not replay the run's whole command history
+* [x] Driving a run once does not replay the run's whole command history
 * [x] The broker's snapshot is not decoded more than once per change
-* [ ] Driving a run once does not replay the run's whole command history
-* [ ] A run's records are not rewritten whole on every command
-* [ ] A portal read is served without waiting for a run cycle
-* [ ] The example's own run is read in a browser while its agents work, and
+* [x] A portal read is served without waiting for a run cycle
+* [x] The example's own run is read in a browser while its agents work, and
   every view answers in under a second
+* [ ] A run's records are not rewritten whole on every command
 
-Measured after the first three: supervisor CPU on an ended run 51.6% to 0%,
-`getRunOverview` 1645ms cold and 26ms warm, `getGraphSummary` 14ms warm,
-`listArtifacts` 4.2s to 15ms over HTTP.
+### Measured on the example, driven from clean, five agents working
+
+```text
+supervisor CPU, run ended      51.6%  ->  0%
+supervisor CPU, agents working             0%
+overview   n=40   median 0.006s   p95 0.007s   max 0.129s
+graph                    0.004s              0.006s
+agents                   0.005s              0.006s
+artifacts                0.003s              0.004s
+questions                0.003s              0.005s
+workspaces               0.001s              0.002s
+```
+
+Against 5.5s for the same overview on an idle supervisor, and 8.1s for the
+graph from a browser while a phase was fanning out.
+
+### What is left
+
+The run record is still rewritten whole on every command: 238,913 bytes on a
+run of three phases, so the write cost is quadratic in the run's own size. It
+is no longer the thing anybody notices, because nothing reads through it any
+more, but it is the last quadratic in the system and it sets a ceiling on how
+long a run can get.
+
+Digesting that record is no longer paid twice per command, which is what made
+replay quadratic on top of quadratic.
 
 ### Not to be traded away
 
