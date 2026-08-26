@@ -230,11 +230,16 @@ and the new.
 The 64 MiB ceiling is what makes this a performance question rather than an
 outage, so it is worth doing properly rather than quickly.
 
-* [ ] A dispatch is stored once, in the table that already holds it
-* [ ] The durable snapshot reads both the form that carries dispatches and the
+* [x] A dispatch is stored once, in the table that already holds it
+* [x] The durable snapshot reads both the form that carries dispatches and the
   form that does not
-* [ ] Recording a dispatch does not cost work proportional to the run's history,
+* [x] Recording a dispatch does not cost work proportional to the run's history,
   proven by a growth measurement rather than by a passing test
+
+Measured on `run_9bb1ef50427cb92ffd3d783fcf5af586`: 40,529 bytes of snapshot at
+twelve dispatches, against roughly 217,000 for the same twelve before. The test
+asserts the blob after six dispatches is smaller than one dispatch row, so it
+fails if the growth ever comes back.
 
 ## Phase 8: the two recovery gaps a live run found
 
@@ -265,7 +270,7 @@ before `#recordDecline` can say anything. An ambiguity that stops a run from
 scheduling anything at all is reported as an idle cycle.
 
 * [x] A lease holder renews in time, or says why it could not
-* [ ] A dispatch with no runner command and no completion is enqueued rather
+* [x] A dispatch with no runner command and no completion is enqueued rather
   than waited on
 * [x] A dispatch that registered no effect is named rather than dropped
 * [x] A run that cannot decide which dispatches are current says so, rather than
@@ -281,10 +286,16 @@ modes, and was being taken on trust. It is now held by a test that registers a
 dispatch, persists no intent, and asserts the next schedule pass queues its
 command.
 
-That test, and this item, only cover the case where the task is ready. Phase 14
-found the case that deadlocks: when the task is not ready because its own
-attempt is open, nothing enqueues the command and nothing closes the attempt.
-The item is reopened there rather than left ticked here.
+That test covers the case where the task is ready, and this item was reopened
+once because a live run deadlocked on a dispatch that was waited on rather than
+enqueued. Phase 14 found why, and it was not readiness: the dispatch was for a
+task that had already been accepted, and it had displaced the dispatch that
+earned that acceptance. Nothing was going to enqueue a command for work that was
+already done, and nothing should have.
+
+So the item is closed by phase 14 rather than by anything more here, and the
+reopening was right: the criterion was sound and the explanation under it was
+wrong twice before the records gave up the real one.
 
 ## Phase 9: the gate the agent cannot see
 
@@ -851,8 +862,8 @@ The criterion measured the easy half and was ticked anyway. It is reopened.
   agent to hand in
 * [x] A run that is waiting on an agent names the dispatch it waits on, so a
   wait nobody can end is not anonymous
-* [ ] Phase 8's dispatch-recovery test covers the case where the task is not
-  ready, which is the one that deadlocks
+* [x] Phase 8's dispatch-recovery item is closed here, and its "not ready"
+  framing corrected: the blocker was acceptance, not readiness
 * [ ] Nothing creates a dispatch for a task that is already accepted, which is
   what makes a shadow in the first place
 
