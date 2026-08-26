@@ -745,7 +745,7 @@ describe("one phase in sequence", () => {
   it("waits rather than gating work the agent has not finished", async () => {
     const scenario = await startScenario("unfinished");
 
-    expect(await advance(scenario)).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
+    expect(await advance(scenario)).toMatchObject({ kind: "awaiting-agent", phaseKey: "define" });
   });
 
   it("refuses an output that violates its declared schema", async () => {
@@ -771,7 +771,7 @@ describe("one phase in sequence", () => {
     expect(refused.reason).toContain("2 of definition-note");
     expect(refused.reason).toContain("carries 0");
     // Nothing was published, so the phase is still waiting on the agent.
-    expect(await advance(scenario)).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
+    expect(await advance(scenario)).toMatchObject({ kind: "awaiting-agent", phaseKey: "define" });
   });
 
   it("grants the same completion once the evidence it owed is attached", async () => {
@@ -798,7 +798,7 @@ describe("one phase in sequence", () => {
       omitCompletion: true,
     });
 
-    expect(await advance(scenario)).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
+    expect(await advance(scenario)).toMatchObject({ kind: "awaiting-agent", phaseKey: "define" });
   });
 
   it("retries with the human's reason after they reject", async () => {
@@ -1169,7 +1169,7 @@ describe("one phase in sequence", () => {
     // an agent can ask before submitting.
     expect(first.exitCode).toBe(1);
     expect(second).toEqual(first);
-    expect(await advance(scenario)).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
+    expect(await advance(scenario)).toMatchObject({ kind: "awaiting-agent", phaseKey: "define" });
   });
 
   it("escalates a refused phase carrying the recorded gate evidence", async () => {

@@ -64,7 +64,12 @@ export type AdvanceOutcome =
       readonly dispatchId: string;
       readonly reasons: readonly string[];
     }
-  | { readonly kind: "awaiting-agent"; readonly phaseKey: string }
+  | {
+      readonly kind: "awaiting-agent";
+      readonly phaseKey: string;
+      /** The turn being waited on. Without it, a wait nobody can end is unnamed. */
+      readonly dispatchId?: string;
+    }
   | { readonly kind: "awaiting-approval"; readonly phaseKey: string }
   | {
       readonly kind: "gate-refused";
@@ -636,7 +641,7 @@ async function step(
         reasons: [`no attempt handed any work in after ${maximumAttempts} tries`],
       };
     }
-    return { kind: "awaiting-agent", phaseKey };
+    return { kind: "awaiting-agent", phaseKey, dispatchId };
   }
 
   // Publication is where the declared schema is enforced. A refusal here means

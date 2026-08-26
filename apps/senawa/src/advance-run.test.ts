@@ -80,7 +80,7 @@ describe("advancing a run", () => {
 
     // The phase is dispatched but no agent has completed it, so the driver must
     // stop rather than evaluating a gate over work that does not exist.
-    expect(outcome).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
+    expect(outcome).toMatchObject({ kind: "awaiting-agent", phaseKey: "define" });
   });
 
   it("closes a phase after a scripted agent publishes its output and completes", async () => {
@@ -233,8 +233,8 @@ describe("advancing a run", () => {
         repositoryBase: BASE,
       });
 
-    expect(await advance()).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
-    expect(await advance()).toEqual({ kind: "awaiting-agent", phaseKey: "define" });
+    expect(await advance()).toMatchObject({ kind: "awaiting-agent", phaseKey: "define" });
+    expect(await advance()).toMatchObject({ kind: "awaiting-agent", phaseKey: "define" });
 
     const broker = new SqliteContextBroker({
       databasePath: paths.databasePath,

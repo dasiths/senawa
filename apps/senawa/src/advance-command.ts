@@ -107,7 +107,9 @@ function describe(outcome: AdvanceOutcome): string {
     case "fanned-out":
       return `fanned ${outcome.phaseKey} out over ${outcome.members} items`;
     case "awaiting-agent":
-      return `waiting for the agent working on ${outcome.phaseKey}`;
+      return outcome.dispatchId === undefined
+        ? `waiting for the agent working on ${outcome.phaseKey}`
+        : `waiting for the agent working on ${outcome.phaseKey} (${outcome.dispatchId})`;
     case "awaiting-approval":
       return `waiting for a decision on ${outcome.phaseKey}`;
     case "gate-refused":

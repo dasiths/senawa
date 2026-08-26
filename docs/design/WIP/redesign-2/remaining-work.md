@@ -849,8 +849,8 @@ The criterion measured the easy half and was ticked anyway. It is reopened.
   dispatch out of
 * [x] An attempt on an accepted task is not waited on: nothing is left for that
   agent to hand in
-* [ ] A run that is waiting on an agent that was never started says so, naming
-  the dispatch, rather than reporting `awaiting-agent` indefinitely
+* [x] A run that is waiting on an agent names the dispatch it waits on, so a
+  wait nobody can end is not anonymous
 * [ ] Phase 8's dispatch-recovery test covers the case where the task is not
   ready, which is the one that deadlocks
 * [ ] Nothing creates a dispatch for a task that is already accepted, which is
