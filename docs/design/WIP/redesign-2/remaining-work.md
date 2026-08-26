@@ -842,16 +842,58 @@ The criterion measured the easy half and was ticked anyway. It is reopened.
   target and reports no progress is the thing to explain, not the wake
 * [x] Answer why the ready frontier excluded that member: it did not. The task
   was accepted, and the phase was waiting on an attempt rather than on work
-* [ ] A dispatch on an accepted task is not selected as the phase's live work,
+* [x] A dispatch on an accepted task is not selected as the phase's live work,
   which is where three attempted repairs showed the fix belongs
-* [ ] Reconcile the two acceptances: a task in `acceptedTasks` that the closing
-  candidate says has no accepted accounting assessment
-* [ ] An attempt on an accepted task is not waited on: nothing is left for that
+* [x] Reconcile the two acceptances: there was only ever one. The closing
+  candidate was reading a filtered set the shadow had displaced the real
+  dispatch out of
+* [x] An attempt on an accepted task is not waited on: nothing is left for that
   agent to hand in
 * [ ] A run that is waiting on an agent that was never started says so, naming
   the dispatch, rather than reporting `awaiting-agent` indefinitely
 * [ ] Phase 8's dispatch-recovery test covers the case where the task is not
   ready, which is the one that deadlocks
+* [ ] Nothing creates a dispatch for a task that is already accepted, which is
+  what makes a shadow in the first place
+
+### Fixed, and proved on a second independent stall
+
+The next live run reproduced it without being asked to: twelve attempts with
+exactly one open, twelve dispatches with eleven intents, and the missing intent
+on the same task as the open attempt -- a task the scheduling snapshot listed as
+accepted. The same shape, on a different run, with different task identities.
+
+Both halves were needed and neither works alone. Not letting a shadow be current
+leaves its attempt blocking the dispatch that would replace it, which the
+authority refuses with "that task already has an attempt open". Closing the
+attempt alone makes the driver retry an accepted task, because the shadow is
+still what it considers the phase's live work. Each of those was tried, failed,
+and was reverted before the pair was understood.
+
+With both, that run drives again and reaches its gate:
+
+```text
+retrying implement, attempt 20: tests did not pass
+```
+
+Which is the gate doing exactly its job, and the first time any run has got far
+enough to be judged by it.
+
+The shadow itself is still unexplained. Something creates a dispatch for a task
+that is already accepted, and the fixes make the run survive that rather than
+stop it happening, so the last item above stays open.
+
+### Found beyond it: a wire ceiling on a much-retried phase
+
+Past the gate, the same run stops on:
+
+```text
+wire value exceeds 262144 bytes
+```
+
+A phase that has retried twenty times carries every prior refusal into the next
+dispatch, and the accumulated context crosses the wire limit. It is a real
+finding, it is not this phase, and it is written here so the next run has it.
 
 This was the condition run's blocker. Phases 7 to 12 are otherwise separately
 validated — the criterion marks and the corrected member count were read live in
