@@ -119,6 +119,7 @@ export class SupervisorService {
   readonly #startupCycleLimit: number;
   readonly #onTransition: ((state: SupervisorLifecycleState) => void) | undefined;
   readonly #sessionStoreHealth: CopilotSessionStoreHealthPort | undefined;
+  readonly #reads = new Set<Promise<unknown>>();
   readonly #configuredListeners: readonly SupervisorListener[];
   readonly #closeables: readonly SupervisorCloseable[];
   readonly #drainables: readonly SupervisorDrainable[];
@@ -390,6 +391,9 @@ export class SupervisorService {
 
   async #stopDrained(): Promise<void> {
     this.#transition("stopping");
+    // Reads run beside work rather than behind it, so stopping has to wait for
+    // the ones in flight before closing what they are reading.
+    await Promise.allSettled([...this.#reads]);
     const errors: unknown[] = [];
     try {
       this.authority.setMode("stopped", this.#now());
@@ -408,44 +412,57 @@ export class SupervisorService {
     if (errors.length > 0) throw errors[0];
   }
 
+  /**
+   * Reads do not queue. The operation queue serializes work that changes the
+   * run; a cycle awaits a whole agent turn, so queueing a read behind it meant
+   * the supervisor answered nothing for the minutes an agent was working --
+   * measured at fifteen-second timeouts on `service status` and `portal` while
+   * `senawa status`, which reads the database directly, took two seconds. The
+   * console is what a person reaches for while agents work.
+   */
   async status(): Promise<SupervisorServiceStatus> {
-    return this.#enqueueOperation(async () => {
-      this.#assertQueryAvailable();
-      const snapshot = this.authority.operationalSnapshot();
-      const sdkSessionStore =
-        this.#sessionStoreHealth === undefined
-          ? {
-              status: "unknown" as const,
-              expectedSessionCount: snapshot.startedSessionIds.length,
-              missingSessionIds: Object.freeze([] as string[]),
-              message: "SDK session store health adapter is not configured",
-            }
-          : await this.#sessionStoreHealth.health(snapshot.startedSessionIds);
-      const remoteConnectors = this.#remoteConnectorStatuses.map((connector) => connector.status());
-      return decodeSupervisorServiceStatus({
-        lifecycle: this.#state,
-        mode: this.authority.mode(),
-        health:
-          sdkSessionStore.status === "healthy" &&
-          remoteConnectors.every((connector) => connector.health === "healthy")
-            ? "healthy"
-            : "degraded",
-        processId: this.processId,
-        startedAt: this.#startedAt,
-        listeners: this.#listeners,
-        pending: snapshot.pending,
-        leases: snapshot.leases,
-        sdkSessionStore,
-        remoteConnectors,
-      });
+    this.#assertQueryAvailable();
+    return this.#trackRead(async () => this.#readStatus());
+  }
+
+  async #readStatus(): Promise<SupervisorServiceStatus> {
+    // A status is a reading taken at a moment. The health probe is I/O and the
+    // lifecycle can move while it runs, so what is reported is the lifecycle
+    // this reading was taken of.
+    const lifecycle = this.#state;
+    const listeners = this.#listeners;
+    const snapshot = this.authority.operationalSnapshot();
+    const sdkSessionStore =
+      this.#sessionStoreHealth === undefined
+        ? {
+            status: "unknown" as const,
+            expectedSessionCount: snapshot.startedSessionIds.length,
+            missingSessionIds: Object.freeze([] as string[]),
+            message: "SDK session store health adapter is not configured",
+          }
+        : await this.#sessionStoreHealth.health(snapshot.startedSessionIds);
+    const remoteConnectors = this.#remoteConnectorStatuses.map((connector) => connector.status());
+    return decodeSupervisorServiceStatus({
+      lifecycle,
+      mode: this.authority.mode(),
+      health:
+        sdkSessionStore.status === "healthy" &&
+        remoteConnectors.every((connector) => connector.health === "healthy")
+          ? "healthy"
+          : "degraded",
+      processId: this.processId,
+      startedAt: this.#startedAt,
+      listeners,
+      pending: snapshot.pending,
+      leases: snapshot.leases,
+      sdkSessionStore,
+      remoteConnectors,
     });
   }
 
   async logs(afterCursor?: number, limit?: number): Promise<SupervisorLogPage> {
-    return this.#enqueueOperation(async () => {
-      this.#assertQueryAvailable();
-      return this.authority.queryLogs(afterCursor, limit);
-    });
+    this.#assertQueryAvailable();
+    return this.#trackRead(async () => this.authority.queryLogs(afterCursor, limit));
   }
 
   async recover(repositoryId: string, runId: string): Promise<{ readonly worked: boolean }> {
@@ -589,6 +606,15 @@ export class SupervisorService {
       () => undefined,
     );
     return result;
+  }
+
+  /** A read in flight. Stopping waits for these; work does not. */
+  #trackRead<T>(operation: () => Promise<T>): Promise<T> {
+    const result = operation();
+    this.#reads.add(result);
+    return result.finally(() => {
+      this.#reads.delete(result);
+    });
   }
 
   #assertQueryAvailable(): void {

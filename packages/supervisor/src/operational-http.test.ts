@@ -146,7 +146,7 @@ describe("supervisor operational HTTP", () => {
     });
   });
 
-  it("serializes status health through stop and rejects queries after closure", async () => {
+  it("waits for an in-flight status health probe before stopping, then rejects queries", async () => {
     const root = mkdtempSync(join(tmpdir(), "senawa-operational-stop-race-"));
     roots.add(root);
     const credential = loadOrCreateLocalCredential(join(root, "runtime"), {
@@ -228,7 +228,10 @@ describe("supervisor operational HTTP", () => {
     expect(stopSettled).toBe(false);
 
     releaseHealth?.();
-    await expect(status).resolves.toMatchObject({ lifecycle: "draining", mode: "draining" });
+    // The reading was taken while the service was running, and reports that. It
+    // used to report "draining" because a read queued behind the drain, which
+    // is what left the supervisor answering nobody while an agent worked.
+    await expect(status).resolves.toMatchObject({ lifecycle: "running" });
     await expect(stopping).resolves.toBeUndefined();
     await expect(client.status()).rejects.toMatchObject({
       code: "service-unavailable",

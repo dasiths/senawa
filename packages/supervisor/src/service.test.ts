@@ -373,6 +373,13 @@ describe("SupervisorService lifecycle", () => {
     expect(started).toEqual(["operation_serial-a"]);
     expect(maxActive).toBe(1);
 
+    // A read does not wait for the cycle. Queueing it behind one meant the
+    // supervisor answered nothing for the minutes an agent worked, which is the
+    // only time a person opens the console.
+    await expect(service.status()).resolves.toMatchObject({ lifecycle: "running" });
+    await expect(service.logs()).resolves.toMatchObject({ afterCursor: 0 });
+    expect(started).toEqual(["operation_serial-a"]);
+
     releaseFirst?.();
     await expect(Promise.all([cycle, recovery])).resolves.toMatchObject([
       { worked: true },
