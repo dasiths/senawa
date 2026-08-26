@@ -201,6 +201,7 @@ export async function startSenawaService(
   let ownedWorkspaceAuthority: SqliteWorkspaceIntegrationAuthority | undefined;
   let ownedRunnerAuthority: SqliteRunnerAuthority | undefined;
   let ownedPortalQuery: SqlitePortalQueryAuthority | undefined;
+  let ownedRunDriver: { readonly close: () => void } | undefined;
   let ownedSdkPool: WorkspaceSdkPool | undefined;
   let ownedRemoteConnector: DaemonRemoteConnector | undefined;
   try {
@@ -514,6 +515,23 @@ export async function startSenawaService(
     const waitForStop = new Promise<void>((resolvePromise) => {
       resolveStopped = resolvePromise;
     });
+    const runDriver = driveRun(
+      projectDirectory,
+      paths,
+      dependencies,
+      (repositoryId, runId, event, reason, level) => {
+        authority.appendLog({
+          recordedAt: new Date().toISOString(),
+          level,
+          event,
+          message: reason,
+          fields: { repositoryId, runId },
+        });
+      },
+      (repositoryId, runId, currentTime) =>
+        authority.commandAuthority.recordRunFinished(repositoryId, runId, currentTime),
+    );
+    ownedRunDriver = runDriver;
     service = new SupervisorService({
       authority,
       clock: { now: () => Date.now() },
@@ -547,24 +565,7 @@ export async function startSenawaService(
           return productionScheduler.schedule({ repositoryId, runId, lease, currentTime });
         }),
       listSchedulableRuns: () => productionScheduler.listRuns(),
-      driveRunOnce:
-        composition.driveRunOnce ??
-        driveRun(
-          projectDirectory,
-          paths,
-          dependencies,
-          (repositoryId, runId, event, reason, level) => {
-            authority.appendLog({
-              recordedAt: new Date().toISOString(),
-              level,
-              event,
-              message: reason,
-              fields: { repositoryId, runId },
-            });
-          },
-          (repositoryId, runId, currentTime) =>
-            authority.commandAuthority.recordRunFinished(repositoryId, runId, currentTime),
-        ),
+      driveRunOnce: composition.driveRunOnce ?? runDriver.drive,
       deliverCompletionOutboxOnce: () => contextBroker.deliverCompletionOutboxOnce(),
       deliverAmendmentProposalOutboxOnce: () => amendmentBridge.deliverOnce(),
       ...(remoteConnector === undefined ? {} : { remoteConnectorStatuses: [remoteConnector] }),
@@ -572,6 +573,7 @@ export async function startSenawaService(
       closeables: [
         { close: () => portalQuery.close() },
         { close: () => contextBroker.close() },
+        { close: () => runDriver.close() },
         { close: () => workspaceAuthority.close() },
         { close: () => runnerAuthority.close() },
         ...(sdkPool === undefined
@@ -622,6 +624,11 @@ export async function startSenawaService(
     }
     try {
       ownedPortalQuery?.close();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    try {
+      ownedRunDriver?.close();
     } catch (cleanupError) {
       cleanupErrors.push(cleanupError);
     }
@@ -733,16 +740,49 @@ function driveRun(
   ) => void,
   /** Records that a run finished its own work. Returns whether this ended it. */
   recordFinished: (repositoryId: string, runId: string, currentTime: string) => boolean,
-): (input: {
-  readonly repositoryId: string;
-  readonly runId: string;
-  readonly currentTime: string;
-}) => Promise<boolean> {
+): {
+  readonly drive: (input: {
+    readonly repositoryId: string;
+    readonly runId: string;
+    readonly currentTime: string;
+  }) => Promise<boolean>;
+  readonly close: () => void;
+} {
   /** The last stop reported per run, so a stopped run says it once. */
   const stopped = new Map<string, string>();
-  return async ({ repositoryId, runId, currentTime }) => {
+  // Opening an authority pair costs about half a second on a run of three
+  // phases and grows with the run, and this opened a new one every cycle, on
+  // the event loop the console answers from. The clock is the cycle's, because
+  // what an advance writes is stamped with the time the advance was asked for.
+  let advanceTime = new Date().toISOString();
+  const supervisor = new SqliteSupervisorAuthority({
+    databasePath: paths.databasePath,
+    assetDirectory: paths.assetDirectory,
+    dependencies,
+  });
+  // Deliberately without the fact bridges: an agent's work lands in the outbox
+  // for the advance to act on, rather than driving the runner from inside it.
+  const broker = new SqliteContextBroker({
+    databasePath: paths.databasePath,
+    dependencies: {
+      sha256: dependencies.sha256,
+      currentTime: () => advanceTime,
+      issueGrantToken: () => new Uint8Array(32),
+    },
+  });
+  const drive = async ({
+    repositoryId,
+    runId,
+    currentTime,
+  }: {
+    readonly repositoryId: string;
+    readonly runId: string;
+    readonly currentTime: string;
+  }) => {
+    advanceTime = currentTime;
     try {
       const outcome = await advanceRun({
+        open: { supervisor, broker },
         projectRoot,
         databasePath: paths.databasePath,
         assetDirectory: paths.assetDirectory,
@@ -806,6 +846,13 @@ function driveRun(
       );
       return false;
     }
+  };
+  return {
+    drive,
+    close: () => {
+      broker.close();
+      supervisor.close();
+    },
   };
 }
 

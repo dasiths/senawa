@@ -13,6 +13,7 @@ import {
   SqliteCanonicalJsonAssetStore,
   SqliteContextBroker,
 } from "@senawa/storage-sqlite";
+import { SqliteSupervisorAuthority } from "@senawa/supervisor";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { advanceRun, currentPhaseDispatches } from "./advance-run.js";
@@ -45,6 +46,67 @@ afterEach(async () => {
 });
 
 describe("advancing a run", () => {
+  // Opening an authority pair replays every command the run has accepted and
+  // revalidates the whole record, which cost half a second on a run of three
+  // phases and grew with it. The service advances every cycle on the event loop
+  // its console answers from, so it opens them once and hands them over.
+  it("advances through authorities a caller opened, and leaves them open", async () => {
+    const project = await authoredProject();
+    const paths = {
+      databasePath: join(project, "authority.db"),
+      assetDirectory: join(project, "assets"),
+    };
+    await startAuthoredRun({
+      projectRoot: project,
+      ...paths,
+      dependencies,
+      repositoryId: "repository_shared",
+      runId: "run_shared",
+      principal: runtimePrincipal,
+      input: canonicalValue({ request: "Add a health endpoint" }),
+      currentTime: NOW,
+      repositoryBase: BASE,
+    });
+    const supervisor = new SqliteSupervisorAuthority({ ...paths, dependencies });
+    const broker = new SqliteContextBroker({
+      databasePath: paths.databasePath,
+      dependencies: {
+        sha256: dependencies.sha256,
+        currentTime: () => NOW,
+        issueGrantToken: () => new Uint8Array(32),
+      },
+    });
+    const advance = () =>
+      advanceRun({
+        projectRoot: project,
+        ...paths,
+        repositoryId: "repository_shared",
+        runId: "run_shared",
+        principal: runtimePrincipal,
+        dependencies,
+        currentTime: NOW,
+        workflowInput: {
+          bindingDigest: sha256Digest("3".repeat(64)),
+          value: canonicalValue({ request: "Add a health endpoint" }),
+        },
+        repositoryBase: BASE,
+        open: { supervisor, broker },
+      });
+
+    // Two advances in a row: the second proves the first did not close what it
+    // was lent, which is what a service doing this every cycle depends on.
+    await advance();
+    await advance();
+    expect(
+      supervisor.commandAuthority.queryRunScheduling("repository_shared", "run_shared"),
+    ).toBeDefined();
+    expect(broker.listWorkerDispatches("repository_shared", "run_shared").length).toBeGreaterThan(
+      0,
+    );
+    broker.close();
+    supervisor.close();
+  });
+
   it("waits for the agent rather than advancing past an unfinished phase", async () => {
     const project = await authoredProject();
     const paths = {

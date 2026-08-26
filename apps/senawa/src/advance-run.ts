@@ -143,6 +143,17 @@ export interface AdvanceRunInput {
     readonly commitDigest: Sha256Digest;
     readonly treeDigest: Sha256Digest;
   };
+  /**
+   * Authorities to advance through, already open. Opening a pair costs about
+   * half a second on a run of three phases and grows with the run, and a
+   * service that advances every cycle paid it every cycle, on the event loop
+   * its console answers from. A caller that supplies them keeps them; whoever
+   * opened them closes them.
+   */
+  readonly open?: {
+    readonly supervisor: SqliteSupervisorAuthority;
+    readonly broker: SqliteContextBroker;
+  };
 }
 
 interface SnapshotPhase {
@@ -200,27 +211,33 @@ export async function advanceRun(input: AdvanceRunInput): Promise<AdvanceOutcome
         .join("; ")}`,
     );
   }
-  const supervisor = new SqliteSupervisorAuthority({
-    databasePath: input.databasePath,
-    assetDirectory: input.assetDirectory,
-    dependencies: input.dependencies,
-  });
-  const broker = new SqliteContextBroker({
-    databasePath: input.databasePath,
-    dependencies: {
-      sha256: input.dependencies.sha256,
-      currentTime: () => input.currentTime,
-      issueGrantToken: () => new Uint8Array(32),
-    },
-  });
+  const supervisor =
+    input.open?.supervisor ??
+    new SqliteSupervisorAuthority({
+      databasePath: input.databasePath,
+      assetDirectory: input.assetDirectory,
+      dependencies: input.dependencies,
+    });
+  const broker =
+    input.open?.broker ??
+    new SqliteContextBroker({
+      databasePath: input.databasePath,
+      dependencies: {
+        sha256: input.dependencies.sha256,
+        currentTime: () => input.currentTime,
+        issueGrantToken: () => new Uint8Array(32),
+      },
+    });
   try {
     // An applied amendment leaves the run on a graph the authored project no
     // longer describes, so the run's own snapshot wins where one exists.
     const active = activeSnapshot(supervisor, input, loaded.snapshot);
     return await step(input, active, supervisor, broker);
   } finally {
-    broker.close();
-    supervisor.close();
+    if (input.open === undefined) {
+      broker.close();
+      supervisor.close();
+    }
   }
 }
 
