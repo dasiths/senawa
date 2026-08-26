@@ -908,7 +908,7 @@ a fan-out, steers the *second* member into a retry, and asserts the retry is for
 the second member's task; it fails against the old behaviour by re-running the
 first.
 
-### Found beyond it: a wire ceiling on a much-retried phase
+### Found beyond it: the run's own record held to a message's ceiling
 
 Past the gate, the same run stops on:
 
@@ -916,9 +916,28 @@ Past the gate, the same run stops on:
 wire value exceeds 262144 bytes
 ```
 
-A phase that has retried twenty times carries every prior refusal into the next
-dispatch, and the accumulated context crosses the wire limit. It is a real
-finding, it is not this phase, and it is written here so the next run has it.
+Not the dispatch context, which was 13 KB. `runs.records_json` was **262,077**
+bytes against a ceiling of 262,144 — sixty-seven bytes of headroom, and the next
+retry could not be persisted at all.
+
+Phase 4 already made this distinction and this is a place it did not reach. A
+run's records are state a process writes for itself, not a message, and
+`decodeDurableJsonValue` and `durableStringify` exist for exactly that, with
+ceilings sized for a long run. The run record was still going through
+`canonicalStringify`. It now uses the durable pair, at all four write sites and
+all three reads.
+
+Two things this exposed and did not fix. The record is rewritten whole on every
+command, so its cost is quadratic in its own size — the same shape as the
+dispatch problem phase 7 solved, one table over. And `amendmentEvents` and
+`amendmentRecords` were 155 KB of the 262: a fan-out's graph amendment is large
+and is carried in full.
+
+There is no unit test. Building a record past the ceiling through the authority
+costs time quadratic in its size and timed out at two minutes; writing one
+straight into the table is refused by the tampered-mirror guarantee, which is
+six tests doing their job. The live run is the evidence, and the change is a
+swap to the codec phase 4 built for this.
 
 This was the condition run's blocker. Phases 7 to 12 are otherwise separately
 validated — the criterion marks and the corrected member count were read live in

@@ -69,6 +69,7 @@ import {
   decodeApplyApprovedAmendmentPayload,
   decodeCanonicalJsonValue,
   decodeCommandEnvelope,
+  decodeDurableJsonValue,
   decodeDurableReceipt,
   decodeEventReplayPage,
   decodeEventStreamFrame,
@@ -108,6 +109,7 @@ import {
   decodeSupervisorReceipt,
   decodeSupervisorServiceRecord,
   decodeSupervisorWake,
+  durableStringify,
   type EventReplayPage,
   type EventStreamFrame,
   type JsonValue,
@@ -4189,7 +4191,7 @@ export class SqlitePortalQueryAuthority {
           ? undefined
           : decodeCanonicalJsonValue(escalation.canonical_escalation);
     } else {
-      const records = decodeCanonicalJsonValue(run.records_json);
+      const records = decodeDurableJsonValue(run.records_json);
       body = findRuntimeReviewRecord(records, kind, digestValue);
       if (kind === "candidate" && body !== undefined) {
         const gateEvidenceDigest = findCandidateGateEvidenceDigest(records, digestValue);
@@ -5234,7 +5236,7 @@ export class SqlitePortalQueryAuthority {
     if (recordsRow === undefined)
       return { lifecycles, acceptedTasks, criterionOutcomes, criterionEvidence };
     const records = requiredJsonRecord(
-      decodeCanonicalJsonValue(recordsRow.records_json),
+      decodeDurableJsonValue(recordsRow.records_json),
       "Portal runtime records",
     );
     for (const lifecycle of runtimeLifecycleRecords(records)) {
@@ -5646,7 +5648,7 @@ export class SqlitePortalQueryAuthority {
     const recordsRow = this.#runtimeRecordRow(repositoryId, runId);
     if (recordsRow !== undefined) {
       const records = requiredJsonRecord(
-        decodeCanonicalJsonValue(recordsRow.records_json),
+        decodeDurableJsonValue(recordsRow.records_json),
         "Portal runtime records",
       );
       for (const lifecycle of runtimeLifecycleRecords(records)) {
@@ -16153,7 +16155,10 @@ function persistCommandDelta(
   ) {
     throw new TypeError("Incremental command persistence requires one complete lifecycle");
   }
-  const recordsJson = run.records === undefined ? null : canonicalStringify(run.records);
+  // A run's own records are state it writes for itself, not a message, so the
+  // wire ceiling does not apply. A live run reached 262,077 of its 262,144 wire
+  // bytes and the next retry could not be persisted at all.
+  const recordsJson = run.records === undefined ? null : durableStringify(run.records);
   database
     .prepare(
       "INSERT INTO repositories(repository_id, active_run_key) VALUES (?, NULL) ON CONFLICT(repository_id) DO NOTHING",
@@ -16288,7 +16293,7 @@ class IncrementalCanonicalSnapshot {
           ),
           receiptHistory: run.receiptHistory.map((receipt) => canonicalStringify(receipt)),
           events: run.events.map((event) => canonicalStringify(event)),
-          ...(run.records === undefined ? {} : { records: canonicalStringify(run.records) }),
+          ...(run.records === undefined ? {} : { records: durableStringify(run.records) }),
           ...(run.projectionGeneratedAt === undefined
             ? {}
             : { projectionGeneratedAt: run.projectionGeneratedAt }),
@@ -16340,7 +16345,7 @@ class IncrementalCanonicalSnapshot {
     fragments.events.push(...events.map((event) => canonicalStringify(event)));
     fragments.cursor = run.cursor;
     if (run.records === undefined) delete fragments.records;
-    else fragments.records = canonicalStringify(run.records);
+    else fragments.records = durableStringify(run.records);
     if (run.projectionGeneratedAt === undefined) delete fragments.projectionGeneratedAt;
     else fragments.projectionGeneratedAt = run.projectionGeneratedAt;
     this.#commandIds.add(commandId);
@@ -16434,7 +16439,7 @@ function normalizeSnapshot(
     } else if (activeRunKey === undefined) {
       repositories.set(run.repositoryId, null);
     }
-    const recordsJson = run.records === undefined ? null : canonicalStringify(run.records);
+    const recordsJson = run.records === undefined ? null : durableStringify(run.records);
     runs.push({
       run_key: runKey,
       repository_id: run.repositoryId,
