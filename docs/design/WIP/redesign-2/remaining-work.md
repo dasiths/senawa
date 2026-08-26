@@ -1164,6 +1164,11 @@ fix.
 
 * [x] An artifact carried by more than one submission is listed once
 
+Read live on `run_7121015f89a96f3f36831eb186d2d215`, with research closed and
+plan working: clicking the `plan-produced` pill selected `plan`, opened its
+Produced view, and showed `phase output plan, 13.3 KiB`. The same pill used to
+open a pane reading `plan-produced has produced nothing yet`.
+
 
 Neither blocks anything above, and neither is part of the condition below. The
 first is a feature the phase model does not yet have; the second is done.
