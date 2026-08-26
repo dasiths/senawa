@@ -208,32 +208,45 @@ export function graphFlowView(options: GraphFlowOptions): HTMLElement {
     band.dataset.from = previous;
     band.open = phaseIsOpen(phase, members, unfolded);
     const summary = document.createElement("summary");
-    summary.append(
-      textElement("span", "node-mark", nodeMark("phase")),
-      textElement("span", "band-name", phase.title),
-      statePill(phase.runState),
-      textElement("span", "fold-sub", foldSummary(members)),
-    );
-    summary.addEventListener("click", (event) => {
-      event.preventDefault();
-      actions.toggleFold(phase.nodeId);
-    });
-    const read = document.createElement("button");
-    read.type = "button";
-    read.className = "band-read";
-    read.dataset.focusKey = phase.nodeId;
-    read.textContent = "\u203a";
-    read.title = `Read ${phase.title}`;
-    read.setAttribute("aria-label", `Read ${phase.title}`);
-    if (phase.nodeId === selectedNodeId) read.setAttribute("aria-current", "true");
-    read.addEventListener("click", (event) => {
-      // The summary folds, so without this a phase could not be read at all and
-      // the artifact chip on the connector was the only way to reach one.
+    // The name reads the phase; the marker beside it folds the band. The other
+    // way round, the only gesture on a phase both opened it and shut it, and a
+    // reader who wanted to see inside lost the reading they had just opened.
+    const name = document.createElement("button");
+    name.type = "button";
+    name.className = "band-name";
+    name.dataset.focusKey = phase.nodeId;
+    name.textContent = phase.title;
+    if (phase.nodeId === selectedNodeId) name.setAttribute("aria-current", "true");
+    name.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       actions.select(phase.nodeId);
     });
-    summary.append(read);
+    const fold = document.createElement("button");
+    fold.type = "button";
+    fold.className = "band-fold";
+    fold.textContent = "\u203a";
+    fold.title = band.open ? `Fold ${phase.title}` : `Unfold ${phase.title}`;
+    fold.setAttribute("aria-label", fold.title);
+    fold.setAttribute("aria-expanded", band.open ? "true" : "false");
+    fold.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      actions.toggleFold(phase.nodeId);
+    });
+    summary.append(
+      fold,
+      textElement("span", "node-mark", nodeMark("phase")),
+      name,
+      statePill(phase.runState),
+      textElement("span", "fold-sub", foldSummary(members)),
+    );
+    summary.addEventListener("click", (event) => {
+      // Clicking a phase reads the phase, exactly as clicking a card reads that
+      // card. Only the marker folds.
+      event.preventDefault();
+      actions.select(phase.nodeId);
+    });
     band.append(summary);
     const body = element("div", "band-body");
     for (const member of members) {

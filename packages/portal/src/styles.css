@@ -488,6 +488,7 @@ textarea {
 .band > summary {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin: -10px 0 0;
   border: 1px solid var(--rule);
@@ -709,28 +710,49 @@ textarea {
   font-weight: 570;
 }
 
-/* Going into a phase is the move the breadcrumb makes, so it wears the same
-   chevron. The summary beside it folds. */
-.band-read {
-  margin-left: auto;
+/* The marker folds the band, and turns to face the way it will move. */
+.band-fold {
   border: 1px solid transparent;
   border-radius: 6px;
   background: none;
-  padding: 0 6px;
+  padding: 0 4px;
   color: var(--faint);
   font-size: 15px;
   line-height: 1.4;
   cursor: pointer;
+  transition: transform 120ms ease;
 }
 
-.band-read:hover {
+.band-fold[aria-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+.band-fold:hover {
   border-color: var(--rule);
   color: var(--ink);
 }
 
-.band-read[aria-current="true"] {
+/* The name reads the phase, so it carries the selection the detail view shows. */
+.band > summary > .band-name {
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  padding: 1px 6px;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.band > summary > .band-name:hover {
+  border-color: var(--rule);
+}
+
+.band > summary > .band-name[aria-current="true"] {
   border-color: var(--ink);
-  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 /* Where the reader is, and the way back out. */

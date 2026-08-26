@@ -49,9 +49,10 @@ test("scopes the detail view to the run, a phase, and one piece of work", async 
   await expect(trail.locator(".scope-step")).toHaveCount(1);
   await expect(trail.locator('.scope-step[aria-current="true"]')).toHaveText("run");
 
-  // A phase can be read. Its summary folds, so before this the only way to
-  // reach one was the artifact chip on the connector.
-  await page.locator(".band-read").first().click();
+  // A phase can be read by its name. The marker beside it folds the band, so
+  // opening a phase and seeing inside it are two gestures rather than one
+  // pulling both ways.
+  await page.locator(".band > summary > .band-name").first().click();
   await expect(trail.locator(".scope-step")).toHaveCount(2);
 
   // And one piece of work narrows again, with the phase left behind it.
@@ -71,7 +72,7 @@ test("opens on the phase a link names", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
   await page.getByRole("tab", { name: "Graph", exact: true }).click();
-  await page.locator(".band-read").first().click();
+  await page.locator(".band > summary > .band-name").first().click();
 
   const trail = page.locator(".scope-trail");
   await expect(trail.locator(".scope-step")).toHaveCount(2);
@@ -90,7 +91,7 @@ test("reads a phase's gate: what it asked, what it read, and what it decided", a
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");
   await page.getByRole("tab", { name: "Graph", exact: true }).click();
-  await page.locator(".band-read").first().click();
+  await page.locator(".band > summary > .band-name").first().click();
   await page.getByRole("tab", { name: "Checks", exact: true }).click();
 
   // A gate is a phase record the driver produced, and it is the thing that
