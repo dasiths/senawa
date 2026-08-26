@@ -1502,17 +1502,44 @@ that is what builds the context.
 
 ### Still open beside it
 
-Not every extra attempt was this. On the same run:
+Not every extra attempt was this, and one of them is only a label. On the same
+run, the ordinal a member shows is the **phase** attempt, not its own:
 
-* A member's attempts read as the **phase** attempt, so four different
-  implementors working on four different tasks showed as attempts 1, 2, 3 and
-  4, which reads as one agent retrying four times.
-* One implementor spent attempts 5 through 9 on the same task against a gate
-  that kept reporting the same failing assertion, and the authored ceiling is
-  6 -- so it ran past its own ceiling.
+```text
+attempt 1  implementor  implement-work-c6fa4d9
+attempt 2  implementor  implement-work-d79c681
+attempt 3  implementor  implement-work-e0d96dc
+attempt 4  implementor  implement-work-fcc56a8
+attempt 5  implementor  implement-work-fcc56a8   refused: tests said not ok 1
+...
+attempt 9  implementor  implement-work-fcc56a8   refused: tests said not ok 1
+```
 
-* [ ] A member's attempt ordinal is its own, not the phase's
-* [ ] A phase stops at its authored attempt ceiling
+Four different members on four different tasks read as one agent retrying four
+times. And the member that could not pass ran at 4, 5, 6, 7, 8 and 9 -- which
+is six tries against an authored ceiling of six, so the ceiling held exactly.
+Read off the ordinal alone it looks like nine tries against a ceiling of six,
+which is why the number has to be the member's own.
+
+Counted per member, the same run reads:
+
+```text
+1  planner      plan                       2  planner      plan
+1  researcher   research                   ... 4 researcher research
+1  implementor  implement-work-c6fa4d9
+1  implementor  implement-work-d79c681
+1  implementor  implement-work-e0d96dc
+1..6 implementor implement-work-fcc56a8
+```
+
+Three of the four members passed on their first try, and one used its six.
+
+* [x] A member's attempt ordinal is its own, not the phase's
+
+The discriminating case -- a member dispatched on its first try while the phase
+is already past its first attempt -- is not reachable from the scenario fixtures
+yet, so the evidence for it is the live run above. The fan-out scenario locks
+the shape.
 
 ## Carried from the v1 plan
 

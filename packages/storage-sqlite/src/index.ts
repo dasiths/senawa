@@ -4625,7 +4625,18 @@ export class SqlitePortalQueryAuthority {
                 json_extract(b.canonical_context, '$.role.key') AS persona,
                 json_extract(b.canonical_context, '$.phaseAttempt.phase.phaseId') AS phase_id,
                 json_extract(b.canonical_context, '$.task.taskId') AS task_id,
-                json_extract(b.canonical_context, '$.phaseAttempt.phase.attempt') AS attempt,
+                -- A member's try, not its phase's. The phase ordinal is shared
+                -- by everything the phase dispatched, so four members on four
+                -- tasks read as one agent retrying four times, and a member
+                -- that used all six of its tries read as being on its ninth.
+                (SELECT COUNT(*) FROM context_dispatches e
+                  JOIN context_bases c ON c.context_id = e.context_id
+                  WHERE e.repository_id = d.repository_id AND e.run_id = d.run_id
+                    AND json_extract(c.canonical_context, '$.task.taskId')
+                        = json_extract(b.canonical_context, '$.task.taskId')
+                    AND json_extract(c.canonical_context, '$.phaseAttempt.phase.attempt')
+                        <= json_extract(b.canonical_context, '$.phaseAttempt.phase.attempt')
+                ) AS attempt,
                 json_extract(b.canonical_context, '$.priorRefusals') AS refusals,
                 (SELECT 1 FROM context_terminal_completions t
                   WHERE t.dispatch_id = d.dispatch_id) AS finished,

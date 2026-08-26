@@ -417,6 +417,27 @@ describe("running every member of a fan-out", () => {
     ).toMatchObject({ exitCode: 0 });
 
     expect(await advance(scenario)).toMatchObject({ kind: "retrying", phaseKey: "implement" });
+
+    // And the console counts the same thing. The phase's ordinal is shared by
+    // everything it dispatched, so read off that, two members on two tasks read
+    // as one agent retrying, and a member that used all its tries read as being
+    // several attempts past its ceiling.
+    const roster = new SqlitePortalQueryAuthority({ ...scenario.paths, dependencies });
+    try {
+      const byTask = new Map<string, number[]>();
+      for (const agent of roster.listAgents(scenario.repositoryId, scenario.runId).agents) {
+        const held = byTask.get(String(agent.taskId)) ?? [];
+        held.push(agent.attempt);
+        byTask.set(String(agent.taskId), held);
+      }
+      expect(
+        [...byTask.values()]
+          .map((tries) => tries.toSorted((left, right) => left - right))
+          .toSorted((left, right) => left.length - right.length),
+      ).toEqual([[1], [1], [1, 2]]);
+    } finally {
+      roster.close();
+    }
   });
 
   // The dispatch driver takes `phaseTasks[memberIndex ?? 0]`, and every retry
@@ -1081,6 +1102,22 @@ describe("one phase in sequence", () => {
     // forgotten the rest, so it asked again in different words for what it had
     // already been told: a live researcher asked the same thing four times.
     expect(carried).toEqual([1, 2, 3]);
+
+    // And what the console calls an attempt is this member's try, not its
+    // phase's. Read off the phase, four members on four tasks read as one agent
+    // retrying four times, and a member that used all six of its tries read as
+    // being on its ninth.
+    const roster = new SqlitePortalQueryAuthority({ ...scenario.paths, dependencies });
+    try {
+      expect(
+        roster
+          .listAgents(scenario.repositoryId, scenario.runId)
+          .agents.map(({ attempt }) => attempt)
+          .toSorted((left, right) => left - right),
+      ).toEqual([1, 2, 3, 4]);
+    } finally {
+      roster.close();
+    }
 
     // And the run is still able to finish: the attempts were never spent.
     await agentTurn(scenario, dispatchId, canonicalValue({ definition: "x" }));
