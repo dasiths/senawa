@@ -427,7 +427,12 @@ function parseLockRecord(value: string): LockRecord {
 
 function linuxProcessMatches(record: LockRecord): boolean {
   try {
-    return readLinuxProcessStartTime(record.pid) === record.startTime;
+    const held = readLinuxProcess(record.pid);
+    // A killed service whose parent never reaps it stays in the process table
+    // as a zombie with its pid and start time intact, so identity alone called
+    // it live and every restart failed for ever on a lock nothing held. A
+    // zombie has already released its socket.
+    return held.state !== "Z" && held.startTime === record.startTime;
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") return false;
     throw error;
@@ -435,6 +440,10 @@ function linuxProcessMatches(record: LockRecord): boolean {
 }
 
 function readLinuxProcessStartTime(pid: number): string {
+  return readLinuxProcess(pid).startTime;
+}
+
+function readLinuxProcess(pid: number): { readonly state: string; readonly startTime: string } {
   const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
   if (!stat.startsWith(`${pid} (`)) throw new Error("Linux process identity is invalid");
   const commandEnd = stat.lastIndexOf(") ");
@@ -443,11 +452,16 @@ function readLinuxProcessStartTime(pid: number): string {
     .slice(commandEnd + 2)
     .trim()
     .split(/\s+/u);
+  const state = fields[0];
   const startTime = fields[19];
-  if (startTime === undefined || !PROCESS_START_TIME_PATTERN.test(startTime)) {
+  if (
+    state === undefined ||
+    startTime === undefined ||
+    !PROCESS_START_TIME_PATTERN.test(startTime)
+  ) {
     throw new Error("Linux process identity is invalid");
   }
-  return startTime;
+  return { state, startTime };
 }
 
 function fileIdentity(metadata: Stats): FileIdentity {

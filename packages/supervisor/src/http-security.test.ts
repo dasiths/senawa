@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -649,6 +649,61 @@ describe("supervisor Unix socket security", () => {
     await expect(
       startUnixSupervisorServer(required(fixture.ipc.socketPath), fixture.ipcHandler),
     ).rejects.toThrow("live singleton lock");
+  });
+
+  // A service killed under a parent that never reaps it stays in the process
+  // table as a zombie, keeping its pid and start time. Identity alone called
+  // that live, so every restart failed on a lock nothing was holding and an
+  // operator was told to look for a supervisor that no longer existed.
+  it("reclaims a lock held by a zombie", async () => {
+    // Python does not reap on its own, so the forked child stays a zombie for
+    // as long as its parent lives -- exactly how a killed service is left
+    // behind under a parent that never waits.
+    const holder = spawn("python3", [
+      "-c",
+      "import os, sys, time\np = os.fork()\nif p == 0:\n    os._exit(0)\nprint(p, flush=True)\ntime.sleep(30)\n",
+    ]);
+    try {
+      const pid = Number.parseInt(
+        await new Promise<string>((resolve) => {
+          holder.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString("utf8").trim()));
+        }),
+        10,
+      );
+      expect(Number.isSafeInteger(pid)).toBe(true);
+
+      let stat = "";
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+        if (
+          stat
+            .slice(stat.lastIndexOf(") ") + 2)
+            .trim()
+            .startsWith("Z")
+        )
+          break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const fields = stat
+        .slice(stat.lastIndexOf(") ") + 2)
+        .trim()
+        .split(/\s+/u);
+      expect(fields[0]).toBe("Z");
+
+      const socketPath = join(fixture.root, "runtime", "zombie-lock.sock");
+      writeFileSync(
+        `${socketPath}.lock`,
+        `${JSON.stringify({ pid, startTime: fields[19], version: 1 })}\n`,
+        { mode: 0o600 },
+      );
+
+      // Its pid and start time both match, so only its state says it is gone.
+      const recovered = await startUnixSupervisorServer(socketPath, fixture.ipcHandler);
+      await recovered.close();
+      expect(existsSync(`${socketPath}.lock`)).toBe(false);
+    } finally {
+      holder.kill("SIGKILL");
+    }
   });
 
   it("recovers a private binding socket left by an abrupt pre-publication exit", async () => {
