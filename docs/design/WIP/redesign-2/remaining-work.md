@@ -1082,6 +1082,24 @@ escalation path is a phase of its own.
 * [ ] A phase that has spent its attempts raises the escalation its policy
   declares, and the portal offers it as a decision
 
+Seen again, whole, on `run_1b4d4d416670ebe7aadc8bf78247b065`. Four implement
+members: three passed on their first try, the fourth used all six of its
+authored attempts against a gate reporting a failing assertion each time.
+
+```text
+implementor  implement-work-62a2848   1 try   finished
+implementor  implement-work-78805357  1 try   finished
+implementor  implement-work-7b935589  1 try   finished
+implementor  implement-work-ee58e4b2  6 tries could not pass
+```
+
+The phase declares `onFailure: continue`, so the three that finished should
+carry the run to delivery without the fourth. Instead the phase cannot close,
+the run stops, and the driver repeats the same refusal for ever. Whether that
+should continue without the member or stop and ask a person is the product
+decision this item is already waiting on -- but the run stopping silently is
+not either of them.
+
 ### Found next: two publications, one source
 
 The clean run with these changes in place stopped again at the plan phase, and
