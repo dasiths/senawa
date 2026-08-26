@@ -45,6 +45,10 @@ phases:
     input: schemas/task.schema.json
     output: schemas/implementation.schema.json
     gates: [tests]
-    attempts: 3
+    # The gate runs the project's own suite over the whole workspace, so a
+    # member is retried for any failing test, including one a sibling wrote.
+    # Three was too few for that even once a refusal started carrying the
+    # failing assertion: two runs spent the ceiling and stopped.
+    attempts: 6
     # A member that cannot pass does not block the ones that did.
     onFailure: continue
