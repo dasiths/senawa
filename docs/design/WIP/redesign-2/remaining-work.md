@@ -1426,6 +1426,24 @@ the cost.
   every view answers in under a second
 * [ ] A run's records are not rewritten whole on every command
 
+### Found beside it: a supervisor with no repository says nothing about it
+
+A service started without `SENAWA_REPOSITORY_DIR` builds no SDK pool, so it has
+no async effect host and no worker dispatch can ever start. The run then sits
+with its commands queued and no intents against them, for ever, and the
+supervisor log says nothing at all -- not at startup, not on the cycles that
+find work they cannot begin.
+
+Found by restarting the example's service by hand and watching four dispatched
+implementors produce no transcript line for half an hour. The state is exactly
+the deadlock this plan has chased three times, reached by configuration rather
+than by a defect, and it is indistinguishable from one while it is happening.
+
+The health report does say `worker dispatch is disabled`, but only to a caller
+that asks for session-store health.
+
+* [ ] A supervisor that cannot dispatch work says so where a run's history is
+
 ### Measured on the example, driven from clean, five agents working
 
 ```text
