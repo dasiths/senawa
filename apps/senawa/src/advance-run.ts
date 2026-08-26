@@ -1056,10 +1056,20 @@ function sensorExcerpt(
   const printed = [data.stdout, data.stderr]
     .filter((part): part is string => typeof part === "string" && part.length > 0)
     .join("\n");
-  // The first failure carries the detail; the tail is a count of how many there
-  // were. An attempt can only act on the former.
-  return printed.length === 0 ? undefined : printed.slice(0, MAX_REFUSAL_EXCERPT);
+  if (printed.length === 0) return undefined;
+  // From the first thing that went wrong, not from the top. A test run that
+  // passes ten cases before failing one puts nothing but successes in its first
+  // nine hundred characters, and a retry was handed the part that was already
+  // right.
+  const failure = FAILURE_MARKERS.map((marker) => printed.indexOf(marker))
+    .filter((index) => index >= 0)
+    .sort((left, right) => left - right)[0];
+  const from = failure === undefined ? 0 : Math.max(0, printed.lastIndexOf("\n", failure) + 1);
+  return printed.slice(from, from + MAX_REFUSAL_EXCERPT);
 }
+
+/** Where a sensor's output starts saying what went wrong. */
+const FAILURE_MARKERS = ["not ok ", "AssertionError", "FAIL", "Error:", "error:", "✗"];
 
 function gateFor(
   snapshot: ConfigurationSnapshot,

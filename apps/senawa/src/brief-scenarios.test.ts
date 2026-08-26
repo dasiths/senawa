@@ -1325,8 +1325,10 @@ describe("one phase in sequence", () => {
   it("tells the next attempt what the sensor said, not that a sensor failed", async () => {
     const scenario = await startScenario("refusal-detail", {
       // A sensor is argv, not a shell line, so the message it prints carries no
-      // spaces of its own.
-      sensorCommand: "node -e console.error('board-rejects-an-occupied-square');process.exit(3)",
+      // spaces of its own. The passing case is printed first, as a real test
+      // run prints it, because the excerpt has to skip past what already works.
+      sensorCommand:
+        "node -e console.log('ok-1-board-accepts-a-move');console.error('FAIL-2-board-rejects-an-occupied-square');process.exit(3)",
       attempts: 2,
     });
     await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
@@ -1337,11 +1339,15 @@ describe("one phase in sequence", () => {
     // "measure did not pass" is true and useless: the attempt already knew it
     // failed. What it could not know is which assertion, and that is the only
     // thing that makes the next attempt different from the last.
-    expect(outcome.reasons.join("\n")).toContain("board-rejects-an-occupied-square");
+    const reasons = outcome.reasons.join("\n");
+    expect(reasons).toContain("FAIL-2-board-rejects-an-occupied-square");
+    // And the excerpt starts at the failure. A run that passes plenty before it
+    // fails once would otherwise spend the whole excerpt on what already works.
+    expect(reasons).not.toContain("ok-1-board-accepts-a-move");
     // The rule states the comparison it made, so a person reading the run knows
     // what was expected without opening the gate definition.
-    expect(outcome.reasons.join("\n")).toContain("/exitCode");
-    expect(outcome.reasons.join("\n")).toContain("3");
+    expect(reasons).toContain("/exitCode");
+    expect(reasons).toContain("3");
   });
 
   it("escalates a refused phase carrying the recorded gate evidence", async () => {
