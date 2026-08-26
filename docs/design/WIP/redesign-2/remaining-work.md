@@ -928,8 +928,18 @@ agent working, `make portal` minted tokens immediately.
 The console is exactly what a person reaches for while agents are working, which
 is the only time it does not answer.
 
-* [ ] A read of the supervisor's own state does not queue behind a run cycle
-* [ ] Minting a portal credential does not queue behind a run cycle
+`status` and `logs` now run beside work rather than behind it, and stopping
+waits for the reads in flight before closing what they are reading. A status
+reading is taken of the lifecycle it was taken during, so a health probe that
+spans a drain reports the running service it observed rather than the draining
+one it landed in. The gated-cycle test asserts a read answers while a cycle is
+held open; it times out against the queued version.
+
+Minting was never queued. `senawa portal` mints in memory and then calls
+`status`, and it was the status call that timed out.
+
+* [x] A read of the supervisor's own state does not queue behind a run cycle
+* [x] Minting a portal credential does not queue behind a run cycle
 
 ### Found beyond it: the run's own record held to a message's ceiling
 
@@ -968,7 +978,100 @@ the browser on this very run, and the crash reason that unblocked phase 13 came
 from the run before it — but "the example completes" is not met while this
 stands.
 
-## Carried from the v1 plan
+## Phase 15: a refused run says what refused it
+
+The first run to reach the implement gate was the furthest any run had come:
+three phases, twelve dispatches, no worker failures, no open attempts, and a
+workspace holding `package.json`, `src` and `test`. It then sat entirely still
+for twenty minutes. `senawa status` said:
+
+```text
+mode: running
+phases: 3
+phases closed: 2
+agents dispatched: 12
+waiting on you: 0
+```
+
+Which is what a healthy run says. Nothing was written to the database in that
+time; nothing was working; nothing was waiting. The run was over and said so
+nowhere.
+
+Reading the record directly found the answer immediately:
+
+```text
+gateEvidence.evaluation.decision  rejected
+gateEvidence.evaluation.blocking  tests-exit-code-exit-code = false
+gateEvidence.readings[0].data     exitCode 1, TAP output with two failing tests
+```
+
+The system had done exactly the right thing. Four members completed, the gate
+ran the project's own test suite, the suite failed, and the gate refused. The
+whole point of the product worked. Two things around it did not.
+
+### The retry was told nothing it could use
+
+`senawa service logs` held the one sentence anybody was ever given:
+
+```text
+run.stopped  gate-refused at implement: tests did not pass
+```
+
+That message was also what every retry was told. The reasons handed to the next
+attempt were built as `readings.map(reading => "<sensor> did not pass")` — one
+line per reading, passing sensors included, and no content from any of them. The
+comment directly above it says a retry that is not told what to change only
+spends an attempt, and that is precisely what the three implement retries did.
+
+A refusal now names the rule that was not met as the comparison it made, and
+carries the sensor's own output:
+
+```text
+tests/exitCode equals 0, and read 1
+tests said:
+TAP version 13
+# Subtest: two-human mode plays a scripted X win to completion
+not ok 1 - two-human mode plays a scripted X win to completion
+  ...
+```
+
+Passing sensors are left out; naming them pointed the attempt at work that was
+already right. The excerpt is bounded to 900 characters because a worker context
+refuses a prior refusal longer than 1,024, and the head of a test run is where
+the first failure's detail is.
+
+### The stop was invisible where a person looks
+
+The reason existed, in the supervisor's operational log, behind an IPC call,
+mixed in with every other run. `senawa status` — the thing a person runs to find
+out what their run is doing — did not mention it.
+
+Status now reports it. The driver already recorded a stop and cleared it when
+the run moved again; it now records the clearing too, so the latest of the two
+entries is the answer and a recovered run does not go on wearing an old refusal.
+
+```text
+waiting on you: 0
+stopped: gate-refused at implement: tests/exitCode equals 0, and read 1; tests said: ...
+```
+
+* [x] A refusal carries what the sensor measured, not that a sensor was measured
+* [x] A run the driver has given up on says so in `senawa status`
+* [x] A stop stops being reported once the run moves again
+
+### Not fixed here
+
+The phase's `onExhausted: escalate` is authored and does nothing. The kernel
+models a phase escalation and projects it as a human need, and `create-escalation`
+records one, but the driver never raises it on a terminal refusal and the SQLite
+portal projection reads escalations only from `runner_escalations`, which is the
+budget-allowance table. So a blocked phase cannot become a decision a person is
+offered in the portal. Status reporting the stop is the smaller honest fix; the
+escalation path is a phase of its own.
+
+* [ ] A phase that has spent its attempts raises the escalation its policy
+  declares, and the portal offers it as a decision
+
 
 Neither blocks anything above, and neither is part of the condition below. The
 first is a feature the phase model does not yet have; the second is done.

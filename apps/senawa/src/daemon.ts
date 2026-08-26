@@ -770,8 +770,11 @@ function driveRun(
           stopped.set(key, reason);
           report(repositoryId, runId, "run.stopped", reason, "error");
         }
-      } else {
-        stopped.delete(key);
+      } else if (stopped.delete(key)) {
+        // Clearing the stop silently left the record saying the run was refused
+        // long after it had moved on, so anything reading the log to find out
+        // what a run is doing reported a refusal that no longer held.
+        report(repositoryId, runId, "run.resumed", `moved on with ${outcome.kind}`, "info");
       }
       // A run that has finished has no more work, and saying "no work" is not
       // the same as being over. `ended` was only reachable from `ending`, which

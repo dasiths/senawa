@@ -5,6 +5,7 @@ import { loadAuthoredWorkflow } from "@senawa/execution-host";
 import { type CanonicalValue, canonicalBytes, canonicalValue, sha256Digest } from "@senawa/kernel";
 import { decodeCommandEnvelope, PROTOCOL_VERSION } from "@senawa/protocol";
 import { SqliteAuthority, SqliteCanonicalJsonAssetStore } from "@senawa/storage-sqlite";
+import { SqliteSupervisorAuthority } from "@senawa/supervisor";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { type AdvanceOutcome, advanceRun, classifyOutcome } from "./advance-run.js";
@@ -506,6 +507,50 @@ describe("running every member of a fan-out", () => {
     ).toContain("every phase has closed");
   });
 
+  it("says why the driver stopped, and stops saying it once the run moves", async () => {
+    const scenario = await startScenario("stopped-status", { sensorCommand: "false", attempts: 1 });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+    expect(await advance(scenario)).toMatchObject({ kind: "gate-refused" });
+
+    const supervisor = new SqliteSupervisorAuthority({ ...scenario.paths, dependencies });
+    const status = () =>
+      runStatus({
+        ...scenario.paths,
+        currentTime: NOW,
+        dependencies,
+        repositoryId: scenario.repositoryId,
+        runId: scenario.runId,
+      }).output;
+    try {
+      // Before this, a run the driver had given up on reported "running",
+      // "waiting on you: 0", and nothing else. The reason existed, in the
+      // supervisor's log, which is not somewhere a person looks to find out
+      // what their run is doing.
+      expect(status()).not.toContain("stopped:");
+      supervisor.appendLog({
+        recordedAt: NOW,
+        level: "error",
+        event: "run.stopped",
+        message: "gate-refused at define: measure /exitCode equals 0, and read 1",
+        fields: { repositoryId: scenario.repositoryId, runId: scenario.runId },
+      });
+      expect(status()).toContain("stopped: gate-refused at define");
+
+      supervisor.appendLog({
+        recordedAt: NOW,
+        level: "info",
+        event: "run.resumed",
+        message: "moved on with dispatched",
+        fields: { repositoryId: scenario.repositoryId, runId: scenario.runId },
+      });
+      // A stop that was never cleared would leave a working run wearing a
+      // refusal it had already recovered from.
+      expect(status()).not.toContain("stopped:");
+    } finally {
+      supervisor.close();
+    }
+  });
+
   async function driveMembers(options: { readonly failFast: boolean }) {
     const scenario = await startScenario(`fanout-policy-${String(options.failFast)}`, {
       fanOut: "complete",
@@ -902,7 +947,7 @@ describe("one phase in sequence", () => {
     // attempt learning nothing.
     const pack = await promptPackText(scenario, outcome.dispatchId);
     expect(pack).toContain("This is attempt 2");
-    expect(pack).toContain("measure did not pass");
+    expect(pack).toContain("measure/exitCode equals 0, and read 1");
   });
 
   // Retrying a refused gate is only half of a retry. The attempt it starts has
@@ -1230,6 +1275,28 @@ describe("one phase in sequence", () => {
     expect(first.exitCode).toBe(1);
     expect(second).toEqual(first);
     expect(await advance(scenario)).toMatchObject({ kind: "awaiting-agent", phaseKey: "define" });
+  });
+
+  it("tells the next attempt what the sensor said, not that a sensor failed", async () => {
+    const scenario = await startScenario("refusal-detail", {
+      // A sensor is argv, not a shell line, so the message it prints carries no
+      // spaces of its own.
+      sensorCommand: "node -e console.error('board-rejects-an-occupied-square');process.exit(3)",
+      attempts: 2,
+    });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
+
+    const outcome = await advance(scenario);
+    expect(outcome).toMatchObject({ kind: "retrying", phaseKey: "define" });
+    if (!("reasons" in outcome)) throw new Error("a retry carries reasons");
+    // "measure did not pass" is true and useless: the attempt already knew it
+    // failed. What it could not know is which assertion, and that is the only
+    // thing that makes the next attempt different from the last.
+    expect(outcome.reasons.join("\n")).toContain("board-rejects-an-occupied-square");
+    // The rule states the comparison it made, so a person reading the run knows
+    // what was expected without opening the gate definition.
+    expect(outcome.reasons.join("\n")).toContain("/exitCode");
+    expect(outcome.reasons.join("\n")).toContain("3");
   });
 
   it("escalates a refused phase carrying the recorded gate evidence", async () => {

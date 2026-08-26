@@ -162,7 +162,12 @@ interface SnapshotPhase {
 }
 
 interface GateRule {
-  readonly condition: { readonly accessor: { readonly sensorKey: string } };
+  readonly key: string;
+  readonly condition: {
+    readonly accessor: { readonly sensorKey: string; readonly pointer?: string };
+    readonly operator?: string;
+    readonly expected?: unknown;
+  };
 }
 
 interface SnapshotGateValue {
@@ -793,7 +798,7 @@ async function step(
   // escalation carries that evidence and there is nothing to escalate with
   // otherwise.
   if (evaluation !== undefined && evaluation.decision !== "accepted") {
-    const reasons = readings.map((reading) => `${String(reading.sensorKey)} did not pass`);
+    const reasons = refusalReasons(gate, evaluation, measured);
     const maximumAttempts = phase.iteration?.maximumAttempts ?? 1;
     if (phase.iteration?.onGateRejected === "iterate" && taskAttempts < maximumAttempts) {
       // The next attempt is told what the last one failed, because a retry that
@@ -969,6 +974,91 @@ async function readGate(
 function gateSensorKeys(gate: NonNullable<ReturnType<typeof gateFor>>): readonly string[] {
   const rules = [...(gate.blocking ?? []), ...(gate.advisory ?? [])];
   return rules.map((rule) => String(rule.condition.accessor.sensorKey));
+}
+
+/** As much of a sensor's own words as a worker context will carry. */
+const MAX_REFUSAL_EXCERPT = 900;
+
+/**
+ * Why the gate refused, in terms the next attempt can act on.
+ *
+ * A retry that is told "tests did not pass" only spends an attempt: it knows it
+ * failed and nothing about what to change. The reading that refused it already
+ * holds the sensor's own output, so the refusal carries that instead, along
+ * with the rule that was not met. Passing sensors are left out; naming them as
+ * reasons pointed the next attempt at work that was already right.
+ */
+function refusalReasons(
+  gate: ReturnType<typeof gateFor>,
+  evaluation: ReturnType<typeof evaluateGate>,
+  measured: Awaited<ReturnType<typeof readGate>>,
+): readonly string[] {
+  const rules = new Map(
+    [...(gate?.blocking ?? []), ...(gate?.advisory ?? [])].map((rule) => [String(rule.key), rule]),
+  );
+  const failed = evaluation.blocking.filter((rule) => rule.result !== "true");
+  const reasons: string[] = [];
+  for (const outcome of failed) {
+    const rule = rules.get(String(outcome.key));
+    const sensorKey = rule === undefined ? undefined : String(rule.condition.accessor.sensorKey);
+    const reading = measured.find((entry) => String(entry.sensorKey) === sensorKey);
+    reasons.push(unmetRule(outcome.key, rule, reading));
+    const excerpt = sensorExcerpt(reading);
+    if (excerpt !== undefined) reasons.push(`${sensorKey ?? "sensor"} said:\n${excerpt}`);
+  }
+  // A gate can refuse with no blocking rule named when the evaluation itself is
+  // what went wrong. Saying nothing would leave the attempt with no reason at
+  // all, which the context refuses to carry.
+  if (reasons.length === 0) reasons.push("the phase gate refused this attempt");
+  return reasons;
+}
+
+/** The rule that was not met, stated as the comparison it made. */
+function unmetRule(
+  key: unknown,
+  rule: GateRule | undefined,
+  reading: Awaited<ReturnType<typeof readGate>>[number] | undefined,
+): string {
+  if (rule === undefined) return `gate rule ${String(key)} was not met`;
+  const pointer = rule.condition.accessor.pointer ?? "";
+  const observed =
+    reading === undefined || reading.outcome !== "succeeded"
+      ? "nothing, because the sensor did not run"
+      : JSON.stringify(readingValue(reading.data, pointer));
+  return `${String(rule.condition.accessor.sensorKey)}${pointer} ${String(rule.condition.operator ?? "equals")} ${JSON.stringify(rule.condition.expected)}, and read ${observed}`;
+}
+
+/** The value a rule's pointer selects, without pulling in a JSON Pointer library. */
+function readingValue(data: unknown, pointer: string): unknown {
+  let current: unknown = data;
+  for (const segment of pointer.split("/").filter((part) => part.length > 0)) {
+    if (current === null || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[
+      segment.replaceAll("~1", "/").replaceAll("~0", "~")
+    ];
+  }
+  return current;
+}
+
+/** What the sensor printed, bounded to what a worker context will carry. */
+function sensorExcerpt(
+  reading: Awaited<ReturnType<typeof readGate>>[number] | undefined,
+): string | undefined {
+  if (reading === undefined) return undefined;
+  if (reading.outcome !== "succeeded") {
+    const error = reading.error as { readonly code?: unknown; readonly message?: unknown };
+    return `${String(error?.code ?? "failed")}: ${String(error?.message ?? "")}`.slice(
+      0,
+      MAX_REFUSAL_EXCERPT,
+    );
+  }
+  const data = reading.data as { readonly stdout?: unknown; readonly stderr?: unknown };
+  const printed = [data.stdout, data.stderr]
+    .filter((part): part is string => typeof part === "string" && part.length > 0)
+    .join("\n");
+  // The first failure carries the detail; the tail is a count of how many there
+  // were. An attempt can only act on the former.
+  return printed.length === 0 ? undefined : printed.slice(0, MAX_REFUSAL_EXCERPT);
 }
 
 function gateFor(

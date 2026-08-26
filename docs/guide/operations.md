@@ -101,6 +101,18 @@ digest so it cannot drift from what the next attempt is told. When the phase
 authored `onApprovalRejected: iterate` and attempts remain, the next `advance`
 dispatches the next attempt with that exact sentence.
 
+`status` also reports a run the driver has given up on:
+
+```text
+waiting on you: 0
+stopped: gate-refused at implement: tests/exitCode equals 0, and read 1; tests said: ...
+```
+
+A refusal names the rule that was not met as the comparison it made, and carries
+what the sensor printed. The same text is what the next attempt is told, so a
+retry knows which assertion to change rather than only that something failed.
+The line disappears once the run moves again.
+
 ## Credentials
 
 The IPC credential is 32 random bytes encoded as base64url, created exclusively
