@@ -3629,6 +3629,7 @@ export class SqlitePortalQueryAuthority {
   readonly assetDirectory: string;
   readonly dependencies: RuntimeDependencies;
   readonly #database: Database.Database;
+  #replayed: { readonly state: string; readonly service: RuntimeCommandService } | undefined;
 
   constructor(options: SqlitePortalQueryAuthorityOptions) {
     this.databasePath = resolve(options.databasePath);
@@ -4939,6 +4940,11 @@ export class SqlitePortalQueryAuthority {
         });
   }
 
+  // Building the service replays every command the run has ever accepted, and
+  // each replayed command digests the whole record set, so one portal read cost
+  // 1.3 seconds on a run of three phases and grew with the run. This authority
+  // only ever reads. The durable state is still read on every call; the replay
+  // is reused only while those exact bytes are what is stored.
   #runtimeService(): RuntimeCommandService {
     const row = this.#database
       .prepare<[], { canonical_json: string }>(
@@ -4946,10 +4952,13 @@ export class SqlitePortalQueryAuthority {
       )
       .get();
     if (row === undefined) throw new Error("SQLite authority singleton is missing");
-    return new RuntimeCommandService(
+    if (this.#replayed?.state === row.canonical_json) return this.#replayed.service;
+    const service = new RuntimeCommandService(
       this.dependencies,
       InMemoryAuthority.fromCanonicalJson(row.canonical_json, this.dependencies),
     );
+    this.#replayed = { state: row.canonical_json, service };
+    return service;
   }
 
   #graph(repositoryId: string, runId: string) {

@@ -1351,10 +1351,10 @@ Half a core, for ever, on a run with nothing left to do.
 Timed directly against that database from another process:
 
 ```text
-getRunOverview                    207ms
-getGraphSummary                   188ms
-listHumanNeeds                     22ms
-listArtifacts                      12ms
+getRunOverview                   1304ms
+getGraphSummary                  1304ms
+listHumanNeeds                     12ms
+listArtifacts                      13ms
 ```
 
 The same reads over loopback HTTP, served by the supervisor, with the run
@@ -1366,44 +1366,64 @@ graph         4.2s
 artifacts     4.2s
 ```
 
-And from the browser while the implement phase was working, `graph` took 8.1s.
-The queries are not the problem. The process serving them is.
+Two facts sit in those numbers. The gap between 1.3s and 5.5s is contention:
+the portal is served from the event loop a run cycle works on. But 1.3s is not
+a floor worth reaching -- the read itself is the larger part, and it grows with
+the run.
+
+An earlier reading here said `getRunOverview` cost 207ms and concluded the
+queries were not the problem. That measurement was taken from a script whose
+authority dependency was incomplete, so the call threw partway through and the
+timer recorded how long it took to fail. The conclusion drawn from it was
+wrong, and the two repairs that followed were aimed one layer too high.
 
 ### Where the time goes
 
 Three costs, each paid far more often than it needs to be.
 
-**Constructing an authority replays the run.** `new SqliteAuthority` runs
-`verifyDatabase`, which calls `InMemoryAuthority.fromCanonicalJson` and replays
-every command through `submitWithTrustedFacts`. That took **360ms** on this run.
-`advanceRun` constructs `SqliteSupervisorAuthority` -- and so a `SqliteAuthority`
--- on every call, and the driver calls it every cycle. The integrity guarantee is
-worth keeping; paying for it per cycle is not.
+**Every read replays the run.** `SqlitePortalQueryAuthority` builds its view
+through `#runtimeService()`, which calls `InMemoryAuthority.fromCanonicalJson`,
+which calls `replaySerializedRun`, which submits every command the run has ever
+accepted. A CPU profile of five `getRunOverview` calls spends 4.8 of 6.2
+seconds inside `replaySerializedRun`, and 1.8 of those inside `recordRevision`,
+which canonically digests the entire record set once per replayed command. The
+cost is quadratic in the run's own history, and it is paid per read.
 
-**The broker snapshot decodes everything, every time.** `context_authority_state`
-holds **129,239 bytes** of canonical JSON, and
-`contextBroker.authority.snapshot()` takes **106ms**, then **114ms** when called
-again immediately -- there is no cache. `listRuns()` called it on every schedule.
+**Constructing an authority replays it too.** `new SqliteAuthority` runs
+`verifyDatabase`, which does the same replay: **360ms** on this run. `advanceRun`
+constructs `SqliteSupervisorAuthority` -- and so a `SqliteAuthority` -- on every
+call, and the driver calls it every cycle.
+
+**The broker snapshot decodes everything, every time.**
+`context_authority_state` holds **129,239 bytes** of canonical JSON, and
+`contextBroker.authority.snapshot()` took **106ms**, then **114ms** when called
+again immediately -- there was no cache. Of that, two milliseconds are reading
+and parsing the bytes; the rest is the codec validating records it has already
+validated. `listRuns()` called it on every schedule.
 
 **The run record is rewritten whole on every command.** `runs.records_json` is
-**238,913 bytes** on this run, so its cost is quadratic in its own size. Phase 14
-noted this and did not fix it. `#humanNeeds`, `getRunOverview` and the record
-readers all decode it in full.
+**238,913 bytes** on this run, so its cost is quadratic in its own size. Phase
+14 noted this and did not fix it.
 
 A run that had ended was still offered to the scheduler for ever, because
 `listRuns()` returned every run that had ever held a dispatch with no regard for
-its mode. That one is fixed here; it is the cheapest of the three and the least
-of the cost.
+its mode. That one is fixed here; it is the cheapest of them and the least of
+the cost.
 
 ### What has to become true
 
-* [ ] A supervisor with nothing to do uses no measurable CPU
+* [x] A supervisor with nothing to do uses no measurable CPU
+* [x] A portal read does not replay the run's whole command history
+* [x] The broker's snapshot is not decoded more than once per change
 * [ ] Driving a run once does not replay the run's whole command history
-* [ ] The broker's snapshot is not decoded more than once per change
 * [ ] A run's records are not rewritten whole on every command
 * [ ] A portal read is served without waiting for a run cycle
 * [ ] The example's own run is read in a browser while its agents work, and
   every view answers in under a second
+
+Measured after the first three: supervisor CPU on an ended run 51.6% to 0%,
+`getRunOverview` 1645ms cold and 26ms warm, `getGraphSummary` 14ms warm,
+`listArtifacts` 4.2s to 15ms over HTTP.
 
 ### Not to be traded away
 

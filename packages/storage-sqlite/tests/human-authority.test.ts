@@ -913,6 +913,31 @@ describe("SQLite Phase 11B portal query authority", () => {
     fixture.dispose();
   });
 
+  // Building the portal's view of a run replays every command that run has
+  // accepted, and each replayed command digests the whole record set, so one
+  // read cost 1.3 seconds on a run of three phases and grew with the run. The
+  // replay is reused while the durable bytes hold still, which is only sound if
+  // it is dropped the instant they move -- and they move on another connection.
+  it("reuses a replay of the runs and drops it when a command lands elsewhere", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    const portal = new SqlitePortalQueryAuthority(fixture.options);
+    const listed = (repositoryId: string) =>
+      portal.listRuns(repositoryId).runs.map(({ runId }) => runId);
+    expect(listed(runtimeFixture.repositoryId)).toEqual([runtimeFixture.runId]);
+    expect(listed(runtimeFixture.repositoryId)).toEqual([runtimeFixture.runId]);
+
+    // Discovery refuses a run it cannot find a graph for, so a replay held past
+    // its bytes does not read as stale here -- it reads as a missing run.
+    instantiate(authority, { repositoryId: SECOND_REPOSITORY_ID, runId: SECOND_RUN_ID });
+    expect(listed(SECOND_REPOSITORY_ID)).toEqual([SECOND_RUN_ID]);
+    expect(listed(runtimeFixture.repositoryId)).toEqual([runtimeFixture.runId]);
+    portal.close();
+    authority.close();
+    fixture.dispose();
+  });
+
   it("marks an ended run with unaccepted work as failed", () => {
     const fixture = createFixture();
     const authority = new SqliteAuthority(fixture.options);
