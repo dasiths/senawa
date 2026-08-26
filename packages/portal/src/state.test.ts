@@ -235,6 +235,39 @@ describe("portal pure models", () => {
     expect(parsePortalHash("#/runs/../run_one/workflow")).toEqual({ name: "workflow" });
   });
 
+  // Reading a phase was a place you could get to and not a place you could
+  // send, so the only way to show somebody what a phase did was to tell them
+  // which one to click.
+  it("carries the detail view's scope in the route", () => {
+    const scoped = portalHash("repository_one", "run_one", "workflow", "phase_define");
+    expect(scoped).toBe("#/runs/repository_one/run_one/workflow/phase_define");
+    expect(parsePortalHash(scoped)).toEqual({
+      name: "workflow",
+      repositoryId: "repository_one",
+      runId: "run_one",
+      focus: "phase_define",
+    });
+    // A mangled scope is not a reason to refuse the run it names.
+    expect(parsePortalHash("#/runs/repository_one/run_one/workflow/..")).toEqual({
+      name: "workflow",
+      repositoryId: "repository_one",
+      runId: "run_one",
+    });
+    expect(portalHash("repository_one", "run_one", "workflow", "../etc")).toBe(
+      "#/runs/repository_one/run_one/workflow",
+    );
+
+    const opened = initialPortalState(parsePortalHash(scoped));
+    expect(opened.ui.focusedRecord).toBe("phase_define");
+    expect(opened.ui.transcriptScope).toBe("node");
+    const widened = portalReducer(opened, {
+      type: "route",
+      route: parsePortalHash("#/runs/repository_one/run_one/workflow"),
+    });
+    expect(widened.ui.focusedRecord).toBeUndefined();
+    expect(widened.ui.transcriptScope).toBe("run");
+  });
+
   it("compares the assembly sync vector without the transcript component", () => {
     expect(vectorsEqual(sync, { ...sync })).toBe(true);
     expect(vectorsEqual(sync, { ...sync, humanRevision: 3 })).toBe(false);

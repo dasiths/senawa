@@ -65,6 +65,27 @@ test("scopes the detail view to the run, a phase, and one piece of work", async 
   expect(diagnostics.severe()).toEqual([]);
 });
 
+// Reading a phase was a place you could get to and not a place you could send,
+// so showing somebody what a phase did meant telling them which one to click.
+test("opens on the phase a link names", async ({ page }) => {
+  const diagnostics = await bootstrapPortal(page, runs.journey);
+  await navigate(page, "Workflow");
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
+  await page.locator(".band-read").first().click();
+
+  const trail = page.locator(".scope-trail");
+  await expect(trail.locator(".scope-step")).toHaveCount(2);
+  const scoped = await page.evaluate(() => location.hash);
+  const phase = await trail.locator(".scope-step").nth(1).textContent();
+  expect(scoped).toMatch(/\/workflow\/phase_/u);
+
+  await page.reload();
+  await expect(page.locator(".scope-trail .scope-step")).toHaveCount(2);
+  await expect(page.locator(".scope-trail .scope-step").nth(1)).toHaveText(phase ?? "");
+
+  expect(diagnostics.severe()).toEqual([]);
+});
+
 test("reads a phase's gate: what it asked, what it read, and what it decided", async ({ page }) => {
   const diagnostics = await bootstrapPortal(page, runs.journey);
   await navigate(page, "Workflow");

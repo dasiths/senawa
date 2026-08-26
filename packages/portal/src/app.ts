@@ -998,6 +998,9 @@ export class PortalApplication {
         this.#dispatch(
           recordId === undefined ? { type: "focus-record" } : { type: "focus-record", recordId },
         );
+        // The scope belongs in the address, so a phase view can be sent to
+        // somebody rather than described to them.
+        this.#writeScopeToHash(recordId);
         void this.#syncTranscript();
       },
       openNeed: (need, triggerId) => void this.#openNeed(need, triggerId),
@@ -1034,6 +1037,24 @@ export class PortalApplication {
     this.#dispatch({ type: "asset-overlay-close" });
     if (triggerId !== undefined)
       requestAnimationFrame(() => document.getElementById(triggerId)?.focus());
+  }
+
+  /** Puts the detail view's scope in the address, so a phase view can be linked. */
+  #writeScopeToHash(recordId: string | undefined): void {
+    const identity = this.#selectedIdentity();
+    if (identity === undefined) return;
+    const next = portalHash(
+      identity.repositoryId,
+      identity.runId,
+      this.#state.route.name,
+      recordId,
+    );
+    if (location.hash === next) return;
+    // Replaced rather than assigned: assigning fires a hashchange, and the
+    // route it delivers is the state this already holds. The re-render it
+    // caused threw away a roving tab stop the reader had just moved.
+    history.replaceState(null, "", next);
+    this.#dispatch({ type: "route", route: parsePortalHash(next) });
   }
 
   #answerDraftIdentity(need: PortalHumanNeed | undefined): string | undefined {

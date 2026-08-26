@@ -1300,7 +1300,7 @@ all, so it does not even get the indent `.tree-group` gives the workflow tree.
   containment
 * [ ] The Agents tree opens a member's attempts, and an attempt scopes the
   detail view to that try
-* [ ] The scope is in the route, so a phase view can be linked
+* [x] The scope is in the route, so a phase view can be linked
 
 ### Found while reading it live: the console times out on a busy run
 

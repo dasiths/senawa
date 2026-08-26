@@ -298,7 +298,8 @@ export function initialPortalState(route: PortalRoute): PortalState {
     ui: Object.freeze({
       dialog: undefined,
       filter: "",
-      focusedRecord: undefined,
+      // A link names the scope it was taken at, so the portal opens on it.
+      focusedRecord: route.focus,
       rightRailOpen: false,
       graphMode: "diagram",
       unfoldedNodes: Object.freeze([]),
@@ -308,7 +309,7 @@ export function initialPortalState(route: PortalRoute): PortalState {
       openedRecords: Object.freeze([]),
       graphViewport: INITIAL_GRAPH_VIEWPORT,
       transcript: emptyTranscriptView(),
-      transcriptScope: "run",
+      transcriptScope: route.focus === undefined ? "run" : "node",
       narration: undefined,
       railLayout: DEFAULT_RAIL_LAYOUT,
       assetOverlay: undefined,
@@ -362,16 +363,27 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
           ...(action.message === undefined ? {} : { message: action.message }),
         }),
       });
-    case "route":
+    case "route": {
+      // Narrowing the scope writes it to the address, so the route arrives
+      // again carrying only a new focus. Clearing the transcript then threw
+      // away the lines the narrowing had just fetched.
+      const sameView =
+        state.route.name === action.route.name &&
+        state.route.repositoryId === action.route.repositoryId &&
+        state.route.runId === action.route.runId;
       return next(state, {
         route: action.route,
         ui: Object.freeze({
           ...state.ui,
-          focusedRecord: undefined,
+          // The route carries the scope, so a link to a phase opens on that
+          // phase rather than on the run it belongs to.
+          focusedRecord: action.route.focus,
+          transcriptScope: action.route.focus === undefined ? ("run" as const) : ("node" as const),
           assetOverlay: undefined,
-          transcript: emptyTranscriptView(),
+          ...(sameView ? {} : { transcript: emptyTranscriptView() }),
         }),
       });
+    }
     case "select-run":
       return next(state, {
         selectedRepositoryId: action.repositoryId,
@@ -384,13 +396,18 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
         ui: Object.freeze({
           ...state.ui,
           dialog: undefined,
-          focusedRecord: undefined,
+          // The scope belongs to the run the route names, so opening a link
+          // keeps it and moving to another run does not.
+          focusedRecord: state.route.runId === action.runId ? state.route.focus : undefined,
           assetOverlay: undefined,
           graphViewport: INITIAL_GRAPH_VIEWPORT,
           transcript: emptyTranscriptView(),
           // Another run has none of this run's nodes, so a scope narrowed to one
           // of them would follow something that is no longer there.
-          transcriptScope: "run" as const,
+          transcriptScope:
+            state.route.runId === action.runId && state.route.focus !== undefined
+              ? ("node" as const)
+              : ("run" as const),
         }),
       });
     case "repositories":
