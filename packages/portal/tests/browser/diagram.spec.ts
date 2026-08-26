@@ -47,7 +47,7 @@ test("scopes the detail view to the run, a phase, and one piece of work", async 
   const trail = page.locator(".scope-trail");
   await expect(trail).toBeVisible();
   await expect(trail.locator(".scope-step")).toHaveCount(1);
-  await expect(trail.locator('.scope-step[aria-current="true"]')).toHaveText(/run_/u);
+  await expect(trail.locator('.scope-step[aria-current="true"]')).toHaveText("run");
 
   // A phase can be read. Its summary folds, so before this the only way to
   // reach one was the artifact chip on the connector.
@@ -92,7 +92,7 @@ test("reads what a phase produced inside the phase", async ({ page }) => {
   await expect(page.locator(".chip")).toHaveCount(0);
   const produced = page.locator(".band-produced").first();
   if ((await page.locator(".band-produced").count()) > 0) {
-    await expect(produced.locator(".band-produced-item b").first()).not.toHaveText("");
+    await expect(produced.locator(".band-produced-name").first()).not.toHaveText("");
   }
 
   expect(diagnostics.severe()).toEqual([]);

@@ -13,7 +13,7 @@ import { allowanceResult, allowanceReviewFromSource } from "./allowance-review.j
 import { type BoundedJsonNode, boundedJsonModel } from "./bounded-json.js";
 import { narrationBusy, narrationText } from "./command-narrator.js";
 import { focusGraphViewport } from "./graph-diagram.js";
-import { drawGraphFlowEdges, graphFlowView } from "./graph-flow.js";
+import { drawGraphFlowEdges, type GraphFlowProduced, graphFlowView } from "./graph-flow.js";
 import { executionOrdered, graphLayout } from "./graph-layout.js";
 import { chevronMark, copyMark, locateMark } from "./marks.js";
 import { type NodeToolbarAction, nodeToolbarView } from "./node-toolbar.js";
@@ -864,12 +864,17 @@ function graphFlow(
   const key = ids === undefined ? undefined : runKey(ids.repositoryId, ids.runId);
   const agents = key === undefined ? [] : (state.caches.agents[key]?.agents ?? []);
   const artifacts = key === undefined ? [] : (state.caches.artifacts[key]?.artifacts ?? []);
-  const handedOn = new Map<string, { readonly name: string; readonly size: string }>();
+  const handedOn = new Map<string, GraphFlowProduced[]>();
   for (const artifact of artifacts) {
     if (artifact.taskId === undefined) continue;
     const id = String(artifact.taskId);
-    if (!handedOn.has(id))
-      handedOn.set(id, { name: artifact.summary, size: formatBytes(artifact.byteLength) });
+    const held = handedOn.get(id) ?? [];
+    held.push({
+      name: artifact.summary,
+      size: formatBytes(artifact.byteLength),
+      version: artifactVersion(artifact),
+    });
+    handedOn.set(id, held);
   }
   return graphFlowView({
     nodes,
@@ -1133,7 +1138,7 @@ function scopeTrail(
   const trail = element("nav", "scope-trail");
   trail.setAttribute("aria-label", "What this is scoped to");
   const steps: { readonly label: string; readonly nodeId: string | undefined }[] = [
-    { label: selectedIds(state)?.runId ?? "This run", nodeId: undefined },
+    { label: "run", nodeId: undefined },
   ];
   if (scope.level !== "run") {
     const parent = nodes.find(({ nodeId }) => nodeId === scope.node.parentNodeId);

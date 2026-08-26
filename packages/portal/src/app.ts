@@ -1054,6 +1054,7 @@ export class PortalApplication {
     if (identity === undefined) return;
     pruneAnswerDrafts(
       sessionStorage,
+      identity,
       this.#state.humanNeeds
         .filter((need) => need.kind === "question")
         .map((need) => answerDraftIdentity(identity.repositoryId, identity.runId, need)),

@@ -84,7 +84,12 @@ export class PortalHttpClient {
 
   constructor(options: PortalHttpClientOptions = {}) {
     this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
-    this.#timeoutMs = options.timeoutMs ?? 10_000;
+    // The portal is served by the supervisor process, and a run cycle's work
+    // sits on the event loop it answers from. Ten seconds called a busy local
+    // server offline while a fan-out phase was working, which is exactly when
+    // somebody opens the console. A read is milliseconds now, so this is a
+    // ceiling on contention, not on the read.
+    this.#timeoutMs = options.timeoutMs ?? 20_000;
     this.#onUnauthorized = options.onUnauthorized ?? (() => undefined);
   }
 

@@ -645,45 +645,87 @@ textarea {
   flex-wrap: wrap;
 }
 
-/* What a phase produced, read inside the phase that produced it. */
+/* What a phase produced: a box, not a card. It is not another piece of work. */
 .band-produced {
+  margin-top: 10px;
+  border: 1px dashed var(--rule);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+}
+
+.band-produced > summary {
   display: flex;
   align-items: baseline;
-  flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--rule);
+  padding: 6px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.band-produced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.band-produced > summary::before {
+  content: "\203a";
+  color: var(--faint);
+  transition: transform 120ms ease;
+}
+
+.band-produced[open] > summary::before {
+  transform: rotate(90deg);
 }
 
 .band-produced-label {
   color: var(--faint);
   font-size: 11px;
-  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
-.band-produced-item {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  color: var(--muted);
+.band-produced-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 6px;
   font-size: 12px;
 }
 
-.band-produced-item b {
+.band-produced-table th {
+  padding: 2px 10px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 500;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.band-produced-table td {
+  padding: 3px 10px;
+  vertical-align: baseline;
+}
+
+.band-produced-name {
   color: var(--ink);
   font-weight: 570;
 }
 
-/* A phase is a thing to read, not only a thing to fold. */
+/* Going into a phase is the move the breadcrumb makes, so it wears the same
+   chevron. The summary beside it folds. */
 .band-read {
-  border: 1px solid var(--rule);
+  margin-left: auto;
+  border: 1px solid transparent;
   border-radius: 6px;
-  background: var(--surface);
-  padding: 2px 8px;
-  color: var(--muted);
-  font-size: 11px;
+  background: none;
+  padding: 0 6px;
+  color: var(--faint);
+  font-size: 15px;
+  line-height: 1.4;
   cursor: pointer;
+}
+
+.band-read:hover {
+  border-color: var(--rule);
+  color: var(--ink);
 }
 
 .band-read[aria-current="true"] {
@@ -691,62 +733,39 @@ textarea {
   color: var(--ink);
 }
 
-/* What a gate asked of a phase, and what it read. */
-.gate-reading {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--rule);
-}
-
-.gate-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.gate-phase {
-  color: var(--ink);
-  font-weight: 570;
-}
-
-.gate-decision {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.gate-decision.is-rejected {
-  color: var(--bad, #b4232c);
-}
-
-.gate-decision.is-accepted {
-  color: var(--good, #1f7a35);
-}
-
 /* Where the reader is, and the way back out. */
 .scope-trail {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px;
-  padding: 6px 10px 0;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
 }
 
 .scope-step,
 .row-scope {
-  border: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
   background: none;
-  padding: 0;
+  padding: 1px 6px;
   color: var(--muted);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
-  text-decoration: underline dotted;
+}
+
+.scope-step:hover,
+.row-scope:hover {
+  border-color: var(--rule);
+  color: var(--ink);
 }
 
 .scope-step[aria-current="true"] {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
   color: var(--ink);
   font-weight: 570;
-  text-decoration: none;
   cursor: default;
 }
 

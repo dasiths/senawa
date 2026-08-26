@@ -75,8 +75,9 @@ describe("answer draft persistence", () => {
     expect(loadAnswerDrafts(storage).size).toBe(MAX_ANSWER_DRAFTS);
   });
 
-  it("prunes every draft whose question is no longer open", () => {
+  it("prunes a run's drafts whose question is no longer open, and leaves other runs alone", () => {
     const storage = new MemoryStorage();
+    const scope = { repositoryId: "repository_one", runId: "run_one" };
     const open = answerDraftIdentity("repository_one", "run_one", question);
     const stale = answerDraftIdentity("repository_one", "run_one", {
       ...question,
@@ -85,11 +86,12 @@ describe("answer draft persistence", () => {
     const otherRun = answerDraftIdentity("repository_one", "run_two", question);
     writeAnswerDraft(storage, open, "keep");
     writeAnswerDraft(storage, stale, "drop");
-    writeAnswerDraft(storage, otherRun, "drop");
-    pruneAnswerDrafts(storage, [open]);
-    expect([...loadAnswerDrafts(storage).keys()]).toEqual([open]);
-    pruneAnswerDrafts(storage, []);
-    expect(storage.getItem(answerDraftStorageKey())).toBeNull();
+    writeAnswerDraft(storage, otherRun, "keep");
+    pruneAnswerDrafts(storage, scope, [open]);
+    expect([...loadAnswerDrafts(storage).keys()].toSorted()).toEqual([open, otherRun].toSorted());
+    // What one run has open says nothing about another run's questions.
+    pruneAnswerDrafts(storage, scope, []);
+    expect([...loadAnswerDrafts(storage).keys()]).toEqual([otherRun]);
   });
 
   it("drops only the departed run's drafts when the selected run changes", () => {

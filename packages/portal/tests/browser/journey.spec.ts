@@ -221,21 +221,31 @@ test("publishes only the selected run when authority loads overlap", async ({ br
     cursor: 999_999,
     eventId: "event_stale-run-after-selection",
   };
-  const sourceCount = await page.evaluate(() => window.__senawaEventSources?.length ?? 0);
 
   let releaseJourneyOverview: (() => void) | undefined;
   const journeyOverviewGate = new Promise<void>((resolvePromise) => {
     releaseJourneyOverview = resolvePromise;
   });
   let gatedRequests = 0;
+  // A load already in flight is joined rather than restarted, so the gate has
+  // to be installed against a settled portal or whether it sees anything is a
+  // race with the bootstrap load.
+  await page.waitForLoadState("networkidle");
   await page.route("**/overview", async (route) => {
     if (!route.request().url().includes(runs.journey)) return route.continue();
     gatedRequests += 1;
     await journeyOverviewGate;
     await route.continue();
   });
+  // The portal lands on Workflow, so clicking that tab is a no-op and whether
+  // this gate ever sees a request depends on the bootstrap load still being in
+  // flight. Leaving the route and coming back makes the load happen here.
+  await navigate(page, "Timeline");
   await navigate(page, "Workflow");
   await expect.poll(() => gatedRequests).toBeGreaterThan(0);
+  // Counted from here, because what this asserts is that the overlap publishes
+  // one stream and not two, not how many the portal opened getting here.
+  const sourceCount = await page.evaluate(() => window.__senawaEventSources?.length ?? 0);
   await selectRun(page, runs.workspace);
   await page.evaluate((frame) => {
     const source = window.__senawaEventSources?.at(-1);

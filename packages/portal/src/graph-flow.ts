@@ -23,6 +23,12 @@ export interface GraphFlowActions {
   unfoldAll(): void;
 }
 
+export interface GraphFlowProduced {
+  readonly name: string;
+  readonly size: string;
+  readonly version: string;
+}
+
 export interface GraphFlowOptions {
   /** Phases and their members, already in execution order. */
   readonly nodes: readonly PortalGraphNode[];
@@ -33,7 +39,7 @@ export interface GraphFlowOptions {
   /** Whether the run is over, so the flow does not describe it in future tense. */
   readonly terminal?: boolean;
   /** What each task handed on, keyed by node id. */
-  readonly handedOn: ReadonlyMap<string, { readonly name: string; readonly size: string }>;
+  readonly handedOn: ReadonlyMap<string, readonly GraphFlowProduced[]>;
   readonly decorate: (node: PortalGraphNode) => GraphFlowNodeExtras;
   readonly actions: GraphFlowActions;
 }
@@ -216,7 +222,9 @@ export function graphFlowView(options: GraphFlowOptions): HTMLElement {
     read.type = "button";
     read.className = "band-read";
     read.dataset.focusKey = phase.nodeId;
-    read.textContent = "Read this phase";
+    read.textContent = "\u203a";
+    read.title = `Read ${phase.title}`;
+    read.setAttribute("aria-label", `Read ${phase.title}`);
     if (phase.nodeId === selectedNodeId) read.setAttribute("aria-current", "true");
     read.addEventListener("click", (event) => {
       // The summary folds, so without this a phase could not be read at all and
@@ -245,19 +253,35 @@ export function graphFlowView(options: GraphFlowOptions): HTMLElement {
     // What a phase produced belongs inside the phase, not on the line leaving
     // it. A chip out there named the first artifact of the first member that
     // had one, so a phase of three read as though it produced one small file.
-    const produced = members
-      .map((member) => handedOn.get(member.nodeId))
-      .filter(
-        (entry): entry is { readonly name: string; readonly size: string } => entry !== undefined,
-      );
+    const produced = members.flatMap((member) => handedOn.get(member.nodeId) ?? []);
     if (produced.length > 0) {
-      const strip = element("div", "band-produced");
-      strip.append(textElement("span", "band-produced-label", "produced"));
+      // A box, not a card: what a phase handed on is not another piece of work.
+      const strip = document.createElement("details");
+      strip.className = "band-produced";
+      const summary = document.createElement("summary");
+      summary.append(
+        textElement("span", "band-produced-label", "produced"),
+        textElement(
+          "span",
+          "fan",
+          produced.length === 1 ? "1 output" : `${String(produced.length)} outputs`,
+        ),
+      );
+      strip.append(summary);
+      const table = element("table", "band-produced-table");
+      const head = element("tr", "");
+      for (const column of ["What", "Version", "Size"]) head.append(textElement("th", "", column));
+      table.append(head);
       for (const entry of produced) {
-        const item = element("span", "band-produced-item");
-        item.append(textElement("b", "", entry.name), textElement("span", "fan", entry.size));
-        strip.append(item);
+        const row = element("tr", "");
+        row.append(
+          textElement("td", "band-produced-name", entry.name),
+          textElement("td", "fan", entry.version),
+          textElement("td", "fan", entry.size),
+        );
+        table.append(row);
       }
+      strip.append(table);
       body.append(strip);
     }
     band.append(body);

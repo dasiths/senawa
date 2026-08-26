@@ -50,11 +50,23 @@ export function writeAnswerDraft(
   persist(storage, drafts);
 }
 
-/** Drops every draft whose question is no longer open, which covers accepted and stale answers. */
-export function pruneAnswerDrafts(storage: SessionStorageLike, active: Iterable<string>): void {
+/**
+ * Drops drafts of one run whose question is no longer open, which covers
+ * accepted and stale answers. Only that run is considered: the open questions
+ * of one run say nothing about what another run still has open, and wiping
+ * those made `dropRunAnswerDrafts` pointless.
+ */
+export function pruneAnswerDrafts(
+  storage: SessionStorageLike,
+  scope: { readonly repositoryId: string; readonly runId: string },
+  active: Iterable<string>,
+): void {
   const keep = new Set(active);
+  const prefix = answerDraftRunPrefix(scope.repositoryId, scope.runId);
   const drafts = loadAnswerDrafts(storage);
-  const retained = new Map([...drafts].filter(([identity]) => keep.has(identity)));
+  const retained = new Map(
+    [...drafts].filter(([identity]) => !identity.startsWith(prefix) || keep.has(identity)),
+  );
   if (retained.size === drafts.size) return;
   persist(storage, retained);
 }
@@ -65,11 +77,7 @@ export function dropRunAnswerDrafts(
   repositoryId: string,
   runId: string,
 ): void {
-  const prefix = answerDraftRunPrefix(repositoryId, runId);
-  pruneAnswerDrafts(
-    storage,
-    [...loadAnswerDrafts(storage).keys()].filter((identity) => !identity.startsWith(prefix)),
-  );
+  pruneAnswerDrafts(storage, { repositoryId, runId }, []);
 }
 
 /** Drops every persisted draft, used when the session or the selected run changes. */
