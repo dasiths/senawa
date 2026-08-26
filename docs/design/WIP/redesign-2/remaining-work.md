@@ -1196,7 +1196,19 @@ members of the open phase never started.
 A task an earlier phase finished is not work this run can schedule. The current
 set is now the current phase's tasks.
 
+That moved the blockage rather than removing it, and the move is what named the
+real cause. With the plan task out of the dispatch set it read `pending` instead
+of `active`, and the implement members depend on it, so still nothing could
+start.
+
+`queryRunScheduling` built `acceptedTasks` from `records.assessments` -- the
+**open** phase's assessments alone. The readiness frontier is derived over the
+whole graph, so every task an earlier phase accepted came back unaccepted, and
+anything depending on it could never be ready. A task a closed phase accepted
+stays accepted for the rest of the run, and the snapshot now says so.
+
 * [x] A dispatch belonging to a closed phase does not hold the ready frontier
+* [x] A task accepted by a closed phase is still accepted for the run
 
 ## Carried from the v1 plan
 

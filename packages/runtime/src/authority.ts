@@ -538,7 +538,17 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
       closed: records.closure !== undefined,
       attempts: Object.freeze([...(records.attempts ?? [])]),
       acceptedTasks: Object.freeze(
-        records.assessments
+        // Every phase's, not only the open one's. A task a closed phase accepted
+        // stays accepted for the rest of the run, and the readiness frontier is
+        // derived over the whole graph: reading only the current phase's
+        // assessments made a finished task look unfinished, so nothing that
+        // depended on it could ever be scheduled.
+        [
+          ...(records.phaseLifecycles ?? [])
+            .filter(({ phase }) => phase.phaseId !== records.phase.phaseId)
+            .flatMap(({ assessments }) => assessments),
+          ...records.assessments,
+        ]
           .map(({ assessment, assessmentDigest }) =>
             Object.freeze({
               task: assessment.submission.task,

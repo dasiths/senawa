@@ -1403,6 +1403,22 @@ describe("one phase in sequence", () => {
 
     expect(await advance(scenario)).toEqual({ kind: "closed", phaseKey: "define" });
     expect(await advance(scenario)).toMatchObject({ kind: "dispatched", phaseKey: "verify" });
+
+    // A task the closed phase accepted is still accepted. The scheduler derives
+    // its ready frontier over the whole graph, so reading only the open phase's
+    // assessments made the finished task look unfinished and nothing that
+    // depended on it could ever be scheduled: a live run held four dispatched
+    // members that never started.
+    const supervisor = new SqliteSupervisorAuthority({ ...scenario.paths, dependencies });
+    try {
+      const scheduling = supervisor.commandAuthority.queryRunScheduling(
+        scenario.repositoryId,
+        scenario.runId,
+      );
+      expect(scheduling?.acceptedTasks.length).toBeGreaterThan(0);
+    } finally {
+      supervisor.close();
+    }
   });
 
   // Every other phase pair in this file is named in alphabetical order, so a
