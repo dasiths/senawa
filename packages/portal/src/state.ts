@@ -186,6 +186,12 @@ export interface PortalUiState {
   readonly graphViewport: PortalGraphViewport;
   readonly transcript: TranscriptView;
   readonly transcriptScope: TranscriptScope;
+  /**
+   * The dispatch a reader opened from the Agents tree. Every dispatch names a
+   * task, so an attempt is a second axis across the scope rather than a level
+   * below it: which try, by whom, of work the scope already names.
+   */
+  readonly selectedAttempt: string | undefined;
   readonly narration: CommandNarration | undefined;
   readonly railLayout: RailLayout;
   readonly assetOverlay: PortalAssetOverlayState | undefined;
@@ -244,6 +250,7 @@ export type PortalAction =
   | { readonly type: "dialog-close" }
   | { readonly type: "filter"; readonly value: string }
   | { readonly type: "focus-record"; readonly recordId?: string }
+  | { readonly type: "select-attempt"; readonly dispatchId?: string }
   | { readonly type: "right-rail"; readonly open: boolean }
   | { readonly type: "graph-mode"; readonly mode: GraphMode }
   | { readonly type: "graph-unfold"; readonly nodeId: string }
@@ -310,6 +317,7 @@ export function initialPortalState(route: PortalRoute): PortalState {
       graphViewport: INITIAL_GRAPH_VIEWPORT,
       transcript: emptyTranscriptView(),
       transcriptScope: route.focus === undefined ? "run" : "node",
+      selectedAttempt: undefined,
       narration: undefined,
       railLayout: DEFAULT_RAIL_LAYOUT,
       assetOverlay: undefined,
@@ -379,6 +387,7 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
           // phase rather than on the run it belongs to.
           focusedRecord: action.route.focus,
           transcriptScope: action.route.focus === undefined ? ("run" as const) : ("node" as const),
+          selectedAttempt: undefined,
           assetOverlay: undefined,
           ...(sameView ? {} : { transcript: emptyTranscriptView() }),
         }),
@@ -399,6 +408,7 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
           // The scope belongs to the run the route names, so opening a link
           // keeps it and moving to another run does not.
           focusedRecord: state.route.runId === action.runId ? state.route.focus : undefined,
+          selectedAttempt: undefined,
           assetOverlay: undefined,
           graphViewport: INITIAL_GRAPH_VIEWPORT,
           transcript: emptyTranscriptView(),
@@ -527,6 +537,17 @@ export function portalReducer(state: PortalState, action: PortalAction): PortalS
           ...state.ui,
           focusedRecord: action.recordId,
           transcriptScope: action.recordId === undefined ? "run" : "node",
+          // Moving the scope drops the attempt: it named a try at work the
+          // scope no longer points at.
+          selectedAttempt: undefined,
+        }),
+      });
+    case "select-attempt":
+      return next(state, {
+        ui: Object.freeze({
+          ...state.ui,
+          selectedAttempt: action.dispatchId,
+          transcript: emptyTranscriptView(),
         }),
       });
     case "right-rail":

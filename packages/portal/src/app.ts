@@ -893,6 +893,11 @@ export class PortalApplication {
       return undefined;
     if (this.#state.ui.transcriptScope === "run")
       return Object.freeze({ kind: "run", id: identity.runId });
+    // An attempt a reader opened from the Agents tree names one dispatch, and
+    // that dispatch wrote its own lines. Without this, reading a retried
+    // agent's earlier try showed the latest try's output under its name.
+    const attempt = this.#state.ui.selectedAttempt;
+    if (attempt !== undefined) return Object.freeze({ kind: "dispatch", id: attempt });
     const revision = this.#state.vector?.graphRevision;
     if (revision === undefined) return undefined;
     const nodes =
@@ -1001,6 +1006,18 @@ export class PortalApplication {
         // The scope belongs in the address, so a phase view can be sent to
         // somebody rather than described to them.
         this.#writeScopeToHash(recordId);
+        void this.#syncTranscript();
+      },
+      selectAttempt: (taskId, dispatchId) => {
+        if (this.#state.ui.focusedRecord !== taskId) {
+          this.#dispatch({ type: "focus-record", recordId: taskId });
+          this.#writeScopeToHash(taskId);
+        }
+        this.#dispatch(
+          dispatchId === undefined
+            ? { type: "select-attempt" }
+            : { type: "select-attempt", dispatchId },
+        );
         void this.#syncTranscript();
       },
       openNeed: (need, triggerId) => void this.#openNeed(need, triggerId),

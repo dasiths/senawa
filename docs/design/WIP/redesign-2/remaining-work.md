@@ -1459,6 +1459,61 @@ The tampered-mirror guarantee, the canonical encoding, and the refusal to trust
 a projection are the reasons this system is worth anything. Speed comes from
 paying for them once rather than from paying for them less.
 
+### Found while reading the Agents tree: an agent forgets what it was told
+
+The tree showed a researcher on its fourth attempt of one task, with no refusal
+on any of them. Nothing had failed. Each of those dispatches existed because a
+question had been answered, and an answer reaches the agent that asked only by
+being carried into a fresh dispatch.
+
+Reading the four contexts:
+
+```text
+attempt 1   answeredQuestions: 0
+attempt 2   answeredQuestions: 1
+attempt 3   answeredQuestions: 1
+attempt 4   answeredQuestions: 1
+```
+
+One each, never two. The context was built from `listAnsweredQuestions`, which
+filtered to `satisfied_by_dispatch_id IS NULL` -- the answers no dispatch had
+carried yet. That is the scheduler's question, *what still has to be delivered*,
+and it was being used to answer a different one, *what does this agent know*.
+
+An agent cannot read the database. Its context is the whole of its memory. So
+every fresh turn was handed the newest answer and had the rest taken away, and
+it asked again, in different words, for what it had already been told:
+
+```text
+Interface: should tic-tac-toe be playable interactively in the terminal ...
+Should the game be playable interactively in the terminal (prompting f...
+Does a person play against another person (two humans alternating), or...
+Opponent: two humans alternating turns, or a human against the machine...
+```
+
+Five questions on that run, and two pairs of them are the same question.
+
+The two readings are now two methods. `listUndeliveredAnswers` is what still
+blocks the run and what a delivering dispatch marks satisfied;
+`listAnsweredQuestions` is everything this run has answered, oldest first, and
+that is what builds the context.
+
+* [x] A fresh dispatch carries every answer the task has been given
+
+### Still open beside it
+
+Not every extra attempt was this. On the same run:
+
+* A member's attempts read as the **phase** attempt, so four different
+  implementors working on four different tasks showed as attempts 1, 2, 3 and
+  4, which reads as one agent retrying four times.
+* One implementor spent attempts 5 through 9 on the same task against a gate
+  that kept reporting the same failing assertion, and the authored ceiling is
+  6 -- so it ran past its own ceiling.
+
+* [ ] A member's attempt ordinal is its own, not the phase's
+* [ ] A phase stops at its authored attempt ceiling
+
 ## Carried from the v1 plan
 
 Neither blocks anything above, and neither is part of the condition below. The

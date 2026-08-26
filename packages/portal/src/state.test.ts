@@ -268,6 +268,35 @@ describe("portal pure models", () => {
     expect(widened.ui.transcriptScope).toBe("run");
   });
 
+  // Every dispatch names a task, so a try is a second axis across the scope
+  // rather than a level below it. The tree said "3 attempts" and offered no way
+  // to read any of them but the last.
+  it("reads one try across the scope, and drops it when the scope moves", () => {
+    const start = initialPortalState(parsePortalHash("#/runs/repository_one/run_one/agents"));
+    const scoped = portalReducer(start, { type: "focus-record", recordId: "task_one" });
+    expect(scoped.ui.selectedAttempt).toBeUndefined();
+
+    const reading = portalReducer(scoped, {
+      type: "select-attempt",
+      dispatchId: "dispatch_first-try",
+    });
+    expect(reading.ui.selectedAttempt).toBe("dispatch_first-try");
+    expect(reading.ui.focusedRecord).toBe("task_one");
+    // The lines belong to the try, so the ones already held are not its.
+    expect(reading.ui.transcript.lines).toEqual([]);
+
+    // Letting the try go leaves the scope where it was.
+    const released = portalReducer(reading, { type: "select-attempt" });
+    expect(released.ui.selectedAttempt).toBeUndefined();
+    expect(released.ui.focusedRecord).toBe("task_one");
+
+    // Moving the scope drops it: it named a try at work the scope no longer
+    // points at.
+    const moved = portalReducer(reading, { type: "focus-record", recordId: "task_two" });
+    expect(moved.ui.selectedAttempt).toBeUndefined();
+    expect(portalReducer(reading, { type: "focus-record" }).ui.selectedAttempt).toBeUndefined();
+  });
+
   it("compares the assembly sync vector without the transcript component", () => {
     expect(vectorsEqual(sync, { ...sync })).toBe(true);
     expect(vectorsEqual(sync, { ...sync, humanRevision: 3 })).toBe(false);

@@ -78,6 +78,8 @@ export interface PortalRenderActions {
   readonly unfoldNode: (nodeId: string) => void;
   readonly toggleRecord: (recordKey: string) => void;
   readonly focusRecord: (recordId: string | undefined) => void;
+  /** Reads one try of the work the scope names, by the dispatch that made it. */
+  readonly selectAttempt: (taskId: string, dispatchId: string | undefined) => void;
   readonly openNeed: (need: PortalHumanNeed, triggerId: string) => void;
   readonly openRunControl: (kind: "pause" | "resume" | "end", triggerId: string) => void;
   readonly openAgentAction: (
@@ -2276,8 +2278,6 @@ function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLEle
       work.title = nodeId;
       right.append(work);
       if (current.model !== undefined) right.append(textElement("span", "model", current.model));
-      if (attempts.length > 1)
-        right.append(textElement("span", "node-sub", `${String(attempts.length)} attempts`));
       if (current.latestRefusal !== undefined)
         right.append(textElement("span", "asks", "could not finish"));
       right.append(
@@ -2289,6 +2289,41 @@ function renderAgents(state: PortalState, actions: PortalRenderActions): HTMLEle
         event.stopPropagation();
         actions.focusRecord(nodeId);
       });
+      // Every dispatch names a task, so an attempt is a second axis rather than
+      // a deeper scope. The tree said "3 attempts" and offered no way to read
+      // any of them but the last.
+      if (attempts.length > 1) {
+        const tries = element("ul", "tree-children agent-tries");
+        tries.setAttribute("role", "group");
+        for (const attempt of [...attempts].reverse()) {
+          const dispatchId = String(attempt.dispatchId);
+          const tried = element("li", "tree-item workflow-node agent-try");
+          tried.setAttribute("role", "treeitem");
+          tried.setAttribute("aria-level", "3");
+          const chosen = state.ui.selectedAttempt === dispatchId;
+          if (chosen) tried.setAttribute("aria-selected", "true");
+          const line = commandButton(`attempt ${String(attempt.attempt)}`, () =>
+            actions.selectAttempt(nodeId, chosen ? undefined : dispatchId),
+          );
+          line.className = "node try-row";
+          line.dataset.focusKey = dispatchId;
+          line.title = dispatchId;
+          if (chosen) line.setAttribute("aria-current", "true");
+          if (attempt.model !== undefined) line.append(textElement("span", "model", attempt.model));
+          if (attempt.latestRefusal !== undefined)
+            line.append(textElement("span", "asks", "could not finish"));
+          line.append(
+            textElement(
+              "span",
+              `state ${AGENT_TONES[attempt.state] ?? "is-waiting"}`,
+              attempt.state,
+            ),
+          );
+          tried.append(line);
+          tries.append(tried);
+        }
+        item.append(tries);
+      }
       children.append(item);
     }
   }

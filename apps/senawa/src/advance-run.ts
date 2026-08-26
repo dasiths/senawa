@@ -543,9 +543,17 @@ async function step(
   // read the database, so the answer reaches it by being carried into a fresh
   // dispatch, and the requirement that stopped the run is satisfied by that
   // dispatch rather than by the answer being written down.
+  const forTask = (entry: { readonly taskId: string }) =>
+    entry.taskId === String(dispatch.task.taskId);
+  // Everything it has been told, not just what arrived since it last ran. Its
+  // context is the only memory it has, so carrying one answer at a time had it
+  // asking again in different words for what it already knew.
   const answered = supervisor.commandAuthority
     .listAnsweredQuestions(input.repositoryId, input.runId)
-    .filter((entry) => entry.taskId === String(dispatch.task.taskId));
+    .filter(forTask);
+  const undelivered = supervisor.commandAuthority
+    .listUndeliveredAnswers(input.repositoryId, input.runId)
+    .filter(forTask);
   // An answer carries into the next attempt, and work that has already been
   // handed in has no next attempt. Dispatching one anyway makes work the
   // scheduler will never start, because a task that is accepted, or waiting to
@@ -573,15 +581,15 @@ async function step(
   // carry the answer makes a second dispatch for the same task, and whichever
   // one loses is waited on for ever. Only a turn that is over needs replacing.
   const memberStillWorking = !taskAlreadyDone && !completed && attemptOpen(String(dispatchId));
-  if (answered.length > 0 && taskAlreadyDone) {
-    for (const entry of answered) {
+  if (undelivered.length > 0 && taskAlreadyDone) {
+    for (const entry of undelivered) {
       supervisor.commandAuthority.satisfyFreshDispatchRequirement(
         entry.submissionId,
         String(dispatch.dispatchId),
       );
     }
   }
-  if (answered.length > 0 && !taskAlreadyDone && !memberStillWorking) {
+  if (undelivered.length > 0 && !taskAlreadyDone && !memberStillWorking) {
     // A member owns its own task, so the fresh dispatch has to name the same
     // member rather than the phase's first.
     const member = members.findIndex(
@@ -609,7 +617,7 @@ async function step(
       memberIndex: member < 0 ? 0 : member,
       answeredQuestions: answered.map(({ question, answer }) => ({ question, answer })),
     });
-    for (const entry of answered) {
+    for (const entry of undelivered) {
       supervisor.commandAuthority.satisfyFreshDispatchRequirement(
         entry.submissionId,
         resumed.dispatch.dispatchId,

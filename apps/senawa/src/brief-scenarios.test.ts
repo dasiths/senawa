@@ -1048,6 +1048,7 @@ describe("one phase in sequence", () => {
   it("does not spend an attempt on a turn that ended by asking", async () => {
     const scenario = await startScenario("asked-not-spent", { attempts: 2 });
     let dispatchId = scenario.dispatchId;
+    const carried: number[] = [];
 
     // More rounds of ask-and-answer than the phase has attempts. None of them
     // is a try, so none of them may exhaust the ceiling. The advance between
@@ -1072,7 +1073,14 @@ describe("one phase in sequence", () => {
       if (resumed.kind !== "dispatched") throw new Error("expected a fresh dispatch");
       expect(resumed.dispatchId).not.toBe(dispatchId);
       dispatchId = resumed.dispatchId;
+      carried.push(answeredQuestionsCarried(scenario.paths.databasePath, dispatchId));
     }
+
+    // An agent's context is the only memory it has. Built from the answers no
+    // dispatch had carried yet, each fresh turn knew the newest answer and had
+    // forgotten the rest, so it asked again in different words for what it had
+    // already been told: a live researcher asked the same thing four times.
+    expect(carried).toEqual([1, 2, 3]);
 
     // And the run is still able to finish: the attempts were never spent.
     await agentTurn(scenario, dispatchId, canonicalValue({ definition: "x" }));
@@ -1926,3 +1934,25 @@ describe("naming the pieces of work a phase runs", () => {
     expect(diagnostics.map(({ message }) => message).join(" ")).toContain("not both");
   });
 });
+
+/** How many answers a dispatch's context carries, read from the durable record. */
+function answeredQuestionsCarried(databasePath: string, dispatchId: string): number {
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const row = database
+      .prepare(
+        `SELECT b.canonical_context AS context
+         FROM context_dispatches d
+         JOIN context_bases b ON b.context_id = d.context_id
+         WHERE d.dispatch_id = ?`,
+      )
+      .get(dispatchId) as { readonly context: string } | undefined;
+    if (row === undefined) throw new Error(`No context for dispatch ${dispatchId}`);
+    const context = JSON.parse(row.context) as {
+      readonly answeredQuestions?: readonly unknown[];
+    };
+    return context.answeredQuestions?.length ?? 0;
+  } finally {
+    database.close();
+  }
+}

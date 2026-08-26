@@ -1225,9 +1225,46 @@ export class SqliteAuthority
    * The requirement stays unsatisfied until a fresh dispatch carries the answer,
    * which is why answering alone does not release the run.
    */
+  /**
+   * Every question this run has answered, oldest first.
+   *
+   * Distinct from the undelivered set on purpose. The agent that asked cannot
+   * read the database, so its context is the only place it holds what it has
+   * been told, and building that context from what was still undelivered meant
+   * each fresh dispatch knew the newest answer and had forgotten the rest. A
+   * researcher asked the same thing in different words four times.
+   */
   listAnsweredQuestions(
     repositoryId: string,
     runId: string,
+  ): readonly {
+    readonly submissionId: string;
+    readonly taskId: string;
+    readonly definitionGeneration: number;
+    readonly question: string;
+    readonly answer: string;
+  }[] {
+    return this.#answeredQuestions(repositoryId, runId, false);
+  }
+
+  /** Answers no dispatch has carried yet, which is what still blocks the run. */
+  listUndeliveredAnswers(
+    repositoryId: string,
+    runId: string,
+  ): readonly {
+    readonly submissionId: string;
+    readonly taskId: string;
+    readonly definitionGeneration: number;
+    readonly question: string;
+    readonly answer: string;
+  }[] {
+    return this.#answeredQuestions(repositoryId, runId, true);
+  }
+
+  #answeredQuestions(
+    repositoryId: string,
+    runId: string,
+    undeliveredOnly: boolean,
   ): readonly {
     readonly submissionId: string;
     readonly taskId: string;
@@ -1254,7 +1291,7 @@ export class SqliteAuthority
            FROM context_fresh_dispatch_requirements f
            JOIN context_question_answers a ON a.submission_id = f.submission_id
            JOIN context_questions q ON q.submission_id = f.submission_id
-           WHERE f.run_key = ? AND f.satisfied_by_dispatch_id IS NULL
+           WHERE f.run_key = ?${undeliveredOnly ? " AND f.satisfied_by_dispatch_id IS NULL" : ""}
            ORDER BY f.created_at, f.submission_id`,
         )
         .all(canonicalStringify([repositoryId, runId]))
