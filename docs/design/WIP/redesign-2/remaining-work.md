@@ -1291,14 +1291,14 @@ all, so it does not even get the indent `.tree-group` gives the workflow tree.
   node's criteria at a task
 * [x] A table shows the part of the path below the current scope, and clicking
   it scopes there
-* [ ] Produced names the attempt each artifact came from and which one the phase
+* [x] Produced names the attempt each artifact came from and which one the phase
   accepted
 * [x] A phase band names what it produced and how its gate read, and the chip on
   the connector is gone
 * [x] A phase band's name selects the phase; its disclosure control folds it
 * [x] The Agents tree orders phases by execution order and draws its own
   containment
-* [ ] The Agents tree opens a member's attempts, and an attempt scopes the
+* [x] The Agents tree opens a member's attempts, and an attempt scopes the
   detail view to that try
 * [x] The scope is in the route, so a phase view can be linked
 
