@@ -323,6 +323,7 @@ export class InMemoryAuthority
 export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPort {
   readonly authority: AuthorityPort<RuntimeAuthorityRun>;
   readonly dependencies: RuntimeDependencies;
+  private readonly revisionByRecords = new WeakMap<RuntimeRunRecords, string>();
 
   constructor(
     dependencies: RuntimeDependencies,
@@ -1897,9 +1898,18 @@ export class RuntimeCommandService implements CommandServicePort, RuntimeQueryPo
   }
 
   private recordRevision(records: RuntimeRunRecords | undefined): string | undefined {
-    return records === undefined
-      ? undefined
-      : canonicalDigest(canonicalValue(records), this.dependencies.sha256);
+    if (records === undefined) return undefined;
+    // Two of these are taken per command and the digest covers every record the
+    // run holds, so accepting one command paid for the run's whole history
+    // twice, and replaying the run paid for it once per command it had ever
+    // accepted. Records are replaced wholesale on every change and never
+    // mutated in place, so the object's identity is exactly what the digest
+    // depends on.
+    const memoised = this.revisionByRecords.get(records);
+    if (memoised !== undefined) return memoised;
+    const digest = canonicalDigest(canonicalValue(records), this.dependencies.sha256);
+    this.revisionByRecords.set(records, digest);
+    return digest;
   }
 
   private findStoredCommand(
