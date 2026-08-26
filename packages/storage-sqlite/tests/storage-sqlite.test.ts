@@ -662,6 +662,40 @@ describe("SQLite context broker durability", () => {
     expect(broker.authority.snapshot().receipts).toHaveLength(1);
   });
 
+  // Decoding the durable state cost about a hundred milliseconds on a run of
+  // three phases, and a supervisor cycle asked for it repeatedly, so every read
+  // sharing that process waited behind it. The decode is now reused when the
+  // durable bytes have not moved -- which is only safe if it is never reused
+  // when they have, including when somebody else moved them.
+  it("reuses a decode of the context state and drops it the moment the state moves", async () => {
+    const harness = createSqliteContextBrokerHarness();
+    const broker = harness.broker as SqliteContextBroker;
+    const before = broker.authority.snapshot();
+    expect(broker.authority.snapshot()).toEqual(before);
+
+    const grant = issueContextGrant(harness);
+    expect(broker.authority.snapshot().grants).toHaveLength(1);
+
+    await broker.readAsset({
+      request: contextChunkRequest(harness, grant.grantToken, "request_cache-honesty", 0, 16),
+    });
+    expect(broker.authority.snapshot().grants[0]).toMatchObject({ operationsUsed: 1 });
+
+    // A write from another connection is not one this instance can know about,
+    // so the fingerprint is read from the database rather than remembered.
+    const foreign = new Database(broker.databasePath);
+    try {
+      foreign
+        .prepare("UPDATE context_dispatches SET canonical_effect = NULL WHERE dispatch_id = ?")
+        .run(harness.dispatch.dispatchId);
+    } finally {
+      foreign.close();
+    }
+    expect(broker.authority.snapshot().dispatches.map((record) => "effect" in record)).toEqual([
+      false,
+    ]);
+  });
+
   it("persists exact conflict attribution and distinct-request budget exhaustion", async () => {
     const harness = createSqliteContextBrokerHarness();
     const grant = harness.broker.grantAssetAccess({

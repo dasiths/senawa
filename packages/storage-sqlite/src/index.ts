@@ -9950,6 +9950,9 @@ export class SqliteContextBroker {
   readonly #phaseOutputFacts: PhaseOutputFactPort | undefined;
   readonly #faultInjector: ((point: SqliteContextBrokerFaultPoint) => void) | undefined;
   readonly #deliveringSubmissionIds = new Set<string>();
+  #decoded:
+    | { readonly fingerprint: string; readonly authority: InMemoryContextAuthority }
+    | undefined;
 
   installCanonicalOutputAsset(asset: InstalledCanonicalOutputAsset, bytes: Uint8Array): void {
     if (
@@ -10240,12 +10243,12 @@ export class SqliteContextBroker {
       append: (record: AgentTranscriptLine) => void this.appendTranscript(record),
     });
     this.authority = Object.freeze({
-      snapshot: () => this.#loadAuthority().snapshot(),
-      projection: () => this.#loadAuthority().projection(),
-      toCanonicalJson: () => this.#loadAuthority().toCanonicalJson(),
+      snapshot: () => this.#readAuthority().snapshot(),
+      projection: () => this.#readAuthority().projection(),
+      toCanonicalJson: () => this.#readAuthority().toCanonicalJson(),
       // The stored form leaves dispatches to their table, so a caller wanting
       // one self-contained value gets it rebuilt rather than read raw.
-      toDurableCanonicalJson: () => this.#loadAuthority().toDurableCanonicalJson(),
+      toDurableCanonicalJson: () => this.#readAuthority().toDurableCanonicalJson(),
       installTaskScopeFences: (input) => this.installTaskScopeFences(input),
     });
   }
@@ -10259,15 +10262,15 @@ export class SqliteContextBroker {
   }
 
   loadWorkerDispatch(dispatchId: string) {
-    return this.#loadBroker().loadWorkerDispatch(dispatchId);
+    return this.#readBroker().loadWorkerDispatch(dispatchId);
   }
 
   listWorkerDispatches(repositoryId: string, runId: string) {
-    return this.#loadBroker().listWorkerDispatches(repositoryId, runId);
+    return this.#readBroker().listWorkerDispatches(repositoryId, runId);
   }
 
   loadWorkerDispatchProgress(dispatchId: string) {
-    return this.#loadBroker().loadWorkerDispatchProgress(dispatchId);
+    return this.#readBroker().loadWorkerDispatchProgress(dispatchId);
   }
 
   installTaskScopeFences(input: InstallTaskScopeFencesInput): readonly TaskScopeCurrentness[] {
@@ -10843,6 +10846,12 @@ export class SqliteContextBroker {
     return new ContextBroker(this.assets, this.dependencies, this.#loadAuthority());
   }
 
+  // Reads never mutate the authority they are given, so they can share the one
+  // already decoded.
+  #readBroker(): ContextBroker {
+    return new ContextBroker(this.assets, this.dependencies, this.#readAuthority());
+  }
+
   #readContextState(): string {
     const row = this.#database
       .prepare<[], ContextAuthorityStateRow>(
@@ -10861,6 +10870,83 @@ export class SqliteContextBroker {
     );
     overlayContextTaskScopeCurrentness(this.#database, authority);
     return authority;
+  }
+
+  // Decoding the durable state costs about a hundred milliseconds on a run of
+  // three phases, and a supervisor cycle asked for it repeatedly. The bytes are
+  // still read from SQLite every time; what is skipped is decoding bytes that
+  // have already been decoded. The fingerprint covers exactly the tables
+  // #loadAuthority reads, so anything that could change the result changes it.
+  #readAuthority(): InMemoryContextAuthority {
+    const fingerprint = this.#contextFingerprint();
+    if (this.#decoded?.fingerprint === fingerprint) return this.#decoded.authority;
+    const authority = this.#loadAuthority();
+    this.#decoded = { fingerprint, authority };
+    return authority;
+  }
+
+  #contextFingerprint(): string {
+    const parts: string[] = [this.#readContextState()];
+    for (const row of this.#database
+      .prepare<
+        [],
+        {
+          dispatch_id: string;
+          canonical_dispatch: string;
+          canonical_completion_requirements: string;
+          canonical_task_scope: string;
+          canonical_effect: string | null;
+          context_id: string;
+        }
+      >(
+        `SELECT dispatch_id, canonical_dispatch, canonical_completion_requirements,
+                canonical_task_scope, canonical_effect, context_id
+         FROM context_dispatches ORDER BY dispatch_id`,
+      )
+      .all()) {
+      parts.push(
+        row.dispatch_id,
+        row.canonical_dispatch,
+        row.canonical_completion_requirements,
+        row.canonical_task_scope,
+        row.canonical_effect ?? "",
+        row.context_id,
+      );
+    }
+    for (const row of this.#database
+      .prepare<[], { context_id: string; canonical_context: string }>(
+        "SELECT context_id, canonical_context FROM context_bases ORDER BY context_id",
+      )
+      .all()) {
+      parts.push(row.context_id, row.canonical_context);
+    }
+    for (const row of this.#database
+      .prepare<
+        [],
+        {
+          run_key: string;
+          task_id: string;
+          definition_generation: number;
+          fence_generation: number;
+          current_context_digest: string;
+          claims_accepted: number;
+        }
+      >(
+        `SELECT run_key, task_id, definition_generation, fence_generation,
+                current_context_digest, claims_accepted
+         FROM amendment_work_fences ORDER BY run_key, task_id, definition_generation`,
+      )
+      .all()) {
+      parts.push(
+        row.run_key,
+        row.task_id,
+        String(row.definition_generation),
+        String(row.fence_generation),
+        row.current_context_digest,
+        String(row.claims_accepted),
+      );
+    }
+    return this.dependencies.sha256.digest(new TextEncoder().encode(parts.join("\u0000")));
   }
 
   #persistContextAuthority(authority: InMemoryContextAuthority): void {
