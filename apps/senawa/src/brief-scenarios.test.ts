@@ -13,6 +13,7 @@ import {
   agentTurn,
   askThroughSink,
   BASE,
+  boundUpstreamValue,
   compileScenario,
   compileSnapshot,
   completeThroughSink,
@@ -931,6 +932,50 @@ describe("one phase in sequence", () => {
     expect(await promptPackText(scenario, outcome.dispatchId)).toContain(
       "the endpoint returns the wrong status",
     );
+  });
+
+  it("binds the upstream output the phase closed on, not every one it published", async () => {
+    const scenario = await startScenario("republished-upstream", {
+      secondPhase: true,
+      attempts: 3,
+    });
+
+    // What the live run did: produce the output, then ask before completing.
+    // The turn is suspended and its publication stays in the outbox.
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "first" }), {
+      omitCompletion: true,
+    });
+    await askThroughSink(scenario, scenario.dispatchId, "which endpoint?");
+    expect(await advance(scenario)).toMatchObject({ kind: "awaiting-agent" });
+    expect(
+      answerQuestion({
+        ...scenario.paths,
+        answer: "the second one",
+        currentTime: NOW,
+        dependencies,
+        principal: runtimePrincipal,
+        repositoryId: scenario.repositoryId,
+        runId: scenario.runId,
+      }),
+    ).toMatchObject({ exitCode: 0 });
+
+    const resumed = await advance(scenario);
+    if (resumed.kind !== "dispatched") throw new Error(`expected a dispatch, got ${resumed.kind}`);
+    await agentTurn(scenario, resumed.dispatchId, canonicalValue({ definition: "second" }));
+    expect(await advance(scenario)).toEqual({ kind: "closed", phaseKey: "define" });
+
+    // Every attempt that produced output leaves a publication behind. Handing
+    // both to the binder made two bindings for one source, and the phase
+    // downstream could never be dispatched: a live run stopped here for good
+    // with "Source phase-output:research:research has conflicting bindings".
+    const next = await advance(scenario);
+    expect(next).toMatchObject({ kind: "dispatched", phaseKey: "verify" });
+    if (next.kind !== "dispatched") throw new Error("expected a dispatch");
+    // And it is the accepted attempt's output that was bound, not the one the
+    // question interrupted.
+    expect(await boundUpstreamValue(scenario, next.dispatchId)).toEqual({
+      definition: "second",
+    });
   });
 
   it("retries a refused phase with the reasons the gate gave", async () => {

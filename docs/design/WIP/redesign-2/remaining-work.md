@@ -938,6 +938,16 @@ held open; it times out against the queued version.
 Minting was never queued. `senawa portal` mints in memory and then calls
 `status`, and it was the status call that timed out.
 
+Measured again on the next clean run, while a researcher was working:
+
+```text
+senawa service status   0.36s   (was a 15s timeout)
+senawa portal           0.25s   (was a 15s timeout)
+```
+
+The portal opened in a browser on that run and reported `Connection live`,
+`Data current`, and the three phases with the researcher working.
+
 * [x] A read of the supervisor's own state does not queue behind a run cycle
 * [x] Minting a portal credential does not queue behind a run cycle
 
@@ -1071,6 +1081,56 @@ escalation path is a phase of its own.
 
 * [ ] A phase that has spent its attempts raises the escalation its policy
   declares, and the portal offers it as a decision
+
+### Found next: two publications, one source
+
+The clean run with these changes in place stopped again at the plan phase, and
+this time said why on its own:
+
+```text
+stopped: Source phase-output:research:research has conflicting bindings
+```
+
+The researcher produced its output, then asked a question before completing.
+The turn was suspended and its publication stayed in the outbox; the answered
+retry produced the output again. The phase closed on attempt 5, and the closure
+names attempt 5's publication as the accepted one -- but `upstreamOutputs` hands
+the binder every publication it finds for the phase, so the plan phase was given
+two bindings for a single source and could never be dispatched at all.
+
+The rule is the one already used for dispatches: a later attempt supersedes an
+earlier one, and a phase closes on its current attempt. The binder now takes the
+publication from the highest attempt per output, which is the one the closure
+accepted. Verified against the live record: the closure's accepted publication
+digest is attempt 5's, not attempt 4's.
+
+This is the first stall the new `stopped:` line diagnosed by itself, without
+reading the database.
+
+* [x] An upstream phase that published more than once binds the output it
+  closed on
+
+## Phase 16: a criterion pill belongs to the node that owes it
+
+A criterion is drawn as a pill on the node that owes it, which is right. But the
+pill is its own selectable node, so clicking `plan-produced` opens a detail pane
+scoped to the criterion, which says:
+
+```text
+plan-produced has produced nothing yet.
+```
+
+A criterion produces nothing. What was produced is owned by the node the pill
+sits on, and the pane for that node already has a Produced tab. So the pill
+navigates away from the thing it is about.
+
+Clicking a pill should highlight it and take the reader to the owning node's
+own section, not open a separate one.
+
+* [ ] A criterion pill selects the node that owes it and opens that node's
+  Produced view, rather than opening a pane scoped to the criterion
+* [ ] The Live, Answers, Produced and About tabs each show the selected node's
+  own content, for a phase, a member and a criterion alike
 
 
 Neither blocks anything above, and neither is part of the condition below. The

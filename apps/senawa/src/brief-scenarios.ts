@@ -316,6 +316,38 @@ export async function promptPackText(scenario: Scenario, dispatchId: string): Pr
   }
 }
 
+/** The upstream value a dispatch was actually bound to. */
+export async function boundUpstreamValue(
+  scenario: Scenario,
+  dispatchId: string,
+): Promise<CanonicalValue | undefined> {
+  const authority = new SqliteAuthority({ ...scenario.paths, dependencies });
+  const assets = new SqliteCanonicalJsonAssetStore(authority);
+  const broker = new SqliteContextBroker({
+    databasePath: scenario.paths.databasePath,
+    dependencies: {
+      sha256: dependencies.sha256,
+      currentTime: () => NOW,
+      issueGrantToken: () => new Uint8Array(32),
+    },
+  });
+  try {
+    const stored = broker
+      .listWorkerDispatches(scenario.repositoryId, scenario.runId)
+      .find((entry) => entry.dispatch.dispatchId === dispatchId);
+    if (stored === undefined) throw new Error("Dispatch was not stored");
+    const binding = stored.context.phaseInputBinding.mappings.find(
+      (entry) => entry.source.kind === "phase-output",
+    );
+    return await Promise.resolve(
+      binding === undefined ? undefined : assets.load(binding.sourceBindingDigest),
+    );
+  } finally {
+    broker.close();
+    authority.close();
+  }
+}
+
 /**
  * Runs one turn through the sink a real agent reaches over the worker channel.
  *

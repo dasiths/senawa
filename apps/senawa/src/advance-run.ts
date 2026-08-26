@@ -1713,13 +1713,17 @@ function upstreamOutputs(
 }[] {
   const wanted = new Set(phase.dependsOn ?? []);
   if (wanted.size === 0) return [];
-  const found: {
-    phase: string;
-    output: string;
-    bindingDigest: Sha256Digest;
-    acceptanceDigest: Sha256Digest;
-    value: CanonicalValue;
-  }[] = [];
+  const found = new Map<
+    string,
+    {
+      phase: string;
+      output: string;
+      attempt: number;
+      bindingDigest: Sha256Digest;
+      acceptanceDigest: Sha256Digest;
+      value: CanonicalValue;
+    }
+  >();
   for (const entry of state.phaseOutputOutbox) {
     const producing = phaseKeyById(snapshot, entry.fact.output.phase.phaseId);
     if (producing === undefined || !wanted.has(producing)) continue;
@@ -1728,15 +1732,26 @@ function upstreamOutputs(
     // has to read what the agent actually produced.
     const value = assets.load(contentDigest);
     if (value === undefined) continue;
-    found.push({
+    const output = String(entry.fact.output.outputName);
+    const attempt = Number(entry.fact.output.phase.attempt ?? 0);
+    const key = `${producing}\u0000${output}`;
+    // Every attempt that produced output leaves a publication behind, and an
+    // upstream phase that was asked a question or refused once has more than
+    // one. Handing all of them to the binder made two bindings for a single
+    // source, and the phase downstream could never be dispatched again. The
+    // phase closes on its current attempt, so the highest is the accepted one.
+    const seen = found.get(key);
+    if (seen !== undefined && seen.attempt >= attempt) continue;
+    found.set(key, {
       phase: producing,
-      output: String(entry.fact.output.outputName),
+      output,
+      attempt,
       bindingDigest: contentDigest,
       acceptanceDigest: sha256Digest(String(entry.fact.output.validationReceiptDigest)),
       value,
     });
   }
-  return found;
+  return [...found.values()].map(({ attempt: _attempt, ...binding }) => binding);
 }
 
 /**
