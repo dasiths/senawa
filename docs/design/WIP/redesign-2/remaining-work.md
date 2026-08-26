@@ -1169,6 +1169,36 @@ plan working: clicking the `plan-produced` pill selected `plan`, opened its
 Produced view, and showed `phase output plan, 13.3 KiB`. The same pill used to
 open a pane reading `plan-produced has produced nothing yet`.
 
+## Phase 17: a finished phase's task stops holding the scheduler
+
+The next clean run reached implement, dispatched four members, and stopped for
+twenty minutes with `waiting on you: 0`, no `stopped:` line, and no worker
+running. Three attempts were open and no SDK session existed. The supervisor's
+log said one sentence over and over:
+
+```text
+no dispatch is schedulable; the ready frontier holds
+  task_1babea535fe75... active
+```
+
+That task belongs to the **plan** phase, which had closed. It was reported
+`accepted` once, and `active` from then on.
+
+The scheduler picks its current dispatches by walking every task node in the
+graph, with no notion of which phase the run is in, so a finished task from a
+closed phase stayed in the set for ever. Its status then came out wrong twice
+over: `acceptedTasks` is the *current* phase's accepted set, so a closed phase's
+task drops out of it, and a worker effect that **completed** reads as `active`
+because the frontier's only terminal statuses are `failed` and `cancelled`. One
+finished task therefore held the frontier permanently, and the three dispatched
+members of the open phase never started.
+
+A task an earlier phase finished is not work this run can schedule. The current
+set is now the current phase's tasks.
+
+* [x] A dispatch belonging to a closed phase does not hold the ready frontier
+
+## Carried from the v1 plan
 
 Neither blocks anything above, and neither is part of the condition below. The
 first is a feature the phase model does not yet have; the second is done.

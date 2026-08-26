@@ -154,6 +154,18 @@ describe("production worker composition", () => {
         },
       ] as never),
     ).toBeUndefined();
+
+    // A task an earlier phase finished is not work this run can schedule. A
+    // live run held one, and because its phase had closed it was no longer an
+    // accepted task while its completed worker still read as active, so it held
+    // the ready frontier and three dispatched members never started.
+    const laterPhase = {
+      ...runtime,
+      phase: { ...runtimeFixture.phase, phaseId: "phase_a-later-one" },
+    };
+    expect(
+      selectCurrentDispatches(laterPhase as never, [scope], [historical, current] as never),
+    ).toEqual([]);
   });
 
   it("recovers an approved amendment after restart and applies the exact reviewed graph", async () => {

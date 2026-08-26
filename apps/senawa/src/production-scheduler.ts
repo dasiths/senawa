@@ -723,9 +723,17 @@ export function selectCurrentDispatches(
   }[],
   dispatches: readonly StoredDispatch[],
 ): readonly StoredDispatch[] | undefined {
+  const current = currentPhaseTaskIds(runtime);
   const selected: StoredDispatch[] = [];
   for (const node of runtime.graph.nodes) {
     if (node.kind !== "task") continue;
+    // A task an earlier phase finished is not work this run can schedule, and
+    // holding its dispatch here stopped the run scheduling anything at all: its
+    // phase had closed, so it was no longer an accepted task, and a completed
+    // worker with no acceptance reads as still active. One finished task from a
+    // closed phase held the ready frontier and three dispatched members of the
+    // open one never started.
+    if (!current.has(node.definition.id)) continue;
     const scopes = taskScopes.filter(
       (scope) =>
         scope.claimsAccepted &&
@@ -747,6 +755,16 @@ export function selectCurrentDispatches(
     if (dispatch?.effect !== undefined) selected.push(dispatch);
   }
   return Object.freeze(selected);
+}
+
+/** The tasks the phase this run is working on contains. */
+function currentPhaseTaskIds(runtime: RuntimeSchedulingSnapshot): ReadonlySet<string> {
+  const tasks = new Set<string>();
+  for (const edge of runtime.graph.edges) {
+    if (edge.kind !== "contains" || String(edge.from) !== String(runtime.phase.phaseId)) continue;
+    tasks.add(String(edge.to));
+  }
+  return tasks;
 }
 
 function sameTaskScope(
