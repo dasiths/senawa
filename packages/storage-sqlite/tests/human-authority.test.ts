@@ -992,10 +992,13 @@ describe("SQLite Phase 11B portal query authority", () => {
     });
     // The submission order and the asset order disagree, which is the ordinary
     // case: an asset is named by its content and a submission by when it
-    // arrived.
+    // arrived. The third submission carries an asset the first already carried:
+    // an attempt that was asked a question and its answered retry producing the
+    // same bytes is exactly that.
     for (const [submissionId, assetId] of [
       ["submission_portal-order-1", "asset_zulu"],
       ["submission_portal-order-2", "asset_alpha"],
+      ["submission_portal-order-3", "asset_zulu"],
     ] as const) {
       const bytes = new TextEncoder().encode(assetId);
       broker.admitSubmission({
@@ -1022,7 +1025,9 @@ describe("SQLite Phase 11B portal query authority", () => {
     }
     const portal = new SqlitePortalQueryAuthority(fixture.options);
     // Paging on the submission built a page the page's own contract refuses, so
-    // the whole view answered five hundred for any run that made two things.
+    // the whole view answered five hundred for any run that made two things. An
+    // artifact is its content, so one carried twice is listed once: two rows
+    // with one identity do not ascend, and the query refused itself again.
     const page = portal.listArtifacts(runtimeFixture.repositoryId, runtimeFixture.runId);
     expect(page.artifacts.map((artifact) => artifact.artifactId)).toEqual([
       "asset_alpha",

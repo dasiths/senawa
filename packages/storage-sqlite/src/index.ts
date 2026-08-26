@@ -4420,20 +4420,27 @@ export class SqlitePortalQueryAuthority {
     // asset rather than by the submission that carried it. Paging on the
     // submission handed back a page whose own contract refused it, so the whole
     // view answered five hundred for every run that made more than one thing.
-    const ordered = rows
-      .map(({ canonical_submission }) => {
-        const submission = requiredJsonRecord(
-          decodeCanonicalJsonValue(canonical_submission),
-          "Portal worker asset submission",
-        );
-        // A phase output is the thing the workflow exists to produce. Listing only
-        // proposed assets hid it from everyone who finished a run.
-        const asset =
-          submission.asset === undefined
-            ? phaseOutputAsAsset(requiredJsonRecord(submission.output, "Portal phase output"))
-            : requiredJsonRecord(submission.asset, "Portal worker asset metadata");
-        return this.#artifactMetadata(submission, asset);
-      })
+    const byIdentity = new Map<string, PortalArtifactMetadata>();
+    for (const { canonical_submission } of rows) {
+      const submission = requiredJsonRecord(
+        decodeCanonicalJsonValue(canonical_submission),
+        "Portal worker asset submission",
+      );
+      // A phase output is the thing the workflow exists to produce. Listing only
+      // proposed assets hid it from everyone who finished a run.
+      const asset =
+        submission.asset === undefined
+          ? phaseOutputAsAsset(requiredJsonRecord(submission.output, "Portal phase output"))
+          : requiredJsonRecord(submission.asset, "Portal worker asset metadata");
+      const artifact = this.#artifactMetadata(submission, asset);
+      // An artifact is its content. Two submissions can carry the same bytes --
+      // an attempt that was asked a question and its answered retry producing
+      // the same output is exactly that -- and listing both put two rows with
+      // one identity in a page whose contract requires them to ascend, so the
+      // query refused itself and every artifact view went blank.
+      if (!byIdentity.has(artifact.artifactId)) byIdentity.set(artifact.artifactId, artifact);
+    }
+    const ordered = [...byIdentity.values()]
       .filter((artifact) => after === undefined || artifact.artifactId > after)
       .sort((left, right) =>
         left.artifactId < right.artifactId ? -1 : left.artifactId > right.artifactId ? 1 : 0,

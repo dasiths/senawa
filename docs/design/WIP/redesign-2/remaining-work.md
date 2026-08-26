@@ -1141,6 +1141,29 @@ members as well as the phase itself.
 * [x] The Live, Answers, Produced and About tabs each show the selected node's
   own content, for a phase, a member and a criterion alike
 
+### Found underneath it: the artifact query refused itself
+
+Fetching artifacts on the workflow route made the whole view hang on `Loading
+graph revision`. The query behind it was broken on real data:
+
+```text
+senawa artifact list <repo> <run>
+ProtocolValidationError: $.artifacts[2] must be lexically ascending after the cursor
+```
+
+An artifact is named by its content. The researcher's suspended attempt and its
+answered retry produced byte-identical output, so two submissions carried one
+asset, and the page held two rows with a single identity. A page whose contract
+requires its items to ascend cannot hold two of the same, so the query refused
+its own answer and every artifact view in the portal went blank -- including the
+one the timeline had been reading all along.
+
+An artifact carried twice is now listed once. The regression test submits the
+same asset under two submissions and fails with that exact message without the
+fix.
+
+* [x] An artifact carried by more than one submission is listed once
+
 
 Neither blocks anything above, and neither is part of the condition below. The
 first is a feature the phase model does not yet have; the second is done.
