@@ -379,13 +379,17 @@ export class PortalApplication {
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
         if (summary.graphRevision !== overview.sync.graphRevision)
           throw new Error("Graph summary revision changed during assembly");
-        const [nodes, edges, workspaces, questions] = await Promise.all([
+        const [nodes, edges, workspaces, questions, artifacts] = await Promise.all([
           this.#client.graphNodes(repositoryId, runId, summary.graphRevision),
           this.#client.graphEdges(repositoryId, runId, summary.graphRevision),
           this.#client.workspaces(repositoryId, runId),
           // A need renders on the node it blocks, so the question behind it has
           // to be here rather than on a tab of its own.
           this.#client.questions(repositoryId, runId),
+          // A node's detail pane reads what that node produced. Fetching this
+          // only for the history meant the Produced tab said "nothing yet"
+          // however much the node had handed on.
+          this.#client.artifacts(repositoryId, runId),
         ]);
         if (!this.#isCurrentAssembly(repositoryId, runId, route)) return false;
         if (
@@ -399,6 +403,7 @@ export class PortalApplication {
         this.#dispatch({ type: "cache", cache: "graphEdges", key: revision, value: edges });
         this.#dispatch({ type: "cache", cache: "workspaces", key, value: workspaces });
         this.#dispatch({ type: "cache", cache: "questions", key, value: questions });
+        this.#dispatch({ type: "cache", cache: "artifacts", key, value: artifacts });
         // The transcript names its lines by agent, but a name is a nicety and
         // this view is how a person answers a blocked agent. Letting it fail the
         // assembly would take every command offline to spare a label.

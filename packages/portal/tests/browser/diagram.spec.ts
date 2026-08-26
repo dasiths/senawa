@@ -44,14 +44,21 @@ test("reads a criterion through the work that had to satisfy it", async ({ page 
 
   // A criterion is something a task had to produce, not something that ran, so
   // reading one on its own left the pane with nothing in it at all. It is a
-  // mark on the card of the node that owed it, and it is still selectable.
+  // mark on the card of the node that owed it.
   const mark = page.locator(".g-mark").first();
   await expect(mark).toHaveCount(1);
   // The mark sits inside the card of the node that had to satisfy it.
   await expect(page.locator(".gnode:not(.kind-criterion) .g-mark")).not.toHaveCount(0);
   await mark.click();
-  await expect(page.locator(".agent-terminal-scope")).not.toHaveText("no agent selected");
-  await expect(page.locator(".agent-terminal-scope")).not.toHaveText("every agent");
+
+  // Clicking it opens what the node it sits on produced. A pane scoped to the
+  // criterion could only ever say the criterion had produced nothing, which is
+  // true of every criterion and tells a reader nothing about their run.
+  await expect(page.getByRole("tab", { name: "Produced", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator(".pane")).not.toContainText("has produced nothing yet");
 
   // Nothing claims a criterion ran, and nothing counts it as a piece of work.
   await expect(page.locator(".g-mark .state-pill")).toHaveCount(0);

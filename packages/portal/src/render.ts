@@ -910,6 +910,10 @@ function graphFlow(
     },
     actions: {
       select: (nodeId: string) => actions.focusRecord(nodeId),
+      showProduced: (nodeId: string) => {
+        actions.focusRecord(nodeId);
+        actions.setDetailTab("produced");
+      },
       toggleFold: (nodeId: string) => actions.unfoldNode(nodeId),
       unfoldAll: () => {
         for (const node of nodes) if (node.kind === "phase") actions.unfoldNode(node.nodeId);
@@ -1158,24 +1162,22 @@ function graphDetail(
   }
   detail.append(tabs);
   const pane = element("div", "pane");
+  // Live, Answers and Produced are about work. A criterion is how a piece of
+  // work is allowed to finish and does none of its own, so those three read the
+  // node that owes it. About is about the record, so it reads the record.
+  const worked =
+    node.kind === "criterion"
+      ? (nodes.find(({ nodeId }) => nodeId === node.parentNodeId) ?? node)
+      : node;
   switch (state.ui.detailTab) {
     case "live":
-      // A criterion did not run; the task that had to satisfy it did.
-      pane.append(
-        livePane(
-          state,
-          actions,
-          node.kind === "criterion"
-            ? nodes.find(({ nodeId }) => nodeId === node.parentNodeId)
-            : node,
-        ),
-      );
+      pane.append(livePane(state, actions, worked));
       break;
     case "answers":
-      pane.append(answersPane(state, node));
+      pane.append(answersPane(state, worked, nodes));
       break;
     case "produced":
-      pane.append(producedPane(state, node));
+      pane.append(producedPane(state, worked, nodes));
       break;
     case "about": {
       const facts = element("dl", "kv dense-facts");
@@ -1230,17 +1232,29 @@ function livePane(
 }
 
 /** Questions this work has already been answered on. */
-function answersPane(state: PortalState, node: PortalGraphNode): HTMLElement {
+function answersPane(
+  state: PortalState,
+  node: PortalGraphNode,
+  nodes: readonly PortalGraphNode[],
+): HTMLElement {
   const list = element("ul", "answered");
   const ids = selectedIds(state);
   const key = ids === undefined ? undefined : runKey(ids.repositoryId, ids.runId);
-  const events = key === undefined ? [] : (state.caches.events[key]?.events ?? []);
-  for (const event of events) {
-    if (!event.eventType.includes("answer") && !event.eventType.includes("decision")) continue;
+  const questions = key === undefined ? [] : (state.caches.questions[key]?.questions ?? []);
+  // A question names the task that asked it. Listing every answer in the run
+  // meant the pane said the same thing whatever was selected, which is not an
+  // answer about this node at all.
+  const owned = new Set<string>([node.nodeId]);
+  if (node.kind === "phase")
+    for (const member of nodes) if (member.parentNodeId === node.nodeId) owned.add(member.nodeId);
+  for (const question of questions) {
+    if (!owned.has(String(question.source.taskId))) continue;
+    if (question.answer === undefined) continue;
     const item = element("li", "");
     item.append(
-      textElement("p", "a-q", event.eventType),
-      textElement("p", "a-when", event.occurredAt),
+      textElement("p", "a-q", question.prompt),
+      textElement("p", "a-a", answerText(question.answer.answer)),
+      textElement("p", "a-when", question.answer.answeredAt),
     );
     list.append(item);
   }
@@ -1251,12 +1265,32 @@ function answersPane(state: PortalState, node: PortalGraphNode): HTMLElement {
   return list;
 }
 
+/** An answer is a JSON value; a reader wants the sentence inside it. */
+function answerText(answer: JsonValue): string {
+  if (typeof answer === "string") return answer;
+  if (answer !== null && typeof answer === "object" && !Array.isArray(answer)) {
+    const text = (answer as Record<string, JsonValue>).answer;
+    if (typeof text === "string") return text;
+  }
+  return JSON.stringify(answer);
+}
+
 /** What this work handed on. */
-function producedPane(state: PortalState, node: PortalGraphNode): HTMLElement {
+function producedPane(
+  state: PortalState,
+  node: PortalGraphNode,
+  nodes: readonly PortalGraphNode[],
+): HTMLElement {
   const ids = selectedIds(state);
   const key = ids === undefined ? undefined : runKey(ids.repositoryId, ids.runId);
   const artifacts = key === undefined ? [] : (state.caches.artifacts[key]?.artifacts ?? []);
-  const mine = artifacts.filter((artifact) => String(artifact.taskId) === node.nodeId);
+  // An artifact names the task that produced it. A phase produces through its
+  // members, so a phase that read only its own id showed nothing however much
+  // its members had handed on.
+  const owned = new Set<string>([node.nodeId]);
+  if (node.kind === "phase")
+    for (const member of nodes) if (member.parentNodeId === node.nodeId) owned.add(member.nodeId);
+  const mine = artifacts.filter((artifact) => owned.has(String(artifact.taskId)));
   if (mine.length === 0)
     return textElement("p", "empty-state", `${node.title} has produced nothing yet.`);
   return summaryTable(

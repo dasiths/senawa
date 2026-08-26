@@ -17,6 +17,8 @@ export interface GraphFlowNodeExtras {
 
 export interface GraphFlowActions {
   select(nodeId: string): void;
+  /** Opens what a node produced, which is what a criterion on it is about. */
+  showProduced(nodeId: string): void;
   toggleFold(nodeId: string): void;
   unfoldAll(): void;
 }
@@ -80,11 +82,13 @@ function foldSummary(members: readonly PortalGraphNode[]): string {
  * work, and drawing it as a peer card made four tasks look like eight members
  * and gave a thing that never ran a green `done` pill. A mark is lit once the
  * node has produced what it owed and dark while it is still owed, so it reports
- * possession rather than execution. It stays selectable because the detail pane
- * already reads a criterion correctly as an exit condition.
+ * possession rather than execution. Clicking one opens what the node it sits on
+ * produced: a criterion produces nothing itself, so a pane scoped to the
+ * criterion could only ever say so.
  */
 function criterionMarks(
   criteria: readonly PortalGraphNode[],
+  owner: PortalGraphNode,
   selectedNodeId: string | undefined,
   actions: GraphFlowActions,
 ): HTMLElement {
@@ -104,14 +108,14 @@ function criterionMarks(
       `${criterion.title}: ${produced ? "produced" : "not produced yet"}`,
     );
     mark.title = criterion.title;
-    if (criterion.nodeId === selectedNodeId) mark.setAttribute("aria-current", "true");
+    if (owner.nodeId === selectedNodeId) mark.setAttribute("aria-current", "true");
     mark.append(
       textElement("span", "g-mark-dot", nodeMark("criterion")),
       textElement("span", "g-mark-name", criterion.title),
     );
     mark.addEventListener("click", (event) => {
       event.stopPropagation();
-      actions.select(criterion.nodeId);
+      actions.showProduced(owner.nodeId);
     });
     marks.append(mark);
   }
@@ -147,7 +151,7 @@ function memberCard(
   open.append(foot);
   open.addEventListener("click", () => actions.select(node.nodeId));
   card.append(open);
-  if (criteria.length > 0) card.append(criterionMarks(criteria, selectedNodeId, actions));
+  if (criteria.length > 0) card.append(criterionMarks(criteria, node, selectedNodeId, actions));
   // The whole card still selects the node, including the padding around the
   // control and the space beside the marks. A mark stops its own click, so the
   // only thing that reaches here is the card itself.

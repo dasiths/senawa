@@ -1127,9 +1127,18 @@ navigates away from the thing it is about.
 Clicking a pill should highlight it and take the reader to the owning node's
 own section, not open a separate one.
 
-* [ ] A criterion pill selects the node that owes it and opens that node's
+Reading the panes to fix that found the reason the tab was empty in the first
+place: artifacts were fetched only for the history route, so the Produced tab on
+the workflow route had nothing to read however much a node had handed on. The
+Answers tab was worse -- it listed every answer and decision event in the whole
+run whatever was selected, and named them by event type rather than by what was
+asked. It now reads the questions the selected node asked, and shows the answer.
+A phase produces and is asked through its members, so both panes read a phase's
+members as well as the phase itself.
+
+* [x] A criterion pill selects the node that owes it and opens that node's
   Produced view, rather than opening a pane scoped to the criterion
-* [ ] The Live, Answers, Produced and About tabs each show the selected node's
+* [x] The Live, Answers, Produced and About tabs each show the selected node's
   own content, for a phase, a member and a criterion alike
 
 
