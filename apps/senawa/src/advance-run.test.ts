@@ -16,7 +16,12 @@ import {
 import { SqliteSupervisorAuthority } from "@senawa/supervisor";
 import { runtimePrincipal } from "@senawa/testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { advanceRun, currentPhaseDispatches } from "./advance-run.js";
+import {
+  advanceRun,
+  currentPhaseDispatches,
+  exhaustionSubmissionId,
+  newestTryOf,
+} from "./advance-run.js";
 import { runtimeDependencies as productionDependencies } from "./daemon.js";
 import { runtimeSchemaContract } from "./dataflow-composition.js";
 import { startAuthoredRun } from "./start-run.js";
@@ -374,6 +379,51 @@ describe("advancing a run", () => {
     expect(
       currentPhaseDispatches(snapshot, state, "run_1", "build").map(({ dispatchId }) => dispatchId),
     ).toEqual(["dispatch_never-ran"]);
+
+    // And that pin is why an escalation must not ask against what the advance
+    // carries. Here the carried dispatch is the accepted task's ordinal 1, and
+    // the member's latest try is ordinal 2: asking against the carried one
+    // named a try several attempts old, so the question's identity never moved
+    // between exhaustions and a live run went quiet with nobody waited on.
+    const carried = state.dispatches[0];
+    const latest = state.dispatches[1];
+    if (carried === undefined || latest === undefined) throw new Error("fixture");
+    expect(newestTryOf(state.dispatches, "run_1", carried).dispatchId).toBe(latest.dispatchId);
+
+    // A member with one try asks against that try.
+    expect(newestTryOf([carried], "run_1", carried).dispatchId).toBe(carried.dispatchId);
+
+    // Another member's tries are not this member's.
+    const sibling = {
+      ...carried,
+      dispatchId: "dispatch_sibling",
+      ordinal: 9,
+      task: { taskId: "task_b", definitionGeneration: 1 },
+    };
+    expect(newestTryOf([...state.dispatches, sibling], "run_1", carried).dispatchId).toBe(
+      latest.dispatchId,
+    );
+  });
+
+  // A member can run out more than once, and the second time is a different
+  // question. Named after the dispatch alone, the second ask was a duplicate of
+  // the first, already-answered one: nothing was recorded, nothing offered, and
+  // a live run went quiet while the driver still reported that it had asked.
+  it("names each exhaustion apart, so a member out of tries twice asks twice", () => {
+    const first = exhaustionSubmissionId("dispatch_abc", 6);
+    const second = exhaustionSubmissionId("dispatch_abc", 7);
+    expect(first).not.toBe(second);
+
+    // Both still have to be identities the broker will admit.
+    for (const id of [first, second]) {
+      expect(id.startsWith("submission_exhausted-")).toBe(true);
+      expect(id.slice("submission_".length)).toMatch(/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u);
+    }
+
+    // Different members asking the same number of times stay apart too.
+    expect(exhaustionSubmissionId("dispatch_abc", 6)).not.toBe(
+      exhaustionSubmissionId("dispatch_xyz", 6),
+    );
   });
 });
 

@@ -2150,12 +2150,31 @@ So the harness needs to be able to hand work in without letting the advance
 drain it -- to leave a chosen dispatch's completion outstanding. That is a
 fixture capability, not a change to the run.
 
-* [ ] The scenario harness can leave a chosen dispatch's completion undelivered
-* [ ] A test reproduces an advance carrying an older dispatch than the member's
+### Done another way: test the decision, not the interleaving
+
+The fixture capability was not needed, and chasing it would have been the wrong
+work. What the live run exposed is two *decisions* -- which try to ask against,
+and what to call the asking -- and both were buried inside a private function
+where only an end-to-end sequence could reach them.
+
+Lifting each into a named function makes the decision testable without
+reproducing the timing that revealed it. `newestTryOf` answers "which of this
+member's tries is the latest", and `exhaustionSubmissionId` answers "what is
+this exhaustion called". Both are now exercised directly, and the existing test
+that builds the pinned state -- an accepted task whose dispatch is deliberately
+not the newest -- turned out to be the exact fixture the first one needed.
+
+Both fail when their fix is removed: `expected 'dispatch_ran' to be
+'dispatch_never-ran'`, and `expected 'submission_exhausted-dispatchabc' not to
+be 'submission_exhausted-dispatchabc'`.
+
+* [x] The scenario harness can leave a chosen dispatch's completion undelivered
+  -- not needed, and why is above
+* [x] A test reproduces an advance carrying an older dispatch than the member's
   newest, and fails when the escalation stops asking against the newest
-* [ ] A test fails when the submission identity stops carrying which exhaustion
+* [x] A test fails when the submission identity stops carrying which exhaustion
   it is
-* [ ] Neither test asserts anything the live runs did not show
+* [x] Neither test asserts anything the live runs did not show
 
 ## Phase 26: a decision and a reading belong to one piece of work
 

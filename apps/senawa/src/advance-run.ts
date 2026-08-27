@@ -885,25 +885,10 @@ async function step(
     // member nobody has spoken to and one somebody has redirected are not the
     // same member.
     if (phase.iteration?.onExhausted === "escalate") {
-      // Ask against the member's newest try, not the dispatch this advance
-      // happens to carry. For an accepted task that is deliberately the
-      // dispatch which earned the acceptance, which never moves, so every
-      // exhaustion asked under one identity: the second ask was a duplicate of
-      // the answered first, nothing was recorded, and the run went quiet.
-      const newest = state.dispatches
-        .filter(
-          (candidate) =>
-            candidate.runId === input.runId &&
-            String(candidate.task.taskId) === String(dispatch.task.taskId),
-        )
-        .reduce(
-          (latest, candidate) => (candidate.ordinal > latest.ordinal ? candidate : latest),
-          dispatch,
-        );
       const asked = askForHelp({
         broker,
         supervisor,
-        dispatch: newest,
+        dispatch: newestTryOf(state.dispatches, input.runId, dispatch),
         phaseKey,
         reasons,
         tries: taskAttempts,
@@ -1278,12 +1263,7 @@ function askForHelp(input: {
     const admitted = input.broker.admitSubmission({
       submission: {
         apiVersion: PROTOCOL_VERSION,
-        // A member can run out more than once, and the second time is a
-        // different question. Naming the id after the dispatch alone made the
-        // second ask a duplicate of the first, already-answered one: nothing
-        // was recorded, nothing was offered, and the run went quiet with the
-        // driver still reporting that it had asked.
-        submissionId: `submission_exhausted-${dispatchId.replace(/[^a-z0-9]/gu, "").slice(0, 40)}-${String(input.tries)}`,
+        submissionId: exhaustionSubmissionId(dispatchId, input.tries),
         repositoryId: input.dispatch.repositoryId,
         runId: input.dispatch.runId,
         dispatchId: input.dispatch.dispatchId,
@@ -1805,6 +1785,46 @@ function acceptedPhaseTasks(
  * retried phase select one task twice, and then refuse its own candidate for
  * carrying an assessment from a context it no longer names.
  */
+/**
+ * What a member's escalation is called, which has to say *which* exhaustion.
+ *
+ * Naming it after the asking dispatch alone made a second exhaustion a
+ * duplicate of the first, already-answered question: nothing was recorded,
+ * nothing was offered, and a live run went quiet with the driver still
+ * reporting that it had asked.
+ */
+export function exhaustionSubmissionId(dispatchId: string, tries: number): string {
+  return `submission_exhausted-${dispatchId.replace(/[^a-z0-9]/gu, "").slice(0, 40)}-${String(tries)}`;
+}
+
+/**
+ * The member's latest try, whichever try the advance happens to be carrying.
+ *
+ * A task the run has accepted is deliberately pinned to the dispatch that
+ * earned the acceptance, so the carried dispatch can be several attempts old.
+ * An escalation named that one, so its identity never moved between
+ * exhaustions and the ceiling an answer bought back was counted from the
+ * member's first try.
+ */
+export function newestTryOf<
+  Dispatch extends {
+    readonly runId: unknown;
+    readonly ordinal: number;
+    readonly task: { readonly taskId: unknown };
+  },
+>(dispatches: readonly Dispatch[], runId: string, carried: Dispatch): Dispatch {
+  return dispatches
+    .filter(
+      (candidate) =>
+        String(candidate.runId) === runId &&
+        String(candidate.task.taskId) === String(carried.task.taskId),
+    )
+    .reduce(
+      (latest, candidate) => (candidate.ordinal > latest.ordinal ? candidate : latest),
+      carried,
+    );
+}
+
 export function currentPhaseDispatches(
   snapshot: ConfigurationSnapshot,
   state: ReturnType<SqliteContextBroker["authority"]["snapshot"]>,
