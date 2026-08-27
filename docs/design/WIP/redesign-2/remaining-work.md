@@ -1820,6 +1820,12 @@ member answered once and out of tries again has to be able to ask again.
 Advancing `run_af3a5af52de038477f6fcf693ce2458e` -- stuck reporting an ask
 nobody could see -- now gives `waiting on you: 1`.
 
+Neither fix has a test that guards it, and the scenario says so in its own
+comment rather than implying otherwise. Removing either one still passes,
+because a single member gets a fresh dispatch each attempt and never collides.
+Both need a fan-out, where every attempt escalates against the member's first
+dispatch and so asks twice under one identity. That is the next thing to write.
+
 The ordinal attribution above is still wrong and still worth fixing: the
 question is hung on the dispatch the advance carries, which in a fan-out is the
 member's first, so the ceiling is bought back from ordinal 4 while the tries

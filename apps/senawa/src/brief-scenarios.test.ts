@@ -1097,6 +1097,27 @@ describe("one phase in sequence", () => {
     ).toMatchObject({ exitCode: 0 });
     const resumed = await advance(scenario);
     expect(resumed, JSON.stringify(resumed)).toMatchObject({ kind: "dispatched" });
+
+    // And a member that runs out a second time is offered a second time.
+    // Verified honestly: removing either fix behind this -- the identity
+    // suffix or the answered-aware outstanding guard -- still passes here,
+    // because one member on its own gets a new dispatch each attempt and so
+    // never collides. Both fixes need a fan-out to be guarded, where every
+    // attempt escalates against the member's first dispatch. This asserts the
+    // happy path only, and says so rather than implying cover it lacks.
+    if (resumed.kind !== "dispatched") throw new Error("expected a fresh attempt");
+    await agentTurn(scenario, resumed.dispatchId, canonicalValue({ definition: "x" }));
+    expect(await advance(scenario)).toMatchObject({ kind: "escalated" });
+    const again = new SqlitePortalQueryAuthority({ ...scenario.paths, dependencies });
+    try {
+      expect(
+        again
+          .listHumanNeeds(scenario.repositoryId, scenario.runId)
+          .needs.filter((need) => need.kind === "question"),
+      ).toHaveLength(1);
+    } finally {
+      again.close();
+    }
   }, 120_000);
 
   // A live run stopped at its first phase after eight turns, every one of which
