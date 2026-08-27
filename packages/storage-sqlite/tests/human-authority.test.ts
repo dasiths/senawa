@@ -228,6 +228,73 @@ describe("SQLite Phase 11A human authority", () => {
     fixture.dispose();
   });
 
+  it("keeps offering a question from a member that is out of tries after its scope moves on", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    const broker = new SqliteContextBroker({
+      databasePath: fixture.databasePath,
+      dependencies: contextDependencies(),
+    });
+    const first = createWorkerExecutionFixture(createRuntimeGraph(), [
+      "worker.submit.completion",
+      "worker.submit.question",
+    ]);
+    broker.registerDispatch({
+      context: first.context,
+      dispatch: first.dispatch,
+      completionRequirements: first.completionRequirements,
+      taskScope: taskScope(first.context.contextDigest),
+    });
+    for (const submissionId of ["submission_ordinary", "submission_exhausted-first"]) {
+      expect(
+        broker.admitSubmission({
+          submission: {
+            apiVersion: PROTOCOL_VERSION,
+            submissionId,
+            repositoryId: first.dispatch.repositoryId,
+            runId: first.dispatch.runId,
+            dispatchId: first.dispatch.dispatchId,
+            task: first.dispatch.task,
+            contextId: first.dispatch.contextId,
+            contextDigest: first.dispatch.contextDigest,
+            principalId: first.dispatch.worker.principalId,
+            type: "question",
+            question: { prompt: `${submissionId} needs a person`, details: {} },
+          },
+        }).status,
+      ).toBe("accepted");
+    }
+
+    // A later attempt takes the scope over, which is what the live run did
+    // between the last try handing work in and the gate refusing it.
+    const second = createWorkerExecutionFixture(
+      createRuntimeGraph(),
+      ["worker.submit.completion"],
+      2,
+      2,
+    );
+    broker.registerDispatch({
+      context: second.context,
+      dispatch: second.dispatch,
+      completionRequirements: second.completionRequirements,
+      taskScope: taskScope(second.context.contextDigest),
+    });
+    broker.close();
+
+    const portal = new SqlitePortalQueryAuthority(fixture.options);
+    const offered = portal
+      .listHumanNeeds(runtimeFixture.repositoryId, runtimeFixture.runId)
+      .needs.map(({ sourceId }) => sourceId);
+    // The ordinary question has a later attempt to answer it. The exhausted
+    // one has none by definition, so hiding it strands the run.
+    expect(offered).not.toContain("submission_ordinary");
+    expect(offered).toContain("submission_exhausted-first");
+    portal.close();
+    authority.close();
+    fixture.dispose();
+  });
+
   it("grants one policy-bounded allowance without changing reserved, spent, or unreported accounting", () => {
     const fixture = createFixture();
     let authority = new SqliteAuthority(fixture.options);

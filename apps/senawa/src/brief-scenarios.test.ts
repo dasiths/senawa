@@ -1074,6 +1074,10 @@ describe("one phase in sequence", () => {
         .listHumanNeeds(scenario.repositoryId, scenario.runId)
         .needs.filter((need) => need.kind === "question");
       expect(needs).toHaveLength(1);
+      // A need's title is bounded, and a wall of test output is not a title.
+      // The live example's gate reading ran past it and the whole page threw.
+      expect(needs[0]?.title.length).toBeLessThanOrEqual(1_024);
+      expect(needs[0]?.title).toContain("What should the agent do differently");
     } finally {
       portal.close();
     }

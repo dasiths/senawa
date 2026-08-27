@@ -1638,6 +1638,32 @@ it.
 A refusal a person has answered is not the same as a refusal nobody has seen,
 so the budget it grants is the authored ceiling again rather than one more try.
 
+### Found live: the escalation was raised, and nobody could see it
+
+`run_6ceae5adbc60c1d1c551708092110b13` raised the escalation exactly as
+intended -- one implement member spent six attempts, the other three passed on
+their first -- and the portal still reported nothing was waiting. Two separate
+defects, both only visible on a real run.
+
+A question is offered to a person only while its asking dispatch still holds
+the task scope, which is right for an ordinary question: a later attempt takes
+over and answering the old one would be answering the past. A member that is
+out of tries has no later attempt by construction, and its question is the only
+thing that can create one. The live row showed the scope had already moved on
+(`dcb979c2` asked, `09b73aa7` current), so the escalation was filtered out of
+the needs projection and sat open and unanswerable for ever. Being out of tries
+is now an exemption from that rule rather than a reason to hide.
+
+The second defect surfaced the moment the first was fixed: the whole needs page
+threw, because a need's title is bounded at 1024 code units and the prompt
+carried the gate's entire reading -- a failing test's output. The ask is now
+short and the reading travels beside it, which is where the portal already
+shows a question's details. A wall of test output was never a title.
+
+Neither defect had a test, and the scenario that covers the escalation could
+not have caught either: its scope never moves, and its gate reading is one
+line. Both now have one.
+
 * [ ] A member that spends its attempts raises the escalation its policy
   declares instead of stopping the run
 * [ ] The escalation names what kept failing: the gate, its reading, and the

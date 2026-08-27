@@ -5780,7 +5780,14 @@ export class SqlitePortalQueryAuthority {
       const task = requiredJsonRecord(submission.task, "Portal question need task");
       const question = requiredJsonRecord(submission.question, "Portal question need body");
       const questionDigest = this.dependencies.sha256.digest(canonicalBytes(question));
+      // A member that has run out of tries has no later attempt to be
+      // superseded by -- that is what being out of tries means -- and its
+      // question is the only thing that can start one. Hiding it because the
+      // scope had moved on left the escalation open and unanswerable, with the
+      // portal reporting nothing was waiting.
+      const exhausted = row.submission_id.startsWith("submission_exhausted-");
       if (
+        !exhausted &&
         !this.#questionStillAnswerable(
           repositoryId,
           runId,

@@ -1236,9 +1236,13 @@ function askForHelp(input: {
     (entry) => (entry as { readonly type?: unknown }).type === "question",
   );
   if (outstanding) return true;
+  // The prompt becomes a need's title, which is bounded, and a wall of test
+  // output is not a title anyway. The ask is short and the reading travels
+  // beside it, where the portal already shows a question's details.
+  const excerpt = input.reasons.join("\n").replace(/\s+/gu, " ").slice(0, 600);
   const prompt =
     `${input.phaseKey} could not be finished in ${String(input.tries)} attempts. ` +
-    `What should the agent do differently?\n\nWhat kept failing:\n${input.reasons.join("\n")}`;
+    `What should the agent do differently?\n\nWhat kept failing: ${excerpt}`;
   try {
     input.broker.admitSubmission({
       submission: {
