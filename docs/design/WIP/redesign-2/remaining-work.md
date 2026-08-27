@@ -1664,13 +1664,32 @@ Neither defect had a test, and the scenario that covers the escalation could
 not have caught either: its scope never moves, and its gate reading is one
 line. Both now have one.
 
-* [ ] A member that spends its attempts raises the escalation its policy
+### And a third, on the way out
+
+Offering a question a person cannot answer strands the run just as completely.
+The same rule guards the write, so the portal listed the escalation and the
+authority then refused the answer as `stale-question`. Being out of tries is an
+exemption on both sides or on neither.
+
+The refusal that followed the fix was not the same bug: a command's identity is
+derived from its payload, so re-sending the identical answer text replayed the
+receipt the pre-fix authority had already cached. Changing a word in the answer
+gave it a new identity and it went through. Worth knowing before reading a
+second refusal as a second defect.
+
+Proved live on `run_2b69a12b42f7b72cb735d83fa68d9642`: one implement member
+spent six attempts and escalated, the portal offered exactly one need with a
+705-character title, answering it was accepted and carried the failing
+assertion back, and the dispatch count moved from 16 to 17 -- a fresh attempt
+for the member that had none left.
+
+* [x] A member that spends its attempts raises the escalation its policy
   declares instead of stopping the run
-* [ ] The escalation names what kept failing: the gate, its reading, and the
+* [x] The escalation names what kept failing: the gate, its reading, and the
   tries it took
-* [ ] The portal offers it as a need with a reply, beside the questions
-* [ ] Answering carries the instruction into the next attempt
-* [ ] Answering grants the member its attempt ceiling again
+* [x] The portal offers it as a need with a reply, beside the questions
+* [x] Answering carries the instruction into the next attempt
+* [x] Answering grants the member its attempt ceiling again
 * [ ] A run whose member is answered finishes without a restart
 
 ## Phase 22: a member owns its own gates, approval and attempts
@@ -1704,41 +1723,52 @@ authored workflow changes behaviour by being read again.
 ### How a member-scoped approval is asked
 
 The kernel closes a phase against one candidate, and that is right: a phase
-closes once. So `scope: member` does not become a candidate per member. The
-driver asks one approval per member through the same question path a person
-already answers, naming that member's work, and the phase closes only once
-every member has been approved.
+closes once. So `scope: member` does not become a candidate per member. What it
+becomes is a decision per task **within** that one candidate, so the record
+still says who approved what, and the phase closes when every member's decision
+is in.
 
-This keeps the kernel phase-shaped and deterministic while the person sees the
-decision they were promised: one per member, against that member's work.
+The route to that was not the first one tried, and the section below is why.
 
 ### Found while starting the driver half: the aggregate has no author
 
 The obvious implementation does not work, and it is worth writing down why
 before someone tries it again.
 
-If the driver asks per member and then closes the phase, the kernel still
-demands its phase decision, because the compiled policy says approval is
-required -- so the person is asked N+1 times. If instead the driver records the
-phase decision itself once every member has been approved, it cannot:
-`record-authority-decision` is bound to `release-manager`, and the driver is
-not one. That restriction is correct and should not be loosened to make this
-convenient.
+If the driver asks per member through the question path and then closes the
+phase, the kernel still demands its phase decision, because the compiled policy
+says approval is required -- so the person is asked N+1 times. If instead the
+driver records that phase decision itself once every member has been approved,
+it cannot: `record-authority-decision` is bound to `release-manager`, and the
+driver is not one. That restriction is correct and should not be loosened to
+make this convenient.
 
-That leaves the choice the next session has to make deliberately. Either the
-compiled phase carries `policy: none` under `scope: member`, and the per-member
-asks become the whole enforcement -- which moves a person's decision out of the
-kernel record, where it is currently provable -- or the kernel learns a
-member-scoped approval policy and records N decisions against the one
-candidate, which is more work and keeps the guarantee.
+That leaves a real choice. Either the compiled phase carries `policy: none`
+under `scope: member`, and per-member asks become the whole enforcement --
+which moves a person's decision out of the kernel record, where it is currently
+provable -- or the kernel learns a member-scoped approval policy and records a
+decision per task against the one candidate.
 
 The second is the right one on the evidence. The kernel already models a
 decision per candidate; what it lacks is a decision per task within one. Losing
-the record of who approved what, to save that, is the kind of trade the
+the record of who approved what, to save that work, is the kind of trade the
 durability rules exist to prevent.
 
+### Already true, and where it is proved
+
+Two of these were delivered by phase 21's work rather than by this one, and
+saying so beats implementing them twice.
+
+A member's ceiling is counted from its own dispatches -- "counts a member's own
+tries against the attempt ceiling" drives two members and reads the roster back
+as `[1], [1], [1, 2]`, so one member being on its second try leaves the others
+on their first. And a member that cannot finish does not take the phase with
+it: "runs the members that can finish when an earlier one cannot" reaches all
+three. What phase 21 added is that exhausting a ceiling now behaves the same
+way as failing did, by asking rather than stopping.
+
 * [x] `approval.scope` is authored per phase and accepts `phase` or `member`
-* [ ] A member's attempt ceiling is its own, spent only by its own tries
+* [x] A member's attempt ceiling is its own, spent only by its own tries
 * [ ] A member's gates are evaluated against that member's work
 * [ ] `scope: member` asks one approval per member, against that member's work
 * [ ] `scope: phase`, and a phase that declares no scope, asks once for all of

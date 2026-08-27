@@ -6403,6 +6403,12 @@ function buildTrustedQuestionAnswer(
     )
     .get(canonicalStringify([command.repositoryId, command.runId]), taskId, definitionGeneration);
   const questionDigest = dependencies.sha256.digest(canonicalBytes(question.question));
+  // A member that has run out of tries has no later attempt to be superseded
+  // by, and its answer is the only thing that can open one. Requiring the scope
+  // to be where the asking dispatch left it makes the escalation unanswerable
+  // for exactly the members that need answering, which showed up live as a
+  // question the portal offered and the authority then refused.
+  const exhausted = payload.submissionId.startsWith("submission_exhausted-");
   if (
     payload.questionDigest !== questionDigest ||
     command.exactObjectDigest !== questionDigest ||
@@ -6410,8 +6416,9 @@ function buildTrustedQuestionAnswer(
     payload.taskId !== taskId ||
     payload.definitionGeneration !== definitionGeneration ||
     command.expectedDefinitionRevision !== question.task.contextRevisionDigest ||
-    currentness?.current_context_digest !== source.context_digest ||
-    currentness.claims_accepted !== 1
+    (!exhausted &&
+      (currentness?.current_context_digest !== source.context_digest ||
+        currentness.claims_accepted !== 1))
   ) {
     return trustedRefusal(
       "stale-question",

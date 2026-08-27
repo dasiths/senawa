@@ -291,6 +291,35 @@ describe("SQLite Phase 11A human authority", () => {
     expect(offered).not.toContain("submission_ordinary");
     expect(offered).toContain("submission_exhausted-first");
     portal.close();
+
+    // Offering it and then refusing the answer strands the run just as
+    // completely, which is what the live example did: the portal showed the
+    // escalation and the authority called it stale.
+    const answerFor = (submissionId: string) => {
+      const question = { prompt: `${submissionId} needs a person`, details: {} };
+      const questionDigest = deterministicSha256.digest(canonicalBytes(question));
+      return runtimeCommand({
+        commandId: `command_answer-${submissionId.replaceAll("_", "-")}`,
+        intent: "answer-question",
+        payload: {
+          submissionId,
+          questionDigest,
+          contextDigest: first.context.contextDigest,
+          taskId: first.dispatch.task.taskId,
+          definitionGeneration: first.dispatch.task.definitionGeneration,
+          answer: { instruction: "read the assertion before editing" },
+        },
+        expectedDefinitionRevision: first.dispatch.task.contextRevisionDigest,
+        exactObjectDigest: questionDigest,
+      });
+    };
+    expect(authority.submit(answerFor("submission_exhausted-first"), admission())).toMatchObject({
+      status: "completed",
+    });
+    expect(authority.submit(answerFor("submission_ordinary"), admission())).toMatchObject({
+      status: "refused",
+      error: { code: "stale-question" },
+    });
     authority.close();
     fixture.dispose();
   });
