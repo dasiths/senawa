@@ -1813,10 +1813,19 @@ So a member gets exactly one conversation. The first escalation works end to
 end -- raised, offered, answered, delivered, retried, all of it proved on this
 run -- and the second is silent for ever.
 
-An escalation's identity has to include which exhaustion it is, not only which
-dispatch asked, so a member that runs out twice can ask twice. Fixing the
-ordinal attribution above matters too, because a ceiling bought back from the
-member's first try is no ceiling, but this is what makes the run go quiet.
+**Fixed, and proved on the run that went quiet.** An escalation's identity now
+carries which exhaustion it is rather than only which dispatch asked, and the
+"already outstanding" guard ignores questions that have been answered, since a
+member answered once and out of tries again has to be able to ask again.
+Advancing `run_af3a5af52de038477f6fcf693ce2458e` -- stuck reporting an ask
+nobody could see -- now gives `waiting on you: 1`.
+
+The ordinal attribution above is still wrong and still worth fixing: the
+question is hung on the dispatch the advance carries, which in a fan-out is the
+member's first, so the ceiling is bought back from ordinal 4 while the tries
+run to 10. A fix for it was written and reverted because it did not change the
+live outcome, and an unvalidated change to attempt accounting is not worth a
+plausible story.
 
 * [x] A member that spends its attempts raises the escalation its policy
   declares instead of stopping the run

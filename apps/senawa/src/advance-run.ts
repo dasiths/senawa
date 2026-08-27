@@ -887,6 +887,7 @@ async function step(
     if (phase.iteration?.onExhausted === "escalate") {
       const asked = askForHelp({
         broker,
+        supervisor,
         dispatch,
         phaseKey,
         reasons,
@@ -1216,6 +1217,7 @@ function nextPhaseAttemptOrdinal(
  */
 function askForHelp(input: {
   readonly broker: SqliteContextBroker;
+  readonly supervisor: SqliteSupervisorAuthority;
   readonly dispatch: {
     readonly dispatchId: unknown;
     readonly repositoryId: unknown;
@@ -1232,8 +1234,17 @@ function askForHelp(input: {
 }): boolean {
   const dispatchId = String(input.dispatch.dispatchId);
   const progress = input.broker.loadWorkerDispatchProgress(dispatchId);
+  // An outstanding question is one nobody has answered. A member that has been
+  // answered once and run out again has to be able to ask again.
+  const answeredAlready = new Set(
+    input.supervisor.commandAuthority
+      .listAnsweredQuestions(input.dispatch.repositoryId as string, input.dispatch.runId as string)
+      .map((entry) => entry.submissionId),
+  );
   const outstanding = (progress?.submissions ?? []).some(
-    (entry) => (entry as { readonly type?: unknown }).type === "question",
+    (entry) =>
+      (entry as { readonly type?: unknown }).type === "question" &&
+      !answeredAlready.has(String((entry as { readonly submissionId?: unknown }).submissionId)),
   );
   if (outstanding) return true;
   // The prompt becomes a need's title, which is bounded, and a wall of test
@@ -1252,7 +1263,12 @@ function askForHelp(input: {
     const admitted = input.broker.admitSubmission({
       submission: {
         apiVersion: PROTOCOL_VERSION,
-        submissionId: `submission_exhausted-${dispatchId.replace(/[^a-z0-9]/gu, "").slice(0, 48)}`,
+        // A member can run out more than once, and the second time is a
+        // different question. Naming the id after the dispatch alone made the
+        // second ask a duplicate of the first, already-answered one: nothing
+        // was recorded, nothing was offered, and the run went quiet with the
+        // driver still reporting that it had asked.
+        submissionId: `submission_exhausted-${dispatchId.replace(/[^a-z0-9]/gu, "").slice(0, 40)}-${String(input.tries)}`,
         repositoryId: input.dispatch.repositoryId,
         runId: input.dispatch.runId,
         dispatchId: input.dispatch.dispatchId,
