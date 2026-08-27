@@ -2301,6 +2301,33 @@ What is left is the structural half: records in rows rather than one blob, so
 a command writes only what it changed. That still wants a migration and is
 still the largest thing here.
 
+### The two criteria are in tension, and the way out is not the blob
+
+Splitting the blob was the assumed route. It does not work on its own, and the
+reason is worth having before someone spends a migration finding out.
+
+A run's 235,977 bytes are mostly four append-mostly collections --
+`amendmentEvents` 84KB, `amendmentRecords` 83KB, `phaseLifecycles` 37KB,
+`runEvents` 37KB -- so rows would indeed let a command write only what changed.
+But `revision_digest` is SHA-256 over the canonical form of the **whole**
+records, and SHA-256 has to read every byte of its message. Any scheme that
+keeps the digest exactly as it is must therefore touch all the records on every
+command, however they are stored.
+
+So criterion two and criterion three cannot both be met by splitting: keeping
+the digest keeps the linear cost, and making the write flat means the digest is
+computed from parts, which moves every receipt.
+
+The way out is neither. It is to take the digest **off the write path**: keep
+the records current incrementally, and compute `revision_digest` when something
+asks for it rather than on every command. The digest is then unchanged --
+same definition, same bytes, same receipts -- and a write stops paying for a
+run's whole history.
+
+That reframes the remaining work: the question to answer first is who reads
+`revision_digest` and whether any of them needs it synchronously with the
+write. Splitting the blob is then an optimisation of the read, not the fix.
+
 * [ ] A command writes only the records it changed
 * [x] The run's record digest is still exactly what it was, so no receipt moves
 * [ ] Write latency does not grow with the number of commands a run has
