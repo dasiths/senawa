@@ -1882,9 +1882,9 @@ plausible story.
 * [x] The portal offers it as a need with a reply, beside the questions
 * [x] Answering carries the instruction into the next attempt
 * [x] Answering grants the member its attempt ceiling again
-* [ ] An `escalated` outcome and a recorded question are the same event: the
+* [x] An `escalated` outcome and a recorded question are the same event: the
   driver cannot say it asked unless a person can see the asking
-* [ ] A run whose member is answered finishes without a restart
+* [x] A run whose member is answered finishes without a restart
 
 ## Phase 24: a run says what it is waiting for where a person looks
 
@@ -2106,6 +2106,24 @@ first is a feature the phase model does not yet have; the second is done.
 
 * [x] With every phase above done, the example is driven once more from a clean
   state root, end to end in a browser, and completes
+
+`run_f77328ce7a87a1cc4b172c691254a261`, driven from an empty state root with the
+portal open on it throughout: three phases closed, `mode=ended`, ten dispatches,
+and the driver's own `COMPLETE`. The portal read it live while five agents
+worked and answered in milliseconds, which is phase 19 still holding.
+
+### Found by watching it: four agents working, one agent
+
+The browser check earned its place. The Agents tree showed `researcher` with
+attempt 5 finished and attempts 1 to 4 all saying **working**, and the header
+counted them: one agent retrying read as five working.
+
+A try's state was read from its own terminal completion alone, so a try that
+ended by asking, or one a retry had replaced, never stopped saying it was
+working. A try the same member has already superseded is over, whatever it
+handed in. Reading that as well fixes the row and the count, and the scenario
+that drives a member to a second attempt now asserts its first reads finished
+-- it says `working` when the fix is removed.
 
 A run driven before the last change proves that change against the state it
 happened to find. A run driven after everything proves the plan.

@@ -435,6 +435,16 @@ describe("running every member of a fan-out", () => {
           .map((tries) => tries.toSorted((left, right) => left - right))
           .toSorted((left, right) => left.length - right.length),
       ).toEqual([[1], [1], [1, 2]]);
+
+      // A try the member has already replaced is over. Reading only its own
+      // completion left every superseded try saying "working", so one agent on
+      // its second attempt read as two agents working.
+      const byTry = new Map<string, string>();
+      for (const agent of roster.listAgents(scenario.repositoryId, scenario.runId).agents) {
+        byTry.set(`${String(agent.taskId)}#${String(agent.attempt)}`, agent.state);
+      }
+      const retriedTask = [...byTask.entries()].find(([, tries]) => tries.length > 1)?.[0];
+      expect(byTry.get(`${String(retriedTask)}#1`)).toBe("finished");
     } finally {
       roster.close();
     }

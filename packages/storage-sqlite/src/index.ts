@@ -4618,6 +4618,7 @@ export class SqlitePortalQueryAuthority {
           route_index: number | null;
           refusals: string | null;
           finished: number | null;
+          superseded: number | null;
           session_id: string | null;
         }
       >(
@@ -4640,6 +4641,18 @@ export class SqlitePortalQueryAuthority {
                 json_extract(b.canonical_context, '$.priorRefusals') AS refusals,
                 (SELECT 1 FROM context_terminal_completions t
                   WHERE t.dispatch_id = d.dispatch_id) AS finished,
+                -- A try the same member has already replaced is over, whatever
+                -- it handed in. Reading only its own completion left four
+                -- superseded tries of one member all saying "working", and the
+                -- roster counting them, so one agent read as five.
+                (SELECT 1 FROM context_dispatches e
+                  JOIN context_bases c ON c.context_id = e.context_id
+                  WHERE e.repository_id = d.repository_id AND e.run_id = d.run_id
+                    AND json_extract(c.canonical_context, '$.task.taskId')
+                        = json_extract(b.canonical_context, '$.task.taskId')
+                    AND json_extract(c.canonical_context, '$.phaseAttempt.phase.attempt')
+                        > json_extract(b.canonical_context, '$.phaseAttempt.phase.attempt')
+                  LIMIT 1) AS superseded,
                 (SELECT s.predecessor_session_id FROM agent_session_resume_bindings s
                   WHERE s.predecessor_dispatch_id = d.dispatch_id LIMIT 1) AS session_id
          FROM context_dispatches d
@@ -4675,7 +4688,7 @@ export class SqlitePortalQueryAuthority {
           attempt: row.attempt ?? 1,
           ...(route === undefined ? {} : { model: route.model }),
           routeIndex: route?.routeIndex ?? 0,
-          state: row.finished === 1 ? "finished" : "working",
+          state: row.finished === 1 || row.superseded === 1 ? "finished" : "working",
           ...(row.session_id === null ? {} : { sessionId: row.session_id }),
           ...(latest === undefined ? {} : { latestRefusal: latest.slice(0, MAX_REFUSAL_LENGTH) }),
         };
