@@ -72,6 +72,12 @@ export type AdvanceOutcome =
     }
   | { readonly kind: "awaiting-approval"; readonly phaseKey: string }
   | {
+      /** A member out of tries has asked a person what to do, and waits. */
+      readonly kind: "escalated";
+      readonly phaseKey: string;
+      readonly reasons: readonly string[];
+    }
+  | {
       readonly kind: "gate-refused";
       readonly phaseKey: string;
       readonly reasons: readonly string[];
@@ -112,6 +118,7 @@ export function classifyOutcome(outcome: AdvanceOutcome): AdvanceDisposition {
     // wait, not a stall.
     case "awaiting-agent":
     case "awaiting-approval":
+    case "escalated":
       return "awaiting-human";
     case "gate-refused":
     case "rejected":
@@ -165,6 +172,7 @@ interface SnapshotPhase {
     readonly maximumAttempts?: number;
     readonly onGateRejected?: string;
     readonly onApprovalRejected?: string;
+    readonly onExhausted?: string;
   };
   readonly exit?: {
     readonly gate?: string;
@@ -490,9 +498,19 @@ async function step(
   // A turn that ended by asking a person is not a try, so it does not count
   // against the ceiling. Counting it meant a run could exhaust its attempts
   // without anything going wrong, purely by asking and being answered.
+  //
+  // Nor does a try made before a person told the member what to do differently.
+  // A member that has spent its attempts asks for help, and an answer that
+  // bought it nothing would be no answer at all, so the ceiling is counted from
+  // the last instruction rather than from the start of the run.
+  const answeredOrdinal = Math.max(
+    0,
+    ...answeredAttemptOrdinals(supervisor, broker, input, String(dispatch.task.taskId)),
+  );
   const taskAttempts = phaseDispatches.filter(
     (candidate) =>
       String(candidate.task.taskId) === String(dispatch.task.taskId) &&
+      candidate.ordinal > answeredOrdinal &&
       digestOf(String(candidate.dispatchId))?.disposition !== "suspended",
   ).length;
   const steerings = supervisor.commandAuthority.listAgentSteerings(dispatchId);
@@ -577,11 +595,19 @@ async function step(
     (scheduling.acceptedTasks ?? []).some(
       (entry) => String(entry.task.taskId) === String(dispatch.task.taskId),
     );
+  // Except when the answer is to a member that had run out of tries. That work
+  // was handed in and refused, so "already done" is true and useless: the whole
+  // point of the answer is to open the attempt that acts on it. Marking the
+  // requirement delivered against the turn that asked would also satisfy it
+  // with its own dispatch, which the record refuses outright.
+  const answeringExhaustion = undelivered.some((entry) =>
+    entry.submissionId.startsWith("submission_exhausted-"),
+  );
   // A member that is still working will hand in on its own. Giving it a turn to
   // carry the answer makes a second dispatch for the same task, and whichever
   // one loses is waited on for ever. Only a turn that is over needs replacing.
   const memberStillWorking = !taskAlreadyDone && !completed && attemptOpen(String(dispatchId));
-  if (undelivered.length > 0 && taskAlreadyDone) {
+  if (undelivered.length > 0 && taskAlreadyDone && !answeringExhaustion) {
     for (const entry of undelivered) {
       supervisor.commandAuthority.satisfyFreshDispatchRequirement(
         entry.submissionId,
@@ -589,7 +615,7 @@ async function step(
       );
     }
   }
-  if (undelivered.length > 0 && !taskAlreadyDone && !memberStillWorking) {
+  if (undelivered.length > 0 && (answeringExhaustion || !taskAlreadyDone) && !memberStillWorking) {
     // A member owns its own task, so the fresh dispatch has to name the same
     // member rather than the phase's first.
     const member = members.findIndex(
@@ -852,6 +878,22 @@ async function step(
         dispatchId: retried.dispatch.dispatchId,
         reasons,
       };
+    }
+    // Out of tries. A phase whose policy says escalate asks a person what to do
+    // instead of stopping the run, and tells them what kept failing. Their
+    // answer is carried into the next attempt and buys the ceiling back, so a
+    // member nobody has spoken to and one somebody has redirected are not the
+    // same member.
+    if (phase.iteration?.onExhausted === "escalate") {
+      const asked = askForHelp({
+        broker,
+        dispatch,
+        phaseKey,
+        reasons,
+        tries: taskAttempts,
+        currentTime: input.currentTime,
+      });
+      if (asked) return { kind: "escalated", phaseKey, reasons };
     }
     return { kind: "gate-refused", phaseKey, reasons };
   }
@@ -1160,6 +1202,97 @@ function nextPhaseAttemptOrdinal(
   } finally {
     authority.close();
   }
+}
+
+/**
+ * Asks a person what to do about a member that has run out of tries.
+ *
+ * The question carries what kept failing, because "it failed six times" is not
+ * something anybody can act on. It is raised once: a second identical question
+ * would be a second thing to answer for one problem.
+ *
+ * Returns whether anybody now owes an answer, which is what makes this a wait
+ * rather than a refusal.
+ */
+function askForHelp(input: {
+  readonly broker: SqliteContextBroker;
+  readonly dispatch: {
+    readonly dispatchId: unknown;
+    readonly repositoryId: unknown;
+    readonly runId: unknown;
+    readonly task: unknown;
+    readonly contextId: unknown;
+    readonly contextDigest: unknown;
+    readonly worker: { readonly principalId: unknown };
+  };
+  readonly phaseKey: string;
+  readonly reasons: readonly string[];
+  readonly tries: number;
+  readonly currentTime: string;
+}): boolean {
+  const dispatchId = String(input.dispatch.dispatchId);
+  const progress = input.broker.loadWorkerDispatchProgress(dispatchId);
+  const outstanding = (progress?.submissions ?? []).some(
+    (entry) => (entry as { readonly type?: unknown }).type === "question",
+  );
+  if (outstanding) return true;
+  const prompt =
+    `${input.phaseKey} could not be finished in ${String(input.tries)} attempts. ` +
+    `What should the agent do differently?\n\nWhat kept failing:\n${input.reasons.join("\n")}`;
+  try {
+    input.broker.admitSubmission({
+      submission: {
+        apiVersion: PROTOCOL_VERSION,
+        submissionId: `submission_exhausted-${dispatchId.replace(/[^a-z0-9]/gu, "").slice(0, 48)}`,
+        repositoryId: input.dispatch.repositoryId,
+        runId: input.dispatch.runId,
+        dispatchId: input.dispatch.dispatchId,
+        task: input.dispatch.task,
+        contextId: input.dispatch.contextId,
+        contextDigest: input.dispatch.contextDigest,
+        principalId: input.dispatch.worker.principalId,
+        type: "question",
+        question: { prompt, details: { attempts: input.tries, reasons: input.reasons } },
+      },
+    });
+    return true;
+  } catch {
+    // A broker that will not take the question leaves the run refused, which is
+    // the old behaviour and still says why.
+    return false;
+  }
+}
+
+/**
+ * The attempt ordinals a person's answer has already covered for this task.
+ *
+ * A member that spends its attempts asks for help. An answer that bought it
+ * nothing would be no answer at all, so the tries made before the answer stop
+ * counting against the ceiling and the member gets its allowance again.
+ */
+function answeredAttemptOrdinals(
+  supervisor: SqliteSupervisorAuthority,
+  broker: SqliteContextBroker,
+  input: AdvanceRunInput,
+  taskId: string,
+): readonly number[] {
+  const answered = new Set(
+    supervisor.commandAuthority
+      .listAnsweredQuestions(input.repositoryId, input.runId)
+      .filter((entry) => entry.taskId === taskId)
+      .map((entry) => entry.submissionId),
+  );
+  if (answered.size === 0) return [];
+  const ordinals: number[] = [];
+  for (const stored of broker.listWorkerDispatches(input.repositoryId, input.runId)) {
+    if (String(stored.dispatch.task.taskId) !== taskId) continue;
+    const progress = broker.loadWorkerDispatchProgress(String(stored.dispatch.dispatchId));
+    for (const submission of progress?.submissions ?? []) {
+      const id = (submission as { readonly submissionId?: unknown }).submissionId;
+      if (typeof id === "string" && answered.has(id)) ordinals.push(stored.dispatch.ordinal);
+    }
+  }
+  return ordinals;
 }
 
 /**

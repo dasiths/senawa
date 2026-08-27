@@ -118,6 +118,8 @@ function describe(outcome: AdvanceOutcome): string {
       return `${outcome.phaseKey} was rejected: ${outcome.reasons.join(", ")}`;
     case "output-refused":
       return `${outcome.phaseKey} produced an output senawa refused: ${outcome.reasons.join(", ")}`;
+    case "escalated":
+      return `${outcome.phaseKey} is out of attempts and has asked you what to do: ${outcome.reasons.join(", ")}`;
     case "closed":
       return `closed ${outcome.phaseKey}`;
     case "finished":

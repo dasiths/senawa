@@ -536,7 +536,8 @@ describe("running every member of a fan-out", () => {
   it("says why the driver stopped, and stops saying it once the run moves", async () => {
     const scenario = await startScenario("stopped-status", { sensorCommand: "false", attempts: 1 });
     await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
-    expect(await advance(scenario)).toMatchObject({ kind: "gate-refused" });
+    // Its policy says escalate, so being out of tries asks rather than refuses.
+    expect(await advance(scenario)).toMatchObject({ kind: "escalated" });
 
     const supervisor = new SqliteSupervisorAuthority({ ...scenario.paths, dependencies });
     const status = () =>
@@ -1054,12 +1055,45 @@ describe("one phase in sequence", () => {
     expect(outcome.kind, JSON.stringify(outcome)).not.toBe("awaiting-agent");
   }, 120_000);
 
-  it("stops at the authored attempt ceiling rather than retrying forever", async () => {
+  // A member out of tries used to take the whole run down with it: the gate
+  // refused, the phase could not close, and the driver repeated the same
+  // refusal for ever with nothing a person could act on. Its policy says
+  // escalate, so it asks instead, and says what kept failing.
+  it("asks a person when it has spent its attempts, and says what kept failing", async () => {
     const scenario = await startScenario("ceiling", { sensorCommand: "false", attempts: 1 });
     await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
 
-    expect(await advance(scenario)).toMatchObject({ kind: "gate-refused", phaseKey: "define" });
-  });
+    const asked = await advance(scenario);
+    expect(asked, JSON.stringify(asked)).toMatchObject({ kind: "escalated", phaseKey: "define" });
+
+    // The question reaches a person exactly where every other question does,
+    // carrying the gate's reading rather than a count of failures.
+    const portal = new SqlitePortalQueryAuthority({ ...scenario.paths, dependencies });
+    try {
+      const needs = portal
+        .listHumanNeeds(scenario.repositoryId, scenario.runId)
+        .needs.filter((need) => need.kind === "question");
+      expect(needs).toHaveLength(1);
+    } finally {
+      portal.close();
+    }
+
+    // And answering buys the ceiling back, so the instruction has somewhere to
+    // be acted on. Without this the answer would be read and never used.
+    expect(
+      answerQuestion({
+        ...scenario.paths,
+        answer: "the sensor wants an exit code of zero; make the suite pass",
+        currentTime: NOW,
+        dependencies,
+        principal: runtimePrincipal,
+        repositoryId: scenario.repositoryId,
+        runId: scenario.runId,
+      }),
+    ).toMatchObject({ exitCode: 0 });
+    const resumed = await advance(scenario);
+    expect(resumed, JSON.stringify(resumed)).toMatchObject({ kind: "dispatched" });
+  }, 120_000);
 
   // A live run stopped at its first phase after eight turns, every one of which
   // ended by asking a person, and was rejected for handing no work in. Whether
@@ -1180,8 +1214,8 @@ describe("one phase in sequence", () => {
 
     const outcome = await advance(scenario);
 
-    expect(outcome).toMatchObject({ kind: "gate-refused", phaseKey: "define" });
-    if (outcome.kind !== "gate-refused") throw new Error("expected a refusal");
+    expect(outcome).toMatchObject({ kind: "escalated", phaseKey: "define" });
+    if (outcome.kind !== "escalated") throw new Error("expected an escalation");
     expect(outcome.reasons.join(" ")).toContain("measure");
   });
 
@@ -1195,7 +1229,7 @@ describe("one phase in sequence", () => {
     const outcome = await advance(scenario);
 
     // An unreported blocking reading resolves to unknown rather than to pass.
-    expect(outcome).toMatchObject({ kind: "gate-refused", phaseKey: "define" });
+    expect(outcome).toMatchObject({ kind: "escalated", phaseKey: "define" });
   });
 
   it("closes the phase when every blocking rule is green", async () => {
@@ -1416,7 +1450,7 @@ describe("one phase in sequence", () => {
   it("escalates a refused phase carrying the recorded gate evidence", async () => {
     const scenario = await startScenario("escalate", { sensorCommand: "false", attempts: 1 });
     await agentTurn(scenario, scenario.dispatchId, canonicalValue({ definition: "x" }));
-    expect(await advance(scenario)).toMatchObject({ kind: "gate-refused" });
+    expect(await advance(scenario)).toMatchObject({ kind: "escalated" });
 
     const loaded = await loadAuthoredWorkflow(scenario.project, dependencies.sha256);
     const snapshot = loaded.snapshot;
