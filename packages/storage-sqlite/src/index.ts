@@ -4215,7 +4215,7 @@ export class SqlitePortalQueryAuthority {
     if (!isSha256Digest(digestValue)) throw new TypeError("record digest must be a SHA-256 digest");
     const graph = this.#graph(repositoryId, runId);
     if (graph === undefined) return undefined;
-    const run = this.#runtimeRecordRow(repositoryId, runId);
+    const run = this.#runtimeRecords(repositoryId, runId);
     if (run === undefined) return undefined;
     let body: JsonValue | undefined;
     if (kind === "escalation") {
@@ -4236,7 +4236,7 @@ export class SqlitePortalQueryAuthority {
           ? undefined
           : decodeCanonicalJsonValue(escalation.canonical_escalation);
     } else {
-      const records = decodeDurableJsonValue(run.records_json);
+      const { records } = run;
       body = findRuntimeReviewRecord(records, kind, digestValue);
       if (kind === "candidate" && body !== undefined) {
         const gateEvidenceDigest = findCandidateGateEvidenceDigest(records, digestValue);
@@ -4255,7 +4255,7 @@ export class SqlitePortalQueryAuthority {
       recordId: digestValue,
       digest: digestValue,
       graphRevision: graph.revisionDigest,
-      recordedAt: run.projection_generated_at,
+      recordedAt: run.projectionGeneratedAt,
       body,
     });
   }

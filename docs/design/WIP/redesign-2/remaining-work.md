@@ -2462,6 +2462,20 @@ instead of at four call sites that know nothing about storage. Two decode sites
 stay outside it: the review-record path, which holds a row but not the run's
 identity, and `reporting-snapshot`, a separate module with its own handle.
 
+That first exception was wrong, and reading it settled the matter rather than
+repeating the claim. `getImmutableRecord` takes `repositoryId` and `runId` as
+arguments -- it had the identity all along, and used the raw row only for
+`projection_generated_at`, which the seam already returns. It now goes through
+`#runtimeRecords` like the rest, and `#runtimeRecordRow` has exactly two
+mentions left: its own definition, and the seam that wraps it.
+
+So inside `index.ts` the seam is complete. Every reader of a run's records goes
+through one method. What still touches the column directly is the write path,
+the backup export, and `reporting-snapshot` -- and the first two are meant to,
+because they are about storage rather than about records. `reporting-snapshot`
+walks every run at once with its own handle, so it needs the merge repeated
+rather than shared, which is a known cost of the split and not a surprise.
+
 The rest interlocks, and each piece alone breaks something:
 
 * Split the column without a lazy digest and the digest is taken over a blob
