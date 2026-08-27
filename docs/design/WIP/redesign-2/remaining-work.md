@@ -2385,6 +2385,31 @@ than rewrites, the lazy digest, and a migration that moves existing runs'
 That is one focused change of real size, and it is the only thing left in this
 plan that is neither done nor decided.
 
+### Done: the seam. And why the rest cannot be taken in pieces
+
+`#runtimeRecords` now exists and four of the readers go through it, as a
+refactor with no behaviour change -- 186 storage tests and 1582 overall
+unmoved. Moving collections out of the blob is now a change inside one method
+instead of at four call sites that know nothing about storage. Two decode sites
+stay outside it: the review-record path, which holds a row but not the run's
+identity, and `reporting-snapshot`, a separate module with its own handle.
+
+The rest interlocks, and each piece alone breaks something:
+
+* Split the column without a lazy digest and the digest is taken over a blob
+  that no longer holds everything, so **every receipt moves**.
+* Make the digest lazy without the split and `verifyNormalizedSnapshot` has to
+  learn to compute it, for no gain -- as measured above.
+* Split without teaching `normalizeSnapshot` to compare merged records and the
+  integrity check fails on its own database, because the expected side builds
+  the whole blob while the actual side holds part of it.
+
+So it is one pass: migration, append-on-write, merge in `#runtimeRecords`, lazy
+digest, and `normalizeSnapshot` comparing merged records. Landing it in
+fragments leaves receipts moved or integrity checks broken between commits,
+which is why the seam was landed alone and the rest was not started at the end
+of a long session.
+
 * [ ] A command writes only the records it changed
 * [x] The run's record digest is still exactly what it was, so no receipt moves
 * [ ] Write latency does not grow with the number of commands a run has
