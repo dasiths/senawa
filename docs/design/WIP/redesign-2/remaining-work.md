@@ -1442,7 +1442,7 @@ the cost.
 * [x] A portal read is served without waiting for a run cycle
 * [x] The example's own run is read in a browser while its agents work, and
   every view answers in under a second
-* [ ] A run's records are not rewritten whole on every command
+* [ ] A run's records are not rewritten whole on every command, which is phase 23
 
 ### Found beside it: a supervisor with no repository says nothing about it
 
@@ -1460,7 +1460,8 @@ than by a defect, and it is indistinguishable from one while it is happening.
 The health report does say `worker dispatch is disabled`, but only to a caller
 that asks for session-store health.
 
-* [ ] A supervisor that cannot dispatch work says so where a run's history is
+* [ ] A supervisor that cannot dispatch work says so where a run's history is,
+  which is phase 20
 
 ### Measured on the example, driven from clean, five agents working
 
@@ -1577,14 +1578,108 @@ is already past its first attempt -- is not reachable from the scenario fixtures
 yet, so the evidence for it is the live run above. The fan-out scenario locks
 the shape.
 
+## Phase 20: a supervisor that cannot dispatch says so
+
+The smallest of the four and the one that makes the others debuggable, so it
+goes first.
+
+A service started without `SENAWA_REPOSITORY_DIR` builds no SDK pool, so it has
+no async effect host and no worker dispatch can ever begin. The run sits with
+its commands queued and no intents against them, for ever. Nothing says why:
+not at startup, not on the cycles that find work they cannot start. The health
+report does say `worker dispatch is disabled`, but only to a caller that asks
+for session-store health, which a person reading a stuck run does not.
+
+Found by restarting the example's service by hand and watching four dispatched
+implementors produce no transcript line for half an hour. The state is exactly
+the deadlock this plan has chased three times, reached by configuration rather
+than by a defect, and indistinguishable from one while it is happening.
+
+* [ ] A supervisor with no effect host says so at startup, in the run's own
+  record, where every other reason a run stopped is already written
+* [ ] It says so again on a cycle that finds work it cannot begin, once per run
+  rather than once per cycle
+
+## Phase 21: a member that has spent its attempts asks for help
+
+This is what stops runs dead today, and it is the only item here a person is
+waiting on.
+
+`run_1b4d4d416670ebe7aadc8bf78247b065`: four implement members, three passed on
+their first try, the fourth used all six of its authored attempts against a gate
+reporting a failing assertion each time. The phase declares
+`onFailure: continue`. The phase cannot close, the run stops, and the driver
+repeats the same refusal for ever.
+
+`onExhausted: escalate` is authored and does nothing. The kernel models a phase
+escalation and projects it as a human need, `create-escalation` records one, and
+the driver never raises it. The SQLite portal projection reads escalations from
+`runner_escalations`, which is the budget-allowance table, so even a recorded
+escalation could not become a decision anybody is offered.
+
+### What it becomes
+
+A member that spends its attempts raises an escalation naming **what kept
+failing** -- the gate's reading, the assertion it reported, and how many tries
+it took. That reaches the portal as a need with a reply box, exactly as a
+question does. The person answers with new instructions for the agent, and that
+answer does two things: it is carried into the member's next attempt as
+instruction, and it **grants a fresh attempt budget** so the member can act on
+it.
+
+A refusal a person has answered is not the same as a refusal nobody has seen,
+so the budget it grants is the authored ceiling again rather than one more try.
+
+* [ ] A member that spends its attempts raises the escalation its policy
+  declares instead of stopping the run
+* [ ] The escalation names what kept failing: the gate, its reading, and the
+  tries it took
+* [ ] The portal offers it as a need with a reply, beside the questions
+* [ ] Answering carries the instruction into the next attempt
+* [ ] Answering grants the member its attempt ceiling again
+* [ ] A run whose member is answered finishes without a restart
+
+## Phase 22: a member owns its own gates, approval and attempts
+
+The D-025 deviation, decided: policy is **per member**, never shared. A phase's
+members can differ in what they must satisfy and how many tries they get, and
+one member spending its attempts says nothing about another's.
+
+Today `attempts`, `gates` and `approval` are authored on the phase and the phase
+closes over all its members together, which is why phase 21's fourth member
+takes the whole run down with it.
+
+* [ ] A member's attempt ceiling is its own, spent only by its own tries
+* [ ] A member's gates are evaluated against that member's work
+* [ ] A member's approval is asked for that member
+* [ ] An authored phase can still declare a default every member inherits
+* [ ] One member exhausting its policy leaves its siblings untouched
+
+## Phase 23: a run's records stop being rewritten whole
+
+The last quadratic. `runs.records_json` is rewritten in full on every command --
+238,913 bytes on a run of three phases -- so the write cost grows with the run's
+own history. Phase 14 noted it, phase 19 measured around it, and nothing reads
+through it any more, so nobody notices it. It still sets a ceiling on how long a
+run can get.
+
+Writes today are SQLite-bound rather than JS-bound: a profile of 500 commands
+spends 6.6 of 9 seconds inside `exec`, and the per-command p50 is 13ms with no
+upward trend at that size. So this is a ceiling, not a present pain, and it is
+last for that reason.
+
+* [ ] A command writes only the records it changed
+* [ ] The run's record digest is still exactly what it was, so no receipt moves
+* [ ] Write latency does not grow with the number of commands a run has accepted
+
 ## Carried from the v1 plan
 
 Neither blocks anything above, and neither is part of the condition below. The
 first is a feature the phase model does not yet have; the second is done.
 
-* [ ] Give each member its own gates, approval and attempt policy, which is the
-  D-025 deviation. Members run and the phase closes over all of them; per-member
-  policy still needs the phase model
+* [x] Give each member its own gates, approval and attempt policy, which is the
+  D-025 deviation. Decided: policy is per member and never shared. It is phase
+  22 above rather than a carried item
 * [x] No consumer acceptance test has to write `WorkflowConfigurationDocument`
   directly
 
