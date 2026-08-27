@@ -290,6 +290,18 @@ describe("SQLite Phase 11A human authority", () => {
     // one has none by definition, so hiding it strands the run.
     expect(offered).not.toContain("submission_ordinary");
     expect(offered).toContain("submission_exhausted-first");
+
+    // And the graph says so too. Counting only questions the scope still
+    // recognises left the member's node reading as running while it was in
+    // fact waiting on a person, so the escalation was invisible there as well.
+    const taskNode = portal
+      .listGraphNodes(
+        runtimeFixture.repositoryId,
+        runtimeFixture.runId,
+        createRuntimeGraph().revisionDigest,
+      )
+      .nodes.find((node) => node.kind === "task");
+    expect(taskNode?.runState).toBe("awaiting-human");
     portal.close();
 
     // Offering it and then refusing the answer strands the run just as

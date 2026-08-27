@@ -5224,14 +5224,19 @@ export class SqlitePortalQueryAuthority {
            FROM context_questions q
            LEFT JOIN context_question_answers a ON a.submission_id = q.submission_id
            -- Only a question its task scope still recognises can be answered, so
-           -- only that one should hold its node in an awaiting-human state.
+           -- only that one should hold its node in an awaiting-human state. A
+           -- member that is out of tries is the exception: no later attempt
+           -- exists to recognise it, and its question is the only thing that
+           -- can open one, so its node is waiting on a person too.
            JOIN amendment_work_fences w
              ON w.run_key = ?
             AND w.task_id = json_extract(q.canonical_question, '$.task.taskId')
             AND w.definition_generation =
                 json_extract(q.canonical_question, '$.task.definitionGeneration')
-            AND w.claims_accepted = 1
-            AND w.current_context_digest = json_extract(q.canonical_question, '$.contextDigest')
+            AND (q.submission_id LIKE 'submission_exhausted-%'
+                 OR (w.claims_accepted = 1
+                     AND w.current_context_digest =
+                         json_extract(q.canonical_question, '$.contextDigest')))
            WHERE q.repository_id = ? AND q.run_id = ? AND a.submission_id IS NULL
            GROUP BY id, generation`,
         )
