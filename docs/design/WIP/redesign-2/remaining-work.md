@@ -1824,7 +1824,13 @@ Neither fix has a test that guards it, and the scenario says so in its own
 comment rather than implying otherwise. Removing either one still passes,
 because a single member gets a fresh dispatch each attempt and never collides.
 Both need a fan-out, where every attempt escalates against the member's first
-dispatch and so asks twice under one identity. That is the next thing to write.
+dispatch and so asks twice under one identity.
+
+Writing that test was attempted and abandoned, which is worth knowing before it
+is attempted again. `startScenario`'s `sensorCommand` applies to the whole
+workflow, so failing the member's gate also fails the producing phase, and the
+run escalates before it ever fans out -- `member: escalated` at the third
+advance. The fixture needs a sensor that fails for the member phase only.
 
 The ordinal attribution above is still wrong and still worth fixing: the
 question is hung on the dispatch the advance carries, which in a fan-out is the
