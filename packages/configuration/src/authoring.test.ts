@@ -229,17 +229,29 @@ describe("authored workflow lowering", () => {
     });
   });
 
-  it("carries whose work one approval covers, and means the phase when unsaid", () => {
+  it("carries whose work one approval covers, and refuses the scope nothing honours", () => {
+    // The kernel records one decision per candidate, so member scope has
+    // nowhere to be asked yet. Accepting it and ignoring it would be authored
+    // configuration that silently does nothing.
     const perMember = lowerAuthoredWorkflow(
       authoredWithVerify(
         "    output: schemas/verification.schema.json\n    approve:\n      role: security-officer\n      scope: member\n",
       ),
     );
-    expect(perMember.diagnostics).toEqual([]);
+    expect(perMember.diagnostics.map(({ message }) => message).join(" ")).toContain(
+      "not supported yet",
+    );
+
+    const perPhase = lowerAuthoredWorkflow(
+      authoredWithVerify(
+        "    output: schemas/verification.schema.json\n    approve:\n      role: security-officer\n      scope: phase\n",
+      ),
+    );
+    expect(perPhase.diagnostics).toEqual([]);
     expect(
-      (perMember.document as unknown as { readonly phases: readonly Record<string, never>[] })
+      (perPhase.document as unknown as { readonly phases: readonly Record<string, never>[] })
         .phases[1]?.exit,
-    ).toMatchObject({ approval: { policy: "required", scope: "member" } });
+    ).toMatchObject({ approval: { policy: "required", scope: "phase" } });
 
     // An existing workflow says nothing, and reading it again must not change
     // what approval means for it.

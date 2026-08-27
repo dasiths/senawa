@@ -1955,6 +1955,28 @@ Approval's phase scope is the same code that has always run, and the authoring
 test pins that a phase declaring no scope lowers without one, so reading an
 existing workflow again cannot change what it asks.
 
+### Decided: member-scoped approval waits, and says so meanwhile
+
+The kernel change it needs -- a decision per task within one candidate -- is
+right, and it is not urgent. Nothing is waiting on it. No live run uses
+`approve` at all, the example does not, and no criterion above depends on it.
+Against that, the change reaches the kernel, the protocol, the storage
+projection, the portal and the driver, and it touches the record of who
+approved what, which is the part of the system with the least room for a
+mistake.
+
+What is waiting on something is a person trying to tell why a run has gone
+quiet, which is phase 24, and which cost an hour of wrong diagnosis today.
+Ordering phase 24 above the rest of phase 22 follows from that: fix what people
+hit, then what the model lacks.
+
+One consequence has to be handled rather than left. `approve.scope: member`
+compiles today and the driver ignores it, which is authored configuration that
+silently does nothing -- the failure this codebase already warns about for a
+misspelled `approve`. Until the kernel carries it, `scope: member` is refused at
+authoring time and says why. An author who writes it learns immediately, rather
+than after a run approves the wrong thing.
+
 * [x] `approval.scope` is authored per phase and accepts `phase` or `member`
 * [x] A member's attempt ceiling is its own, spent only by its own tries
 * [x] `scope: phase`, and a phase that declares no scope, asks once for all of
