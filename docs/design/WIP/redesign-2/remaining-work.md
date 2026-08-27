@@ -2350,6 +2350,25 @@ to be reassembled just to hash them.
 The order is now clear. Move the digest to the read, then split the column, and
 a command finally writes only what it changed.
 
+### The two steps are one change, and where the bytes actually are
+
+Worth being exact, because the first step looks like a win on its own and is
+not. Taking the digest off the write saves an encode and a hash of a string the
+column has already built -- perhaps a third of a write that is not the
+bottleneck. On its own it also leaves `revision_digest` null for new rows, which
+`verifyNormalizedSnapshot` compares on both sides, so the integrity check has to
+learn to compute it. More moving parts, no real gain.
+
+Its value is as an enabler. With nothing needing the digest at write time, the
+column can be split without ever reassembling the rows to hash them -- and the
+split is where the bytes are. On this run `amendmentEvents` and
+`amendmentRecords` are 167KB of the 236KB, **71%**, from a single amendment, and
+neither is ever rewritten. Moving append-only collections to their own rows
+takes a command's write from 236KB to about 70KB before anything else is done.
+
+So they land together or not at all, and the phase is honest about carrying one
+change rather than two.
+
 * [ ] A command writes only the records it changed
 * [x] The run's record digest is still exactly what it was, so no receipt moves
 * [ ] Write latency does not grow with the number of commands a run has
