@@ -16440,6 +16440,12 @@ function persistCommandDelta(
   // wire ceiling does not apply. A live run reached 262,077 of its 262,144 wire
   // bytes and the next retry could not be persisted at all.
   const recordsJson = run.records === undefined ? null : durableStringify(run.records);
+  // The column's string and the bytes the revision digest is taken over are the
+  // same bytes, which records-serialisation pins. Canonicalising a second time
+  // to hash it walked the whole of a run's history again on every command, and
+  // that history only grows.
+  const revisionDigest =
+    recordsJson === null ? null : dependencies.sha256.digest(new TextEncoder().encode(recordsJson));
   database
     .prepare(
       "INSERT INTO repositories(repository_id, active_run_key) VALUES (?, NULL) ON CONFLICT(repository_id) DO NOTHING",
@@ -16464,9 +16470,7 @@ function persistCommandDelta(
       run.cursor,
       recordsJson,
       run.projectionGeneratedAt ?? null,
-      run.records === undefined
-        ? null
-        : canonicalDigest(canonicalValue(run.records), dependencies.sha256),
+      revisionDigest,
     );
   if (run.records !== undefined) {
     database

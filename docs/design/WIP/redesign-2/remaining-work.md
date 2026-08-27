@@ -2276,10 +2276,35 @@ not last.
 Phase 23's criteria are this phase's criteria; they are restated here so the
 work has one home.
 
+### Half the cost, taken safely, by proving the bytes first
+
+The measurement said the write is cheap and serialising is not, and that a
+command serialises **twice**: `durableStringify` for the column, and
+`canonicalDigest(canonicalValue(...))` for the revision. The obvious saving was
+left alone earlier because it changes what produces durable bytes and no
+receipt may move.
+
+The way to take it safely is to prove the bytes before touching the write, so
+that is what happened. `records-serialisation` pins three things: the column's
+string and the digested bytes are identical, key order does not depend on the
+route, and the digest taken from the column's own string is the digest taken
+from the value. Those tests were written and passing *before* the write
+changed.
+
+With that in hand the revision digest is now taken from the string the column
+already holds. One full traversal of a run's history per command instead of
+two, and the 186 storage tests -- which assert receipts and revisions
+throughout -- pass unchanged, which is the no-receipt-moves criterion proved by
+the suite that would notice.
+
+What is left is the structural half: records in rows rather than one blob, so
+a command writes only what it changed. That still wants a migration and is
+still the largest thing here.
+
 * [ ] A command writes only the records it changed
-* [ ] The run's record digest is still exactly what it was, so no receipt moves
+* [x] The run's record digest is still exactly what it was, so no receipt moves
 * [ ] Write latency does not grow with the number of commands a run has
-  accepted
+  accepted -- halved, not fixed
 * [ ] An existing database opens, reads and drives without migration surprises
 
 ## Carried from the v1 plan
