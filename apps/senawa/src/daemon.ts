@@ -530,8 +530,20 @@ export async function startSenawaService(
       },
       (repositoryId, runId, currentTime) =>
         authority.commandAuthority.recordRunFinished(repositoryId, runId, currentTime),
+      asyncEffectHost !== undefined,
     );
     ownedRunDriver = runDriver;
+    if (asyncEffectHost === undefined) {
+      authority.appendLog({
+        recordedAt: new Date().toISOString(),
+        level: "error",
+        event: "service.cannot-dispatch",
+        message:
+          "SENAWA_REPOSITORY_DIR is not configured, so this supervisor has no worker host " +
+          "and no dispatch it queues will ever start",
+        fields: {},
+      });
+    }
     service = new SupervisorService({
       authority,
       clock: { now: () => Date.now() },
@@ -740,6 +752,12 @@ function driveRun(
   ) => void,
   /** Records that a run finished its own work. Returns whether this ended it. */
   recordFinished: (repositoryId: string, runId: string, currentTime: string) => boolean,
+  /**
+   * Whether anything can actually start a worker. A service with no repository
+   * builds no effect host, so a dispatch is queued and never begins, and the
+   * run sits looking exactly like a deadlock with nothing saying why.
+   */
+  canDispatch = true,
 ): {
   readonly drive: (input: {
     readonly repositoryId: string;
@@ -750,6 +768,8 @@ function driveRun(
 } {
   /** The last stop reported per run, so a stopped run says it once. */
   const stopped = new Map<string, string>();
+  /** Runs already told that nothing here can start their work. */
+  const toldCannotDispatch = new Set<string>();
   // Opening an authority pair costs about half a second on a run of three
   // phases and grows with the run, and this opened a new one every cycle, on
   // the event loop the console answers from. The clock is the cycle's, because
@@ -780,6 +800,20 @@ function driveRun(
     readonly currentTime: string;
   }) => {
     advanceTime = currentTime;
+    // A dispatch this service can never begin is worth saying once, against the
+    // run, where every other reason a run stopped is already written.
+    const key = `${repositoryId}\u0000${runId}`;
+    if (!canDispatch && !toldCannotDispatch.has(key)) {
+      toldCannotDispatch.add(key);
+      report(
+        repositoryId,
+        runId,
+        "run.cannot-dispatch",
+        "this supervisor has no worker host, so a dispatch is queued and never starts; " +
+          "set SENAWA_REPOSITORY_DIR and restart the service",
+        "error",
+      );
+    }
     try {
       const outcome = await advanceRun({
         open: { supervisor, broker },

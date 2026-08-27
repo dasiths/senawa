@@ -1595,10 +1595,18 @@ implementors produce no transcript line for half an hour. The state is exactly
 the deadlock this plan has chased three times, reached by configuration rather
 than by a defect, and indistinguishable from one while it is happening.
 
-* [ ] A supervisor with no effect host says so at startup, in the run's own
+* [x] A supervisor with no effect host says so at startup, in the run's own
   record, where every other reason a run stopped is already written
-* [ ] It says so again on a cycle that finds work it cannot begin, once per run
+* [x] It says so again on a cycle that finds work it cannot begin, once per run
   rather than once per cycle
+
+Proved on the example by starting its service without the variable:
+
+```text
+04:10:34 error service.cannot-dispatch  SENAWA_REPOSITORY_DIR is not configured...
+04:10:37 error run.cannot-dispatch      this supervisor has no worker host, so a
+                                        dispatch is queued and never starts...
+```
 
 ## Phase 21: a member that has spent its attempts asks for help
 

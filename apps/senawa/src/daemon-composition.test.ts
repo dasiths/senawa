@@ -98,6 +98,35 @@ describe("daemon worker composition", () => {
     await started.service.stop();
   });
 
+  // Without a repository there is no worker host, so every dispatch is queued
+  // and never starts. A live run sat like that for half an hour with four
+  // agents apparently working and nothing anywhere saying why: the state is
+  // indistinguishable from the deadlocks this branch has already chased.
+  it("says it cannot dispatch when it has no worker host", async () => {
+    const { environment } = sandbox("senawa-daemon-no-host-", false);
+    const started = await startSenawaService(environment);
+    try {
+      // Read where a person reads: the run's own record, through a fresh handle.
+      const reader = new SqliteSupervisorAuthority({
+        databasePath: started.paths.databasePath,
+        assetDirectory: started.paths.assetDirectory,
+        dependencies: runtimeDependencies,
+      });
+      try {
+        const said = reader
+          .queryLogs()
+          .items.filter((entry) => entry.event === "service.cannot-dispatch");
+        expect(said).toHaveLength(1);
+        expect(said[0]?.message).toContain("SENAWA_REPOSITORY_DIR");
+        expect(said[0]?.level).toBe("error");
+      } finally {
+        reader.close();
+      }
+    } finally {
+      await started.service.stop();
+    }
+  });
+
   // The store holds every run in the project, so a record it will not verify
   // stops the whole service. The bare invariant message reads as a crash and
   // tells an operator nothing about what is safe to do next.
