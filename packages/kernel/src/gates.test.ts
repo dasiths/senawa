@@ -59,6 +59,60 @@ describe("sensor readings", () => {
     expect(Object.isFrozen(failed)).toBe(true);
   });
 
+  // A gate evaluates once per candidate and a candidate is phase-shaped, so a
+  // reading could only ever be about the phase's work. A member's gate needs a
+  // reading addressed to that member, inside the one evaluation.
+  it("lets a reading name the task it read, without moving a phase-scoped one", () => {
+    const phaseScoped = createSensorReading(
+      { sensorKey: METRICS_KEY, inputDigest: INPUT_DIGEST, outcome: "succeeded", data: { ok: 1 } },
+      deterministicSha256,
+    );
+    const memberScoped = createSensorReading(
+      {
+        sensorKey: METRICS_KEY,
+        inputDigest: INPUT_DIGEST,
+        outcome: "succeeded",
+        data: { ok: 1 },
+        taskId: "task_alpha",
+      },
+      deterministicSha256,
+    );
+
+    expect(memberScoped.taskId).toBe("task_alpha");
+    expect(validateSensorReading(memberScoped, deterministicSha256)).toEqual(memberScoped);
+
+    // Two members read separately are two readings of the same sensor.
+    const sibling = createSensorReading(
+      {
+        sensorKey: METRICS_KEY,
+        inputDigest: INPUT_DIGEST,
+        outcome: "succeeded",
+        data: { ok: 1 },
+        taskId: "task_beta",
+      },
+      deterministicSha256,
+    );
+    expect(sibling.readingDigest).not.toBe(memberScoped.readingDigest);
+
+    // A reading that names no task is what it always was, so nothing recorded
+    // moves.
+    expect(phaseScoped).not.toHaveProperty("taskId");
+    expect(phaseScoped.readingDigest).not.toBe(memberScoped.readingDigest);
+
+    expect(() =>
+      createSensorReading(
+        {
+          sensorKey: METRICS_KEY,
+          inputDigest: INPUT_DIGEST,
+          outcome: "succeeded",
+          data: { ok: 1 },
+          taskId: "",
+        } as never,
+        deterministicSha256,
+      ),
+    ).toThrow(/task identities/u);
+  });
+
   it("is deterministic across property order", () => {
     const first = createSensorReading(
       {

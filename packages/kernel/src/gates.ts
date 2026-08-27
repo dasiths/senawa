@@ -16,6 +16,7 @@ export interface SensorReadingSucceededInput {
   readonly inputDigest: Sha256Digest;
   readonly outcome: "succeeded";
   readonly data: unknown;
+  readonly taskId?: string;
 }
 
 export interface SensorReadingFailedInput {
@@ -23,6 +24,7 @@ export interface SensorReadingFailedInput {
   readonly inputDigest: Sha256Digest;
   readonly outcome: "failed";
   readonly error: unknown;
+  readonly taskId?: string;
 }
 
 export type SensorReadingInput = SensorReadingSucceededInput | SensorReadingFailedInput;
@@ -32,6 +34,12 @@ export interface SensorReadingSucceeded {
   readonly inputDigest: Sha256Digest;
   readonly outcome: "succeeded";
   readonly data: CanonicalValue;
+  /**
+   * The one task this reading is about, when a gate reads each member's work.
+   *
+   * Absent means it read the phase's, which is what every reading meant before.
+   */
+  readonly taskId?: string;
   readonly readingDigest: Sha256Digest;
 }
 
@@ -40,6 +48,7 @@ export interface SensorReadingFailed {
   readonly inputDigest: Sha256Digest;
   readonly outcome: "failed";
   readonly error: CanonicalValue;
+  readonly taskId?: string;
   readonly readingDigest: Sha256Digest;
 }
 
@@ -318,36 +327,51 @@ function readingContent(value: unknown): SensorReadingContent {
     fail("invalid-reading", "Sensor readings must be objects");
   }
   if (value.outcome === "succeeded") {
-    assertExactKeys(
-      value,
-      "successful sensor reading",
-      ["sensorKey", "inputDigest", "outcome", "data"],
-      "invalid-reading",
-    );
+    assertReadingKeys(value, "successful sensor reading", "data");
     assertReadingEnvelope(value);
     return {
       sensorKey: value.sensorKey,
       inputDigest: value.inputDigest,
       outcome: value.outcome,
       data: value.data as CanonicalValue,
+      ...readingTask(value),
     };
   }
   if (value.outcome === "failed") {
-    assertExactKeys(
-      value,
-      "failed sensor reading",
-      ["sensorKey", "inputDigest", "outcome", "error"],
-      "invalid-reading",
-    );
+    assertReadingKeys(value, "failed sensor reading", "error");
     assertReadingEnvelope(value);
     return {
       sensorKey: value.sensorKey,
       inputDigest: value.inputDigest,
       outcome: value.outcome,
       error: value.error as CanonicalValue,
+      ...readingTask(value),
     };
   }
   fail("invalid-reading", "Sensor reading outcomes must be succeeded or failed");
+}
+
+function assertReadingKeys(
+  value: Record<string, unknown>,
+  label: string,
+  payload: "data" | "error",
+): void {
+  const keys = Object.keys(value).filter((key) => key !== "taskId");
+  assertExactKeys(
+    Object.fromEntries(keys.map((key) => [key, value[key]])),
+    label,
+    ["sensorKey", "inputDigest", "outcome", payload],
+    "invalid-reading",
+  );
+}
+
+/** Absent stays absent, so a phase-scoped reading digests to what it always did. */
+function readingTask(value: Record<string, unknown>): { readonly taskId?: string } {
+  if (value.taskId === undefined) return {};
+  if (typeof value.taskId !== "string" || value.taskId.length === 0) {
+    fail("invalid-reading", "Sensor reading task identities must be non-empty strings");
+  }
+  return { taskId: value.taskId };
 }
 
 function assertReadingEnvelope(value: Record<string, unknown>): asserts value is Record<
@@ -586,7 +610,12 @@ function validateReadingSnapshot(value: unknown, sha256: Sha256): SensorReading 
     value.outcome === "succeeded"
       ? ["sensorKey", "inputDigest", "outcome", "data", "readingDigest"]
       : ["sensorKey", "inputDigest", "outcome", "error", "readingDigest"];
-  assertExactKeys(value, "sensor reading", expectedKeys, "invalid-reading");
+  assertExactKeys(
+    Object.fromEntries(Object.entries(value).filter(([key]) => key !== "taskId")),
+    "sensor reading",
+    expectedKeys,
+    "invalid-reading",
+  );
   if (!isSha256Digest(value.readingDigest)) {
     fail("invalid-reading", "Sensor readingDigest must be a SHA-256 digest");
   }

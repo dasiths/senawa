@@ -89,6 +89,14 @@ export interface AuthorityDecisionInput {
   readonly occurredAt: string;
   readonly candidateDigest: Sha256Digest;
   /**
+   * The one task this decision covers, when a phase asks per member.
+   *
+   * A phase closes once, so a member-scoped approval is still one candidate --
+   * what it needs is a decision addressed to a task within it. Absent means the
+   * decision covers the phase, which is what every decision meant before.
+   */
+  readonly taskId?: string;
+  /**
    * Why the human decided as they did.
    *
    * A rejection without a reason tells the next attempt nothing, so the agent
@@ -104,6 +112,7 @@ export interface AuthorityDecision {
   readonly principal: CanonicalValue;
   readonly occurredAt: string;
   readonly candidateDigest: Sha256Digest;
+  readonly taskId?: string;
   readonly reason?: string;
   readonly decisionDigest: Sha256Digest;
 }
@@ -1134,7 +1143,7 @@ function authorityDecisionContent(
       "candidateDigest",
       ...(includesDigest ? ["decisionDigest"] : []),
     ],
-    ["reason"],
+    ["reason", "taskId"],
     "invalid-decision",
   );
   if (
@@ -1152,12 +1161,21 @@ function authorityDecisionContent(
   if (!isSha256Digest(value.candidateDigest)) {
     fail("invalid-decision", "Authority decisions require a candidate digest");
   }
+  if (
+    value.taskId !== undefined &&
+    (typeof value.taskId !== "string" || value.taskId.length === 0)
+  ) {
+    fail("invalid-decision", "Authority decision task identities must be non-empty strings");
+  }
   return {
     decision: value.decision,
     approvalId: value.approvalId,
     principal: value.principal as CanonicalValue,
     occurredAt: value.occurredAt,
     candidateDigest: value.candidateDigest,
+    // Absent stays absent, so a phase-scoped decision canonicalises to exactly
+    // the bytes it always did and no receipt moves.
+    ...(value.taskId === undefined ? {} : { taskId: value.taskId }),
     ...(value.reason === undefined ? {} : { reason: value.reason }),
   } as const;
 }

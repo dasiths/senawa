@@ -461,6 +461,42 @@ describe("authority decisions", () => {
     );
   });
 
+  // A phase closes once, so a member-scoped approval is still one candidate.
+  // What it needs is a decision addressed to a task within it, which is the
+  // thing the kernel could not say and why approve.scope: member was refused.
+  it("lets a decision name the task it covers, without moving a phase-scoped one", () => {
+    const phaseScoped = createAuthorityDecision(
+      authorityDecisionInput("approve"),
+      deterministicSha256,
+    );
+    const memberScoped = createAuthorityDecision(
+      { ...authorityDecisionInput("approve"), taskId: "task_alpha" },
+      deterministicSha256,
+    );
+
+    expect(memberScoped.taskId).toBe("task_alpha");
+    expect(validateAuthorityDecision(memberScoped, deterministicSha256)).toEqual(memberScoped);
+
+    // Two members approved separately are two decisions, not one repeated.
+    const sibling = createAuthorityDecision(
+      { ...authorityDecisionInput("approve"), taskId: "task_beta" },
+      deterministicSha256,
+    );
+    expect(sibling.decisionDigest).not.toBe(memberScoped.decisionDigest);
+
+    // And a decision that names no task is byte-for-byte what it always was,
+    // so nothing already recorded moves.
+    expect(phaseScoped).not.toHaveProperty("taskId");
+    expect(phaseScoped.decisionDigest).not.toBe(memberScoped.decisionDigest);
+
+    expectCandidateError("invalid-decision", () =>
+      createAuthorityDecision(
+        { ...authorityDecisionInput("approve"), taskId: "" } as never,
+        deterministicSha256,
+      ),
+    );
+  });
+
   it("rejects accessors, forged approval brands, timestamps, extras, and decision digests", () => {
     let getterCalls = 0;
     const accessor = authorityDecisionInput("approve");
