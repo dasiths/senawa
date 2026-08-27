@@ -2282,6 +2282,28 @@ projection right made the driver right.
 * [x] The driver requires every member's approval before it closes the phase
 * [ ] A member's gates are evaluated against that member's work
 
+### The last item needs a workspace, not a kernel
+
+The kernel can record a reading per task now, and nothing can yet produce one,
+which is a different gap from the one this phase closed.
+
+A sensor is `argv`, a `cwd` and some limits. It takes no input, so running it
+once per member in a shared repository gives the same answer every time --
+"tests pass" is a fact about the repository, not about Alpha's work. Recording
+four identical readings against four tasks would look like member-scoped gates
+and mean nothing.
+
+The lever is `cwd`. Under worktree mode each member already works in its own
+directory, so running the sensor there is a reading genuinely about that
+member's work, and it needs no authoring change at all -- the driver runs the
+gate per member with the member's workspace as `cwd` and tags each reading with
+its task.
+
+So the criterion is reachable, and its precondition is worktree mode. In shared
+mode it is not merely unimplemented but meaningless, and the honest behaviour
+there is what happens today: one reading, about the repository, covering every
+member.
+
 ## Phase 27: a run's records are written as they change
 
 Phase 23 measured this and deferred it against a trigger. The trigger is being
