@@ -1691,7 +1691,8 @@ and can reasonably be either -- approve this member's work, or approve the
 phase once every member is in -- so the workflow file says which, per phase.
 
 ```yaml
-approval:
+approve:
+  role: security-officer
   scope: phase    # one decision covering every member, the default
   # or
   scope: member   # one decision per member
@@ -1700,9 +1701,20 @@ approval:
 A phase that does not say keeps today's meaning, which is `phase`, so no
 authored workflow changes behaviour by being read again.
 
+### How a member-scoped approval is asked
+
+The kernel closes a phase against one candidate, and that is right: a phase
+closes once. So `scope: member` does not become a candidate per member. The
+driver asks one approval per member through the same question path a person
+already answers, naming that member's work, and the phase closes only once
+every member has been approved.
+
+This keeps the kernel phase-shaped and deterministic while the person sees the
+decision they were promised: one per member, against that member's work.
+
+* [x] `approval.scope` is authored per phase and accepts `phase` or `member`
 * [ ] A member's attempt ceiling is its own, spent only by its own tries
 * [ ] A member's gates are evaluated against that member's work
-* [ ] `approval.scope` is authored per phase and accepts `phase` or `member`
 * [ ] `scope: member` asks one approval per member, against that member's work
 * [ ] `scope: phase`, and a phase that declares no scope, asks once for all of
   them

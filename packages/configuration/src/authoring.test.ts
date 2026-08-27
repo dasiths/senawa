@@ -229,6 +229,38 @@ describe("authored workflow lowering", () => {
     });
   });
 
+  it("carries whose work one approval covers, and means the phase when unsaid", () => {
+    const perMember = lowerAuthoredWorkflow(
+      authoredWithVerify(
+        "    output: schemas/verification.schema.json\n    approve:\n      role: security-officer\n      scope: member\n",
+      ),
+    );
+    expect(perMember.diagnostics).toEqual([]);
+    expect(
+      (perMember.document as unknown as { readonly phases: readonly Record<string, never>[] })
+        .phases[1]?.exit,
+    ).toMatchObject({ approval: { policy: "required", scope: "member" } });
+
+    // An existing workflow says nothing, and reading it again must not change
+    // what approval means for it.
+    const unsaid = lowerAuthoredWorkflow(
+      authoredWithVerify(
+        "    output: schemas/verification.schema.json\n    approve:\n      role: security-officer\n",
+      ),
+    );
+    expect(
+      (unsaid.document as unknown as { readonly phases: readonly Record<string, never>[] })
+        .phases[1]?.exit,
+    ).not.toHaveProperty("approval.scope");
+
+    const wrong = lowerAuthoredWorkflow(
+      authoredWithVerify(
+        "    output: schemas/verification.schema.json\n    approve:\n      role: security-officer\n      scope: everyone\n",
+      ),
+    );
+    expect(wrong.diagnostics.map(({ pointer }) => pointer)).toContain("/phases/1/approve/scope");
+  });
+
   it("takes output size from the author", () => {
     const lowered = lowerAuthoredWorkflow(
       authoredWithVerify(

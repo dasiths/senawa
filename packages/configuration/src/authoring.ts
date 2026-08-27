@@ -331,6 +331,8 @@ interface AuthoredPhase {
   readonly completionEvidenceFrom: readonly AuthoredCompletionEvidenceView[];
   readonly iteration: AuthoredIteration;
   readonly approveRole?: string;
+  /** Whose work one approval covers. Absent means the phase's, as it always did. */
+  readonly approveScope?: "phase" | "member";
 }
 
 interface AuthoredIteration {
@@ -1046,6 +1048,19 @@ function readPhases(
     const approve = raw.approve;
     const approveRole =
       isRecord(approve) && typeof approve.role === "string" ? approve.role : undefined;
+    // Whose work one approval covers. A phase that says nothing keeps approval's
+    // original meaning, so reading an existing workflow again changes nothing.
+    const approveScope =
+      isRecord(approve) && typeof approve.scope === "string" ? approve.scope : undefined;
+    if (approveScope !== undefined && approveScope !== "phase" && approveScope !== "member") {
+      add(
+        collector,
+        "invalid-field",
+        path,
+        `${pointer}/approve/scope`,
+        "Approval scope must be phase or member",
+      );
+    }
     // The run is fail-fast when any phase says so, so a phase that says nothing
     // has to continue. Defaulting to fail-fast made every run fail-fast and the
     // authored value unable to express anything.
@@ -1116,6 +1131,7 @@ function readPhases(
       ),
       iteration: readIteration(collector, path, pointer, raw, defaults),
       ...(approveRole === undefined ? {} : { approveRole }),
+      ...(approveScope === "phase" || approveScope === "member" ? { approveScope } : {}),
     });
   }
   return phases;
@@ -1569,7 +1585,11 @@ function lowerPhase(
       requiredOutputs: [phase.name],
       ...(phase.gates.length > 0 ? { gate: `${phase.name}-gate` } : {}),
       approval: phase.approve
-        ? { policy: "required", authority: { role: phase.approveRole ?? "release-manager" } }
+        ? {
+            policy: "required",
+            authority: { role: phase.approveRole ?? "release-manager" },
+            ...(phase.approveScope === undefined ? {} : { scope: phase.approveScope }),
+          }
         : { policy: "none" },
     },
   };

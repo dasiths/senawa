@@ -322,7 +322,11 @@ describe("v1 workflow configuration", () => {
       },
       exit: {
         requiredOutputs: ["result"],
-        approval: { policy: "required", authority: { role: "release-manager" } },
+        approval: {
+          policy: "required",
+          authority: { role: "release-manager" },
+          scope: "member",
+        },
       },
     } as never;
 

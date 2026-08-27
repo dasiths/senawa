@@ -267,7 +267,11 @@ interface ParsedPhaseExit {
   readonly gate?: string;
   readonly approval:
     | { readonly policy: "none" }
-    | { readonly policy: "required"; readonly authority: CanonicalValue };
+    | {
+        readonly policy: "required";
+        readonly authority: CanonicalValue;
+        readonly scope?: "phase" | "member";
+      };
 }
 
 interface ParsedWork {
@@ -2132,14 +2136,30 @@ function parsePhaseExit(
         object.approval,
         `${pointer}/approval`,
         ["policy"],
-        object.approval.policy === "required" ? ["authority"] : [],
+        object.approval.policy === "required" ? ["authority", "scope"] : [],
         collector,
       )
     : undefined;
   let approval: ParsedPhaseExit["approval"] | undefined;
   if (approvalObject?.policy === "none") approval = { policy: "none" };
   if (approvalObject?.policy === "required" && Object.hasOwn(approvalObject, "authority")) {
-    approval = { policy: "required", authority: approvalObject.authority as CanonicalValue };
+    // A phase that names no scope keeps approval's original meaning, so no
+    // authored workflow changes behaviour by being read again.
+    const declared = approvalObject.scope === undefined ? undefined : String(approvalObject.scope);
+    if (declared !== undefined && declared !== "phase" && declared !== "member") {
+      addDiagnostic(
+        collector,
+        "invalid-field",
+        `${pointer}/approval/scope`,
+        "Approval scope must be phase or member",
+      );
+      return undefined;
+    }
+    approval = {
+      policy: "required",
+      authority: approvalObject.authority as CanonicalValue,
+      ...(declared === undefined ? {} : { scope: declared }),
+    };
   }
   if (approval === undefined)
     addDiagnostic(

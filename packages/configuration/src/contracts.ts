@@ -228,9 +228,22 @@ export interface PhaseIterationDeclaration {
   readonly onExhausted: "escalate" | "fail";
 }
 
+/**
+ * Whose work one approval covers. Attempts and gates are always a member's
+ * own, but a person's decision can reasonably be either -- approve this
+ * member's work, or approve the phase once every member is in -- so the author
+ * says which. A phase that does not say means `phase`, which is what approval
+ * has always meant.
+ */
+export type PhaseApprovalScope = "phase" | "member";
+
 export type PhaseApprovalDeclaration =
   | { readonly policy: "none" }
-  | { readonly policy: "required"; readonly authority: unknown };
+  | {
+      readonly policy: "required";
+      readonly authority: unknown;
+      readonly scope?: PhaseApprovalScope;
+    };
 
 export interface PhaseExitDeclaration {
   readonly requiredOutputs: readonly string[];
