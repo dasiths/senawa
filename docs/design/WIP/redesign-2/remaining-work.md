@@ -2263,6 +2263,13 @@ With somewhere to record it, `approve.scope: member` no longer has to be
 refused, and the authoring test asserts it lowers rather than that it is
 rejected.
 
+The driver needed no change, which is worth saying rather than leaving as luck.
+It waits on `approvalPending`, which is `.some(need => need.kind ===
+"candidate-approval")` over the portal's needs. Those needs are now one per
+undecided member and drop away as each is decided, so the driver holds the
+phase until the last member is answered and then closes it once. Making the
+projection right made the driver right.
+
 * [x] An authority decision can name the task it covers, and a phase-scoped
   decision still means every task
 * [x] A gate evaluation can carry a reading per task alongside the phase's
@@ -2272,7 +2279,7 @@ rejected.
 * [x] `approve.scope: member` compiles
 * [x] `scope: member` offers one approval per member in the portal, against
   that member's work
-* [ ] The driver requires every member's approval before it closes the phase
+* [x] The driver requires every member's approval before it closes the phase
 * [ ] A member's gates are evaluated against that member's work
 
 ## Phase 27: a run's records are written as they change
