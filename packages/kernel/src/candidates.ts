@@ -127,6 +127,13 @@ export interface ApprovalRequiredInput {
   readonly policy: "approval-required";
   readonly authority: unknown;
   readonly decision: AuthorityDecision;
+  /**
+   * One approving decision per member, when the phase asks per member.
+   *
+   * A phase still closes once, on one candidate. This is where the answers for
+   * the other members go, because a single `decision` has room for one.
+   */
+  readonly decisions?: readonly AuthorityDecision[];
 }
 
 export type ClosureApprovalInput = NoApprovalRequired | ApprovalRequiredInput;
@@ -148,6 +155,8 @@ export interface ApprovalDecisionReference {
   readonly policy: "approval-required";
   readonly authority: CanonicalValue;
   readonly decisionDigest: Sha256Digest;
+  /** Absent unless the phase asked per member, so a phase-scoped closure is unmoved. */
+  readonly decisionDigests?: readonly Sha256Digest[];
 }
 
 export type ClosureApprovalReference = NoApprovalReference | ApprovalDecisionReference;
@@ -1196,7 +1205,7 @@ function closureApproval(
     fail("invalid-approval-policy", "Closure approval policy is not recognized");
   }
   assertExactKeys(
-    value,
+    Object.fromEntries(Object.entries(value).filter(([key]) => key !== "decisions")),
     "closure approval",
     ["policy", "authority", "decision"],
     "invalid-approval-policy",
@@ -1212,7 +1221,50 @@ function closureApproval(
   if (canonicalSerialize(authority) !== canonicalSerialize(decision.principal)) {
     fail("wrong-authority", "Authority decision principal does not match the required authority");
   }
-  return { policy: value.policy, authority, decisionDigest: decision.decisionDigest };
+  const members = memberDecisions(value.decisions, candidateDigest, authority, sha256);
+  return {
+    policy: value.policy,
+    authority,
+    decisionDigest: decision.decisionDigest,
+    // Absent stays absent, so a phase-scoped closure digests as it always did.
+    ...(members === undefined ? {} : { decisionDigests: members }),
+  };
+}
+
+/** Each member's approving decision, checked the way the phase's own one is. */
+function memberDecisions(
+  value: unknown,
+  candidateDigest: Sha256Digest,
+  authority: CanonicalValue,
+  sha256: Sha256,
+): readonly Sha256Digest[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    fail("invalid-approval-policy", "Closure member decisions must be an array");
+  }
+  const named = new Set<string>();
+  const digests: Sha256Digest[] = [];
+  for (const entry of value) {
+    const decision = validateAuthorityDecision(entry, sha256);
+    if (decision.candidateDigest !== candidateDigest) {
+      fail("candidate-mismatch", "Authority decision is not bound to the closing candidate");
+    }
+    if (decision.decision !== "approve") {
+      fail("rejected-authority", "Only an approving authority decision can close a phase");
+    }
+    if (canonicalSerialize(authority) !== canonicalSerialize(decision.principal)) {
+      fail("wrong-authority", "Authority decision principal does not match the required authority");
+    }
+    if (decision.taskId === undefined) {
+      fail("invalid-approval-policy", "A member decision must name the task it covers");
+    }
+    if (named.has(decision.taskId)) {
+      fail("invalid-approval-policy", "A task cannot be decided twice in one closure");
+    }
+    named.add(decision.taskId);
+    digests.push(decision.decisionDigest);
+  }
+  return digests;
 }
 
 function assertDigests(value: Record<string, unknown>, keys: readonly string[]): void {

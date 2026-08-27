@@ -2247,15 +2247,32 @@ The address had to come first -- a plural of unaddressed decisions would say
 nothing -- so this phase is half-done on purpose rather than abandoned, and
 `scope: member` keeps refusing until the rest lands.
 
+### And then the plural landed, starting where the note said
+
+Starting at `validateClosure` and working outward was the difference. In order:
+the closure takes `decisions` beside `decision` and returns `decisionDigests`;
+the policy takes an optional `scope`; the lifecycle takes
+`authorityDecisions`, validates them as a set, and `deriveStatus` holds a
+member-scoped phase at `awaiting-approval` while any task is still owed one.
+
+Every field is optional and absent stays absent, so a phase-scoped closure,
+policy and projection produce exactly the bytes they always did -- the 376
+kernel tests that existed before pass unchanged throughout.
+
+With somewhere to record it, `approve.scope: member` no longer has to be
+refused, and the authoring test asserts it lowers rather than that it is
+rejected.
+
 * [x] An authority decision can name the task it covers, and a phase-scoped
   decision still means every task
 * [x] A gate evaluation can carry a reading per task alongside the phase's
 * [x] No existing run's records or receipts change shape or digest
-* [ ] A closure carries a decision per task, not one for the phase
-* [ ] `approve.scope: member` compiles, and asks one approval per member
-  against that member's work
+* [x] A closure carries a decision per task, not one for the phase
+* [x] A phase closes only when every decision its scope requires is in
+* [x] `approve.scope: member` compiles
+* [ ] `scope: member` asks one approval per member in the portal, against that
+  member's work -- the driver and projection half
 * [ ] A member's gates are evaluated against that member's work
-* [ ] A phase closes only when every decision its scope requires is in
 
 ## Phase 27: a run's records are written as they change
 

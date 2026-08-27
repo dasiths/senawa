@@ -230,6 +230,72 @@ describe("phase lifecycle projection", () => {
     expect(closed.humanNeeds).toEqual([]);
   });
 
+  // A phase closes once, so member scope is still one candidate -- but one
+  // decision has nowhere to record the second member's answer. The lifecycle
+  // carries a decision per task and stays open while any task is owed one.
+  it("keeps a member-scoped phase awaiting approval until every member is decided", () => {
+    const facts = acceptedFacts();
+    const policy = { policy: "approval-required", authority: AUTHORITY, scope: "member" } as const;
+    const forTask = (taskId: string) =>
+      createAuthorityDecision(
+        {
+          decision: "approve",
+          approvalId: approvalId(`approval_${taskId.replace(/[^a-z0-9]/gu, "")}`),
+          principal: AUTHORITY,
+          occurredAt: "2026-08-12T16:00:00.000Z",
+          candidateDigest: facts.candidate.candidateDigest,
+          taskId,
+        },
+        deterministicSha256,
+      );
+    const only = String(facts.candidate.tasks[0]?.taskId);
+    const base = {
+      ...baseInput(policy),
+      candidate: facts.candidate,
+      gateEvidence: facts.gateEvidence,
+      authorityDecision: authorityDecision(facts.candidate, "approve"),
+    };
+
+    // The phase's own decision is in, but the member's is not.
+    expect(projectPhaseLifecycle(base, deterministicSha256).status).toBe("awaiting-approval");
+
+    // With every member decided it may close.
+    expect(
+      projectPhaseLifecycle({ ...base, authorityDecisions: [forTask(only)] }, deterministicSha256)
+        .status,
+    ).toBe("awaiting-closure");
+
+    // One member cannot stand in for another.
+    expect(() =>
+      projectPhaseLifecycle(
+        { ...base, authorityDecisions: [forTask(only), forTask(only)] },
+        deterministicSha256,
+      ),
+    ).toThrow(/decided twice/u);
+
+    // A decision that names no task is not a member's.
+    expect(() =>
+      projectPhaseLifecycle(
+        { ...base, authorityDecisions: [authorityDecision(facts.candidate, "approve")] },
+        deterministicSha256,
+      ),
+    ).toThrow(/must name the task/u);
+
+    // And a phase-scoped policy will not carry them at all.
+    expect(() =>
+      projectPhaseLifecycle(
+        {
+          ...baseInput({ policy: "approval-required", authority: AUTHORITY }),
+          candidate: facts.candidate,
+          gateEvidence: facts.gateEvidence,
+          authorityDecision: authorityDecision(facts.candidate, "approve"),
+          authorityDecisions: [forTask(only)],
+        },
+        deterministicSha256,
+      ),
+    ).toThrow(/member-scoped approval policy/u);
+  });
+
   it("projects task accounting and active escalation details for human action", () => {
     const facts = acceptedFacts();
     const escalation = taskEscalation(facts.candidate);

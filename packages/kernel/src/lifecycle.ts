@@ -39,11 +39,14 @@ export interface NoApprovalPolicy {
 export interface RequiredApprovalPolicyInput {
   readonly policy: "approval-required";
   readonly authority: unknown;
+  /** Whose work one decision covers. Absent means the phase's, as it always did. */
+  readonly scope?: "phase" | "member";
 }
 
 export interface RequiredApprovalPolicy {
   readonly policy: "approval-required";
   readonly authority: CanonicalValue;
+  readonly scope?: "phase" | "member";
 }
 
 export type PhaseApprovalPolicyInput = NoApprovalPolicy | RequiredApprovalPolicyInput;
@@ -57,6 +60,13 @@ export interface PhaseLifecycleInput {
   readonly candidate?: PhaseCandidate;
   readonly gateEvidence?: GateEvidence;
   readonly authorityDecision?: AuthorityDecision;
+  /**
+   * One decision per member, when the policy asks per member.
+   *
+   * Beside the single decision rather than replacing it, so a phase-scoped
+   * lifecycle projects exactly the bytes it always did.
+   */
+  readonly authorityDecisions?: readonly AuthorityDecision[];
   readonly closure?: PhaseClosure;
   readonly escalations?: readonly Escalation[];
   /** Set for an archived phase, whose candidate names an earlier graph revision. */
@@ -148,6 +158,8 @@ export type LifecycleErrorCode =
   | "decision-policy-mismatch"
   | "decision-candidate-mismatch"
   | "decision-before-gate"
+  | "duplicate-decision"
+  | "member-undecided"
   | "wrong-authority"
   | "closure-source-missing"
   | "closure-escalation-conflict"
@@ -193,11 +205,15 @@ export function projectPhaseLifecycle(
   const authorityDecision = Object.hasOwn(snapshot, "authorityDecision")
     ? validateAuthorityDecision(snapshot.authorityDecision, sha256)
     : undefined;
+  const authorityDecisions = Object.hasOwn(snapshot, "authorityDecisions")
+    ? validateDecisionList(snapshot.authorityDecisions, sha256)
+    : [];
   const escalations = validateEscalations(snapshot.escalations, sha256);
 
   validateCandidateRelations(phase, candidate);
   validateGateRelations(candidate, gateEvidence);
   validateDecisionRelations(approvalPolicy, candidate, gateEvaluation, authorityDecision);
+  validateDecisionSetRelations(approvalPolicy, candidate, gateEvaluation, authorityDecisions);
   validateEscalationRelations(phase, candidate, snapshot.escalationPolicyDigest, escalations);
 
   const closure = Object.hasOwn(snapshot, "closure")
@@ -224,6 +240,7 @@ export function projectPhaseLifecycle(
     gateEvaluation,
     approvalPolicy,
     authorityDecision,
+    authorityDecisions,
     closure,
     escalations,
   );
@@ -250,7 +267,15 @@ function snapshotInput(input: PhaseLifecycleInput): Record<string, unknown> {
   assertAllowedKeys(
     snapshot,
     ["graph", "phase", "approvalPolicy", "escalationPolicyDigest"],
-    ["candidate", "gateEvidence", "authorityDecision", "closure", "escalations", "historical"],
+    [
+      "candidate",
+      "gateEvidence",
+      "authorityDecision",
+      "authorityDecisions",
+      "closure",
+      "escalations",
+      "historical",
+    ],
   );
   return snapshot;
 }
@@ -272,8 +297,73 @@ function validateApprovalPolicy(value: unknown): PhaseApprovalPolicy {
   if (value.policy !== "approval-required") {
     fail("invalid-input", "Approval policy must be no-approval or approval-required");
   }
-  assertExactKeys(value, ["policy", "authority"]);
-  return { policy: value.policy, authority: value.authority as CanonicalValue };
+  assertExactKeys(Object.fromEntries(Object.entries(value).filter(([key]) => key !== "scope")), [
+    "policy",
+    "authority",
+  ]);
+  if (value.scope !== undefined && value.scope !== "phase" && value.scope !== "member") {
+    fail("invalid-input", "Approval scope must be phase or member");
+  }
+  return {
+    policy: value.policy,
+    authority: value.authority as CanonicalValue,
+    // Absent stays absent, so a phase-scoped policy projects as it always did.
+    ...(value.scope === undefined ? {} : { scope: value.scope }),
+  };
+}
+
+/** The tasks a member-scoped phase still owes a decision. */
+function undecidedTasks(
+  approvalPolicy: PhaseApprovalPolicy,
+  candidate: PhaseCandidate | undefined,
+  decisions: readonly AuthorityDecision[],
+): readonly string[] {
+  if (approvalPolicy.policy !== "approval-required" || approvalPolicy.scope !== "member") return [];
+  if (candidate === undefined) return [];
+  const decided = new Set(decisions.map((decision) => String(decision.taskId)));
+  return candidate.tasks
+    .map((task) => String(task.taskId))
+    .filter((taskId) => !decided.has(taskId));
+}
+
+/** The decisions a member-scoped phase carries, each valid on its own terms. */
+function validateDecisionList(value: unknown, sha256: Sha256): readonly AuthorityDecision[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) fail("invalid-input", "Lifecycle decisions must be an array");
+  return value.map((decision) => validateAuthorityDecision(decision, sha256));
+}
+
+/**
+ * Every decision a member-scoped phase carries, checked as a set.
+ *
+ * A phase-scoped policy is unchanged: one decision, naming no task. Member
+ * scope needs one per task the candidate selected, because a single decision
+ * has nowhere to record the second member's answer.
+ */
+function validateDecisionSetRelations(
+  approvalPolicy: PhaseApprovalPolicy,
+  candidate: PhaseCandidate | undefined,
+  gateEvaluation: GateEvaluation | undefined,
+  decisions: readonly AuthorityDecision[],
+): void {
+  if (decisions.length === 0) return;
+  if (approvalPolicy.policy !== "approval-required" || approvalPolicy.scope !== "member") {
+    fail(
+      "decision-policy-mismatch",
+      "Only a member-scoped approval policy carries a decision per task",
+    );
+  }
+  const named = new Set<string>();
+  for (const decision of decisions) {
+    validateDecisionRelations(approvalPolicy, candidate, gateEvaluation, decision);
+    if (decision.taskId === undefined) {
+      fail("invalid-input", "A member-scoped decision must name the task it covers");
+    }
+    if (named.has(decision.taskId)) {
+      fail("duplicate-decision", "A task cannot be decided twice in one closure");
+    }
+    named.add(decision.taskId);
+  }
 }
 
 function validateEscalations(value: unknown, sha256: Sha256): readonly Escalation[] {
@@ -445,6 +535,7 @@ function deriveStatus(
   gateEvaluation: GateEvaluation | undefined,
   approvalPolicy: PhaseApprovalPolicy,
   authorityDecision: AuthorityDecision | undefined,
+  authorityDecisions: readonly AuthorityDecision[],
   closure: PhaseClosure | undefined,
   escalations: readonly Escalation[],
 ): PhaseLifecycleStatus {
@@ -456,6 +547,11 @@ function deriveStatus(
     return "awaiting-approval";
   }
   if (authorityDecision?.decision === "reject") return "approval-rejected";
+  // A phase that asks per member is not decided until every member is, whatever
+  // the phase's own decision says.
+  if (undecidedTasks(approvalPolicy, candidate, authorityDecisions).length > 0) {
+    return "awaiting-approval";
+  }
   if (closure !== undefined) return "closed";
   return "awaiting-closure";
 }

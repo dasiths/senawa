@@ -1061,19 +1061,6 @@ function readPhases(
         "Approval scope must be phase or member",
       );
     }
-    // The kernel records one decision per candidate, so nothing asks a person
-    // per member yet. Accepting the word and ignoring it would be authored
-    // configuration that silently does nothing, which is the failure a
-    // misspelled approve already guards against.
-    if (approveScope === "member") {
-      add(
-        collector,
-        "invalid-field",
-        path,
-        `${pointer}/approve/scope`,
-        "Approval scope member is not supported yet; a phase is approved once, for every member",
-      );
-    }
     // The run is fail-fast when any phase says so, so a phase that says nothing
     // has to continue. Defaulting to fail-fast made every run fail-fast and the
     // authored value unable to express anything.
