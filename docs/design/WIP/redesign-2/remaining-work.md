@@ -1683,6 +1683,24 @@ spent six attempts and escalated, the portal offered exactly one need with a
 assertion back, and the dispatch count moved from 16 to 17 -- a fresh attempt
 for the member that had none left.
 
+### Why the last criterion is still open, and it is not the feature's fault
+
+That run did not go on to finish, and the cause was mine: the fix had to be
+built before the answer could be accepted, so the service was restarted while
+an agent was mid-dispatch. The supervisor log then reads `schedule-declined --
+no dispatch is schedulable; the ready frontier holds task_65c5fc1f650d`, over
+and over, and no worker process exists for the dispatch that is open.
+
+Which is a finding in its own right, and worth separating from phase 21: **a
+dispatch orphaned by a service restart is never re-driven**. The worker dies
+with the service, the dispatch stays open, and the frontier holds a task that
+can never become schedulable because nothing will ever hand its work in. The
+run cannot recover without intervention.
+
+That deserves its own phase rather than a footnote here. Phase 21's last
+criterion needs a clean run, driven end to end without a restart in the middle,
+to be judged fairly.
+
 * [x] A member that spends its attempts raises the escalation its policy
   declares instead of stopping the run
 * [x] The escalation names what kept failing: the gate, its reading, and the
@@ -1691,6 +1709,30 @@ for the member that had none left.
 * [x] Answering carries the instruction into the next attempt
 * [x] Answering grants the member its attempt ceiling again
 * [ ] A run whose member is answered finishes without a restart
+
+## Phase 24: a dispatch orphaned by a restart is picked up again
+
+Found while proving phase 21. Stopping the service kills the agent processes it
+started, but the dispatches those agents held stay open in the record. On
+restart the scheduler reads a frontier holding a task whose only dispatch will
+never be handed in, declines to schedule anything, and says so once a cycle for
+ever.
+
+Nothing recovers this today. A person cannot answer it, because nothing is
+asking; the phase cannot close, because the member never reported; and the
+member cannot retry, because its dispatch is not finished, only abandoned.
+
+A restart is an ordinary event -- an upgrade, a crash, a machine rebooting --
+so a run surviving one is not a luxury.
+
+* [ ] A dispatch whose worker did not survive the service is recognised as
+  abandoned rather than open
+* [ ] An abandoned dispatch is retried under the member's own policy, spending
+  one of its attempts
+* [ ] A member with no attempts left raises the escalation phase 21 built,
+  rather than holding the frontier silently
+* [ ] The supervisor says which task it is holding for, and why, where a person
+  reads it rather than only in its log
 
 ## Phase 22: a member owns its own gates, approval and attempts
 
