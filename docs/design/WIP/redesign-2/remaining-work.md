@@ -1837,6 +1837,32 @@ both times while the tries ran to 10. Reproducing it means understanding why
 which is the same root as the ordinal attribution above. One fix, once that is
 understood, closes both.
 
+### Found: the member is chosen by the outbox, which drains
+
+`advanceRun` picks the member to carry like this:
+
+```ts
+const handedIn = new Set(state.completionOutbox.map((entry) => String(entry.fact.dispatchId)));
+const dispatch =
+  phaseMembers.find((candidate) => !handedIn.has(String(candidate.dispatchId))) ??
+  phaseMembers.at(-1);
+```
+
+`completionOutbox` is transient. Once a completion has been delivered to the
+authority it leaves the outbox, and the dispatch that sent it starts looking
+like one that never handed anything in. `find` takes the lowest ordinal, so
+after a drain the advance carries the member's **first** try again -- ordinal 4,
+every time, however many attempts have been spent since.
+
+That one line explains both open items. The escalation is hung on ordinal 4, so
+its identity repeats and the answer resets the ceiling from the wrong end.
+
+Whether a dispatch has handed its work in is already recorded, durably, as the
+attempt's disposition -- `attemptClosed` reads exactly that. Reading it there
+rather than from the outbox is the fix. It sits in the middle of the fan-in,
+which is the part three earlier deadlocks came from, so it wants a session with
+room to prove it rather than the end of one.
+
 The ordinal attribution above is still wrong and still worth fixing: the
 question is hung on the dispatch the advance carries, which in a fan-out is the
 member's first, so the ceiling is bought back from ordinal 4 while the tries
