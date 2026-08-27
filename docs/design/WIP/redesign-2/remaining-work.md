@@ -1712,6 +1712,31 @@ every member has been approved.
 This keeps the kernel phase-shaped and deterministic while the person sees the
 decision they were promised: one per member, against that member's work.
 
+### Found while starting the driver half: the aggregate has no author
+
+The obvious implementation does not work, and it is worth writing down why
+before someone tries it again.
+
+If the driver asks per member and then closes the phase, the kernel still
+demands its phase decision, because the compiled policy says approval is
+required -- so the person is asked N+1 times. If instead the driver records the
+phase decision itself once every member has been approved, it cannot:
+`record-authority-decision` is bound to `release-manager`, and the driver is
+not one. That restriction is correct and should not be loosened to make this
+convenient.
+
+That leaves the choice the next session has to make deliberately. Either the
+compiled phase carries `policy: none` under `scope: member`, and the per-member
+asks become the whole enforcement -- which moves a person's decision out of the
+kernel record, where it is currently provable -- or the kernel learns a
+member-scoped approval policy and records N decisions against the one
+candidate, which is more work and keeps the guarantee.
+
+The second is the right one on the evidence. The kernel already models a
+decision per candidate; what it lacks is a decision per task within one. Losing
+the record of who approved what, to save that, is the kind of trade the
+durability rules exist to prevent.
+
 * [x] `approval.scope` is authored per phase and accepts `phase` or `member`
 * [ ] A member's attempt ceiling is its own, spent only by its own tries
 * [ ] A member's gates are evaluated against that member's work
