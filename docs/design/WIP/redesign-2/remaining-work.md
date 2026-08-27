@@ -2032,14 +2032,38 @@ misspelled `approve`. Until the kernel carries it, `scope: member` is refused at
 authoring time and says why. An author who writes it learns immediately, rather
 than after a run approves the wrong thing.
 
+### The last two, decided the same way
+
+**An authored phase already declares the default every member inherits**, and
+this is what the fan-out fixture proves by using it: `attempts` written on the
+`implement` phase bounds each member's own tries, and `gates` written there
+applies to each member. Because policy was never split off the phase, the
+phase's declaration *is* the default and inheritance is automatic. It is ticked
+on that reading rather than on new work.
+
+**A member's gates evaluated against that member's work is deferred**, for the
+reason the approval half was. The kernel evaluates a gate once per candidate
+and a candidate is phase-shaped; giving each member its own gate reading is the
+same class of change as a decision per task, reaching the kernel, the evidence
+and the projection.
+
+Nothing waits on it, and what most authors mean by a member's gate already
+works: a gate written on a fan-out phase runs for that phase's members, which
+is how `member-check` in the scenarios behaves. What is missing is a reading
+bound to one member's output rather than to the phase's candidate, which
+matters only for a sensor that reads a single member's work. No workflow here
+has one.
+
 * [x] `approval.scope` is authored per phase and accepts `phase` or `member`
 * [x] A member's attempt ceiling is its own, spent only by its own tries
 * [x] `scope: phase`, and a phase that declares no scope, asks once for all of
   them
 * [x] One member exhausting its policy leaves its siblings untouched
-* [ ] A member's gates are evaluated against that member's work
+* [x] An authored phase can still declare a default every member inherits
+* [ ] A member's gates are evaluated against that member's work -- deferred
+  above, with the approval half
 * [ ] `scope: member` asks one approval per member, against that member's work
-* [ ] An authored phase can still declare a default every member inherits
+  -- deferred above
 
 ## Phase 23: a run's records stop being rewritten whole
 
