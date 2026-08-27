@@ -1721,6 +1721,18 @@ That is the last criterion, and it is not a restart problem. The unit test
 passes because the submission succeeds in the fixture; nothing proves the
 outcome and the record agree.
 
+The first half is fixed: `admitSubmission` returns a status rather than
+throwing, and that status was discarded, so the driver reported `escalated`
+whatever the broker did. It is read now, and a refused admission leaves the
+phase refused, which at least says something true.
+
+The second half is why the admission was refused at all, and the likely answer
+is in phase 21's own commit message: the turn that escalates has already handed
+its work in. A terminal dispatch is not somewhere a worker submission can be
+added, so attaching the escalation to the dispatch that failed may be the wrong
+channel for it -- confirm that against the broker before choosing between
+permitting this one case and giving an escalation a channel of its own.
+
 * [x] A member that spends its attempts raises the escalation its policy
   declares instead of stopping the run
 * [x] The escalation names what kept failing: the gate, its reading, and the

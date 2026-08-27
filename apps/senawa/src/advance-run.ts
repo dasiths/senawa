@@ -1244,7 +1244,12 @@ function askForHelp(input: {
     `${input.phaseKey} could not be finished in ${String(input.tries)} attempts. ` +
     `What should the agent do differently?\n\nWhat kept failing: ${excerpt}`;
   try {
-    input.broker.admitSubmission({
+    // A refused admission is a returned status, not an exception. Ignoring it
+    // let the driver report `escalated` while nothing was recorded: `advance`
+    // said it had asked, `listHumanNeeds` returned nothing, `status` said
+    // nobody was waited on, and a live run sat for 188 cycles with no way for
+    // anyone to see the question it believed it had raised.
+    const admitted = input.broker.admitSubmission({
       submission: {
         apiVersion: PROTOCOL_VERSION,
         submissionId: `submission_exhausted-${dispatchId.replace(/[^a-z0-9]/gu, "").slice(0, 48)}`,
@@ -1259,7 +1264,7 @@ function askForHelp(input: {
         question: { prompt, details: { attempts: input.tries, reasons: input.reasons } },
       },
     });
-    return true;
+    return admitted.status === "accepted";
   } catch {
     // A broker that will not take the question leaves the run refused, which is
     // the old behaviour and still says why.
