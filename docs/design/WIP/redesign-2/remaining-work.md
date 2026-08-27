@@ -1864,9 +1864,19 @@ for.
 
 Not guarded by a test, and the condition one needs is now known exactly: a task
 the run has **accepted** whose phase gate still refuses. The fan-out scenario
-does not reach it -- its member's gate refuses before acceptance -- so removing
-the fix still passes. That is the next test to write, and it is the same
-condition the identity suffix needs.
+does reach that -- two tasks read accepted at the escalation point, measured --
+but it still does not discriminate, and it is worth writing down why.
+
+The fan-in resolves an accepted task's dispatch by the completion outbox: when
+one dispatch's completion is sitting there undelivered and another's is not,
+the one in the outbox wins, whatever the ordinals. The live run hit that with
+its **oldest** dispatch in the outbox. Every deterministic sequence the harness
+can produce leaves the newest one there instead, so the newest is carried
+either way and removing the fix still passes.
+
+The scenario asserts the escalation names the member's newest try regardless,
+as a pin on the intended behaviour, and its comment says it does not
+discriminate rather than implying it does.
 
 The ordinal attribution above is still wrong and still worth fixing: the
 question is hung on the dispatch the advance carries, which in a fan-out is the

@@ -503,6 +503,23 @@ describe("running every member of a fan-out", () => {
     // the answered one and nobody is waited on.
     expect(await advance(scenario)).toMatchObject({ kind: "escalated" });
     expect(asked()).toBe(1);
+
+    // And it asks against the member's newest try. This pins the behaviour
+    // rather than discriminating: the harness always leaves the newest dispatch
+    // as the one the advance carries, so removing the fix still passes here.
+    // The live divergence needed an older dispatch's completion sitting in the
+    // outbox while a newer one's did not, which the fan-in resolves in favour
+    // of the older, and which no deterministic sequence here produces.
+    const portal = new SqlitePortalQueryAuthority({ ...scenario.paths, dependencies });
+    try {
+      const outstanding = portal
+        .listHumanNeeds(scenario.repositoryId, scenario.runId)
+        .needs.find((need) => need.kind === "question");
+      const named = String(outstanding?.sourceId);
+      expect(named).toContain(retried.dispatchId.replace(/[^a-z0-9]/gu, "").slice(0, 40));
+    } finally {
+      portal.close();
+    }
   }, 120_000);
 
   // The dispatch driver takes `phaseTasks[memberIndex ?? 0]`, and every retry
