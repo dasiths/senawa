@@ -1683,23 +1683,43 @@ spent six attempts and escalated, the portal offered exactly one need with a
 assertion back, and the dispatch count moved from 16 to 17 -- a fresh attempt
 for the member that had none left.
 
-### Why the last criterion is still open, and it is not the feature's fault
+### Why the last criterion is still open, and what it actually is
 
-That run did not go on to finish, and the cause was mine: the fix had to be
-built before the answer could be accepted, so the service was restarted while
-an agent was mid-dispatch. The supervisor log then reads `schedule-declined --
-no dispatch is schedulable; the ready frontier holds task_65c5fc1f650d`, over
-and over, and no worker process exists for the dispatch that is open.
+The first attempt to prove it was spoiled by my own restart mid-dispatch, and
+the supervisor log read `schedule-declined -- no dispatch is schedulable; the
+ready frontier holds task_65c5fc1f650d` once a cycle afterwards. That looked
+exactly like a deadlock, and it was written up here as one.
 
-Which is a finding in its own right, and worth separating from phase 21: **a
-dispatch orphaned by a service restart is never re-driven**. The worker dies
-with the service, the dispatch stays open, and the frontier holds a task that
-can never become schedulable because nothing will ever hand its work in. The
-run cannot recover without intervention.
+It was not. A clean run, driven end to end with no restart anywhere near it,
+reached the same message with all four held tasks reading `accepted`. Asking
+the driver directly is what settled it:
 
-That deserves its own phase rather than a footnote here. Phase 21's last
-criterion needs a clean run, driven end to end without a restart in the middle,
-to be judged fairly.
+```
+implement is out of attempts and has asked you what to do: tests/exitCode
+equals 0, and read 1, tests said: # ReferenceError: require is not defined ...
+```
+
+The run was never stalled. It was waiting on a person, which is phase 21
+working. Two real defects sit behind the hour it took to establish that.
+
+**`schedule-declined` reads as a deadlock when the run is waiting on a human.**
+Leftover dispatches for tasks that are already accepted are held by the
+frontier, so the scheduler reports that nothing is schedulable -- which is true
+and useless. It says nothing about the answer it is waiting for, and it says it
+only in a log a person has no reason to open.
+
+**And the escalation was never actually recorded.** `senawa advance` says
+`implement is out of attempts and has asked you what to do`, while
+`listHumanNeeds` returns **0 needs** and `senawa status` says `waiting on you:
+0`, for the same run at the same moment. So `askForHelp` reported that it asked
+when nothing was written: either its "a question is already outstanding" guard
+matched something that is not the escalation, or `admitSubmission` did not take
+and its result was not checked. The driver script answers `waiting` questions,
+saw zero, and let the run sit for 188 cycles.
+
+That is the last criterion, and it is not a restart problem. The unit test
+passes because the submission succeeds in the fixture; nothing proves the
+outcome and the record agree.
 
 * [x] A member that spends its attempts raises the escalation its policy
   declares instead of stopping the run
@@ -1708,31 +1728,30 @@ to be judged fairly.
 * [x] The portal offers it as a need with a reply, beside the questions
 * [x] Answering carries the instruction into the next attempt
 * [x] Answering grants the member its attempt ceiling again
+* [ ] An `escalated` outcome and a recorded question are the same event: the
+  driver cannot say it asked unless a person can see the asking
 * [ ] A run whose member is answered finishes without a restart
 
-## Phase 24: a dispatch orphaned by a restart is picked up again
+## Phase 24: a run says what it is waiting for where a person looks
 
-Found while proving phase 21. Stopping the service kills the agent processes it
-started, but the dispatches those agents held stay open in the record. On
-restart the scheduler reads a frontier holding a task whose only dispatch will
-never be handed in, declines to schedule anything, and says so once a cycle for
-ever.
+Found while proving phase 21, and it cost an hour of wrong diagnosis, which is
+the measure of how misleading it is.
 
-Nothing recovers this today. A person cannot answer it, because nothing is
-asking; the phase cannot close, because the member never reported; and the
-member cannot retry, because its dispatch is not finished, only abandoned.
+When a run is waiting on a human answer, the supervisor logs `schedule-declined
+-- no dispatch is schedulable; the ready frontier holds task_XXX` once a cycle,
+because dispatches for already-accepted tasks are still held by the frontier.
+That message is true and says nothing that matters. Meanwhile `senawa status`
+reported `waiting on you: 0` for a run whose own driver said it had asked a
+question.
 
-A restart is an ordinary event -- an upgrade, a crash, a machine rebooting --
-so a run surviving one is not a luxury.
+A run that is waiting on a person and a run that is stuck must not look alike.
 
-* [ ] A dispatch whose worker did not survive the service is recognised as
-  abandoned rather than open
-* [ ] An abandoned dispatch is retried under the member's own policy, spending
-  one of its attempts
-* [ ] A member with no attempts left raises the escalation phase 21 built,
-  rather than holding the frontier silently
-* [ ] The supervisor says which task it is holding for, and why, where a person
-  reads it rather than only in its log
+* [ ] A run waiting on a human answer says so, rather than reporting that
+  nothing is schedulable
+* [ ] `status` counts an escalation among what is waiting on you
+* [ ] Dispatches for accepted tasks stop being reported as a held frontier
+* [ ] The reason a run is not scheduling is readable without opening the
+  supervisor's log
 
 ## Phase 22: a member owns its own gates, approval and attempts
 
