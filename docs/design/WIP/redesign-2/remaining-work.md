@@ -1837,31 +1837,36 @@ both times while the tries ran to 10. Reproducing it means understanding why
 which is the same root as the ordinal attribution above. One fix, once that is
 understood, closes both.
 
-### Found: the member is chosen by the outbox, which drains
+### Found: an accepted task is pinned to the dispatch that earned it
 
-`advanceRun` picks the member to carry like this:
+The earlier note here blamed the completion outbox draining and `find` taking
+the lowest ordinal. That was wrong, and reading `currentPhaseDispatches` says
+why. It returns the latest dispatch per task, except for a task the run has
+already **accepted**, where it deliberately keeps the dispatch that earned the
+acceptance:
 
-```ts
-const handedIn = new Set(state.completionOutbox.map((entry) => String(entry.fact.dispatchId)));
-const dispatch =
-  phaseMembers.find((candidate) => !handedIn.has(String(candidate.dispatchId))) ??
-  phaseMembers.at(-1);
-```
+> letting it supersede hides the dispatch that earned the acceptance -- along
+> with its completion and its assessment
 
-`completionOutbox` is transient. Once a completion has been delivered to the
-authority it leaves the outbox, and the dispatch that sent it starts looking
-like one that never handed anything in. `find` takes the lowest ordinal, so
-after a drain the advance carries the member's **first** try again -- ordinal 4,
-every time, however many attempts have been spent since.
+That is right for closing a phase and wrong for asking a person. The live
+member's task was accepted -- all four read `accepted` in the decline log --
+so every advance carried its ordinal-4 dispatch while its tries ran to 10. The
+escalation was hung there, so its identity never moved, and the ordinal the
+answer resets from was the member's first try rather than its last.
 
-That one line explains both open items. The escalation is hung on ordinal 4, so
-its identity repeats and the answer resets the ceiling from the wrong end.
+Both live escalation rows name `dispatch_98ae87ec`, the ordinal-4 one, which is
+the evidence rather than the argument.
 
-Whether a dispatch has handed its work in is already recorded, durably, as the
-attempt's disposition -- `attemptClosed` reads exactly that. Reading it there
-rather than from the outbox is the fix. It sits in the middle of the fan-in,
-which is the part three earlier deadlocks came from, so it wants a session with
-room to prove it rather than the end of one.
+**Fixed** by asking against the member's newest dispatch rather than the one
+the advance happens to carry. The fan-in selection is untouched: it still
+closes phases against the dispatch that earned acceptance, which is what it is
+for.
+
+Not guarded by a test, and the condition one needs is now known exactly: a task
+the run has **accepted** whose phase gate still refuses. The fan-out scenario
+does not reach it -- its member's gate refuses before acceptance -- so removing
+the fix still passes. That is the next test to write, and it is the same
+condition the identity suffix needs.
 
 The ordinal attribution above is still wrong and still worth fixing: the
 question is hung on the dispatch the advance carries, which in a fan-out is the

@@ -885,10 +885,25 @@ async function step(
     // member nobody has spoken to and one somebody has redirected are not the
     // same member.
     if (phase.iteration?.onExhausted === "escalate") {
+      // Ask against the member's newest try, not the dispatch this advance
+      // happens to carry. For an accepted task that is deliberately the
+      // dispatch which earned the acceptance, which never moves, so every
+      // exhaustion asked under one identity: the second ask was a duplicate of
+      // the answered first, nothing was recorded, and the run went quiet.
+      const newest = state.dispatches
+        .filter(
+          (candidate) =>
+            candidate.runId === input.runId &&
+            String(candidate.task.taskId) === String(dispatch.task.taskId),
+        )
+        .reduce(
+          (latest, candidate) => (candidate.ordinal > latest.ordinal ? candidate : latest),
+          dispatch,
+        );
       const asked = askForHelp({
         broker,
         supervisor,
-        dispatch,
+        dispatch: newest,
         phaseKey,
         reasons,
         tries: taskAttempts,
