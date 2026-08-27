@@ -1757,8 +1757,15 @@ export class ContextBroker implements ContextBrokerClient {
     const currentness = this.authority.taskScopes.get(taskScopeKey(stored.taskScope));
     const stale =
       currentness === undefined ||
-      !currentness.claimsAccepted ||
-      !sameTaskScopeFence(stored.taskScope, currentness);
+      // A member that has run out of tries asks after handing its work in, so
+      // its scope has already moved on and the question that is the only way
+      // to start another attempt would be refused as stale. The escalation was
+      // reported as asked and never recorded, and the run waited on nobody.
+      ((!currentness.claimsAccepted || !sameTaskScopeFence(stored.taskScope, currentness)) &&
+        !(
+          submission.type === "question" &&
+          submission.submissionId.startsWith("submission_exhausted-")
+        ));
     let completionFact: CompletionFact | undefined;
     let phaseOutputFact: PhaseOutputFact | undefined;
     const duplicateCompletion =

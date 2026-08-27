@@ -1726,12 +1726,18 @@ throwing, and that status was discarded, so the driver reported `escalated`
 whatever the broker did. It is read now, and a refused admission leaves the
 phase refused, which at least says something true.
 
-The second half is why the admission was refused at all, and the likely answer
-is in phase 21's own commit message: the turn that escalates has already handed
-its work in. A terminal dispatch is not somewhere a worker submission can be
-added, so attaching the escalation to the dispatch that failed may be the wrong
-channel for it -- confirm that against the broker before choosing between
-permitting this one case and giving an escalation a channel of its own.
+The second half is why the admission was refused at all, and it is the same
+rule a fourth time. The broker calls a submission stale when the task scope has
+moved on or its claims are released, which is right for an ordinary submission
+and wrong for this one: a member that is out of tries asks **after** handing
+its work in, so its scope has always moved. The question that is the only way
+to start another attempt was refused for being asked too late by the very thing
+that made it necessary.
+
+Four sites, one rule, one exemption: the needs projection, the graph's node
+count, the answer command, and now the admission itself. Being out of tries is
+an exception everywhere the rule appears, and each place that missed it hid the
+escalation somewhere different.
 
 * [x] A member that spends its attempts raises the escalation its policy
   declares instead of stopping the run
