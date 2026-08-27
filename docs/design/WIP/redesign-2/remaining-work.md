@@ -2222,6 +2222,27 @@ the scope requires has one, and `closureStatus` staying `approval-pending`
 until they are all in. That reaches `recordDigests`, which is where the care
 belongs, because no existing closure's digest may move.
 
+### How far the plural got, and the site it stops at
+
+It was attempted and reverted rather than left half-wired, and the route is
+worth having. These all worked, with the kernel's 376 tests unmoved:
+`RequiredApprovalPolicy` gaining an optional `scope`, a `validateDecisionList`
+beside the escalation one, a `validateDecisionSetRelations` that requires each
+decision to name a distinct task, an `undecidedTasks` check, the
+`duplicate-decision` code, and `authorityDecisions` in the input key list.
+
+It stops at `validateClosure`. Given a member-scoped closure with its decisions
+in the list rather than the singular field, it still fails with *Required-
+approval closure needs its authority decision*, because closure validation
+reads the one field. Every remaining site is downstream of that: `recordDigests`
+and `deriveStatus` take the singular too, and so do the storage projection and
+the driver.
+
+So the next attempt starts at `validateClosure` and works outward, rather than
+starting where this one did. Doing it in the wrong order is what produced an
+`authorityDecisions` field that could be validated but could not close a phase,
+which is a half-built path and not worth keeping.
+
 The address had to come first -- a plural of unaddressed decisions would say
 nothing -- so this phase is half-done on purpose rather than abandoned, and
 `scope: member` keeps refusing until the rest lands.
