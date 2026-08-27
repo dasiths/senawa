@@ -2369,6 +2369,22 @@ takes a command's write from 236KB to about 70KB before anything else is done.
 So they land together or not at all, and the phase is honest about carrying one
 change rather than two.
 
+### What the change costs, counted
+
+Seven places decode a run's whole records today -- `index.ts` at 4239, 5136,
+5161, 5420 and 5839, plus `reporting-snapshot` at 137 and 167, several of them
+through the `#runtimeRecordRow` helper. Splitting the column means every one of
+them has to see the collections merged back, so the first move is one accessor
+that returns whole records from blob plus rows, and then those seven reading
+through it.
+
+After that: a table for append-only collections, a write that appends rather
+than rewrites, the lazy digest, and a migration that moves existing runs'
+`amendmentEvents` and `amendmentRecords` out of the blob.
+
+That is one focused change of real size, and it is the only thing left in this
+plan that is neither done nor decided.
+
 * [ ] A command writes only the records it changed
 * [x] The run's record digest is still exactly what it was, so no receipt moves
 * [ ] Write latency does not grow with the number of commands a run has
