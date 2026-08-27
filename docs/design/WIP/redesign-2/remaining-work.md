@@ -1649,9 +1649,29 @@ Today `attempts`, `gates` and `approval` are authored on the phase and the phase
 closes over all its members together, which is why phase 21's fourth member
 takes the whole run down with it.
 
+### Approval is the exception, and the author says which
+
+Attempts and gates are always the member's own: a try belongs to whoever made
+it, and a gate reads the work in front of it. Approval is a person's decision
+and can reasonably be either -- approve this member's work, or approve the
+phase once every member is in -- so the workflow file says which, per phase.
+
+```yaml
+approval:
+  scope: phase    # one decision covering every member, the default
+  # or
+  scope: member   # one decision per member
+```
+
+A phase that does not say keeps today's meaning, which is `phase`, so no
+authored workflow changes behaviour by being read again.
+
 * [ ] A member's attempt ceiling is its own, spent only by its own tries
 * [ ] A member's gates are evaluated against that member's work
-* [ ] A member's approval is asked for that member
+* [ ] `approval.scope` is authored per phase and accepts `phase` or `member`
+* [ ] `scope: member` asks one approval per member, against that member's work
+* [ ] `scope: phase`, and a phase that declares no scope, asks once for all of
+  them
 * [ ] An authored phase can still declare a default every member inherits
 * [ ] One member exhausting its policy leaves its siblings untouched
 
