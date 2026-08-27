@@ -2270,8 +2270,9 @@ rejected.
 * [x] A closure carries a decision per task, not one for the phase
 * [x] A phase closes only when every decision its scope requires is in
 * [x] `approve.scope: member` compiles
-* [ ] `scope: member` asks one approval per member in the portal, against that
-  member's work -- the driver and projection half
+* [x] `scope: member` offers one approval per member in the portal, against
+  that member's work
+* [ ] The driver requires every member's approval before it closes the phase
 * [ ] A member's gates are evaluated against that member's work
 
 ## Phase 27: a run's records are written as they change

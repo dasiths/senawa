@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   canonicalBytes,
   decodeCommandEnvelope,
+  durableStringify,
   PROTOCOL_VERSION,
   TRANSCRIPT_LIMITS,
 } from "@senawa/protocol";
@@ -699,6 +700,66 @@ describe("SQLite Phase 11A human authority", () => {
     portal.close();
     runner.close();
     authority.close();
+    fixture.dispose();
+  });
+
+  it("offers one approval per member when the phase asks per member", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    authority.close();
+
+    // The projection reads a run's records, so this writes the shape a
+    // member-scoped phase reaches rather than driving a whole run to it.
+    const lifecycle = (scope: "phase" | "member", decided: readonly string[]) => ({
+      phaseLifecycles: [
+        {
+          approvalPolicy: {
+            policy: "approval-required",
+            authority: { role: "release-manager" },
+            scope,
+          },
+          candidate: {
+            candidateDigest: "a".repeat(64),
+            graphRevisionDigest: createRuntimeGraph().revisionDigest,
+            phase: { phaseId: "phase_build" },
+            tasks: [{ taskId: "task_alpha" }, { taskId: "task_beta" }],
+          },
+          authorityDecisions: decided.map((taskId) => ({ taskId })),
+        },
+      ],
+    });
+    const write = (records: unknown) => {
+      const db = new Database(fixture.databasePath);
+      db.prepare(
+        `UPDATE runs SET records_json = ?, projection_generated_at = '2026-08-12T16:00:00.000Z'
+         WHERE repository_id = ? AND run_id = ?`,
+      ).run(durableStringify(records), runtimeFixture.repositoryId, runtimeFixture.runId);
+      db.close();
+    };
+    const approvals = () => {
+      const portal = new SqlitePortalQueryAuthority(fixture.options);
+      try {
+        return portal
+          .listHumanNeeds(runtimeFixture.repositoryId, runtimeFixture.runId)
+          .needs.filter((need) => need.kind === "candidate-approval")
+          .map((need) => need.taskId ?? "phase");
+      } finally {
+        portal.close();
+      }
+    };
+
+    write(lifecycle("member", []));
+    expect(approvals().toSorted()).toEqual(["task_alpha", "task_beta"]);
+
+    // A member already decided is not asked about again.
+    write(lifecycle("member", ["task_alpha"]));
+    expect(approvals()).toEqual(["task_beta"]);
+
+    // A phase-scoped policy asks once, for all of them, as it always did.
+    write(lifecycle("phase", []));
+    expect(approvals()).toEqual(["phase"]);
+
     fixture.dispose();
   });
 

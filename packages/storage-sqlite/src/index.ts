@@ -5868,18 +5868,52 @@ export class SqlitePortalQueryAuthority {
             "candidate digest",
           );
           const phase = requiredJsonRecord(candidate.phase, "candidate phase");
+          const phaseId = requiredStringField(phase.phaseId, "candidate phaseId");
+          const graphRevision = requiredDigestField(
+            candidate.graphRevisionDigest,
+            "candidate graph revision",
+          );
+          // A phase that asks per member offers one decision per member, each
+          // naming the work it covers. Offering the phase once would ask a
+          // person to approve every member at a stroke, which is the thing
+          // member scope exists to avoid.
+          const perMember = policy.scope === "member";
+          const decided = new Set(
+            (Array.isArray(lifecycle.authorityDecisions) ? lifecycle.authorityDecisions : [])
+              .map((entry) => optionalJsonRecord(entry)?.taskId)
+              .filter((taskId): taskId is string => typeof taskId === "string"),
+          );
+          const members = perMember
+            ? (Array.isArray(candidate.tasks) ? candidate.tasks : [])
+                .map((task) => optionalJsonRecord(task)?.taskId)
+                .filter((taskId): taskId is string => typeof taskId === "string")
+                .filter((taskId) => !decided.has(taskId))
+            : [];
+          for (const taskId of members) {
+            needs.push({
+              needId: `need_candidate:${candidateDigest}:${taskId}`,
+              kind: "candidate-approval",
+              sourceId: candidateDigest,
+              sourceDigest: candidateDigest,
+              sourceRevision,
+              title: `Review ${this.#nodeNames(repositoryId, runId).get(taskId) ?? taskId}`,
+              createdAt: held.projectionGeneratedAt,
+              taskId,
+              expectedGraphRevision: graphRevision,
+              exactObjectDigest: candidateDigest,
+              allowedCommands: ["record-authority-decision"],
+            });
+          }
+          if (perMember) continue;
           needs.push({
             needId: `need_candidate:${candidateDigest}`,
             kind: "candidate-approval",
             sourceId: candidateDigest,
             sourceDigest: candidateDigest,
             sourceRevision,
-            title: `Review phase ${requiredStringField(phase.phaseId, "candidate phaseId")}`,
+            title: `Review phase ${phaseId}`,
             createdAt: held.projectionGeneratedAt,
-            expectedGraphRevision: requiredDigestField(
-              candidate.graphRevisionDigest,
-              "candidate graph revision",
-            ),
+            expectedGraphRevision: graphRevision,
             exactObjectDigest: candidateDigest,
             allowedCommands: ["record-authority-decision"],
           });
