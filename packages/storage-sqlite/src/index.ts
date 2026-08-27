@@ -5130,12 +5130,9 @@ export class SqlitePortalQueryAuthority {
    */
   #acceptedPublicationDigests(repositoryId: string, runId: string): ReadonlySet<string> {
     const accepted = new Set<string>();
-    const row = this.#runtimeRecordRow(repositoryId, runId);
-    if (row === undefined) return accepted;
-    const records = requiredJsonRecord(
-      decodeDurableJsonValue(row.records_json),
-      "Portal runtime records",
-    );
+    const held = this.#runtimeRecords(repositoryId, runId);
+    if (held === undefined) return accepted;
+    const records = held.records;
     for (const lifecycle of runtimeLifecycleRecords(records)) {
       const closure = optionalJsonRecord(lifecycle.closure);
       const acceptances = Array.isArray(closure?.outputAcceptances)
@@ -5155,12 +5152,9 @@ export class SqlitePortalQueryAuthority {
     runId: string,
   ): ReadonlyMap<string, string> {
     const digests = new Map<string, string>();
-    const row = this.#runtimeRecordRow(repositoryId, runId);
-    if (row === undefined) return digests;
-    const records = requiredJsonRecord(
-      decodeDurableJsonValue(row.records_json),
-      "Portal runtime records",
-    );
+    const held = this.#runtimeRecords(repositoryId, runId);
+    if (held === undefined) return digests;
+    const records = held.records;
     for (const lifecycle of runtimeLifecycleRecords(records)) {
       const phase = optionalJsonRecord(lifecycle.phase);
       const gate = optionalJsonRecord(lifecycle.gateEvidence);
@@ -5413,13 +5407,10 @@ export class SqlitePortalQueryAuthority {
     const acceptedTasks = new Map<string, string>();
     const criterionOutcomes = new Map<string, string>();
     const criterionEvidence = new Map<string, number>();
-    const recordsRow = this.#runtimeRecordRow(repositoryId, runId);
-    if (recordsRow === undefined)
+    const held = this.#runtimeRecords(repositoryId, runId);
+    if (held === undefined)
       return { lifecycles, acceptedTasks, criterionOutcomes, criterionEvidence };
-    const records = requiredJsonRecord(
-      decodeDurableJsonValue(recordsRow.records_json),
-      "Portal runtime records",
-    );
+    const records = held.records;
     for (const lifecycle of runtimeLifecycleRecords(records)) {
       const phase = requiredJsonRecord(lifecycle.phase, "Portal lifecycle phase");
       const key = generationKey(
@@ -5581,6 +5572,33 @@ export class SqlitePortalQueryAuthority {
            AND records_json IS NOT NULL AND projection_generated_at IS NOT NULL`,
       )
       .get(repositoryId, runId);
+  }
+
+  /**
+   * A run's whole records, however they come to be stored.
+   *
+   * The one place a reader turns a run's stored state into records, so that
+   * moving the append-only collections out of the blob is a change here rather
+   * than at each of the readers.
+   */
+  #runtimeRecords(
+    repositoryId: string,
+    runId: string,
+  ):
+    | {
+        readonly records: Readonly<Record<string, JsonValue>>;
+        readonly projectionGeneratedAt: string;
+      }
+    | undefined {
+    const row = this.#runtimeRecordRow(repositoryId, runId);
+    if (row === undefined) return undefined;
+    return {
+      records: requiredJsonRecord(
+        decodeDurableJsonValue(row.records_json),
+        "Portal runtime records",
+      ),
+      projectionGeneratedAt: row.projection_generated_at,
+    };
   }
 
   #portalQuestionRecord(
@@ -5833,12 +5851,9 @@ export class SqlitePortalQueryAuthority {
         allowedCommands: ["answer-question"],
       });
     }
-    const recordsRow = this.#runtimeRecordRow(repositoryId, runId);
-    if (recordsRow !== undefined) {
-      const records = requiredJsonRecord(
-        decodeDurableJsonValue(recordsRow.records_json),
-        "Portal runtime records",
-      );
+    const held = this.#runtimeRecords(repositoryId, runId);
+    if (held !== undefined) {
+      const records = held.records;
       for (const lifecycle of runtimeLifecycleRecords(records)) {
         const candidate = optionalJsonRecord(lifecycle.candidate);
         const decision = optionalJsonRecord(lifecycle.authorityDecision);
@@ -5860,7 +5875,7 @@ export class SqlitePortalQueryAuthority {
             sourceDigest: candidateDigest,
             sourceRevision,
             title: `Review phase ${requiredStringField(phase.phaseId, "candidate phaseId")}`,
-            createdAt: recordsRow.projection_generated_at,
+            createdAt: held.projectionGeneratedAt,
             expectedGraphRevision: requiredDigestField(
               candidate.graphRevisionDigest,
               "candidate graph revision",
