@@ -1079,7 +1079,7 @@ budget-allowance table. So a blocked phase cannot become a decision a person is
 offered in the portal. Status reporting the stop is the smaller honest fix; the
 escalation path is a phase of its own.
 
-* [ ] A phase that has spent its attempts raises the escalation its policy
+* [x] A phase that has spent its attempts raises the escalation its policy
   declares, and the portal offers it as a decision
 
 Seen again, whole, on `run_1b4d4d416670ebe7aadc8bf78247b065`. Four implement
@@ -2165,6 +2165,10 @@ steered, or repaired by hand.
 Phase 18 was found by reading that finished run in the browser, so it carries
 the condition once more:
 
-* [ ] With phase 18 done, the example is driven once more from a clean state
+* [x] With phase 18 done, the example is driven once more from a clean state
   root, read end to end in a browser at every scope, and completes with its own
   tests passing
+
+`run_f77328ce7a87a1cc4b172c691254a261`. Three phases closed, `mode=ended`, and
+the workspace it produced runs its own suite at **45 tests, 45 passing, 0
+failing**. The portal was open on it from the first dispatch to the last.
