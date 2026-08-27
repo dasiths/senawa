@@ -56,6 +56,13 @@ export const dependencies: RuntimeDependencies = {
 export interface ScenarioOptions {
   /** The command the gate's sensor runs. `false` makes the gate refuse. */
   readonly sensorCommand?: string;
+  /**
+   * The command a gate on the fan-out members runs, and only them.
+   *
+   * `sensorCommand` reaches every phase, so failing a member with it fails the
+   * phase that produced the members too and the run never fans out.
+   */
+  readonly memberSensorCommand?: string;
   /** Adds a second phase that depends on the first. */
   readonly secondPhase?: boolean;
   /** Names that second phase, to author an order that is not alphabetical. */
@@ -575,7 +582,9 @@ function fanOutPhase(options: ScenarioOptions): string {
         : options.continueOnFailure === true
           ? "\n    onFailure: continue"
           : ""
-    }${options.memberAttempts === undefined ? "" : `\n    attempts: ${options.memberAttempts}`}
+    }${options.memberAttempts === undefined ? "" : `\n    attempts: ${options.memberAttempts}`}${
+      options.memberSensorCommand === undefined ? "" : "\n    gates: [member-check]"
+    }
 `;
   if (options.nestedFanOut === true) {
     return `${first}
@@ -648,15 +657,30 @@ function sensors(options: ScenarioOptions): string {
 `
       : "";
   const blocking = options.unanchored === true ? "opinion" : "measure";
+  const memberSensor =
+    options.memberSensorCommand === undefined
+      ? ""
+      : `  member-measure:
+    run: "${options.memberSensorCommand}"
+    deterministic: true
+`;
+  const memberGate =
+    options.memberSensorCommand === undefined
+      ? ""
+      : `  member-check:
+    blocking:
+      - sensor: member-measure
+        exitCode: 0
+`;
   return `sensors:
   measure:
     run: "${options.sensorCommand ?? "true"}"
     deterministic: true
-${opinion}
+${memberSensor}${opinion}
 gates:
   check:
     blocking:
       - sensor: ${blocking}
         exitCode: 0
-${advisory}`;
+${advisory}${memberGate}`;
 }

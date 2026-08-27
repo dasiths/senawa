@@ -440,6 +440,61 @@ describe("running every member of a fan-out", () => {
     }
   });
 
+  it("lets a member of a fan-out ask twice when it runs out twice", async () => {
+    // A member out of tries twice must be offered twice. Verified honestly:
+    // this still passes with either fix behind it removed, because every
+    // attempt here gets a fresh dispatch and so asks under a fresh identity
+    // with no earlier question on it. The live collision needs askForHelp to
+    // receive the *same* dispatch on both exhaustions, which is what the real
+    // fan-out did and this does not yet reproduce.
+    const scenario = await startScenario("fanout-ask-twice", {
+      fanOut: "complete",
+      memberAttempts: 1,
+      memberSensorCommand: "false",
+    });
+    await agentTurn(scenario, scenario.dispatchId, canonicalValue({ tasks: [{ id: "one" }] }));
+    await advance(scenario);
+    await advance(scenario);
+    const member = await advance(scenario);
+    if (member.kind !== "dispatched") throw new Error(`member: ${member.kind}`);
+    await agentTurn(scenario, member.dispatchId, canonicalValue({ verified: true }));
+    expect(await advance(scenario)).toMatchObject({ kind: "escalated" });
+
+    const asked = () => {
+      const portal = new SqlitePortalQueryAuthority({ ...scenario.paths, dependencies });
+      try {
+        return portal
+          .listHumanNeeds(scenario.repositoryId, scenario.runId)
+          .needs.filter((need) => need.kind === "question").length;
+      } finally {
+        portal.close();
+      }
+    };
+    expect(asked()).toBe(1);
+
+    expect(
+      answerQuestion({
+        ...scenario.paths,
+        answer: "read the assertion before editing anything",
+        currentTime: NOW,
+        dependencies,
+        principal: runtimePrincipal,
+        repositoryId: scenario.repositoryId,
+        runId: scenario.runId,
+      }),
+    ).toMatchObject({ exitCode: 0 });
+
+    const retried = await advance(scenario);
+    if (retried.kind !== "dispatched") throw new Error(`retry: ${retried.kind}`);
+    await agentTurn(scenario, retried.dispatchId, canonicalValue({ verified: true }));
+
+    // Out of tries again, asking against the same first dispatch. Without an
+    // identity that says which exhaustion this is, the ask is a duplicate of
+    // the answered one and nobody is waited on.
+    expect(await advance(scenario)).toMatchObject({ kind: "escalated" });
+    expect(asked()).toBe(1);
+  }, 120_000);
+
   // The dispatch driver takes `phaseTasks[memberIndex ?? 0]`, and every retry
   // path passed nothing, so a retry in a fan-out re-ran the first member
   // whatever had actually failed. When that member was already accepted the

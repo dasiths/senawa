@@ -1821,16 +1821,21 @@ Advancing `run_af3a5af52de038477f6fcf693ce2458e` -- stuck reporting an ask
 nobody could see -- now gives `waiting on you: 1`.
 
 Neither fix has a test that guards it, and the scenario says so in its own
-comment rather than implying otherwise. Removing either one still passes,
-because a single member gets a fresh dispatch each attempt and never collides.
-Both need a fan-out, where every attempt escalates against the member's first
-dispatch and so asks twice under one identity.
+comment rather than implying otherwise.
 
-Writing that test was attempted and abandoned, which is worth knowing before it
-is attempted again. `startScenario`'s `sensorCommand` applies to the whole
-workflow, so failing the member's gate also fails the producing phase, and the
-run escalates before it ever fans out -- `member: escalated` at the third
-advance. The fixture needs a sensor that fails for the member phase only.
+The fixture gained what was missing -- `memberSensorCommand` puts a gate on the
+fan-out members alone, so a member can fail while the phase that produced it
+passes -- and a fan-out scenario now drives a member to two exhaustions. It
+still does not reproduce the collision. Removing either fix passes, because
+every attempt in the scenario gets a fresh dispatch and so asks under a fresh
+identity with no earlier question on it.
+
+The live condition is narrower than "a fan-out": `askForHelp` has to receive
+the **same** dispatch on both exhaustions. On the real run that was ordinal 4
+both times while the tries ran to 10. Reproducing it means understanding why
+`advanceRun` carries the member's first dispatch there rather than its latest,
+which is the same root as the ordinal attribution above. One fix, once that is
+understood, closes both.
 
 The ordinal attribution above is still wrong and still worth fixing: the
 question is hung on the dispatch the advance carries, which in a fan-out is the
