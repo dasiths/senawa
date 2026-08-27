@@ -2324,9 +2324,31 @@ asks for it rather than on every command. The digest is then unchanged --
 same definition, same bytes, same receipts -- and a write stops paying for a
 run's whole history.
 
-That reframes the remaining work: the question to answer first is who reads
-`revision_digest` and whether any of them needs it synchronously with the
-write. Splitting the blob is then an optimisation of the read, not the fix.
+### Answered: nothing needs the digest when the write happens
+
+The question that reframing raised has an answer, and it sharpens the plan
+again rather than confirming it.
+
+`runs.revision_digest` is written on every command and read in exactly one
+place: the export that walks `runs` for a backup. The portal's own change
+notification does not need it -- the trigger fires on
+`OLD.records_json IS NOT NEW.records_json` as well, so a records change already
+bumps the revision without the digest saying so.
+
+So the digest can be computed lazily, and that is safe. But it is a modest win,
+and measuring says why: after this phase's first half the digest costs an
+encode and a hash of a string that has already been built, while
+`durableStringify` -- which builds it -- is the 0.482ms. The column is the cost,
+not the digest.
+
+Which corrects the note above. The digest is not what forces a write to touch
+the whole history; **the column is**, because it holds the whole records. So
+splitting the blob is the fix after all, and the lazy digest is what makes the
+split possible: with nothing needing the digest at write time, rows never have
+to be reassembled just to hash them.
+
+The order is now clear. Move the digest to the read, then split the column, and
+a command finally writes only what it changed.
 
 * [ ] A command writes only the records it changed
 * [x] The run's record digest is still exactly what it was, so no receipt moves
