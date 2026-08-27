@@ -1767,14 +1767,23 @@ it: "runs the members that can finish when an earlier one cannot" reaches all
 three. What phase 21 added is that exhausting a ceiling now behaves the same
 way as failing did, by asking rather than stopping.
 
+`run_2b69a12b42f7b72cb735d83fa68d9642` is that in the open: three implement
+members passed on their first try and stayed passed while the fourth spent six
+attempts, escalated, was answered, and started again. Siblings untouched, in a
+real run rather than a fixture.
+
+Approval's phase scope is the same code that has always run, and the authoring
+test pins that a phase declaring no scope lowers without one, so reading an
+existing workflow again cannot change what it asks.
+
 * [x] `approval.scope` is authored per phase and accepts `phase` or `member`
 * [x] A member's attempt ceiling is its own, spent only by its own tries
+* [x] `scope: phase`, and a phase that declares no scope, asks once for all of
+  them
+* [x] One member exhausting its policy leaves its siblings untouched
 * [ ] A member's gates are evaluated against that member's work
 * [ ] `scope: member` asks one approval per member, against that member's work
-* [ ] `scope: phase`, and a phase that declares no scope, asks once for all of
-  them
 * [ ] An authored phase can still declare a default every member inherits
-* [ ] One member exhausting its policy leaves its siblings untouched
 
 ## Phase 23: a run's records stop being rewritten whole
 
