@@ -1460,7 +1460,7 @@ than by a defect, and it is indistinguishable from one while it is happening.
 The health report does say `worker dispatch is disabled`, but only to a caller
 that asks for session-store health.
 
-* [ ] A supervisor that cannot dispatch work says so where a run's history is,
+* [x] A supervisor that cannot dispatch work says so where a run's history is,
   which is phase 20
 
 ### Measured on the example, driven from clean, five agents working
@@ -1864,11 +1864,30 @@ question.
 
 A run that is waiting on a person and a run that is stuck must not look alike.
 
-* [ ] A run waiting on a human answer says so, rather than reporting that
+### Done, and where each is proved
+
+The message was counting finished work. A dispatch for a task the run has
+already accepted is not a frontier holding anything up, and all four held tasks
+in the misleading case read `accepted`. Filtering those leaves nothing to
+report, so a run waiting on a person says nothing about scheduling at all --
+proved on the live example, which logged `schedule-declined` once a cycle until
+`07:09` and has logged none since the service restarted at `09:43` with the
+escalation still outstanding.
+
+A real stall now reaches `status` as a `stopped:` line, beside the reasons the
+driver already reported, and the scheduler says `run.resumed` when it starts
+work again so a working run does not wear an old refusal. Removing the
+surfacing fails the scenario that asserts it.
+
+`status` already counted needs and listed them, so an escalation shows the
+moment it is recorded -- which is what `waiting on you: 1` on
+`run_af3a5af52de038477f6fcf693ce2458e` was.
+
+* [x] A run waiting on a human answer says so, rather than reporting that
   nothing is schedulable
-* [ ] `status` counts an escalation among what is waiting on you
-* [ ] Dispatches for accepted tasks stop being reported as a held frontier
-* [ ] The reason a run is not scheduling is readable without opening the
+* [x] `status` counts an escalation among what is waiting on you
+* [x] Dispatches for accepted tasks stop being reported as a held frontier
+* [x] The reason a run is not scheduling is readable without opening the
   supervisor's log
 
 ## Phase 22: a member owns its own gates, approval and attempts

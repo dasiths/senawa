@@ -211,15 +211,32 @@ export class ProductionScheduler {
   ): void {
     const key = `${input.repositoryId}\u0000${input.runId}`;
     if (worked || dispatches.length === 0) {
-      this.#declined.delete(key);
+      // Saying a run started again matters as much as saying it stopped, now
+      // that a person reads the stop. Without it a working run wears its last
+      // refusal for ever.
+      if (this.#declined.delete(key)) {
+        this.#options.authority.appendLog({
+          recordedAt: input.currentTime,
+          level: "info",
+          event: "run.resumed",
+          message: "the scheduler is starting work again",
+          fields: { repositoryId: input.repositoryId, runId: input.runId },
+        });
+      }
       return;
     }
     const held = dispatches
       .filter(({ taskScope }) => !ready.tasks.has(taskScope.taskId))
       .map(({ taskScope }) => {
         const fact = ready.facts.find(({ taskId }) => taskId === taskScope.taskId);
-        return `${String(taskScope.taskId)} ${fact?.status ?? "unknown"}`;
+        return { id: String(taskScope.taskId), status: fact?.status ?? "unknown" };
       })
+      // A dispatch for a task the run has already accepted is finished work,
+      // not a frontier holding anything up. Counting those reported a deadlock
+      // at a run that was merely waiting for a person to answer, once a cycle,
+      // for ever -- and cost an hour of believing it.
+      .filter(({ status }) => status !== "accepted")
+      .map(({ id, status }) => `${id} ${status}`)
       .sort();
     if (held.length === 0) return;
     this.#report(input, "schedule-declined", declineReason(held), { held });

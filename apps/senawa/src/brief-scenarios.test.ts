@@ -573,6 +573,18 @@ describe("running every member of a fan-out", () => {
       // A stop that was never cleared would leave a working run wearing a
       // refusal it had already recovered from.
       expect(status()).not.toContain("stopped:");
+
+      // A scheduler that will not start anything is a stop as far as a person
+      // is concerned. It only ever said so in the supervisor's log, which is
+      // where an hour of wrong diagnosis went looking.
+      supervisor.appendLog({
+        recordedAt: NOW,
+        level: "warn",
+        event: "schedule-declined",
+        message: "no dispatch is schedulable; the ready frontier holds task_abc",
+        fields: { repositoryId: scenario.repositoryId, runId: scenario.runId },
+      });
+      expect(status()).toContain("stopped: no dispatch is schedulable");
     } finally {
       supervisor.close();
     }

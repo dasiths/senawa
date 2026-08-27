@@ -102,7 +102,13 @@ function stopReason(options: RunStatusOptions): string | undefined {
     for (const entry of page.items) {
       const fields = entry.fields as { readonly runId?: unknown } | null;
       if (fields?.runId !== options.runId) continue;
-      if (entry.event === "run.stopped" || entry.event === "run.drive-failed") {
+      if (
+        entry.event === "run.stopped" ||
+        entry.event === "run.drive-failed" ||
+        // A scheduler that will not start anything is a stop as far as a person
+        // is concerned, and it only ever said so in the supervisor's log.
+        entry.event === "schedule-declined"
+      ) {
         reason = entry.message;
       } else if (entry.event === "run.resumed" || entry.event === "run.finished") {
         reason = undefined;
