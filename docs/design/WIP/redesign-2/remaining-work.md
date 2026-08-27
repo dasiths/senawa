@@ -1753,13 +1753,70 @@ Which corrects the reading above rather than confirming it. The escalation is
 raised, recorded, and answered; nothing is waiting on a person, and `waiting on
 you: 0` is true.
 
-What is left is that `advance` still reports `implement is out of attempts and
-has asked you what to do` for a question that has been answered. The outcome
-and the record disagree again, in the opposite direction this time: the driver
-should be acting on the answer -- opening the attempt it bought -- rather than
-announcing an ask that is closed. Start there, with `askForHelp`'s "already
-outstanding" guard, which cannot tell an outstanding question from an answered
-one.
+`context_question_answers` holds it against
+`task_df4e935387280642339ac9327ee5320a15211008f`, answered at `07:10:45`, with
+the driver script's own words. So the chain works end to end live: the member
+spent its attempts, asked, and somebody answered.
+
+### The one thing left: an answer that buys nothing
+
+Advancing after that answer leaves the dispatch count at **17**, twice, and
+still reports `implement is out of attempts and has asked you what to do`. The
+answer bought no attempt, which is the thing phase 21 said an answer must do.
+
+What has been ruled out, on the live database rather than by reading:
+
+* The question is stored on `dispatch_98ae87ec...` for
+  `task_df4e935387280642339ac9327ee5320a15211008f`, and is present in the
+  authority's own submissions.
+* `context_fresh_dispatch_requirements` holds a row for it, so
+  `listAnsweredQuestions` -- which is driven by that table -- should return it.
+
+Which leaves the reset itself, and printing what it sees settles it. For
+`task_df4e935387280642339ac9327ee5320a15211008f`, whose dispatches run at
+ordinals 4 through 10:
+
+```
+answered total 5 | for task 1
+ordinal 4  | subs 4 | MATCH true
+ordinal 5..10 | subs 0 | MATCH false
+```
+
+The answered escalation matches on ordinal **4** -- the member's *first* try,
+not its last. `answeredAttemptOrdinals` takes the maximum matching ordinal, so
+`answeredOrdinal` is 4, and `taskAttempts` counts everything above it: ordinals
+5, 6, 7, 8, 9, 10. Six attempts, which is exactly the ceiling. The member is
+exhausted again the instant it is answered, however many times a person
+answers.
+
+The cause is where the question is hung. `askForHelp` raises it against
+`input.dispatch`, which at the exhaustion point is the dispatch the advance is
+carrying -- in a fan-out, the member's first -- rather than the try that
+actually ran out. So the answer is recorded against a turn six attempts old.
+
+But that is not the whole of it, and the last row read says what is. The
+escalation's fresh-dispatch requirement is **already satisfied**, by
+`dispatch_89c2a01c...`. The answer was delivered. It did buy an attempt, that
+attempt ran, and it failed the same gate again. The member is genuinely out of
+tries a second time.
+
+### What actually blocks it: the second ask cannot be made
+
+The submission id is derived from the dispatch --
+`submission_exhausted-<dispatch digest>` -- so the second exhaustion tries to
+ask under an id that already exists and has already been answered. The
+admission is a duplicate, nothing new is recorded, `listHumanNeeds` stays at
+zero, and `status` says nobody is waited on, while `advance` goes on reporting
+that it has asked.
+
+So a member gets exactly one conversation. The first escalation works end to
+end -- raised, offered, answered, delivered, retried, all of it proved on this
+run -- and the second is silent for ever.
+
+An escalation's identity has to include which exhaustion it is, not only which
+dispatch asked, so a member that runs out twice can ask twice. Fixing the
+ordinal attribution above matters too, because a ceiling bought back from the
+member's first try is no ceiling, but this is what makes the run go quiet.
 
 * [x] A member that spends its attempts raises the escalation its policy
   declares instead of stopping the run
