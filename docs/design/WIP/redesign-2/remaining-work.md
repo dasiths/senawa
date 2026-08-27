@@ -1739,6 +1739,28 @@ count, the answer command, and now the admission itself. Being out of tries is
 an exception everywhere the rule appears, and each place that missed it hid the
 escalation somewhere different.
 
+### Where it stands, exactly
+
+After the admission fix, on `run_af3a5af52de038477f6fcf693ce2458e`:
+
+* `context_questions` holds **1** row matching `submission_exhausted-%`, where
+  before it held none. The broker now takes the question.
+* `listHumanNeeds` returns **0** -- and reading the row rather than the query
+  says why: it is **already answered**. `context_question_answers` holds a row
+  for that exact submission, so the needs projection is right to hide it.
+
+Which corrects the reading above rather than confirming it. The escalation is
+raised, recorded, and answered; nothing is waiting on a person, and `waiting on
+you: 0` is true.
+
+What is left is that `advance` still reports `implement is out of attempts and
+has asked you what to do` for a question that has been answered. The outcome
+and the record disagree again, in the opposite direction this time: the driver
+should be acting on the answer -- opening the attempt it bought -- rather than
+announcing an ask that is closed. Start there, with `askForHelp`'s "already
+outstanding" guard, which cannot tell an outstanding question from an answered
+one.
+
 * [x] A member that spends its attempts raises the escalation its policy
   declares instead of stopping the run
 * [x] The escalation names what kept failing: the gate, its reading, and the
