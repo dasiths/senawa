@@ -2054,6 +2054,39 @@ spends 6.6 of 9 seconds inside `exec`, and the per-command p50 is 13ms with no
 upward trend at that size. So this is a ceiling, not a present pain, and it is
 last for that reason.
 
+### Measured, so the trigger is a number rather than a feeling
+
+On the live example's own records, 235,977 bytes after three phases:
+
+| what | cost |
+| --- | --- |
+| SQLite `UPDATE` of the whole blob | 0.074ms |
+| the same blob at a tenth its size | 0.007ms |
+| `JSON.stringify` of the records | 0.482ms |
+
+So the write is not the cost -- serialising is, and it is linear in the run's
+own history. `durableStringify` and the digest are each at least a plain
+stringify, and the code does **two** full traversals per command:
+`durableStringify(run.records)` for the column and
+`canonicalDigest(canonicalValue(run.records))` for the revision. Call it 1.5ms
+per command at this size.
+
+Linear per command is quadratic in aggregate, because every command pays for
+all the history before it. At ten times this run's length that is roughly 20ms
+a command, and a workflow accepting a thousand commands spends real time on
+nothing but rewriting what it already knew.
+
+**Deferred, with a trigger.** Nothing today is slow because of this: the
+example's five agents work while the portal answers in milliseconds. It becomes
+worth the schema change when a run's records pass about a megabyte, or when
+per-command write cost is measured above 10ms. Either is a number somebody can
+check rather than an opinion.
+
+The one free-looking improvement was left alone deliberately. Sharing a single
+canonicalisation between the column and the digest would halve the cost, but it
+changes what produces durable bytes, and criterion two here says no receipt may
+move. That is not a change to make speculatively at the end of other work.
+
 * [ ] A command writes only the records it changed
 * [ ] The run's record digest is still exactly what it was, so no receipt moves
 * [ ] Write latency does not grow with the number of commands a run has accepted
