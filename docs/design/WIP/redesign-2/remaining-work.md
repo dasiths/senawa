@@ -2304,6 +2304,27 @@ mode it is not merely unimplemented but meaningless, and the honest behaviour
 there is what happens today: one reading, about the repository, covering every
 member.
 
+### And the driver cannot see a member's workspace
+
+Reading further settles what the change actually is. `readGate` calls
+`runSensors` with `rootDirectory: input.projectRoot` -- the project, not a
+member. A member's directory is resolved inside the effect host, by
+`gitHost.workspaceRoot(repositoryId, runId, workspaceId)`, which the driver has
+no handle on and should not grow one: that is an adapter, and the driver is
+above it.
+
+So the change is a port, not a lookup. `AdvanceRunInput` gains something like
+`resolveMemberWorkspace?: (taskId: string) => string | undefined`, supplied by
+the daemon, which already holds the workspace host. `readGate` then runs once
+per member with that root, tags each reading with its task -- which the kernel
+now accepts -- and falls back to today's single phase-scoped reading whenever
+the resolver returns nothing, which is every run in shared mode.
+
+That is small and well-shaped, and it is deliberately not built yet: no
+workflow here uses worktree mode, so it would be a port with no caller and a
+branch no test could reach honestly. It becomes worth doing with the first
+workflow that isolates its writers.
+
 ## Phase 27: a run's records are written as they change
 
 Phase 23 measured this and deferred it against a trigger. The trigger is being
