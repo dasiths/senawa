@@ -2195,14 +2195,46 @@ Approval and gates move together because they are the same shape: both are
 judgements about work, and both are currently addressed to the phase because
 that is the only address the candidate offers.
 
-* [ ] An authority decision can name the task it covers, and a phase-scoped
+### Found doing it: an address is not a plural
+
+The kernel can now say *which* piece of work a decision covers and which one a
+reading is about, and neither moves anything already recorded. That is the half
+this phase set out to build, and it is done.
+
+It is not enough on its own, and wiring authoring to it made that plain.
+`approve.scope: member` was un-refused, and the moment it lowered it became
+configuration that compiles and does nothing -- exactly the failure the refusal
+exists to prevent -- so the refusal went back.
+
+The reason is one line in `lifecycle.ts`:
+
+```ts
+readonly authorityDecision?: AuthorityDecision;
+```
+
+A closure carries **one** decision. Addressing it to a task lets a person say
+"I approve Alpha's work", but the phase still closes on a single decision, so
+there is nowhere to put the second member's. The same holds for gate evidence.
+
+What is left is a plural, not another address: `authorityDecisions` and
+readings per task, with `validateDecisionRelations` checking that every task
+the scope requires has one, and `closureStatus` staying `approval-pending`
+until they are all in. That reaches `recordDigests`, which is where the care
+belongs, because no existing closure's digest may move.
+
+The address had to come first -- a plural of unaddressed decisions would say
+nothing -- so this phase is half-done on purpose rather than abandoned, and
+`scope: member` keeps refusing until the rest lands.
+
+* [x] An authority decision can name the task it covers, and a phase-scoped
   decision still means every task
-* [ ] A gate evaluation can carry a reading per task alongside the phase's
+* [x] A gate evaluation can carry a reading per task alongside the phase's
+* [x] No existing run's records or receipts change shape or digest
+* [ ] A closure carries a decision per task, not one for the phase
 * [ ] `approve.scope: member` compiles, and asks one approval per member
   against that member's work
 * [ ] A member's gates are evaluated against that member's work
 * [ ] A phase closes only when every decision its scope requires is in
-* [ ] No existing run's records or receipts change shape or digest
 
 ## Phase 27: a run's records are written as they change
 
