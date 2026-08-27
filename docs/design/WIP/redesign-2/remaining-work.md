@@ -2125,6 +2125,91 @@ move. That is not a change to make speculatively at the end of other work.
 * [ ] The run's record digest is still exactly what it was, so no receipt moves
 * [ ] Write latency does not grow with the number of commands a run has accepted
 
+## Phase 25: the escalation fixes get tests that would catch them
+
+Three deferrals were recorded above as decisions. They are being taken now
+rather than left, and this is the smallest and least risky of the three, so it
+goes first: it puts guards under code that is already shipped before anything
+else moves.
+
+Two fixes have no test that discriminates. Removing either still passes.
+
+The escalation asks against the member's **newest** dispatch, because the
+fan-in pins an accepted task to the dispatch that earned acceptance. And the
+submission identity carries which exhaustion it is, so a member out of tries
+twice can ask twice. Both were proved on live runs and neither can be broken by
+a unit test today.
+
+The obstacle is precise. Which dispatch the advance carries is decided by the
+completion outbox: when one dispatch's completion sits there undelivered and
+another's does not, the one in the outbox wins whatever the ordinals. The live
+run hit that with its **oldest** dispatch in the outbox, and every deterministic
+sequence the scenario harness produces leaves the newest one there instead.
+
+So the harness needs to be able to hand work in without letting the advance
+drain it -- to leave a chosen dispatch's completion outstanding. That is a
+fixture capability, not a change to the run.
+
+* [ ] The scenario harness can leave a chosen dispatch's completion undelivered
+* [ ] A test reproduces an advance carrying an older dispatch than the member's
+  newest, and fails when the escalation stops asking against the newest
+* [ ] A test fails when the submission identity stops carrying which exhaustion
+  it is
+* [ ] Neither test asserts anything the live runs did not show
+
+## Phase 26: a decision and a reading belong to one piece of work
+
+This is the kernel change phase 22 was waiting on, and taking it closes both of
+that phase's open criteria.
+
+The kernel records one authority decision per candidate and evaluates one gate
+per candidate, and a candidate is phase-shaped. That is why `approve.scope:
+member` is refused at authoring time today and why a member's gate reads the
+phase's work rather than its own.
+
+What it lacks is not a candidate per member -- a phase closes once, and that
+stays true -- but a decision, and a gate reading, addressed to a **task within**
+the one candidate. The record then still says who approved what, which is the
+guarantee the earlier deferral refused to trade away.
+
+Approval and gates move together because they are the same shape: both are
+judgements about work, and both are currently addressed to the phase because
+that is the only address the candidate offers.
+
+* [ ] An authority decision can name the task it covers, and a phase-scoped
+  decision still means every task
+* [ ] A gate evaluation can carry a reading per task alongside the phase's
+* [ ] `approve.scope: member` compiles, and asks one approval per member
+  against that member's work
+* [ ] A member's gates are evaluated against that member's work
+* [ ] A phase closes only when every decision its scope requires is in
+* [ ] No existing run's records or receipts change shape or digest
+
+## Phase 27: a run's records are written as they change
+
+Phase 23 measured this and deferred it against a trigger. The trigger is being
+overridden deliberately: it is being done now because it is the last structural
+debt, not because a run has hit the wall.
+
+The numbers stand -- 235,977 bytes after three phases, the SQLite write 0.074ms
+and serialising 0.482ms, two full traversals per command. Linear per command is
+quadratic across a run, because every command pays for all the history before
+it.
+
+The hard part is not the split. It is that `runs.revision_digest` must not move
+for any run that already exists, so whatever replaces the whole-blob write has
+to reproduce the same digest from parts. That is the criterion to prove first,
+not last.
+
+Phase 23's criteria are this phase's criteria; they are restated here so the
+work has one home.
+
+* [ ] A command writes only the records it changed
+* [ ] The run's record digest is still exactly what it was, so no receipt moves
+* [ ] Write latency does not grow with the number of commands a run has
+  accepted
+* [ ] An existing database opens, reads and drives without migration surprises
+
 ## Carried from the v1 plan
 
 Neither blocks anything above, and neither is part of the condition below. The
