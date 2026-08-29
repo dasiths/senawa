@@ -61,6 +61,7 @@ import {
   type WorkflowInputBinding,
 } from "@senawa/kernel";
 import {
+  assembleDurableRecord,
   type CommandEnvelope,
   canonicalBytes,
   canonicalStringify,
@@ -110,6 +111,7 @@ import {
   decodeSupervisorServiceRecord,
   decodeSupervisorWake,
   durableStringify,
+  durableStringifyPart,
   type EventReplayPage,
   type EventStreamFrame,
   type JsonValue,
@@ -749,6 +751,7 @@ interface CanonicalRunFragments {
   readonly events: string[];
   cursor: number;
   records?: string;
+  recordParts?: Map<string, { value: unknown; json: string; nodes: number }>;
   projectionGeneratedAt?: string;
 }
 
@@ -16858,8 +16861,14 @@ class IncrementalCanonicalSnapshot {
     fragments.receiptHistory.push(...receipts.map((receipt) => canonicalStringify(receipt)));
     fragments.events.push(...events.map((event) => canonicalStringify(event)));
     fragments.cursor = run.cursor;
-    if (run.records === undefined) delete fragments.records;
-    else fragments.records = durableStringify(run.records);
+    if (run.records === undefined) {
+      delete fragments.records;
+      delete fragments.recordParts;
+    } else {
+      const parts = fragments.recordParts ?? new Map();
+      fragments.recordParts = parts;
+      fragments.records = serializeRecordsIncrementally(run.records, parts);
+    }
     if (run.projectionGeneratedAt === undefined) delete fragments.projectionGeneratedAt;
     else fragments.projectionGeneratedAt = run.projectionGeneratedAt;
     this.#commandIds.add(commandId);
@@ -16873,6 +16882,35 @@ class IncrementalCanonicalSnapshot {
       .map(([, run]) => serializeCanonicalRun(run));
     return `{"runs":[${runs.join(",")}],"version":${JSON.stringify(this.#version)}}`;
   }
+}
+
+/**
+ * Serializes a run's records, reusing the parts the command did not touch.
+ *
+ * Records are built immutably -- a command spreads the aggregate and replaces
+ * only what it changed -- so an untouched top-level value keeps its identity
+ * and its string can be reused. Without this a run canonicalises its entire
+ * history on every command it accepts.
+ */
+function serializeRecordsIncrementally(
+  records: object,
+  cache: Map<string, { value: unknown; json: string; nodes: number }>,
+): string {
+  const view = records as Record<string, unknown>;
+  const parts: { key: string; json: string; nodes: number }[] = [];
+  for (const key of Object.keys(view)) {
+    const value = view[key];
+    if (value === undefined) continue;
+    const cached = cache.get(key);
+    const part =
+      cached !== undefined && cached.value === value ? cached : durableStringifyPart(value);
+    cache.set(key, { value, json: part.json, nodes: part.nodes });
+    parts.push({ key, json: part.json, nodes: part.nodes });
+  }
+  for (const key of [...cache.keys()]) {
+    if (view[key] === undefined) cache.delete(key);
+  }
+  return assembleDurableRecord(parts);
 }
 
 function serializeCanonicalRun(run: CanonicalRunFragments): string {

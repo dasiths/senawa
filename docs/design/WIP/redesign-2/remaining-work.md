@@ -2625,6 +2625,69 @@ The portal then loaded that run live -- connection live, the run's workflow
 rendered, no error anywhere in the page that was not part of the run's own
 text.
 
+## Phase 28: stop re-serialising a run's records on every command
+
+The measurement above pointed at `authority_state.canonical_json` and reading
+the code sharpened it into something much smaller than "change how the
+authority persists".
+
+`IncrementalCanonicalSnapshot` already solved this once. It holds a run's
+commands, receipts and events as **pre-serialised string fragments** and its
+`#serialize` only joins them, so accepting a command does not canonicalise
+254KB of commands or 113KB of receipts -- it appends three fragments and
+concatenates. That is why the blob being 693KB is not itself the cost.
+
+One line is the exception:
+
+```ts
+fragments.records = durableStringify(run.records);
+```
+
+A run's whole records -- 266,422 bytes on the live run -- are canonicalised on
+every accepted command, whatever changed. That is the traversal that grows with
+history, and it is separate from the `runs.records_json` write this phase's
+predecessor fixed.
+
+The fix is the fragment treatment applied one level down. Records are built
+immutably: a command spreads the aggregate and replaces the parts it touched,
+so every untouched top-level value keeps its identity. Caching `value` beside
+its `json` per top-level key and reusing the string whenever the value is
+identical means a command serialises only what it changed.
+
+Appended collections need one more step, because appending makes a new array
+every time. Their elements are immutable once written, so the cached prefix can
+be reused and only the tail serialised -- the same insight as the row split,
+applied to the string.
+
+* [x] A command serialises only the records it changed
+* [x] The blob is byte-identical to what full serialisation would produce
+* [x] The live run's per-command serialisation falls well below 266KB
+* [x] Reference-identity reuse is proved wrong-answer-safe by a test that
+  mutates a value in place
+
+### What it came to
+
+The live run's records are 266,167 bytes across fifteen top-level parts, the
+largest being `amendmentEvents` at 84,185 and `runEvents` at 37,072. A command
+that touches only `runEvents` now serialises 37KB where it used to serialise
+all 266KB.
+
+Byte-identity is the whole risk, so it is the thing pinned: assembling from
+parts must give exactly what one traversal gives, in canonical key order,
+whatever order the parts arrive in. Both are tested against `durableStringify`
+itself rather than against a fixture, so they cannot drift apart.
+
+The ceilings were the subtle part. `durableStringify` bounds a durable value by
+nodes and by bytes, and serialising per part would have checked each part
+instead of the whole -- letting an oversized aggregate be written and then
+refused on read, which bricks a run rather than stopping it. So
+`durableStringifyPart` reports the nodes it counted and `assembleDurableRecord`
+sums them and checks both ceilings on the assembled string.
+
+Reuse is keyed on reference identity, which is sound because canonical values
+are frozen: a part cannot change without becoming a different object. That is
+pinned by a test that tries to change one in place and is refused.
+
 * [x] A command writes only the records it changed
 * [x] The run's record digest is still exactly what it was, so no receipt moves
 * [ ] Write latency does not grow with the number of commands a run has

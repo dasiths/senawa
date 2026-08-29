@@ -1,5 +1,5 @@
 import { canonicalBytes, canonicalDigest, canonicalValue } from "@senawa/kernel";
-import { durableStringify } from "@senawa/protocol";
+import { assembleDurableRecord, durableStringify, durableStringifyPart } from "@senawa/protocol";
 import { deterministicSha256 } from "@senawa/testing";
 import { describe, expect, it } from "vitest";
 
@@ -57,5 +57,35 @@ describe("a run's records", () => {
     );
 
     expect(fromColumn).toBe(fromValue);
+  });
+
+  // A run canonicalises its whole records on every command it accepts, so the
+  // parts it did not touch are reused instead. That is only safe if putting
+  // the parts back gives exactly the bytes one traversal would have.
+  it("assembles from parts into the bytes one traversal would produce", () => {
+    const parts = Object.entries(records).map(([key, value]) => ({
+      key,
+      ...durableStringifyPart(value),
+    }));
+
+    expect(assembleDurableRecord(parts)).toBe(durableStringify(records));
+  });
+
+  it("puts the keys back in canonical order however the parts arrive", () => {
+    const parts = Object.entries(records)
+      .reverse()
+      .map(([key, value]) => ({ key, ...durableStringifyPart(value) }));
+
+    expect(assembleDurableRecord(parts)).toBe(durableStringify(records));
+  });
+
+  // The reuse is keyed on identity, which holds because a canonical value is
+  // frozen: a part cannot change without becoming a different object.
+  it("refuses to let a canonical value be changed in place", () => {
+    const frozen = canonicalValue(records) as { phase: { attempt: number } };
+
+    expect(() => {
+      frozen.phase.attempt = 99;
+    }).toThrow();
   });
 });

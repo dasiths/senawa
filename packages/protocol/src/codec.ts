@@ -1200,6 +1200,39 @@ export function durableStringify(input: unknown): string {
   return encoded;
 }
 
+/**
+ * Serializes one part of a durable value, reporting the nodes it counted.
+ *
+ * A caller that caches parts and reassembles them still has to bound the whole,
+ * and the node count is the part of that bound a string cannot show.
+ */
+export function durableStringifyPart(input: unknown): {
+  readonly json: string;
+  readonly nodes: number;
+} {
+  const budget = { depth: 0, nodes: 0, maxNodes: DURABLE_STATE_LIMITS.maxJsonNodes };
+  const value = snapshotJsonValue(input, "$", budget);
+  return { json: serialize(value), nodes: budget.nodes };
+}
+
+/** Joins durable parts into the object `durableStringify` would have produced. */
+export function assembleDurableRecord(
+  parts: readonly { readonly key: string; readonly json: string; readonly nodes: number }[],
+): string {
+  const nodes = parts.reduce((total, part) => total + part.nodes, 1);
+  if (nodes > DURABLE_STATE_LIMITS.maxJsonNodes) {
+    fail("oversized", "$", `JSON value exceeds ${DURABLE_STATE_LIMITS.maxJsonNodes} nodes`);
+  }
+  const encoded = `{${[...parts]
+    .sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0))
+    .map((part) => `${JSON.stringify(part.key)}:${part.json}`)
+    .join(",")}}`;
+  if (utf8Length(encoded) > DURABLE_STATE_LIMITS.maxBytes) {
+    fail("oversized", "$", `durable value exceeds ${DURABLE_STATE_LIMITS.maxBytes} bytes`);
+  }
+  return encoded;
+}
+
 /** What one process may write for itself and read back. */
 export const DURABLE_STATE_LIMITS = Object.freeze({
   maxBytes: 67_108_864,
