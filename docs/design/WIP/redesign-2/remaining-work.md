@@ -2731,6 +2731,24 @@ into one string and writing that string to disk. Those are byte copies rather
 than parses, and removing them means not storing the run as one row -- the
 change this phase deliberately did not make.
 
+### One scare, and it was the environment again
+
+Validating on the live example, `senawa status` failed with *SQLite migration
+metadata does not match packaged migration checksums* -- exactly what a broken
+migration would look like. The stored checksum for `001-baseline.sql` disagreed
+with the packaged file.
+
+It was a different database. The example's Makefile exports `XDG_STATE_HOME`
+and `XDG_RUNTIME_DIR`; running the built CLI by hand without them resolves to
+`~/.local/state/senawa/authority.db`, a stale default left by earlier sessions.
+With the two variables set, the same command reports the run finished, three
+phases closed, ten agents dispatched, and the portal renders it live with the
+connection up.
+
+Worth the detour only because the failure was indistinguishable from the real
+thing, and the way out was to print both sides rather than to reason about
+which was wrong.
+
 * [x] A command writes only the records it changed
 * [x] The run's record digest is still exactly what it was, so no receipt moves
 * [x] Write latency does not grow with the number of commands a run has
