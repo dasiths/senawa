@@ -2615,6 +2615,16 @@ maintains, and changing that is a change to how the authority persists at all,
 not to how records are stored. Worth its own phase, with these numbers as the
 reason.
 
+### The upgrade ran on the real database
+
+The example's own database was written before the split, so opening it is the
+migration's actual test rather than a rehearsal. The service came up healthy on
+it, `user_version` went to 2, four events totalling 84,180 bytes moved into
+rows, `records_json` fell from 266,422 to 182,218, and nothing was left inline.
+The portal then loaded that run live -- connection live, the run's workflow
+rendered, no error anywhere in the page that was not part of the run's own
+text.
+
 * [x] A command writes only the records it changed
 * [x] The run's record digest is still exactly what it was, so no receipt moves
 * [ ] Write latency does not grow with the number of commands a run has
