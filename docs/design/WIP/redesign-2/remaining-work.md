@@ -2581,11 +2581,46 @@ Crafting that rewind needs canonical encoding too: `JSON.stringify` produced a
 blob the reader refused outright with *$ must use canonical JSON encoding*.
 That is the second time this session a hand-written fixture has hit it.
 
+### Measured afterwards: the records blob was the smaller half
+
+The live run's own database, `run_f77328ce7a87a1cc4b172c691254a261`:
+
+| Blob | Bytes | Rewritten per command |
+| --- | --- | --- |
+| `authority_state.canonical_json` | 693,423 | whole |
+| `runs.records_json` | 266,422 | whole, until now |
+
+The split took 84,185 bytes of events out of the second, leaving 182,237. That
+is a real cut, but against 875KB of serialisation per command it is about 12%,
+so the criterion about latency not growing is still not met and is not ticked.
+
+Where the growth actually lives, inside `authority_state`:
+
+| Part | Bytes | Shape |
+| --- | --- | --- |
+| `records` | 266,422 | mixed |
+| `commands` | 254,336 | append-only |
+| `receiptHistory` | 113,204 | append-only |
+| `events` | 59,205 | append-only |
+
+427KB of 693KB is three append-only lists, and all three are *already* stored
+as ordinary tables -- `commands`, `receipt_history`, `event_frames` -- which
+`normalizeSnapshot` projects them into. The blob duplicates the tables, and
+rewriting it whole on every command is the cost that grows with a run's
+history.
+
+So the remaining work is not more of this phase's kind. It is that the
+authority's durable state is one blob rather than the tables it already
+maintains, and changing that is a change to how the authority persists at all,
+not to how records are stored. Worth its own phase, with these numbers as the
+reason.
+
 * [x] A command writes only the records it changed
 * [x] The run's record digest is still exactly what it was, so no receipt moves
 * [ ] Write latency does not grow with the number of commands a run has
-  accepted -- halved, then the events taken off the write path; measure again
-* [ ] An existing database opens, reads and drives without migration surprises
+  accepted -- measured at about 12% off, because the authority's own state blob
+  is the larger half and is untouched
+* [x] An existing database opens, reads and drives without migration surprises
 
 ## Carried from the v1 plan
 
