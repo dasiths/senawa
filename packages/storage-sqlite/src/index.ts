@@ -4872,7 +4872,9 @@ export class SqlitePortalQueryAuthority {
     const rows =
       owner.kind === "run"
         ? this.#runTranscriptRows(run.run_key, after, limit + 1)
-        : this.#ownerTranscriptRows(run.run_key, owner, after, limit + 1);
+        : owner.kind === "dispatch"
+          ? this.#ownerTranscriptRows(run.run_key, owner, after, limit + 1)
+          : this.#scopedTranscriptRows(repositoryId, runId, run.run_key, owner, after, limit + 1);
     const page = rows.slice(0, limit);
     return decodePortalTranscriptPage({
       apiVersion: PROTOCOL_VERSION,
@@ -4910,6 +4912,55 @@ export class SqlitePortalQueryAuthority {
          ORDER BY sequence LIMIT ?`,
       )
       .all(runKey, owner.kind, owner.id, after, limit);
+  }
+
+  /**
+   * A phase or a task shows the output of the agents that worked on it.
+   *
+   * Nothing writes a line owned by a phase or a task -- every line belongs to
+   * the dispatch that produced it -- so matching the owner exactly left a phase
+   * reading "no durable agent output is recorded" while ten agents had spoken
+   * under it. Lines its own owner did write are still included, so a writer at
+   * that scope would need no change here.
+   */
+  #scopedTranscriptRows(
+    repositoryId: string,
+    runId: string,
+    runKey: string,
+    owner: PortalTranscriptOwner,
+    after: number,
+    limit: number,
+  ): readonly PortalTranscriptRow[] {
+    const field = owner.kind === "phase" ? "$.phaseAttempt.phase.phaseId" : "$.task.taskId";
+    return this.#database
+      .prepare<
+        [string, string, string, string, string, string, number, number],
+        PortalTranscriptRow & { readonly owner_kind: string; readonly owner_id: string }
+      >(
+        `SELECT run_sequence AS sequence, owner_kind, owner_id, occurred_at, stream, text
+         FROM agent_transcript_lines l
+         WHERE l.run_key = ?
+           AND (
+             (l.owner_kind = ? AND l.owner_id = ?)
+             OR (l.owner_kind = 'dispatch' AND EXISTS (
+                   SELECT 1 FROM context_dispatches d
+                   JOIN context_bases b ON b.context_id = d.context_id
+                   WHERE d.dispatch_id = l.owner_id
+                     AND d.repository_id = ? AND d.run_id = ?
+                     AND json_extract(b.canonical_context, '${field}') = ?
+                 ))
+           )
+           AND l.run_sequence > ?
+         ORDER BY l.run_sequence LIMIT ?`,
+      )
+      .all(runKey, owner.kind, owner.id, repositoryId, runId, owner.id, after, limit)
+      .map((row) => ({
+        sequence: row.sequence,
+        occurred_at: row.occurred_at,
+        stream: row.stream,
+        text: row.text,
+        owner: Object.freeze({ kind: row.owner_kind, id: row.owner_id }),
+      }));
   }
 
   /**

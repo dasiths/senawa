@@ -465,7 +465,31 @@ describe("portal codecs", () => {
           nextAfter: 1,
         }),
       ),
-    ).toThrow(/must match the page owner/);
+    ).toThrow(/must name the page owner or one within it/);
+    // A phase is a scope, so it carries the dispatches that worked under it.
+    expect(
+      decodePortalTranscriptPage(
+        transcriptPage(
+          [
+            record(1, { owner: { kind: "dispatch", id: "dispatch_alpha" } }),
+            record(2, { owner: { kind: "task", id: "task_alpha" } }),
+          ],
+          { owner: { kind: "phase", id: "phase_alpha" }, nextAfter: 2 },
+        ),
+      ).records.map(({ owner }) => owner),
+    ).toEqual([
+      { kind: "dispatch", id: "dispatch_alpha" },
+      { kind: "task", id: "task_alpha" },
+    ]);
+    // A scope never carries something wider than itself.
+    expect(() =>
+      decodePortalTranscriptPage(
+        transcriptPage([record(1, { owner: { kind: "phase", id: "phase_alpha" } })], {
+          owner: { kind: "task", id: "task_alpha" },
+          nextAfter: 1,
+        }),
+      ),
+    ).toThrow(/must name the page owner or one within it/);
     // A run page merges owners, so its records name the capture owner instead.
     expect(
       decodePortalTranscriptPage(

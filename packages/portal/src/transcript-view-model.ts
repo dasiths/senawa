@@ -201,9 +201,11 @@ export function transcriptRows(
   return Object.freeze(rows);
 }
 
-/** The run-wide scope merges owners, so each row names the one that produced it. */
+/** A scope that merged owners names each one; a scope of a single owner does not. */
 export function transcriptShowsOwner(view: TranscriptView): boolean {
-  return view.owner?.kind === "run";
+  const owner = view.owner;
+  if (owner === undefined) return false;
+  return view.lines.some((line) => line.owner.kind !== owner.kind || line.owner.id !== owner.id);
 }
 
 /** The exact bounded text the pane displays, reused by copy and download. */

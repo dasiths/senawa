@@ -1331,6 +1331,58 @@ describe("SQLite Phase 11B portal query authority", () => {
     fixture.dispose();
   });
 
+  // A phase and a task own no transcript lines: their agents do. Matching the
+  // owner exactly left a phase reading "no durable agent output is recorded"
+  // while every agent under it had spoken.
+  it("shows a phase and a task the output of the agents that worked under them", () => {
+    const fixture = createFixture();
+    const authority = new SqliteAuthority(fixture.options);
+    instantiate(authority);
+    authority.close();
+    const worker = createWorkerExecutionFixture(createRuntimeGraph());
+    const broker = new SqliteContextBroker({
+      databasePath: fixture.databasePath,
+      dependencies: contextDependencies(),
+    });
+    broker.registerDispatch({
+      context: worker.context,
+      dispatch: worker.dispatch,
+      completionRequirements: worker.completionRequirements,
+      taskScope: taskScope(worker.context.contextDigest),
+    });
+    broker.appendTranscript(
+      transcriptLine({
+        owner: { kind: "dispatch", id: worker.dispatch.dispatchId },
+        lineId: "capture:scoped",
+        text: "the agent spoke",
+      }),
+    );
+    broker.close();
+
+    const portal = new SqlitePortalQueryAuthority(fixture.options);
+    const phaseId = worker.context.phaseAttempt.phase.phaseId;
+    const taskId = worker.context.task.taskId;
+    for (const owner of [
+      { kind: "phase", id: phaseId },
+      { kind: "task", id: taskId },
+    ] as const) {
+      expect(
+        portal
+          .listTranscript(runtimeFixture.repositoryId, runtimeFixture.runId, owner)
+          .records.map(({ text, owner: lineOwner }) => [text, lineOwner.id]),
+      ).toEqual([["the agent spoke", worker.dispatch.dispatchId]]);
+    }
+    // A scope only reaches its own agents, never the whole run.
+    expect(
+      portal.listTranscript(runtimeFixture.repositoryId, runtimeFixture.runId, {
+        kind: "phase",
+        id: "phase_elsewhere",
+      }).records,
+    ).toEqual([]);
+    portal.close();
+    fixture.dispose();
+  });
+
   it("keeps owner-scoped transcript sequences durable, replayable, bounded, and paged", () => {
     const fixture = createFixture();
     const authority = new SqliteAuthority(fixture.options);

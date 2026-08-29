@@ -766,13 +766,17 @@ export function decodePortalTranscriptPage(input: string | unknown): PortalTrans
   for (const [index, record] of records.entries()) {
     if (record.repositoryId !== object.repositoryId || record.runId !== object.runId)
       fail("invalid-value", `$.records[${index}]`, "must match the page repository and run");
-    // The run scope merges many capture owners, so its records keep the owner
-    // that produced them; capture never writes the run scope itself.
-    if (owner.kind === "run") {
-      if (record.owner.kind === "run")
-        fail("invalid-value", `$.records[${index}].owner`, "must name a capture owner");
-    } else if (record.owner.kind !== owner.kind || record.owner.id !== owner.id) {
-      fail("invalid-value", `$.records[${index}].owner`, "must match the page owner");
+    // A run, a phase and a task are scopes rather than capture owners: nothing
+    // writes a line at them, so their pages keep the owner that produced each
+    // line and only require it to sit within the scope asked for.
+    if (record.owner.kind === "run") {
+      fail("invalid-value", `$.records[${index}].owner`, "must name a capture owner");
+    } else if (!withinTranscriptScope(record.owner, owner)) {
+      fail(
+        "invalid-value",
+        `$.records[${index}].owner`,
+        "must name the page owner or one within it",
+      );
     }
     if (record.sequence <= prior)
       fail(
@@ -815,6 +819,19 @@ function transcriptRecord(value: unknown, path: string): PortalTranscriptRecord 
     ...object,
     owner: transcriptOwner(object.owner, `${path}.owner`),
   }) as unknown as PortalTranscriptRecord;
+}
+
+/** How much of a run an owner covers, widest first. */
+const TRANSCRIPT_OWNER_BREADTH: Readonly<Record<PortalTranscriptOwnerKind, number>> = Object.freeze(
+  { run: 3, phase: 2, task: 1, dispatch: 0 },
+);
+
+function withinTranscriptScope(
+  record: PortalTranscriptOwner,
+  page: PortalTranscriptOwner,
+): boolean {
+  if (record.kind === page.kind) return record.id === page.id;
+  return TRANSCRIPT_OWNER_BREADTH[record.kind] < TRANSCRIPT_OWNER_BREADTH[page.kind];
 }
 
 function transcriptOwner(value: unknown, path: string): PortalTranscriptOwner {
