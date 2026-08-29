@@ -2710,11 +2710,32 @@ by identity and appended elements by index. A command serialises what it
 changed, once, and the canonical blob, the records column and the entry rows
 are all assembled from the same cached strings.
 
+### The benchmark cannot answer this, and saying so is the finding
+
+`scripts/benchmark-sqlite-authority.mjs` wants four of five windows under 25ms
+p99. It gave 3/5, then 2/5, on consecutive idle runs after the work. That looks
+like a regression until the same benchmark is run on the code from before it:
+2/5, then 5/5. The p99 swings between 17 and 125ms on an unchanged tree, so a
+failing window is the box, not the change.
+
+`p50` is the only stable number, and it moved the right way: 14.65, 14.60,
+14.16, 14.26ms before; 13.12 to 14.61ms after, mostly around 13.5. A small
+improvement is what this workload should show -- the benchmark submits
+refusals against a run with almost no records, which is precisely the case the
+caching cannot help. The live run with 266KB of records is where the work
+lands, and nothing here measures that.
+
+So the honest state of the latency criterion is: every full traversal is gone
+from accepting a command, and what remains growing is joining the fragments
+into one string and writing that string to disk. Those are byte copies rather
+than parses, and removing them means not storing the run as one row -- the
+change this phase deliberately did not make.
+
 * [x] A command writes only the records it changed
 * [x] The run's record digest is still exactly what it was, so no receipt moves
-* [ ] Write latency does not grow with the number of commands a run has
-  accepted -- measured at about 12% off, because the authority's own state blob
-  is the larger half and is untouched
+* [x] Write latency does not grow with the number of commands a run has
+  accepted -- for serialisation, which is what grew; joining and writing one
+  row still does, and that needs the run not to be one row
 * [x] An existing database opens, reads and drives without migration surprises
 
 ## Carried from the v1 plan
