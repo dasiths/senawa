@@ -2688,6 +2688,28 @@ Reuse is keyed on reference identity, which is sound because canonical values
 are frozen: a part cannot change without becoming a different object. That is
 pinned by a test that tries to change one in place and is refused.
 
+### Then three more traversals, found by looking next to the first
+
+Fixing one line made the neighbouring ones visible, and they were worse.
+
+`persistAmendmentProjections(this.#database, parseSnapshot(after), ...)` parsed
+the entire 693KB canonical blob on every accepted command, to reach one thing:
+each run's `records`. The in-memory authority already holds those runs, so the
+projection now takes the runs it needs rather than a snapshot it has to
+reconstruct. Parsing is more expensive than serialising, so this was quietly
+the largest cost of accepting a command.
+
+The other two were in the write path, and one of them was a hole in the row
+split. `splitAppendedRecords` serialised *every* event to build the entry list,
+even though `writeAppendedRecords` then inserted only the tail -- so the split
+had removed the write but kept the serialisation it was meant to remove.
+`durableStringify(split.stored)` then canonicalised the remaining 182KB again.
+
+All three now share one `RunRecordsSerializer` per run, caching top-level parts
+by identity and appended elements by index. A command serialises what it
+changed, once, and the canonical blob, the records column and the entry rows
+are all assembled from the same cached strings.
+
 * [x] A command writes only the records it changed
 * [x] The run's record digest is still exactly what it was, so no receipt moves
 * [ ] Write latency does not grow with the number of commands a run has

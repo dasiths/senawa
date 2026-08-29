@@ -751,7 +751,7 @@ interface CanonicalRunFragments {
   readonly events: string[];
   cursor: number;
   records?: string;
-  recordParts?: Map<string, { value: unknown; json: string; nodes: number }>;
+  recordsSerializer?: RunRecordsSerializer;
   projectionGeneratedAt?: string;
 }
 
@@ -970,8 +970,15 @@ export class SqliteAuthority
           after,
           before.revision,
           this.dependencies,
+          this.#cachedCanonicalSnapshot.recordsSerializerFor(run),
         );
-        persistAmendmentProjections(this.#database, parseSnapshot(after), this.dependencies);
+        // The projection only needs each run's records, and parsing the whole
+        // canonical blob again to get them was the largest cost of a command.
+        persistAmendmentProjections(
+          this.#database,
+          { runs: this.#cachedAuthority.runs.values() },
+          this.dependencies,
+        );
         if (
           command.intent.type === "record-amendment-decision" &&
           receipt.status === "completed" &&
@@ -11595,7 +11602,13 @@ function validateConfigurationSnapshot(
   };
 }
 
-function normalizeAmendmentRows(snapshot: AuthoritySnapshot): NormalizedAmendmentRows {
+function normalizeAmendmentRows(snapshot: {
+  readonly runs: Iterable<{
+    readonly repositoryId: string;
+    readonly runId: string;
+    readonly records?: unknown;
+  }>;
+}): NormalizedAmendmentRows {
   const proposals: Record<string, unknown>[] = [];
   const decisions: Record<string, unknown>[] = [];
   const withdrawals: Record<string, unknown>[] = [];
@@ -11726,7 +11739,13 @@ function linkAppliedPlanImport(database: Database.Database, result: unknown): vo
 
 function persistAmendmentProjections(
   database: Database.Database,
-  snapshot: AuthoritySnapshot,
+  snapshot: {
+    readonly runs: Iterable<{
+      readonly repositoryId: string;
+      readonly runId: string;
+      readonly records?: unknown;
+    }>;
+  },
   dependencies: RuntimeDependencies,
 ): void {
   const expected = normalizeAmendmentRows(snapshot);
@@ -16652,6 +16671,7 @@ function persistCommandDelta(
   serialized: string,
   expectedRevision: number,
   dependencies: RuntimeDependencies,
+  recordsSerializer?: RunRecordsSerializer,
 ): void {
   const runKey = canonicalStringify([run.repositoryId, run.runId]);
   const command = run.commands.get(receipt.commandId);
@@ -16669,8 +16689,9 @@ function persistCommandDelta(
   // A run's own records are state it writes for itself, not a message, so the
   // wire ceiling does not apply. A live run reached 262,077 of its 262,144 wire
   // bytes and the next retry could not be persisted at all.
-  const split = splitAppendedRecords(run.records);
-  const recordsJson = split === undefined ? null : durableStringify(split.stored);
+  const serializer = recordsSerializer ?? new RunRecordsSerializer();
+  const recordsJson = run.records === undefined ? null : serializer.stored(run.records);
+  const appended = run.records === undefined ? [] : serializer.entries(run.records);
   // The column's string and the bytes the revision digest is taken over are the
   // same bytes, which records-serialisation pins. Canonicalising a second time
   // to hash it walked the whole of a run's history again on every command, and
@@ -16703,7 +16724,7 @@ function persistCommandDelta(
       run.projectionGeneratedAt ?? null,
       revisionDigest,
     );
-  writeAppendedRecords(database, runKey, split?.entries ?? []);
+  writeAppendedRecords(database, runKey, appended);
   if (run.records !== undefined) {
     database
       .prepare("UPDATE repositories SET active_run_key = ? WHERE repository_id = ?")
@@ -16831,6 +16852,11 @@ class IncrementalCanonicalSnapshot {
     return this.#commandIds.has(commandId);
   }
 
+  /** The cache a run's records were last serialised through, for the write path. */
+  recordsSerializerFor(run: RuntimeAuthorityRun): RunRecordsSerializer | undefined {
+    return this.#runs.get(runtimeAuthorityRunKey(run.repositoryId, run.runId))?.recordsSerializer;
+  }
+
   appendCommand(run: RuntimeAuthorityRun, commandId: string): string {
     const command = run.commands.get(commandId);
     const receipts = run.receiptHistory.slice(-3);
@@ -16863,11 +16889,11 @@ class IncrementalCanonicalSnapshot {
     fragments.cursor = run.cursor;
     if (run.records === undefined) {
       delete fragments.records;
-      delete fragments.recordParts;
+      delete fragments.recordsSerializer;
     } else {
-      const parts = fragments.recordParts ?? new Map();
-      fragments.recordParts = parts;
-      fragments.records = serializeRecordsIncrementally(run.records, parts);
+      const serializer = fragments.recordsSerializer ?? new RunRecordsSerializer();
+      fragments.recordsSerializer = serializer;
+      fragments.records = serializer.canonical(run.records);
     }
     if (run.projectionGeneratedAt === undefined) delete fragments.projectionGeneratedAt;
     else fragments.projectionGeneratedAt = run.projectionGeneratedAt;
@@ -16885,32 +16911,79 @@ class IncrementalCanonicalSnapshot {
 }
 
 /**
- * Serializes a run's records, reusing the parts the command did not touch.
+ * Serializes a run's records, reusing every part the command did not touch.
  *
  * Records are built immutably -- a command spreads the aggregate and replaces
  * only what it changed -- so an untouched top-level value keeps its identity
- * and its string can be reused. Without this a run canonicalises its entire
- * history on every command it accepts.
+ * and its string can be reused, and an appended element keeps its identity for
+ * ever. Without this a run canonicalises its entire history on every command
+ * it accepts, three times over: once for the canonical blob, once for the
+ * records column, and once to store the appended entries.
  */
-function serializeRecordsIncrementally(
-  records: object,
-  cache: Map<string, { value: unknown; json: string; nodes: number }>,
-): string {
-  const view = records as Record<string, unknown>;
-  const parts: { key: string; json: string; nodes: number }[] = [];
-  for (const key of Object.keys(view)) {
-    const value = view[key];
-    if (value === undefined) continue;
-    const cached = cache.get(key);
-    const part =
-      cached !== undefined && cached.value === value ? cached : durableStringifyPart(value);
-    cache.set(key, { value, json: part.json, nodes: part.nodes });
-    parts.push({ key, json: part.json, nodes: part.nodes });
+class RunRecordsSerializer {
+  readonly #parts = new Map<string, { value: unknown; json: string; nodes: number }>();
+  readonly #elements = new Map<string, { value: unknown; json: string }[]>();
+
+  /** The whole records, as the canonical authority blob holds them. */
+  canonical(records: object): string {
+    return assembleDurableRecord(this.#partsOf(records, false));
   }
-  for (const key of [...cache.keys()]) {
-    if (view[key] === undefined) cache.delete(key);
+
+  /** The records without the collections held as rows, as the column holds them. */
+  stored(records: object): string {
+    return assembleDurableRecord(this.#partsOf(records, true));
   }
-  return assembleDurableRecord(parts);
+
+  entries(records: object): readonly AppendedRecordEntry[] {
+    const view = records as Record<string, unknown>;
+    const entries: AppendedRecordEntry[] = [];
+    for (const collection of APPENDED_RECORD_COLLECTIONS) {
+      const value = view[collection];
+      if (!Array.isArray(value) || value.length === 0) continue;
+      const cached = this.#elements.get(collection) ?? [];
+      this.#elements.set(collection, cached);
+      for (const [ordinal, element] of value.entries()) {
+        const known = cached[ordinal];
+        const json =
+          known !== undefined && known.value === element ? known.json : durableStringify(element);
+        cached[ordinal] = { value: element, json };
+        entries.push({ collection, ordinal, entry_json: json });
+      }
+      cached.length = value.length;
+    }
+    return entries;
+  }
+
+  #partsOf(
+    records: object,
+    withoutAppended: boolean,
+  ): { key: string; json: string; nodes: number }[] {
+    const view = records as Record<string, unknown>;
+    const parts: { key: string; json: string; nodes: number }[] = [];
+    for (const key of Object.keys(view)) {
+      const value = view[key];
+      if (value === undefined) continue;
+      const cached = this.#parts.get(key);
+      const part =
+        cached !== undefined && cached.value === value ? cached : durableStringifyPart(value);
+      this.#parts.set(key, { value, json: part.json, nodes: part.nodes });
+      const held = withoutAppended && isAppendedCollection(key, value);
+      if (!held) parts.push({ key, json: part.json, nodes: part.nodes });
+    }
+    for (const key of [...this.#parts.keys()]) {
+      if (view[key] === undefined) this.#parts.delete(key);
+    }
+    return parts;
+  }
+}
+
+/** Whether a records key is one this run stores as rows rather than in the blob. */
+function isAppendedCollection(key: string, value: unknown): boolean {
+  return (
+    (APPENDED_RECORD_COLLECTIONS as readonly string[]).includes(key) &&
+    Array.isArray(value) &&
+    value.length > 0
+  );
 }
 
 function serializeCanonicalRun(run: CanonicalRunFragments): string {
