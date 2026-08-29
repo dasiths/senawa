@@ -43,7 +43,7 @@ import {
   sha256Digest,
   taskId,
 } from "@senawa/kernel";
-import { canonicalStringify, PROTOCOL_VERSION } from "@senawa/protocol";
+import { canonicalStringify, durableStringify, PROTOCOL_VERSION } from "@senawa/protocol";
 import {
   createRoleAuthorizationPolicy,
   FencedRunner,
@@ -2151,6 +2151,83 @@ describe("SQLite runner durability and fencing", () => {
 });
 
 describe("SQLite amendment authority", () => {
+  // A database written before the split holds its events inside the blob and
+  // has no entries table at all. Opening one has to migrate it, read it, and
+  // then carry on accepting commands.
+  it("opens a database written before events moved out of the blob", () => {
+    const sandbox = createSandbox();
+    const fixture = createSqliteAmendmentFixture(sandbox);
+    const expectedEvents = authorityRunEvents(sandbox.options.databasePath);
+    fixture.authority.close();
+    revertToInlineRecords(sandbox.options.databasePath);
+
+    const reopened = new SqliteAuthority(sandbox.options);
+    try {
+      const migrated = appendedRecordState(sandbox.options.databasePath);
+      // Opening it is what moves them: the table alone would leave the blob
+      // disagreeing with the records the integrity walk expects.
+      expect(migrated.recordsJson).not.toContain("amendmentEvents");
+      expect(migrated.entries.map((entry) => JSON.parse(entry.entry_json))).toEqual(expectedEvents);
+
+      expect(
+        reopened.submit(
+          amendmentDecisionCommand(fixture.proposal, "command_amendment-after-upgrade"),
+          fixture.admission.at(),
+        ).status,
+      ).toBe("completed");
+
+      const written = appendedRecordState(sandbox.options.databasePath);
+      // The first write moves them out, and nothing was lost on the way.
+      expect(written.recordsJson).not.toContain("amendmentEvents");
+      expect(written.entries.map((entry) => JSON.parse(entry.entry_json))).toEqual(
+        authorityRunEvents(sandbox.options.databasePath),
+      );
+      expect(written.entries.length).toBeGreaterThan(expectedEvents.length);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  // The records blob was rewritten whole on every command, so a run paid for
+  // its entire history each time it accepted one. Events are the part that
+  // only ever grows, and this pins that they are stored as rows and appended
+  // to rather than rewritten.
+  it("keeps a run's events as rows and only writes the ones it added", () => {
+    const sandbox = createSandbox();
+    const fixture = createSqliteAmendmentFixture(sandbox);
+    try {
+      const first = appendedRecordState(sandbox.options.databasePath);
+      expect(first.entries.length).toBeGreaterThan(0);
+      expect(first.entries.every((entry) => entry.collection === "amendmentEvents")).toBe(true);
+      // The events left the blob entirely: that is where the saving comes from.
+      expect(first.recordsJson).not.toContain("amendmentEvents");
+
+      armRewriteDetector(sandbox.options.databasePath);
+      expect(
+        fixture.authority.submit(
+          amendmentDecisionCommand(fixture.proposal, "command_amendment-appended"),
+          fixture.admission.at(),
+        ).status,
+      ).toBe("completed");
+
+      const second = appendedRecordState(sandbox.options.databasePath);
+      expect(second.entries.length).toBeGreaterThan(first.entries.length);
+      // Every event already stored is untouched, and the ordinals continue.
+      expect(second.entries.slice(0, first.entries.length)).toEqual(first.entries);
+      expect(second.entries.map((entry) => entry.ordinal)).toEqual(
+        second.entries.map((_, index) => index),
+      );
+      expect(second.rewritten).toEqual([]);
+      // Splitting is only safe if it loses nothing: the blob and the rows put
+      // back together have to be the events the authority itself holds.
+      expect(second.entries.map((entry) => JSON.parse(entry.entry_json))).toEqual(
+        authorityRunEvents(sandbox.options.databasePath),
+      );
+    } finally {
+      fixture.authority.close();
+    }
+  });
+
   it("rolls approval and exact task plus dispatch fences back or commits them once", () => {
     const sandbox = createSandbox();
     let armed = true;
@@ -4247,6 +4324,114 @@ function amendmentContextDependencies() {
     currentTime: () => "2026-08-13T12:00:00.000Z",
     issueGrantToken: () => new Uint8Array(32),
   };
+}
+
+/**
+ * A trigger is the only honest witness here: `ON CONFLICT DO UPDATE` fires it
+ * exactly when a write rewrites an event that was already stored, which is the
+ * thing appending is supposed to never do.
+ */
+function armRewriteDetector(databasePath: string): void {
+  const database = new Database(databasePath);
+  try {
+    database.exec(
+      `CREATE TABLE IF NOT EXISTS test_rewritten_entries (collection TEXT, ordinal INTEGER);
+       CREATE TRIGGER IF NOT EXISTS test_detect_entry_rewrite
+       AFTER UPDATE ON runtime_record_entries
+       BEGIN
+         INSERT INTO test_rewritten_entries VALUES (NEW.collection, NEW.ordinal);
+       END;`,
+    );
+  } finally {
+    database.close();
+  }
+}
+
+function appendedRecordState(databasePath: string) {
+  const database = new Database(databasePath, { readonly: true });
+  try {
+    const rewritten = database
+      .prepare("SELECT name FROM sqlite_master WHERE name = 'test_rewritten_entries'")
+      .get()
+      ? (database.prepare("SELECT collection, ordinal FROM test_rewritten_entries").all() as {
+          collection: string;
+          ordinal: number;
+        }[])
+      : [];
+    return {
+      recordsJson: (
+        database.prepare("SELECT records_json FROM runs").get() as {
+          records_json: string | null;
+        }
+      ).records_json,
+      entries: database
+        .prepare(
+          `SELECT collection, ordinal, entry_json FROM runtime_record_entries
+           ORDER BY collection, ordinal`,
+        )
+        .all() as { collection: string; ordinal: number; entry_json: string }[],
+      rewritten,
+    };
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Rewinds a database to how version 1 stored a run: events inline in the blob,
+ * no entries table, and no record of the migration that made one.
+ */
+function revertToInlineRecords(databasePath: string): void {
+  const database = new Database(databasePath);
+  try {
+    for (const run of database
+      .prepare("SELECT run_key, records_json FROM runs WHERE records_json IS NOT NULL")
+      .all() as { run_key: string; records_json: string }[]) {
+      const entries = database
+        .prepare(
+          `SELECT collection, entry_json FROM runtime_record_entries
+           WHERE run_key = ? ORDER BY collection, ordinal`,
+        )
+        .all(run.run_key) as { collection: string; entry_json: string }[];
+      if (entries.length === 0) continue;
+      const records = JSON.parse(run.records_json) as Record<string, unknown>;
+      for (const entry of entries) {
+        const list = (records[entry.collection] ?? []) as unknown[];
+        list.push(JSON.parse(entry.entry_json));
+        records[entry.collection] = list;
+      }
+      database
+        .prepare("UPDATE runs SET records_json = ? WHERE run_key = ?")
+        .run(durableStringify(records), run.run_key);
+    }
+    database.exec("DROP TABLE runtime_record_entries");
+    database.prepare("DELETE FROM migration_metadata WHERE version = 2").run();
+    database.pragma("user_version = 1");
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * The authority keeps its own state in one canonical blob, so that blob is the
+ * independent answer to what a run's events really are.
+ */
+function authorityRunEvents(databasePath: string): unknown[] {
+  const database = new Database(databasePath, { readonly: true });
+  try {
+    const state = JSON.parse(
+      (
+        database
+          .prepare("SELECT canonical_json FROM authority_state WHERE singleton = 1")
+          .get() as {
+          canonical_json: string;
+        }
+      ).canonical_json,
+    ) as { runs: { records?: { amendmentEvents?: unknown[] } }[] };
+    return state.runs.flatMap((run) => run.records?.amendmentEvents ?? []);
+  } finally {
+    database.close();
+  }
 }
 
 function amendmentStorageCounts(databasePath: string) {

@@ -2492,10 +2492,99 @@ fragments leaves receipts moved or integrity checks broken between commits,
 which is why the seam was landed alone and the rest was not started at the end
 of a long session.
 
-* [ ] A command writes only the records it changed
+### Only one of the two collections is append-only
+
+The plan named `amendmentEvents` and `amendmentRecords` as the target, 167KB of
+236KB, "both append-only". Half of that was wrong, and checking before building
+on it is why it matters.
+
+`amendmentEvents` is genuinely append-only: the only write is
+`[...records.amendmentEvents, event]` in `appendAmendmentEvent`, and an entry
+carries its own sequence and digest, so it is immutable once written.
+
+`amendmentRecords` is not. `replaceAmendmentRecord` rewrites an entry in place
+at an arbitrary index, because an amendment's lifecycle advances -- proposed,
+then reviewed, then applied or withdrawn -- and that advance edits the record
+already there.
+
+The consequence is sharper than the smaller number suggests. Rows would still
+hold a mutable list correctly, updating only the changed row, but to know which
+row changed you must serialise every entry and compare -- which is the whole
+traversal the phase exists to avoid. Splitting `amendmentRecords` would save
+the write and keep the cost that actually hurts.
+
+So the split is `amendmentEvents` alone: 84KB of 236KB, and for it a command
+serialises only the events it appended. That also dissolves most of the
+interlock above -- there is no per-entry comparison to get right, and appending
+is the only write.
+
+### What the split turned out to be
+
+Landed as one pass. A migration adds `runtime_record_entries`, keyed by run,
+collection and ordinal. A write splits the appended collections out of the
+blob, stores the tail it added, and leaves everything else exactly where it
+was. `#runtimeRecords` merges the rows back, so no reader changed.
+
+Three details were decided by reading rather than by the plan:
+
+* An **absent** collection and an **empty** one both stay in the blob. Rows
+  cannot tell those apart, and conflating them would change what a reader sees
+  for a run that has proposed nothing.
+* `revision_digest` covers **the blob the column actually holds**, and the
+  entries are checked as rows in the integrity walk instead. That is stricter
+  than folding them into one digest, and it costs no traversal on the write
+  path. It is safe because nothing outside that walk reads the column -- the
+  digests receipts carry are `graph_revision_digest` and its neighbours, which
+  are different columns entirely.
+* `reporting-snapshot` needs no merge after all. It reads `records_json` only
+  for gates, approvals and the configuration digest, all of which stay in the
+  blob; amendments it reads from the `amendment_*` tables.
+
+The guard is a trigger, because a trigger is the only honest witness available:
+`ON CONFLICT DO UPDATE` fires exactly when a write rewrites an event already
+stored. Making the writer insert every entry instead of the tail turns the
+trigger's log from empty into a hit, and the test fails -- which was checked,
+not assumed.
+
+Removing the merge from `#runtimeRecords` broke nothing, though, across the
+whole suite. That is not the merge being wrong; it is that no reader reads an
+appended collection today -- needs, digests, accepted tasks and immutable
+records all live in the part that stayed in the blob. So the merge is there for
+the reader that comes next, and losslessness is guarded where it can actually
+be observed: the blob and the rows put back together must equal the events the
+authority holds in its own canonical state, which is an independent source.
+Dropping an event fails it, and so does storing them in the wrong order. Both
+were checked by breaking them.
+
+### The table alone would have broken every existing database
+
+Writing the upgrade test found this rather than reasoning finding it. A
+database written before the split holds its events inside the blob. Adding the
+table changes nothing for it, but `normalizeSnapshot` now expects them out of
+the blob, so the integrity walk compares the two and refuses: *SQLite
+normalized authority tables diverge from canonical snapshot*. Every existing
+database would have failed to open.
+
+So migration 2 moves the data, not just the schema, and it does it in
+TypeScript rather than SQL. `json_remove` and `json_each` would re-serialise
+the blob in SQLite's own formatting, and the blob has to keep canonical bytes
+or nothing downstream can read it. The move reuses the same split the write
+path uses, and recomputes the run's digest over the blob it leaves behind.
+
+The test rewinds a real database to the version 1 shape -- events folded back
+in, entries table dropped, migration row and `user_version` reverted -- then
+opens it and drives it. Pointing the data migration at a version that never
+runs brings the divergence error straight back, so the test is holding the
+door, not decorating it.
+
+Crafting that rewind needs canonical encoding too: `JSON.stringify` produced a
+blob the reader refused outright with *$ must use canonical JSON encoding*.
+That is the second time this session a hand-written fixture has hit it.
+
+* [x] A command writes only the records it changed
 * [x] The run's record digest is still exactly what it was, so no receipt moves
 * [ ] Write latency does not grow with the number of commands a run has
-  accepted -- halved, not fixed
+  accepted -- halved, then the events taken off the write path; measure again
 * [ ] An existing database opens, reads and drives without migration surprises
 
 ## Carried from the v1 plan

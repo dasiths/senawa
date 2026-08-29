@@ -248,7 +248,7 @@ import {
 } from "@senawa/runtime";
 import Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 export const ASSET_SECURITY_LIMITS = Object.freeze({
   maxObjectBytes: 256 * 1024 * 1024,
   defaultMaxObjects: 10_000,
@@ -758,6 +758,7 @@ interface NormalizedSnapshot {
   readonly commands: readonly Record<string, unknown>[];
   readonly receiptHistory: readonly Record<string, unknown>[];
   readonly eventFrames: readonly Record<string, unknown>[];
+  readonly recordEntries: readonly Record<string, unknown>[];
 }
 
 interface ConfigurationSnapshotValue {
@@ -5593,9 +5594,9 @@ export class SqlitePortalQueryAuthority {
     const row = this.#runtimeRecordRow(repositoryId, runId);
     if (row === undefined) return undefined;
     return {
-      records: requiredJsonRecord(
-        decodeDurableJsonValue(row.records_json),
-        "Portal runtime records",
+      records: mergeAppendedRecords(
+        requiredJsonRecord(decodeDurableJsonValue(row.records_json), "Portal runtime records"),
+        readAppendedRecords(this.#database, canonicalStringify([repositoryId, runId])),
       ),
       projectionGeneratedAt: row.projection_generated_at,
     };
@@ -13307,10 +13308,52 @@ function applyMigrations(
         .prepare("INSERT INTO migration_metadata(version, name, checksum) VALUES (?, ?, ?)")
         .run(migration.version, migration.name, migration.checksum);
       database.pragma(`user_version = ${migration.version}`);
+      if (migration.version === 2) moveAppendedRecordsOutOfBlob(database, dependencies);
     });
     apply.immediate();
   }
   verifyMigrationMetadata(database, migrations);
+}
+
+/**
+ * Moves a pre-split run's appended collections into rows.
+ *
+ * The table alone is not enough: a database written before the split still has
+ * its events inside the blob, and the integrity walk compares against records
+ * that expect them out of it, so opening one would fail. Done here rather than
+ * in SQL because the blob has to keep its canonical bytes, which `json_remove`
+ * would not preserve.
+ */
+function moveAppendedRecordsOutOfBlob(
+  database: Database.Database,
+  dependencies: Pick<RuntimeDependencies, "sha256">,
+): void {
+  const update = database.prepare(
+    "UPDATE runs SET records_json = ?, revision_digest = ? WHERE run_key = ?",
+  );
+  const insert = database.prepare(
+    `INSERT INTO runtime_record_entries(run_key, collection, ordinal, entry_json)
+     VALUES (?, ?, ?, ?)`,
+  );
+  for (const row of database
+    .prepare<[], { run_key: string; records_json: string }>(
+      "SELECT run_key, records_json FROM runs WHERE records_json IS NOT NULL",
+    )
+    .all()) {
+    const split = splitAppendedRecords(
+      requiredJsonRecord(decodeDurableJsonValue(row.records_json), "Runtime records"),
+    );
+    if (split === undefined || split.entries.length === 0) continue;
+    const recordsJson = durableStringify(split.stored);
+    update.run(
+      recordsJson,
+      dependencies.sha256.digest(new TextEncoder().encode(recordsJson)),
+      row.run_key,
+    );
+    for (const entry of split.entries) {
+      insert.run(row.run_key, entry.collection, entry.ordinal, entry.entry_json);
+    }
+  }
 }
 
 function loadMigrations(dependencies: Pick<RuntimeDependencies, "sha256">): readonly Migration[] {
@@ -16335,6 +16378,134 @@ function readAssetDescriptors(database: Database.Database): readonly AssetDescri
     .map(toAssetDescriptor);
 }
 
+/**
+ * Record collections a run only ever appends to.
+ *
+ * `amendmentEvents` qualifies: the sole write is `[...events, event]` and an
+ * entry carries its own sequence and digest, so it never changes once written.
+ * `amendmentRecords` deliberately does not, despite being the same size --
+ * an amendment's lifecycle rewrites its record in place, and finding which
+ * row changed would mean serialising every entry, which is the traversal this
+ * exists to avoid.
+ */
+const APPENDED_RECORD_COLLECTIONS = ["amendmentEvents"] as const;
+
+interface AppendedRecordEntry {
+  readonly collection: string;
+  readonly ordinal: number;
+  readonly entry_json: string;
+}
+
+/** Separates a run's appended collections from the records stored as one blob. */
+function splitAppendedRecords<Records extends object>(
+  records: Records | undefined,
+):
+  | {
+      readonly stored: Records;
+      readonly entries: readonly AppendedRecordEntry[];
+    }
+  | undefined {
+  if (records === undefined) return undefined;
+  const stored = { ...records } as Record<string, JsonValue>;
+  const entries: AppendedRecordEntry[] = [];
+  for (const collection of APPENDED_RECORD_COLLECTIONS) {
+    const value = stored[collection];
+    // An absent collection and an empty one both stay in the blob: rows cannot
+    // tell them apart, and confusing the two would change what a reader sees.
+    if (!Array.isArray(value) || value.length === 0) continue;
+    delete stored[collection];
+    for (const [ordinal, entry] of value.entries()) {
+      entries.push({ collection, ordinal, entry_json: durableStringify(entry) });
+    }
+  }
+  return { stored: stored as Records, entries };
+}
+
+/** Puts a run's appended collections back, giving the records a reader expects. */
+function mergeAppendedRecords(
+  stored: Readonly<Record<string, JsonValue>>,
+  entries: readonly AppendedRecordEntry[],
+): Readonly<Record<string, JsonValue>> {
+  if (entries.length === 0) return stored;
+  const collections = new Map<string, JsonValue[]>();
+  for (const entry of [...entries].sort((left, right) => left.ordinal - right.ordinal)) {
+    const list = collections.get(entry.collection) ?? [];
+    list.push(decodeDurableJsonValue(entry.entry_json));
+    collections.set(entry.collection, list);
+  }
+  const merged: Record<string, JsonValue> = { ...stored };
+  for (const [collection, list] of collections) merged[collection] = list;
+  return merged;
+}
+
+/** Reads a run's appended entries, ordered so a merge restores the original list. */
+function readAppendedRecords(
+  database: Database.Database,
+  runKey: string,
+): readonly AppendedRecordEntry[] {
+  return database
+    .prepare<[string], AppendedRecordEntry>(
+      `SELECT collection, ordinal, entry_json FROM runtime_record_entries
+       WHERE run_key = ? ORDER BY collection, ordinal`,
+    )
+    .all(runKey);
+}
+
+/**
+ * Writes a run's appended entries, adding only the ones not already stored.
+ *
+ * Appending is the whole point, so the common path inserts the tail and
+ * touches nothing else. A collection that shrank or whose stored tail differs
+ * is not an append at all, so that one is rewritten rather than trusted.
+ */
+function writeAppendedRecords(
+  database: Database.Database,
+  runKey: string,
+  entries: readonly AppendedRecordEntry[],
+): void {
+  const insert = database.prepare(
+    `INSERT INTO runtime_record_entries(run_key, collection, ordinal, entry_json)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(run_key, collection, ordinal) DO UPDATE SET entry_json = excluded.entry_json`,
+  );
+  const byCollection = new Map<string, AppendedRecordEntry[]>();
+  for (const entry of entries) {
+    const list = byCollection.get(entry.collection) ?? [];
+    list.push(entry);
+    byCollection.set(entry.collection, list);
+  }
+  const storedCollections = database
+    .prepare<[string], { collection: string; stored: number }>(
+      `SELECT collection, COUNT(*) AS stored FROM runtime_record_entries
+       WHERE run_key = ? GROUP BY collection`,
+    )
+    .all(runKey);
+  const deleteFrom = database.prepare(
+    "DELETE FROM runtime_record_entries WHERE run_key = ? AND collection = ? AND ordinal >= ?",
+  );
+  for (const { collection, stored } of storedCollections) {
+    if (!byCollection.has(collection)) deleteFrom.run(runKey, collection, 0);
+  }
+  const storedCounts = new Map(
+    storedCollections.map(({ collection, stored }) => [collection, stored]),
+  );
+  const tail = database.prepare<[string, string, number], { entry_json: string }>(
+    `SELECT entry_json FROM runtime_record_entries
+     WHERE run_key = ? AND collection = ? AND ordinal = ?`,
+  );
+  for (const [collection, list] of byCollection) {
+    const stored = storedCounts.get(collection) ?? 0;
+    const appended =
+      stored === 0 ||
+      (stored <= list.length &&
+        tail.get(runKey, collection, stored - 1)?.entry_json === list[stored - 1]?.entry_json);
+    if (!appended) deleteFrom.run(runKey, collection, 0);
+    for (const entry of list.slice(appended ? stored : 0)) {
+      insert.run(runKey, entry.collection, entry.ordinal, entry.entry_json);
+    }
+  }
+}
+
 function persistSnapshot(
   database: Database.Database,
   snapshot: AuthoritySnapshot,
@@ -16344,7 +16515,7 @@ function persistSnapshot(
 ): void {
   const normalized = normalizeSnapshot(snapshot, dependencies);
   database.exec(
-    "UPDATE repositories SET active_run_key = NULL; DELETE FROM event_frames; DELETE FROM receipt_history;",
+    "UPDATE repositories SET active_run_key = NULL; DELETE FROM event_frames; DELETE FROM receipt_history; DELETE FROM runtime_record_entries;",
   );
   const insertRepository = database.prepare(
     "INSERT INTO repositories(repository_id, active_run_key) VALUES (?, NULL) ON CONFLICT(repository_id) DO NOTHING",
@@ -16393,6 +16564,13 @@ function persistSnapshot(
       run.projection_generated_at,
       run.revision_digest,
     );
+  }
+  const insertRecordEntry = database.prepare(
+    `INSERT INTO runtime_record_entries(run_key, collection, ordinal, entry_json)
+     VALUES (?, ?, ?, ?)`,
+  );
+  for (const entry of normalized.recordEntries) {
+    insertRecordEntry.run(entry.run_key, entry.collection, entry.ordinal, entry.entry_json);
   }
   for (const command of normalized.commands) {
     upsertCommand.run(
@@ -16488,7 +16666,8 @@ function persistCommandDelta(
   // A run's own records are state it writes for itself, not a message, so the
   // wire ceiling does not apply. A live run reached 262,077 of its 262,144 wire
   // bytes and the next retry could not be persisted at all.
-  const recordsJson = run.records === undefined ? null : durableStringify(run.records);
+  const split = splitAppendedRecords(run.records);
+  const recordsJson = split === undefined ? null : durableStringify(split.stored);
   // The column's string and the bytes the revision digest is taken over are the
   // same bytes, which records-serialisation pins. Canonicalising a second time
   // to hash it walked the whole of a run's history again on every command, and
@@ -16521,6 +16700,7 @@ function persistCommandDelta(
       run.projectionGeneratedAt ?? null,
       revisionDigest,
     );
+  writeAppendedRecords(database, runKey, split?.entries ?? []);
   if (run.records !== undefined) {
     database
       .prepare("UPDATE repositories SET active_run_key = ? WHERE repository_id = ?")
@@ -16747,6 +16927,12 @@ function verifyNormalizedSnapshot(
          FROM event_frames ORDER BY run_key, cursor`,
       )
       .all() as Record<string, unknown>[],
+    recordEntries: database
+      .prepare(
+        `SELECT run_key, collection, ordinal, entry_json FROM runtime_record_entries
+         ORDER BY run_key, collection, ordinal`,
+      )
+      .all() as Record<string, unknown>[],
   };
   if (canonicalSerialize(canonicalValue(actual)) !== canonicalSerialize(canonicalValue(expected))) {
     throw new Error("SQLite normalized authority tables diverge from canonical snapshot");
@@ -16762,6 +16948,7 @@ function normalizeSnapshot(
   const commands: Record<string, unknown>[] = [];
   const receiptHistory: Record<string, unknown>[] = [];
   const eventFrames: Record<string, unknown>[] = [];
+  const recordEntries: Record<string, unknown>[] = [];
   for (const run of snapshot.runs) {
     const runKey = canonicalStringify([run.repositoryId, run.runId]);
     const activeRunKey = repositories.get(run.repositoryId);
@@ -16773,7 +16960,16 @@ function normalizeSnapshot(
     } else if (activeRunKey === undefined) {
       repositories.set(run.repositoryId, null);
     }
-    const recordsJson = run.records === undefined ? null : durableStringify(run.records);
+    const recordsSplit = splitAppendedRecords(run.records as Record<string, JsonValue> | undefined);
+    const recordsJson = recordsSplit === undefined ? null : durableStringify(recordsSplit.stored);
+    for (const entry of recordsSplit?.entries ?? []) {
+      recordEntries.push({
+        run_key: runKey,
+        collection: entry.collection,
+        ordinal: entry.ordinal,
+        entry_json: entry.entry_json,
+      });
+    }
     runs.push({
       run_key: runKey,
       repository_id: run.repositoryId,
@@ -16781,10 +16977,13 @@ function normalizeSnapshot(
       cursor: run.cursor,
       records_json: recordsJson,
       projection_generated_at: run.projectionGeneratedAt ?? null,
+      // The digest covers the blob the column actually holds. The appended
+      // entries are checked as rows instead, which is stricter than folding
+      // them into one digest and costs no traversal on the write path.
       revision_digest:
-        run.records === undefined
+        recordsJson === null
           ? null
-          : canonicalDigest(canonicalValue(run.records), dependencies.sha256),
+          : dependencies.sha256.digest(new TextEncoder().encode(recordsJson)),
     });
     for (const command of run.commands) {
       commands.push({
@@ -16833,6 +17032,7 @@ function normalizeSnapshot(
     commands: commands.sort(compareNormalized("command_id")),
     receiptHistory: receiptHistory.sort(compareNormalized("run_key", "cursor")),
     eventFrames: eventFrames.sort(compareNormalized("run_key", "cursor")),
+    recordEntries: recordEntries.sort(compareNormalized("run_key", "collection", "ordinal")),
   };
 }
 
@@ -16842,17 +17042,19 @@ function compareText(left: string, right: string): number {
 
 function compareNormalized(
   primary: string,
-  secondary?: string,
+  ...rest: readonly string[]
 ): (left: Record<string, unknown>, right: Record<string, unknown>) => number {
   return (left, right) => {
-    const primaryOrder = compareText(String(left[primary]), String(right[primary]));
-    if (primaryOrder !== 0 || secondary === undefined) return primaryOrder;
-    const leftSecondary = left[secondary];
-    const rightSecondary = right[secondary];
-    if (typeof leftSecondary === "number" && typeof rightSecondary === "number") {
-      return leftSecondary - rightSecondary;
+    for (const key of [primary, ...rest]) {
+      const leftValue = left[key];
+      const rightValue = right[key];
+      const order =
+        typeof leftValue === "number" && typeof rightValue === "number"
+          ? leftValue - rightValue
+          : compareText(String(leftValue), String(rightValue));
+      if (order !== 0) return order;
     }
-    return compareText(String(leftSecondary), String(rightSecondary));
+    return 0;
   };
 }
 
