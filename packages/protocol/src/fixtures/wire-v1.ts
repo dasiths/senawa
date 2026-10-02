@@ -1,0 +1,5 @@
+export const GOLDEN_COMMAND_JSON =
+  '{"apiVersion":"senawa.dev/protocol/v1","commandId":"018f47a6-45cd-7df2-89ab-0123456789ab","exactObjectDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","expectedDefinitionRevision":"definition_17","expiresAt":"2026-08-12T12:30:00.000Z","intent":{"type":"instantiate-run"},"payload":{"alpha":true,"workflowId":"workflow_alpha","zeta":2},"payloadDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","principal":{"assurance":"multi-factor","issuer":"https://identity.example.test","roles":["operator","release-manager"],"subject":"operator@example.test","tenant":"tenant_alpha"},"repositoryId":"repository_alpha","runId":"run_alpha","transport":{"kind":"portal","requestId":"request_01"}}';
+
+export const GOLDEN_RECEIPT_JSON =
+  '{"apiVersion":"senawa.dev/protocol/v1","commandId":"018f47a6-45cd-7df2-89ab-0123456789ab","cursor":7,"priorRevision":"revision_06","repositoryId":"repository_alpha","result":{"accepted":true},"resultRevision":"revision_07","runId":"run_alpha","status":"completed"}';

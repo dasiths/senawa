@@ -1,398 +1,398 @@
 # Senawa
 
-## Overview
+Senawa is the deterministic workflow kernel of a consumer-defined software
+factory. It executes consumer-defined workflows as an auditable state machine on
+your own host, with a local supervisor, a SQLite authority, and a browser run
+console.
 
-Senawa (සේනාව) is an orchestration harness for [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli). You talk to an ordinary Copilot session carrying the senawa skill, and it turns what you ask for into `senawa` commands. Senawa decomposes the work and delegates the pieces to specialist worker sessions: a researcher, a planner, one or more implementors, and verifiers. The part that decides what runs next is a deterministic driver rather than a model, so no agent is ever in the control path.
+Start with [Getting started](docs/guide/getting-started.md).
 
-Three ideas hold the design together.
+## Why not just run an agent
 
-Durable workflow state lives outside the model, behind a runtime graph-store
-boundary. Ordinary CLI commands use
-[beads](https://github.com/gastownhall/beads). The split file-backed runtime is
-available only through explicit global `--runtime file` for development and
-tests. Agents ask runtime state what is workable rather than remembering a plan.
+An agent decides when it is done. That is fine for work you are watching and a
+problem for work you are not: the thing being asked to judge whether the job is
+finished is the thing that did the job.
 
-Every agent-facing operation crosses the Senawa boundary. The principal agent
-uses the CLI. Hosted workers use typed Senawa tools, and subprocess workers use a
-restricted CLI wrapper. That single seam is where policy lives, which means
-guardrails are enforced rather than merely requested.
+Senawa takes that decision away from it. A real command measures the work, the
+result of that command decides whether the phase closes, and the run keeps a
+record no agent can write. What you get back is not a claim that the work is
+done, but a reading you can check and a trail you can read afterwards.
 
-Completion is granted, not claimed. A worker requests completion; the harness
-runs sensors, evaluates gates, and either accepts the work or hands back
-actionable failures. The driver remains authoritative even when a worker ends a
-turn without making the request. This is the backpressure model described in
-[Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/).
+## The three loops
 
-Because everything routes through that one seam, the harness can also write down what happened. Every orchestration event lands in an append-only journal that no agent can author, and `senawa work report` renders it into a document you can read or attach to a pull request: which host and adapter handled each turn, which models and efforts were configured, requested, resolved, and invoked, what evidence was consumed, how many times the harness sent the work back and why, what you decided, and what it cost.
+Senawa runs three nested loops, and almost every design choice follows from
+which loop a decision belongs to.
 
-## Three loops, and where you sit
+The **inner loop** is one agent working alone on one phase. It reads its
+assignment, does the work, and asks to finish. It repeats until it satisfies the
+conditions or says it cannot. It runs for minutes.
 
-Senawa runs three nested loops. Each outer layer sets a reference the layer
-inside it cannot redefine.
+The **middle loop** is the deterministic driver. It dispatches a phase, measures
+the result, and either grants completion or hands back reasons. No model runs
+this loop, which is what makes it repeatable. It runs for the length of a run.
 
-| Loop | Who runs it | Period | You |
-|------|-------------|--------|-----|
-| Outer | you | hours to days | you own the request, declared phase decisions, and definition of better |
-| Middle | the run driver, deterministic | minutes to hours | steer it any time; it asks at declared approvals and escalations |
-| Inner | one worker, alone | seconds to minutes | absent by design; this is where the harness pushes back |
+The **outer loop** is the human. They define what better means, review at the
+points they declared, and change the workflow when it is producing the wrong
+thing. It runs for as long as the project does.
 
-`senawa work start` drives the run in the foreground and stops when it needs a
-decision. `senawa work resume` picks up from durable state. Detached execution
-is not exposed because the current process does not provide a durable background
-driver lifecycle.
+The property that makes this worth building is that **completion is granted, not
+claimed**. An agent asks to finish; the harness decides.
 
-Version 1 allows one unfinished Senawa run per repository and one active worker
-turn. If a run cannot be completed or resumed, `senawa work end --reason "..."`
-records its abandonment and frees the repository for a replacement. It does not
-delete the ended run or its evidence. An active or stranded worker requires
-explicit `--force`; forced end cancels the turn, waits a bounded grace period,
-takes over through the fenced driver lease, reconciles the dispatch, and
-persists terminal state before repository ownership is released.
+## What happens when an agent asks to finish
 
-## What a run looks like
+Nothing in a run happens on its own. `senawa advance` takes exactly one step and
+returns, and you or a scheduler call it again for the next one. Here is one
+phase, in the order those steps happen.
 
-A workflow is a sequence of phases you declare in the repository. Each one can
-ask for your approval, and any phase you are not happy with can be sent back to
-run again on top of what it already produced.
+1. **Dispatch.** The driver writes an assignment: the agent's prompt, the inputs
+   it may read, and the tools it may call. It gets nothing else. That record is
+   the dispatch, and it is what the agent runs against.
+2. **Work.** The agent works, then hands in its output and says it is done. That
+   is a request. Nothing is published yet.
+3. **Measure.** The next `advance` runs the phase's sensors. Each is a real
+   command, run by the driver in its own process, and each returns a reading:
+   an exit code, some output, whether it timed out. Every attempt re-runs them
+   against the work as it now stands; no reading is carried over from the last
+   one.
+4. **Judge.** The gate is a rule over those readings, written by the author. A
+   rule is *green* when the reading satisfies it and *red* when it does not.
+   Green on every blocking rule: the driver publishes the output, grants
+   completion, and the phase closes. One red blocking rule and none of that
+   happens. An advisory rule that is red is recorded and shown and stops
+   nothing, which is the whole difference between the two.
+5. **Retry.** The phase stays open with one attempt spent. The output stays
+   unpublished, so the next phase still cannot see it. The next `advance`
+   writes a **new dispatch** for the same phase, carrying the readings that
+   failed, in the words the sensors produced. That is how the agent learns what
+   was wrong: it is in the assignment it is handed, not a message it must go and
+   look for. An attempt not told what failed only spends an attempt.
+6. **Stop.** When the attempts the author allowed are used up, `advance` returns
+   that the phase was refused and stops. It does not lower the bar, and it does
+   not carry on to the next phase.
 
-```text
-you   Add Entity Framework support for the persistence layer
-PA    [senawa workflow list] I can run standard-delivery or hotfix. Which?
-you   standard-delivery
-PA    [senawa work start "<goal>" --workflow standard-delivery] Define is ready.
-PA    [senawa phase brief define] Define is ready: artifacts/define/v1.json, version 1, digest <digest>
-PA    [senawa phase artifact define --version 1] <complete definition artifact>
-you   looks right, go on
-PA    [senawa --caller principal-agent approve define --expected-version 1 --expected-digest <digest>] [senawa work resume]
-PA    [senawa work wait --timeout 300] Research is ready: v1
-PA    [senawa phase brief research] Research artifact: artifacts/research/v1.json, version 1, digest <digest>
-PA    [senawa phase artifact research --version 1] <complete research artifact>
-you   approve
-PA    [senawa --caller principal-agent approve research --expected-version 1 --expected-digest <digest>] [senawa work resume]
-PA    [senawa work wait --timeout 300] Plan is ready: v1, 6 tasks
-PA    [senawa phase brief plan] Plan artifact: artifacts/plan/v1.json, version 1, digest <digest>
-PA    [senawa phase artifact plan --version 1] <complete plan artifact>
-you   no error handling on the adapter boundary
-PA    [senawa --caller principal-agent reject plan --reason "<reason>" --expected-version 1 --expected-digest <digest>] [senawa work resume]
-PA    [senawa work wait --timeout 300] Plan v2 adds two tasks for it
-PA    [senawa phase brief plan] Plan artifact: artifacts/plan/v2.json, version 2, digest <digest>
-PA    [senawa phase artifact plan --version 2] <complete plan artifact>
-you   approve
-PA    [senawa --caller principal-agent approve plan --expected-version 2 --expected-digest <digest>] [senawa work resume] Implementing.
-you   how is it going?
-PA    [senawa work show] 4 of 6 closed.
-      bd-a1b2 was refused once on unit-tests and passed on its second attempt.
-PA    [senawa work wait --timeout 300] Verify is ready: v1
-you   add the tasks in extra-tasks.json
-PA    [senawa plan revise --add extra-tasks.json] [senawa work resume]
-PA    [senawa work wait --timeout 300] Done, verify re-ran: v2
-PA    [senawa phase brief verify] Verification artifact: artifacts/verify/v2.json, version 2, digest <digest>
-PA    [senawa phase artifact verify --version 2] <complete verification artifact>
-you   accept
-PA    [senawa --caller principal-agent approve verify --expected-version 2 --expected-digest <digest>] [senawa work resume]
-PA    [senawa work wait --timeout 300] Run accepted. Report at report.md
+The agent never runs step 3 and never decides step 4. It cannot edit the gate,
+the attempt limit, or the output shape, because those are in the workflow and it
+is only ever handed a dispatch. Asking again with better work is its only move.
+
+A phase can also ask for a person before it closes. That approval sits after the
+gate, not instead of it: green readings make a phase eligible to close, and an
+authored approval then holds it open until somebody accepts or rejects it. A
+rejection carries the person's reason into the next attempt exactly as a red
+reading does.
+
+## What you write
+
+Three files, and the prompts and schemas they name.
+
+```yaml
+# .senawa/workflow.yaml
+name: delivery
+input: schemas/request.schema.json
+phases:
+  - name: implement
+    agent: builder
+    output: schemas/change.schema.json
+    gates: [tests]
+    attempts: 3
 ```
 
-Everything in brackets is a `senawa` command. Rejecting a phase is the normal
-case rather than an error path: your reason becomes the input to the next
-iteration, and every artifact version is kept, so you can see what changed and
-why.
+```yaml
+# .senawa/sensors.yaml
+sensors:
+  tests:
+    run: [pnpm, test]
+gates:
+  tests:
+    blocking:
+      - sensor: tests
+        equals: { exitCode: 0 }
+```
 
-Additive plan revision currently consumes a schema-valid task file. Turning a
-free-form request into that file is not part of the principal agent contract.
+`senawa init` writes a working project, `senawa doctor` checks it, `senawa start`
+begins a run, and `senawa advance` takes the next step. The
+[getting started guide](docs/guide/getting-started.md) walks through one.
 
-This is the shape [Addy Osmani calls loop engineering](https://addyosmani.com/blog/loop-engineering/): you design the system that prompts the agents rather than prompting them yourself. [Carlos Perez's follow-up](https://medium.com/intuitionmachine/from-loop-engineering-to-graph-engineering-d3ebeb08511c) argues that a single loop always fails, and that the fix is a graph of loops that check each other. Senawa takes that seriously without mistaking its task graph for a control graph: what keeps it honest is narrower than topology. Deterministic sensors that execute real code. A journal no agent can write. A frozen set of files the optimizer cannot weaken. And a human who decides what "better" means.
+A prompt says what the work is and never mentions senawa. The **operating
+contract** is the part senawa writes: a short set of instructions appended to
+every prompt at dispatch, telling the agent how to hand work in, what it may
+call, and what it may not. It is generated rather than authored so an author
+cannot drift from it or claim authority the dispatch does not carry.
 
-## Status
+## The vocabulary
 
-The first production vertical slice is implemented in `packages/`. It includes
-strict repository contracts, a deterministic driver, versioned artifacts,
-singleton and lease enforcement, append-only events and output, a shared CLI and
-HTTP command path, the loopback browser supervisor, and report rendering.
-`@senawa/application` owns commands, queries, driver transitions, prompts,
-status projections, and the ports consumed by both adapters. Its production
-code imports only `@senawa/domain`; executable composition lives in
-`apps/senawa` and injects the selected adapters directly.
-Repository worker profiles under `.senawa/agents` now provide strict model,
-capability-request, and prompt configuration. Their exact sources are frozen,
-snapshotted, and fingerprinted; hosts apply a separate Senawa-owned capability
-ceiling. Workflows, schemas, profiles, and sensor policy are repository-owned at
-`.senawa/workflows/`, `.senawa/schemas/`, `.senawa/agents/`, and
-`.senawa/sensors.yaml`. Runtime hooks, isolation, capability ceilings, gate
-evaluation, and audit remain Senawa-owned.
+A **sensor** measures a property of the work by running a real command, and
+returns a reading.
 
-The `@senawa/sensors` package now runs the built-in artifact and command sensors
-from snapshotted policy. `RunCommandService` evaluates their readings and owns
-every gate transition; worker hosts return no acceptance verdict. Sensor starts,
-completions, execution errors, and gate evidence are recorded in the journal.
-Deterministic sensors run from cheap to expensive, later blocking expensive
-checks stop after a deterministic failure, and advisory checks still report.
-Cache identity and evidence-spill ports keep those storage choices outside the
-gate evaluator. `senawa sensor audit [<run>]` derives verdict agreement, drift
-transitions, and latency from recorded readings. Hook latency remains an
-explicit unreported metric until the hook writes measurements.
+A **gate** is a rule over readings that resists progress while they are red. A
+blocking rule refuses; an advisory rule is recorded and shown.
 
-`@senawa/workers` owns simulated, recording, Copilot subprocess, and Copilot SDK
-lifecycle adapters, capability negotiation, authorization, normalized events,
-and explicit create, resume, inspect, cancel, and release operations. The SDK
-adapter is pinned to `@github/copilot-sdk` 1.0.7 and uses caller-chosen session
-identity, pre-send event registration, native typed tools, canonical permission
-callbacks, model and effort discovery, W3C trace injection, explicit abort,
-isolated session storage, and retain or archive-delete release. Application-owned
-typed binding contracts cover task completion, phase submission, questions,
-discoveries, and notes. Normalized lifecycle, model, trace, text, artifact,
-task-diff, duration, usage, AIU, and cost events are durably deduplicated before
-output can fan out to the browser. Task transcripts and explicit no-diff
-evidence are materialized in the work directory. Offline conformance uses the
-simulated adapter, a bounded recording fake executable, and an injected
-fake SDK client. No validation command starts Copilot or spends AI credits.
-Live SDK session execution remains unvalidated.
-New worker-producing runs default to canonical `--worker-host copilot-sdk` and
-persist that choice. Select `--worker-host simulated` explicitly for tests,
-offline demos, and no-credit probes. Read-only status, report, browser, workflow,
-and ordinary doctor commands do not start Copilot. The SDK launches the installed
-`copilot` runtime over stdio only for connected diagnostics or worker dispatch.
-Senawa resolves the runtime to an absolute executable from `PATH`; set
-`SENAWA_COPILOT_CLI` to an absolute path when the CLI is installed outside
-`PATH`. A failed live host never falls back to simulation.
+An **anchor** is a deterministic reading that cannot be argued with. Every
+blocking gate needs one, or the harness is only agreeing with whoever submitted
+the work. Senawa refuses a blocking gate with no anchor when it is written, not
+when it runs.
 
-The `senawa` app composes `@senawa/runtime-beads` by default and selects
-`@senawa/runtime-file` only for explicit `--runtime file` commands. Mutable runtime state,
-active-run ownership, fenced leases, immutable documents, journal JSONL, and
-session/turn output streams each have one file authority. Owner output replay is
-derived across those streams. Browser commands have a separate run-scoped,
-append-only receipt authority with fenced claims and restart recovery. A
-write-ahead transaction
-replays interrupted cross-store commits on reopen. Shared contracts cover
-restart, revisions, document conflicts, journal and output idempotency, lease
-fencing, mid-commit crash recovery, dispatch reconstruction, and projections.
-Run, output, worker, and receipt SSE streams reread durable cursors as their
-correctness path, so independent process writes and supervisor restart do not
-depend on process-local notifications.
+**Backpressure** is what the gates provide. An agent that cannot pass does not
+get to continue by insisting, and it cannot lower the bar it is measured
+against.
 
-The loopback console now lives in `@senawa/browser`, and `@senawa/reporting`
-renders from an application evidence projection rather than a runtime adapter.
-The report renderer neutralizes control characters, instruction-like tags, raw
-HTML, and Markdown syntax in capped untrusted fields. It renders request and
-outcome, decomposition, worker execution, gate and human history, discoveries,
-notes, exact consumed manifests, measured task evidence, and usage by role and
-invoked model. The `senawa` app wires target adapters directly.
+A **frozen set** is what a run may not weaken while it is running: the attempt
+limits, the blocking gates, and the declared outputs. They are settled when the
+workflow is written and no run can move them, because an agent that could relax
+them would optimise against the measurement rather than the work.
 
-Run identity and the active-run pointer record the selected backend. Status and
-reports expose it, and reopening through another backend is rejected. Beads
-startup errors are terminal and never fall back to file state. The deterministic
-file and Beads offline demos are covered by integration tests. The opt-in
-Copilot subprocess host is implemented, but this production live-worker path has
-not been validated in this slice. Existing live-model claims remain limited to
-the probes that recorded them.
+The **journal** is the run's record of what was asked, measured, and decided. It
+is written by the authority and no agent can write to it, which is what makes a
+finished run something you can read back rather than take on trust.
 
-Start with the [design index and reading order](docs/design/README.md). It moves
-from the system model and workflow lifecycle into agents, quality enforcement,
-runtime state, provenance, and implementation. Probe evidence and abandoned
-directions remain available in the non-authoritative design working record.
+Four things keep this honest: deterministic sensors that execute real code, a
+journal no agent can write, a frozen set the optimizer cannot weaken, and a
+human who decides what better means.
 
-## Production demo
+This is loop engineering: the system is a graph of loops, and the design work is
+deciding what each loop optimises, what measures it, and who may change the
+target. The inner loop optimises one phase against its gates. The middle loop
+optimises the run against its workflow. The outer loop optimises the workflow
+against what the human actually wanted, and only that loop may change the
+target.
 
-Install dependencies, then run the no-credit demo against the default Beads
-runtime:
+## Documentation
+
+* [Consumer guide](docs/guide/README.md) is the index for everything below.
+* [Getting started](docs/guide/getting-started.md) installs senawa, creates a
+  workflow tree, starts the service, opens the portal, submits a command, and
+  shuts down without spending model credits.
+* [Workflow authoring](docs/guide/workflow-authoring.md) documents the authored
+  workflow tree.
+* [Portal](docs/guide/portal.md) documents the run console, its workflow
+  diagram, and its human decision surfaces.
+* [Worktree mode](docs/guide/worktree-mode.md) documents the optional isolated
+  workspace mode.
+* [Operations](docs/guide/operations.md) documents paths, credentials, backup,
+  restore, recovery, diagnostics, and the live-worker opt-in.
+* [Security](docs/guide/security.md) documents principals, capabilities, grants,
+  approvals, and the local and remote trust boundaries.
+* [Troubleshooting and limits](docs/guide/troubleshooting.md) documents the
+  platform matrix, common failures, and deferred behavior.
+
+The references define exact surfaces: the [authoring
+reference](docs/reference/authoring.md), the [CLI
+reference](docs/reference/cli.md), the [local supervisor HTTP
+reference](docs/reference/local-supervisor-http.md), and the [remote
+control-plane reference](docs/reference/remote-control-plane.md).
+
+[What proves each claim](docs/reference/acceptances.md) names the test behind
+each documented behaviour, and a check refuses the build when a name stops
+matching anything real.
+
+The [design set](docs/design/README.md) explains why the system behaves this way,
+with the [v1 brief](docs/design/WIP/redesign-2/brief.md) carrying the canonical
+behaviours, the [plan](docs/design/WIP/redesign-2/plan.md) as the active source,
+and the [implementation log](docs/design/WIP/redesign-2/implementation-log.md)
+recording decisions.
+
+The repository carries no `examples/` tree. Every runnable example lives inside
+the consumer guides: [Getting started](docs/guide/getting-started.md) carries the
+end-to-end command sequence, [Workflow authoring](docs/guide/workflow-authoring.md)
+carries the configuration documents, and [Operations](docs/guide/operations.md)
+carries the service, backup, restore, and diagnostics sequences.
+
+## High-level design
+
+Senawa executes consumer-defined workflows as a deterministic state machine.
+Every transition is an immutable, content-addressed record derived from exact
+authority facts, so a run can be replayed, audited, and resumed from the exact
+boundary where it stopped.
+
+Five rules shape the whole system:
+
+* Authority flows one way. The kernel decides, storage commits, adapters act,
+  and clients observe. No client, prompt, or model response can widen authority.
+* Agents propose. Humans and workflow policy approve. Model output, central
+  receipts, and prompt text are evidence, never decisions.
+* Intent is persisted before any external effect, and the outcome is reconciled
+  before it is committed, so a crash never silently duplicates work.
+* Every autonomous loop carries an independent finite budget that escalates
+  instead of running unbounded.
+* Local-first control. Source, credentials, leases, and unsynchronized assets
+  stay on the repository host even when a remote control plane is enrolled.
+
+### Package graph
+
+The kernel is pure and has no filesystem, process, network, database, Git,
+clock, random, worker, sensor, or UI dependency. Protocol carries contracts with
+no behavior. Every edge below is a direct entry in the `dependencies` field of
+the source manifest. External dependencies are listed per component in
+[Architecture](docs/design/architecture.md).
+
+```mermaid
+flowchart TD
+    protocol["protocol<br/>versioned wire contracts"]
+    kernel["kernel<br/>pure workflow authority"]
+    configuration["configuration<br/>workflow compiler"]
+    runtime["runtime<br/>ports, commands, runner"]
+    storage["storage-sqlite<br/>transactional authority"]
+    host["execution-host<br/>process, Git, worker adapters"]
+    supervisor["supervisor<br/>local control plane"]
+    reporting["reporting<br/>reports and exports"]
+    portal["portal<br/>browser client"]
+    testing["testing<br/>shared conformance suites"]
+    cli["apps/senawa<br/>CLI composition root"]
+    control["apps/control-plane<br/>reference server"]
+
+    configuration --> kernel
+
+    runtime --> kernel
+    runtime --> protocol
+
+    storage --> configuration
+    storage --> kernel
+    storage --> protocol
+    storage --> runtime
+
+    host --> configuration
+    host --> kernel
+    host --> protocol
+    host --> runtime
+
+    supervisor --> protocol
+    supervisor --> runtime
+    supervisor --> storage
+
+    reporting --> kernel
+    reporting --> protocol
+    reporting --> runtime
+
+    testing --> kernel
+    testing --> protocol
+    testing --> runtime
+
+    portal --> protocol
+    control --> protocol
+
+    cli --> configuration
+    cli --> host
+    cli --> kernel
+    cli --> protocol
+    cli --> reporting
+    cli --> runtime
+    cli --> storage
+    cli --> supervisor
+```
+
+### Command and effect lifecycle
+
+A command becomes a durable receipt before anything external happens. The runner
+then performs exactly one recoverable transition per operation under a fenced
+run lease.
+
+```mermaid
+sequenceDiagram
+    participant Client as CLI or portal
+    participant Supervisor
+    participant Authority as SQLite authority
+    participant Runner as Fenced runner
+    participant Host as Execution host
+
+    Client->>Supervisor: submit command
+    Supervisor->>Authority: queued, then claimed receipt
+    Authority->>Authority: kernel decision in one transaction
+    Authority-->>Supervisor: terminal receipt and cursor
+    Supervisor-->>Client: receipt, events, projections
+    Supervisor->>Runner: wake under run lease
+    Runner->>Authority: persist effect intent with fence
+    Runner->>Host: one external effect
+    Host-->>Runner: outcome or uncertainty
+    Runner->>Authority: reconcile, then commit outcome
+```
+
+### Phase lifecycle
+
+Phase state is derived, never stored as mutable status. Each projection is
+rebuilt from the current candidate, gate evaluation, authority decision,
+closure, and escalation records.
+
+```mermaid
+stateDiagram-v2
+    [*] --> awaiting_completion
+    awaiting_completion --> awaiting_gate: every active task accounted
+    awaiting_gate --> gate_rejected: blocking rule failed or unknown
+    awaiting_gate --> awaiting_approval: gate accepted, approval required
+    awaiting_gate --> awaiting_closure: gate accepted, no approval required
+    awaiting_approval --> approval_rejected: human rejected
+    awaiting_approval --> awaiting_closure: human approved
+    awaiting_closure --> closed
+    closed --> [*]
+    awaiting_gate --> escalated: budget exhausted or blocked
+    awaiting_approval --> escalated: budget exhausted or blocked
+    gate_rejected --> escalated: budget exhausted or blocked
+    approval_rejected --> escalated: budget exhausted or blocked
+    awaiting_closure --> escalated: budget exhausted or blocked
+```
+
+An escalation requires a current candidate, so `awaiting-completion` cannot
+escalate. [Workflow model](docs/design/workflow-model.md) carries the exact
+derivation rules.
+
+### Where the branch stands
+
+Every implementation phase is delivered. Phases 0 through 14 built the kernel
+through packaged delivery and standard authoring, Phase 16 added the
+browser run console, and Phase 17 added the design and consumer documentation
+sets. No phase carries the number 15; the former Phase 15 was renumbered to
+Phase 17 so documentation could describe final behavior. Acceptance criteria and
+the decision record live in the [comprehensive
+plan](docs/design/WIP/redesign-1/implementation-plan.md).
+
+## Development
 
 ```bash
 pnpm install
-pnpm demo:beads
+pnpm build
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm package:release
+pnpm test:packaging
+pnpm check:boundaries
+pnpm docs:links
 ```
 
-This builds Senawa, creates an isolated temporary repository, and runs the
-standard workflow through the real CLI and loopback browser command path with
-explicit simulated workers. Mutable state is stored in a real Beads database. See
-[`examples/demos/beads-offline/README.md`](examples/demos/beads-offline/README.md)
-for full details and the `--keep-server` option.
+The execution host targets Linux x64 with glibc 2.34 or newer. Builds
+require a C17 compiler available as `cc` and package the resulting
+`senawa-process-supervisor` and `senawa-workspace-files` executables under
+`@senawa/execution-host/dist`. Installed packages use those prebuilt helpers;
+installation and runtime sensor execution never invoke a compiler.
 
-To run the file-backed variant instead (explicit development/test mode using
-`--runtime file`), use:
+`pnpm package:release` builds a deterministic local bundle under `dist/release`.
+The bundle contains the public `senawa` package and exact local tarballs for its
+internal workspace dependencies. It is a local verification lane, not a
+registry publication command. `pnpm test:packaging` copies the bundle to an
+operating-system temporary directory, installs it there, and verifies init,
+doctor, service, portal, platform metadata, dependency versions, inventories,
+digests, executable modes, migrations, and native helpers without workspace
+resolution.
 
-```bash
-pnpm demo
-```
+The local core bundle does not declare, resolve, install, or load the Copilot
+SDK or Koffi. A live-enabled installation must make the exact SDK available
+separately; worker execution loads it only when a repository worker is
+configured. The separate `pnpm test:live-worker` source lane requires explicit
+cost and data acknowledgement plus its bounded model, credit, and timeout
+settings. It can invoke a model and is never part of default or packaging
+validation.
 
-See [`examples/demos/file-offline/README.md`](examples/demos/file-offline/README.md)
-for details.
+## CLI
 
-The complete generated command grammar is in the [CLI reference](docs/reference/cli.md).
-`senawa init`, individual `sensor run`, `task done`, and `task abort` remain
-deferred. Initialization lacks versioned scaffold assets; individual sensor
-execution lacks an instance-level expectation contract; task completion lacks
-an authenticated subprocess command bridge; and task abort lacks per-task
-driver coordination despite forced whole-run cancellation being available.
+Senawa ships one public executable, `senawa`. It creates and validates
+workflow configuration, owns the local supervisor lifecycle, submits workflow
+commands, reads durable receipts, events, and projections, reviews amendments,
+mints portal sessions, and performs backup, restore, integrity, diagnostics, and
+repair operations.
 
-Open the active run console directly:
+See [Getting started](docs/guide/getting-started.md) for the first journey,
+[Operations](docs/guide/operations.md) for the operational commands, and the
+[CLI reference](docs/reference/cli.md) for the complete surface with exact
+arguments and exit codes.
 
-```bash
-senawa browser
-```
-
-Pass a run ID to open an ended or finished run. The command starts the loopback
-supervisor, opens a high-entropy bootstrap URL through `$BROWSER`, and keeps
-serving until interrupted. It also prints that URL so a failed browser launch,
-link preview, or later retry can recover the same session.
-
-For remote forwarding or manual opening, prevent the local launch:
-
-```bash
-senawa browser [<run-id>] --no-open
-```
-
-The bootstrap capability remains valid only while that supervisor process is
-running. Keep it private: anyone who can reach the loopback or forwarded port
-and possesses the URL can obtain a browser session. Authentication remains
-necessary because the console can approve, reject, steer, resume, and end runs,
-answer active worker questions, and display source, prompts, paths, and process
-diagnostics. Command POSTs return after durable receipt submission; the fenced
-supervisor executes and recovers the command while receipt-local SSE reports
-queued, running, completed, or refused state. Worker answers use a separate
-authenticated route so they remain available while a command receipt is active.
-
-The live-worker launcher is separate and guarded:
-
-```bash
-pnpm demo:live -- --confirm-cost --host copilot-sdk --goal "Implement the requested change"
-```
-
-It prints an AI-credit warning before starting and selects
-`--worker-host copilot-sdk`. Pass `--host copilot-subprocess` to exercise the
-experimental subprocess adapter. It uses `--runtime file` (the explicit
-development and test adapter) for state storage. This path is opt-in and does
-not establish authenticated Sonnet 5 or Opus 5 availability, live workflow
-quality, or tmux behavior. Exit code `2` means the run reached a human decision,
-not that the start failed. Resume uses the host persisted by start and refuses
-an explicit mismatch.
-
-## How it fits together
-
-```mermaid
-flowchart LR
-    H[You] <--> PA[Copilot with the senawa skill]
-    PA -->|relay start, show, approve, reject, steer| S[Senawa runtime]
-    H -->|direct commands| S
-    S --> D{Deterministic run driver}
-    D --> W[Researcher, planner, implementors, verifiers]
-    W -->|typed Senawa tools or restricted CLI| S
-    S --> G[(Runtime graph store<br/>Beads by default)]
-    S --> SEN[sensors and gates]
-    S --> J[(journal)]
-    W --> T[(telemetry)]
-    G --> RPT[run report]
-    J --> RPT[run report]
-    T --> RPT
-    RPT --> H
-    RPT --> PA
-```
-
-The normal conversational path is you, the principal agent, Senawa, then the
-workers. The principal agent relays your intent and explains what came back; it
-never decides what runs next, and it never reaches past Senawa to the graph, the
-journal, or the workers. You can also drive Senawa directly, and the harness runs
-headless with no principal agent at all.
-
-## Concepts
-
-| Term | Meaning |
-|------|---------|
-| Workflow | A declarative sequence of phases, with their gates, approvals, and iteration budgets. Lives in the repository |
-| Phase | A stage of a workflow. Can be entered more than once, so rejecting one starts an iteration rather than an error |
-| Run driver | The process started by `senawa work start`. Performs every transition and decides what runs next |
-| Principal agent | The Copilot session you talk to, carrying the senawa skill. Relays your intent as `senawa` commands and explains what came back. It never decides what runs next, and the harness runs without it |
-| Worker session | A role-scoped worker with its own context window, model, reasoning effort, and tool permissions. A separate session, not an in-process helper |
-| Artifact | A phase's schema-validated output, versioned rather than overwritten. A plan's tasks become the implementation frontier |
-| Graph state | The dependency graph of phases, tasks, and gates plus orchestration metadata, held by Beads for ordinary commands |
-| Sensor | A tool that measures a property of the work and returns an assessment plus evidence. Builds, tests, linters, and reviewer agents |
-| Gate | A rule that consumes sensor readings and resists progress when they are red |
-| Anchor | A deterministic reading that cannot be argued with. Every blocking gate needs at least one, or the harness is only agreeing with itself |
-| Frozen set | Files no worker may write, such as tests, sensor definitions, workflows, schemas, and worker profiles. Enforced, not requested |
-| Journal | An append-only log of every orchestration event, written by the harness rather than by any agent |
-| Run report | A rendered account of how the work was done, regenerated from the journal, the graph, and telemetry |
-| Work directory | Durable per-run files under `.agents/.copilot-tracking/`, including frozen definitions, versioned artifacts, transcripts, evidence, and the journal |
-
-## Prerequisites
-
-The offline vertical slice requires Node.js 22.12 or later, pnpm 10 or later, Git,
-and `bd` 1.1.x for ordinary commands. Explicit `--runtime file` development and
-test commands do not require `bd`. Worker-producing commands use the Copilot SDK
-host by default and require GitHub Copilot CLI with an active Copilot
-subscription. Offline work must select `--worker-host simulated` explicitly.
-
-A repository running Senawa must provide `.senawa/sensors.yaml`, workflows,
-schemas, and worker profiles under `.senawa/`. It must also provide
-`.agents/skills/senawa/SKILL.md` when a Copilot session will act as the
-conversational principal agent. The latter path is a Copilot discovery
-exception, not runtime worker configuration.
-
-### Package registry
-
-The devcontainer uses the public npm registry by default. On first creation it copies `.devcontainer/.env.example` to the gitignored `.devcontainer/.env` file automatically. Docker Compose passes these values into the image build, so npm-based Dev Container Features use the configured registry before the container starts. The same values are available inside the running container.
-
-To use a package proxy instead, create or edit the local file before rebuilding the devcontainer:
-
-```bash
-cp .devcontainer/.env.example .devcontainer/.env
-```
-
-Set both `NPM_CONFIG_REGISTRY` and `COREPACK_NPM_REGISTRY` in that file to the proxy URL, then rebuild the devcontainer. Variables exported by the host shell take precedence over `.devcontainer/.env` during Docker Compose interpolation.
-
-Build arguments and image environment variables are not secret storage. Keep credentials out of the URL; configure npm authentication through your user-level `.npmrc` or a secret store.
-
-## Repository layout
-
-The tree below shows the repository definition and runtime ownership boundaries.
-
-```text
-docs/design/                 numbered current-state guides and their reading index
-docs/design/wip/             proposed decisions, evidence, rejected ideas, and the historical monolith
-apps/                        deployable Senawa CLI and hook composition roots
-examples/demos/              supported simulated and guarded live demonstrations
-experiments/probes/          bounded experiments that measured substrate behavior
-packages/                    reusable runtime, sensor, browser, and reporting components
-packages/domain/             pure contracts, schemas, events, and transition invariants
-packages/configuration/      repository definitions, snapshots, fingerprints, and diagnostics
-packages/application/        commands, queries, driver, prompts, projections, and ports
-packages/runtime-beads/      production Beads runtime graph and split-write reconciliation
-packages/runtime-file/       explicit dev/test runtime, active-run, lease, receipt, and recovery adapter
-packages/artifact-store/     immutable run identity, snapshot, and artifact documents
-packages/observability/      append-only journal, output streams, and notification hints
-packages/workers/            worker lifecycle, negotiation, authorization, events, and binding adapters
-packages/sensors/            ordered gate evaluation, command sensors, cache, and evidence seams
-packages/browser/            authenticated HTTP, receipt and output SSE, questions, and graph console
-packages/reporting/          report rendering over application evidence projections
-packages/testing/            shared adapter contracts and simulated fixtures
-tests/contract/              shared storage, recovery, fencing, dispatch, and projection suites
-apps/senawa-hook/            embedded subprocess hook policy
-.senawa/agents/              strict worker profiles with model, capability requests, and prompts
-.senawa/workflows/           phase definitions: gates, approvals, iteration budgets
-.senawa/schemas/             artifact contracts for each phase
-.senawa/sensors.yaml         sensor extensions, configured sensors, gates, and frozen paths
-.senawa/extensions/          locally declared sensor extensions
-.agents/skills/senawa/       the skill that lets a Copilot session drive the harness
-.agents/rubrics/             rubrics for inferential sensors
-```
-
-The `.senawa` entries are consumer-authored Senawa configuration. The skill path
-is separate only because Copilot discovers it there. Repository
-`.github/agents` and `.github/hooks` files are not Senawa configuration;
-enforcement is implemented in Senawa packages.
-
-## Further reading
-
-* [Design index and reading order](docs/design/README.md)
-* [System model](docs/design/01-system-model.md)
-* [Workflows and lifecycle](docs/design/02-workflows-and-lifecycle.md)
-* [Agents and interaction](docs/design/03-agents-and-interaction.md)
-* [Design working record](docs/design/wip/README.md)
-* [Manufacturing Backpressure in Coding Agent Harnesses](https://dasith.me/2026/06/14/backpressure-in-coding-agent-harnesses/)
-* [Refining Inferential Sensors in Coding Agent Harnesses](https://dasith.me/2026/06/20/refining-inferential-sensors/)
-* [Structured workflows for coding with AI agents using the Breadcrumb Protocol](https://dasith.me/2025/04/02/vibe-coding-breadcrumbs/)
-* [Loop Engineering](https://addyosmani.com/blog/loop-engineering/) and [From Loop Engineering to Graph Engineering?](https://medium.com/intuitionmachine/from-loop-engineering-to-graph-engineering-d3ebeb08511c)
-* [beads documentation](https://beads.gascity.com/)
-* [Comparing GitHub Copilot CLI customization features](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/comparing-cli-features)
-
-## Name
-
-Senawa (සේනාව) is Sinhala for an army or host.
+Measured historical substrate behavior remains under
+[experiments/probes](experiments/probes/README.md). Those probes do not imply
+that their former production integrations remain supported.

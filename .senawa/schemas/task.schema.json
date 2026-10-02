@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:senawa:task",
+  "title": "One planned task",
+  "description": "One element of the plan's tasks collection, and the whole input to one implement member phase. The id is the fan-out identity: senawa names the member phase from it and detects added, changed, and removed elements across replans by it.",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "task",
+    "verification"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "#/$defs/slug"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "group": {
+      "$ref": "#/$defs/slug",
+      "description": "Which workstream this belongs to."
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "description": "What to change. Detail beyond this belongs in the plan document."
+    },
+    "dependsOn": {
+      "type": "array",
+      "maxItems": 6,
+      "description": "Other task ids in the same collection that must finish first.",
+      "items": {
+        "$ref": "#/$defs/slug"
+      }
+    },
+    "targets": {
+      "type": "array",
+      "maxItems": 4,
+      "description": "Paths this task is expected to touch. A hint for the agent, not a restriction senawa enforces.",
+      "items": {
+        "$ref": "#/$defs/repositoryPath"
+      }
+    },
+    "verification": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "How a reviewer would know this task worked."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+    }
+  }
+}

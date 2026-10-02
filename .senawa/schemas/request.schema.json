@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:senawa:request",
+  "title": "Workflow input",
+  "type": "object",
+  "required": ["request"],
+  "properties": {
+    "request": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "description": "What the human is asking for, in their own words."
+    }
+  },
+  "additionalProperties": false
+}

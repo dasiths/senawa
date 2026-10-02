@@ -1,98 +1,74 @@
 # Senawa Design
 
-The design is split by reader question. Numbered guides describe the current
-architecture. The [design working record](wip/README.md) holds proposed
-decisions, probe findings, abandoned approaches, and the historical monolith.
+The design set explains why Senawa exists, how its authority model works, and how
+every component fits together, in enough depth to reason about the system without
+reading the implementation log or the source.
 
-Current guidance wins when the working record disagrees with it. Probe findings
-remain the authority for what was measured.
+## Design set
 
-## Recommended reading order
+Read in this order for a first pass.
 
-Read the guides in order on a first pass. The sequence moves from mental model to
-behavioral contracts, then into implementation internals.
+* [Design Overview](overview.md) covers the eight governing principles:
+  deterministic authority, immutable context, proposal-only agents,
+  evidence-backed transitions, intent before effect, durable recovery, bounded
+  autonomous loops, and local-first control. Each principle states the problem it
+  solves and the shortcut it forbids.
+* [Architecture](architecture.md) covers the twelve components, their exact
+  dependency edges, what each must never do, and whether each is browser-safe or
+  Node only.
+* [Authority Model](authority-model.md) covers the command path from submission
+  to durable receipt, the per-run monotonic cursor, the effect path from
+  persisted intent to committed outcome, run leases and task scope fences, and
+  why projections stay derived.
+* [Workflow Model](workflow-model.md) covers the canonical graph, typed edges,
+  definition generations and supersession, completion accounting, evidence
+  policy, sensors and gates, candidate and closure records, budgets and
+  escalation, the derived phase lifecycle, and additive amendments.
+* [Dataflow](dataflow.md) covers workflow input binding, phase attempts, JSON
+  Pointer input mapping, schema-validated phase outputs, the
+  `senawa_complete` correction loop, schema-selected fan-out, reviewed plan
+  import, and iteration.
+* [Durability](durability.md) covers the baseline schema, the current schema
+  version, content addressing, transaction boundaries, crash-recovery
+  guarantees, backup, restore, and integrity verification.
+* [Extending Senawa](extending.md) covers adding an adapter, a sensor, a worker,
+  or a transport, which contracts are stable versus internal, and the exact rules
+  enforced by `scripts/check-boundaries.mjs`.
 
-| Order | Guide | Question it answers | Concepts introduced |
-|-------|-------|---------------------|---------------------|
-| 1 | [System Model](01-system-model.md) | What is Senawa, and who controls it? | Nested loops, principal agent, driver, workers, bounded autonomy |
-| 2 | [Workflows and Lifecycle](02-workflows-and-lifecycle.md) | How does a request become restartable work? | Workflows, phases, artifacts, iteration, approval, resume |
-| 3 | [Agents and Interaction](03-agents-and-interaction.md) | What may each session do, and how does the human participate? | Principal agent, worker roles, command authority, interaction modes, isolation |
-| 4 | [Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md) | How does Senawa decide that work is sound? | Sensor extensions, assessments, gates, backpressure, frozen set, policy layers |
-| 5 | [Runtime and State](05-runtime-and-state.md) | Where does live state reside, and how does execution recover? | Beads graph, driver transitions, leases, reconciliation, cache, parallelism |
-| 6 | [Provenance and Observability](06-provenance-and-observability.md) | How can a run be audited after its sessions are gone? | Work directory, journal, report, traces, costs, rendering safety |
-| 7 | [Implementation and Operations](07-implementation-and-operations.md) | How should the system be built and operated? | Packages, CLI groups, build slices, substrate limits, open decisions |
+Every design page ends with a section naming the test files and scripts that
+prove its central claims.
 
-## Reading paths
+## Vocabulary
 
-### Product and architecture review
+Each term is defined here once. A design page uses them without redefining them.
 
-Read [System Model](01-system-model.md),
-[Workflows and Lifecycle](02-workflows-and-lifecycle.md), and
-[Agents and Interaction](03-agents-and-interaction.md). These establish the
-human experience, authority boundaries, and lifecycle without requiring beads or
-SDK implementation detail.
+| Term | It means |
+|---|---|
+| Sensor | A bounded command senawa runs to measure a property of the work. It returns a reading, never a verdict |
+| Reading | What one sensor measured, bound to the exact command that produced it |
+| Gate | A rule over readings that resists progress while any blocking rule is red |
+| Anchor | A deterministic reading. Every blocking gate needs one, or the harness is agreeing with whoever submitted the work |
+| Backpressure | Completion granted rather than claimed. An agent requests it; senawa measures and either grants or returns reasons |
+| Completion evidence | Attachments an agent offers with a completion. It can be argued with, so it feeds completion accounting and never a gate |
+| Gate evidence | The gate definition, its readings, and the evaluation over them. Senawa's own record, which no agent supplies |
+| Citation | A source inside an authored output. It informs a reader, not a decision senawa makes |
+| Dispatch | One agent assignment: a frozen context, a rendered prompt, a scoped credential, and a task scope claim |
+| Candidate | The claim that a phase is ready, naming the exact tasks, outputs, and digests it rests on |
+| Closure | A candidate that passed its gate and any declared approval, with the outputs it accepted |
+| Escalation | A handover to a person, built from recorded gate evidence rather than an agent's account of it |
+| Attempt | One pass at a phase. A refusal starts the next one with the reasons the last was refused |
+| Frozen set | Definitions a run may not change under itself. Changing one is an amendment, reviewed and recorded |
 
-### Quality and policy implementation
+## References
 
-Read [Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md), then
-the command authority and containment sections in
-[Agents and Interaction](03-agents-and-interaction.md).
+* [CLI Reference](../reference/cli.md) for the complete alpha command surface.
+* [Local supervisor HTTP](../reference/local-supervisor-http.md) for routes and
+  the local security boundary.
+* [Remote control plane](../reference/remote-control-plane.md) for enrollment,
+  classified synchronization, and reference-server limits.
 
-### Runtime implementation
+The [repository README](../../README.md) remains the shortest entry point to the
+authority model, the package graph, and the command and effect lifecycle.
 
-Read [Runtime and State](05-runtime-and-state.md), followed by
-[Provenance and Observability](06-provenance-and-observability.md) and
-[Implementation and Operations](07-implementation-and-operations.md).
-
-### Decision archaeology
-
-Start with the [Probe Findings](wip/probe-findings.md), then use
-[Roads Not Taken](wip/roads-not-taken.md) and the
-[original monolith](wip/multi-agent-orchestration.md) for rationale and context.
-
-### Maturing a new idea
-
-Start an entry in the [Decision Log](wip/decision-log.md), identify the owning
-guide and evidence needed, then use the smallest coherent probe to resolve it. The
-[working record guide](wip/README.md) defines the full promotion path.
-
-## Concept ownership
-
-Each concept has one primary home. Other guides link to it rather than redefining
-it.
-
-| Concept | Primary guide |
-|---------|---------------|
-| Nested control loops and authority | [System Model](01-system-model.md) |
-| Consumer `.senawa` layout, workflow schema, worker profiles, phase iteration, and artifacts | [Workflows and Lifecycle](02-workflows-and-lifecycle.md) |
-| Principal agent, workers, sessions, and human interaction | [Agents and Interaction](03-agents-and-interaction.md) |
-| Sensor policy location, gate language, backpressure, and enforcement | [Sensors, Gates, and Enforcement](04-sensors-gates-and-enforcement.md) |
-| Beads mapping, state machine, driver, resume, and concurrency | [Runtime and State](05-runtime-and-state.md) |
-| Snapshot inputs, journal, report, traces, and cost attribution | [Provenance and Observability](06-provenance-and-observability.md) |
-| Package boundaries, initialization, CLI grouping, build plan, and open questions | [Implementation and Operations](07-implementation-and-operations.md) |
-| Proposed decisions and promotion status | [WIP Decision Log](wip/decision-log.md) |
-| Measurements and invalidated assumptions | [WIP Probe Findings](wip/probe-findings.md) |
-| Discarded approaches and revival conditions | [WIP Roads Not Taken](wip/roads-not-taken.md) |
-
-## Documentation rules
-
-* Current-state behavior belongs in exactly one numbered guide.
-* Cross-cutting summaries link to the owning guide instead of copying contracts.
-* New ideas begin in the decision log, not in a current-state guide.
-* Measurements belong in the probe README and findings record.
-* Displaced rationale belongs in Roads Not Taken.
-* The WIP monolith is preserved and does not receive new current-state design.
-* A behavior described as measured links to the evidence that established it.
-
-## Relationship to probes
-
-Each folder under [experiments/probes/](../../experiments/probes/README.md) owns
-one subject and includes its
-goal, limits, reproduction command, and dated changes. When evidence changes the
-architecture:
-
-1. Create or update the decision-log entry.
-2. Update the owning probe.
-3. Record the result in the findings document and decision entry.
-4. Update the numbered guide that owns an accepted concept.
-5. Move rejected or superseded rationale to Roads Not Taken.
+Senawa is alpha software. Git history preserves earlier designs; no compatibility
+or historical design documents are maintained in the active tree.

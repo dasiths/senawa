@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:rpi:task-collection",
+  "title": "The array the implement phase fans out over",
+  "type": "array",
+  "minItems": 1,
+  "maxItems": 8,
+  "items": { "$ref": "urn:rpi:task" }
+}

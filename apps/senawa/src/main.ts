@@ -1,101 +1,32 @@
-import { spawn } from "node:child_process";
-import { join } from "node:path";
-import {
-  COPILOT_SDK_WORKER_ADAPTER_VERSION,
-  COPILOT_SUBPROCESS_WORKER_ADAPTER_VERSION,
-  CopilotSdkWorkerAdapter,
-  SIMULATED_WORKER_ADAPTER_VERSION,
-  SimulatedWorkerAdapter,
-  SubprocessWorkerAdapter,
-} from "@senawa/workers";
-import { createRuntimeComposition, selectRuntime } from "./composition.js";
-import { resolveExecutable } from "./executable.js";
-import { optionValue, parseWorkerHostOption } from "./execution-options.js";
-import { runCli } from "./program.js";
-import { createSenawaServices, type SenawaServices } from "./services.js";
-import { createSdkWorkerBindings } from "./worker-bindings.js";
-import { LazyWorkerHostResolver } from "./worker-host-resolver.js";
+#!/usr/bin/env node
+import { type CliResult, runCli } from "./cli.js";
+import { createNodeCliDependencies } from "./node-cli.js";
+import { runOperationalCli } from "./operational-cli.js";
 
 const arguments_ = process.argv.slice(2);
-const repositoryRoot = process.cwd();
-const workerHost = parseWorkerHostOption(optionValue(arguments_, "--worker-host")).kind;
-let services: SenawaServices | undefined;
-const copilotExecutable = () =>
-  resolveExecutable(
-    typeof Reflect.get(process.env, "SENAWA_COPILOT_CLI") === "string"
-      ? String(Reflect.get(process.env, "SENAWA_COPILOT_CLI"))
-      : "copilot",
-  );
-const workerHosts = new LazyWorkerHostResolver({
-  simulated: () => new SimulatedWorkerAdapter(),
-  "copilot-subprocess": () =>
-    new SubprocessWorkerAdapter({
-      enabled: true,
-      repositoryRoot,
-      isolationRoot: join(repositoryRoot, ".agents", ".copilot-tracking", "copilot-home"),
-      executable: copilotExecutable(),
-    }),
-  "copilot-sdk": () =>
-    new CopilotSdkWorkerAdapter({
-      repositoryRoot,
-      isolationRoot: join(repositoryRoot, ".agents", ".copilot-tracking", "copilot-sdk-home"),
-      runtimePath: copilotExecutable(),
-      bindings: createSdkWorkerBindings(() => {
-        if (services === undefined) throw new Error("Senawa services are not initialized");
-        return services;
-      }),
-    }),
-});
-
+let result: CliResult;
 try {
-  const runtime = selectRuntime(arguments_);
-  const { persistence, notifier, receiptStore, repositoryEvidence } = createRuntimeComposition(
-    repositoryRoot,
-    runtime,
-  );
-  services = createSenawaServices(repositoryRoot, {
-    persistence,
-    notifier,
-    receiptStore,
-    repositoryEvidence,
-    runtimeBackend: runtime,
-    workerHostResolver: workerHosts,
-    workerHostIdentity: {
-      kind: workerHost,
-      adapter: workerHost === "simulated" ? "simulated-worker" : workerHost,
-      adapterVersion:
-        workerHost === "copilot-sdk"
-          ? COPILOT_SDK_WORKER_ADAPTER_VERSION
-          : workerHost === "copilot-subprocess"
-            ? COPILOT_SUBPROCESS_WORKER_ADAPTER_VERSION
-            : SIMULATED_WORKER_ADAPTER_VERSION,
-    },
-  });
-  process.exitCode = await runCli(arguments_, {
-    services,
-    openBrowser,
-  });
+  result =
+    (await runOperationalCli(arguments_)) ??
+    (await runCli(arguments_, createNodeCliDependencies()));
 } catch (error) {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-} finally {
-  await workerHosts.shutdown();
+  result = { output: safeOperationalError(error), exitCode: 1 };
 }
+process.stdout.write(`${result.output}\n`);
+process.exitCode = result.exitCode;
 
-async function openBrowser(url: string): Promise<void> {
-  const browserEnvironmentKey = "BROWSER";
-  const configured = process.env[browserEnvironmentKey];
-  const command =
-    configured ??
-    (process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open");
-  const arguments_ =
-    process.platform === "win32" && configured === undefined ? ["/c", "start", "", url] : [url];
-  await new Promise<void>((resolveOpen, rejectOpen) => {
-    const child = spawn(command, arguments_, { detached: true, stdio: "ignore" });
-    child.once("error", rejectOpen);
-    child.once("spawn", () => {
-      child.unref();
-      resolveOpen();
-    });
-  });
+function safeOperationalError(error: unknown): string {
+  if (
+    error instanceof Error &&
+    (("safe" in error && error.safe === true) || error.name === "HttpSupervisorClientError")
+  ) {
+    return error.message;
+  }
+  // An unsafe message may name a path or a credential, so it is withheld unless
+  // the operator asks for it. Withholding it with no way to ask made every
+  // unexpected failure unreportable.
+  if (process.env.SENAWA_DEBUG === "1" && error instanceof Error) {
+    return `Operational command failed: ${error.stack ?? error.message}`;
+  }
+  return "Operational command failed. Re-run with SENAWA_DEBUG=1 for the detail.";
 }

@@ -2,18 +2,19 @@
 
 ## Overview
 
-Throwaway code with a durable purpose. Each folder answers one question from
-[the design](../../docs/design/README.md) with evidence you can
-reproduce, and every folder carries a README stating its goal, what it proved,
-what it did not prove, and a dated change log.
+These folders preserve reproducible experiments from the pre-reset alpha. Each
+folder states its historical question, what it measured, what it did not prove,
+and its dated change log.
 
-Findings are consolidated in
-[the probe findings](../../docs/design/wip/probe-findings.md). That document
-is the cross-cutting evidence record; these folders are the machinery that
-produced it. Current architecture lives in the numbered design guides.
+The former aggregate findings and design documents were removed during the alpha
+reset. A probe may inform a new implementation decision, but it is not current
+architecture. New design and implementation authority lives in the
+[comprehensive plan](../../docs/design/WIP/redesign-1/implementation-plan.md).
 
 | Probe                                            | Question                                                                        | Cost         |
 |--------------------------------------------------|---------------------------------------------------------------------------------|--------------|
+| [v1-authoring](v1-authoring/README.md)         | Can three YAML documents replace the fourteen-key workflow file?                     | offline      |
+| [v1-authoring](v1-authoring/README.md)           | Can three YAML documents replace the fourteen-key workflow file?                        | offline      |
 | [hook-latency](hook-latency/README.md)           | Is a bundled Node CLI fast enough to run as a `preToolUse` hook?                | offline      |
 | [hook-enforcement](hook-enforcement/README.md)   | Do hooks genuinely block a tool call, and how do they fail?                      | AI credits   |
 | [beads-graph](beads-graph/README.md)             | Does the `bd` contract behave the way the graph adapter needs, under contention? | offline      |

@@ -1,0 +1,1647 @@
+import { type CanonicalValue, canonicalValue } from "@senawa/kernel";
+import { parseDocument } from "yaml";
+import type { ConfigurationDiagnostic, ConfigurationDiagnosticCode } from "./contracts.js";
+import { sortDiagnostics } from "./diagnostics.js";
+import { parsePromptTemplate } from "./prompt-template.js";
+
+/** One authored file: its path, used as the diagnostic locator, and its text. */
+export interface AuthoredSource {
+  readonly path: string;
+  readonly text: string;
+}
+
+export interface AuthoredWorkflowInput {
+  readonly agents: AuthoredSource;
+  readonly workflow: AuthoredSource;
+  readonly sensors: AuthoredSource;
+  /** Prompt template text by the path an agent declares, used to derive input paths. */
+  readonly prompts: ReadonlyMap<string, string>;
+  /**
+   * Schema text by the path a phase declares.
+   *
+   * A phase that declares its own input names what it reads by property, and
+   * the binding cannot be derived without knowing those names.
+   */
+  readonly schemas?: ReadonlyMap<string, string>;
+}
+
+export interface AuthoredLoweringResult {
+  readonly diagnostics: readonly ConfigurationDiagnostic[];
+  readonly document?: CanonicalValue;
+}
+
+const WORKFLOW_API_VERSION = "senawa.dev/workflow/v1";
+const SESSION_SCOPES = new Set(["run", "phase", "element"]);
+const FAILURE_POLICIES = new Set(["continue", "fail-fast"]);
+const EVIDENCE_MODES = new Set(["none", "task", "required-criteria", "all-satisfied"]);
+const ITERATE_OR_FAIL = new Set(["iterate", "fail"]);
+const ESCALATE_OR_FAIL = new Set(["escalate", "fail"]);
+const MAX_PHASE_ATTEMPTS = 20;
+/** The comparisons an author may write, and the internal operator each becomes. */
+const GATE_COMPARISONS = Object.freeze([
+  { key: "exitCode", operator: "equals", defaultPointer: "/exitCode" },
+  { key: "equals", operator: "equals", defaultPointer: undefined },
+  { key: "atLeast", operator: "greater-than-or-equal", defaultPointer: undefined },
+  { key: "atMost", operator: "less-than-or-equal", defaultPointer: undefined },
+  { key: "exists", operator: "exists", defaultPointer: undefined },
+] as const);
+const DEFAULT_ITERATION: AuthoredIteration = Object.freeze({
+  maximumAttempts: 3,
+  onGateRejected: "iterate",
+  onApprovalRejected: "iterate",
+  onUpstreamChanged: "iterate",
+  onExhausted: "escalate",
+});
+/** The kernel refuses a larger phase output, so authoring cannot promise one. */
+const MAX_OUTPUT_BYTES = 262_144;
+
+/** The single attempt counter that replaces the six declared budget units (D-005). */
+const PHASE_ATTEMPT_LIMIT = 3;
+
+/**
+ * The one budget an agent executor spends, sized to the phase's own ceiling.
+ *
+ * A fixed limit here meant an authored `attempts:` raised the iteration policy
+ * and nothing else, so a phase authored to try eight times escalated for budget
+ * on its fourth.
+ */
+function agentBudgets(attempts: number = PHASE_ATTEMPT_LIMIT) {
+  return Object.freeze([{ unit: "review-iteration", limit: attempts }]);
+}
+
+/**
+ * What every agent needs to talk back to senawa.
+ *
+ * The broker denies a submission whose capability is absent from the dispatch,
+ * and a dispatch cannot widen what its context granted. Omitting these produces
+ * a run that registers, renders, schedules, and dispatches, then fails at the
+ * agent's first submission.
+ */
+const AGENT_CAPABILITIES = Object.freeze([
+  "worker.submit.completion",
+  "worker.submit.phase-output",
+  "worker.submit.question",
+]);
+
+interface Collector {
+  readonly diagnostics: ConfigurationDiagnostic[];
+}
+
+/** The three documents a consumer authors, by their fixed names. */
+export const AUTHORED_DOCUMENT_NAMES = Object.freeze([
+  "agents.yaml",
+  "workflow.yaml",
+  "sensors.yaml",
+] as const);
+
+/**
+ * Lists the prompt templates the authored agents declare.
+ *
+ * Lowering needs the template text to derive input paths, and reading files is
+ * not this package's job, so a caller uses this to know what to read first.
+ */
+export function listAuthoredPromptPaths(source: AuthoredSource): readonly string[] {
+  const collector: Collector = { diagnostics: [] };
+  const agents = parseYaml(collector, source);
+  if (!isRecord(agents)) return Object.freeze([]);
+  const paths = new Set<string>();
+  for (const value of Object.values(agents)) {
+    if (isRecord(value) && typeof value.prompt === "string") paths.add(value.prompt);
+  }
+  return Object.freeze([...paths].sort(compare));
+}
+
+/**
+ * Lowers the three authored documents into the internal workflow document.
+ *
+ * The authored surface names intent; everything the internal model needs beyond
+ * that is derived here rather than written by hand. Nothing about the internal
+ * model is relaxed, so the compiler and kernel keep every invariant they had.
+ */
+export function lowerAuthoredWorkflow(input: AuthoredWorkflowInput): AuthoredLoweringResult {
+  const collector: Collector = { diagnostics: [] };
+  const agents = parseYaml(collector, input.agents);
+  const workflow = parseYaml(collector, input.workflow);
+  const sensors = parseYaml(collector, input.sensors);
+  if (agents === undefined || workflow === undefined || sensors === undefined) {
+    return { diagnostics: sortDiagnostics(collector.diagnostics) };
+  }
+
+  const agentsByKey = readAgents(collector, input, agents);
+  const sensorSet = readSensors(collector, input.sensors.path, sensors);
+  const gateSet = readGates(collector, input.sensors.path, sensors, sensorSet);
+  const phases = readPhases(
+    collector,
+    input.workflow.path,
+    workflow,
+    agentsByKey,
+    sensorSet,
+    gateSet,
+  );
+  const name = requiredString(collector, input.workflow.path, "/name", workflow, "name");
+  const workflowInput = requiredString(collector, input.workflow.path, "/input", workflow, "input");
+  const execution = readExecution(
+    collector,
+    input.workflow.path,
+    workflow as Readonly<Record<string, unknown>>,
+  );
+  if (name === undefined || workflowInput === undefined || phases === undefined) {
+    return { diagnostics: sortDiagnostics(collector.diagnostics) };
+  }
+
+  const schemaPaths = new Set<string>([workflowInput]);
+  for (const phase of phases) {
+    schemaPaths.add(phase.output);
+    if (phase.input !== undefined) schemaPaths.add(phase.input);
+    if (phase.forEach !== undefined) schemaPaths.add(phase.forEach.collection);
+  }
+
+  const document = canonicalValue({
+    apiVersion: WORKFLOW_API_VERSION,
+    kind: "Workflow",
+    execution: {
+      workspaceMode: execution.workspace,
+      maxWriterConcurrency: execution.maxWriters,
+      // The authority holds one failure policy per run while an author states
+      // it per phase, so a run that any phase wants stopped is stopped. Being
+      // over-strict here fails earlier rather than continuing past a phase the
+      // author asked to halt on. Recorded as F-013.
+      failurePolicy: phases.some((phase) => phase.onFailure === "fail-fast")
+        ? "fail-fast"
+        : "continue",
+      ...(execution.integrationRef === undefined
+        ? {}
+        : { integrationRef: execution.integrationRef }),
+    },
+    workflow: {
+      key: name,
+      generation: 1,
+      input: { schema: schemaKey(workflowInput) },
+    },
+    prompts: [...agentsByKey.values()]
+      .filter((agent) => phases.some((phase) => phase.agent === agent.key))
+      .map((agent) => ({
+        key: agent.key,
+        path: agent.prompt,
+        inputPaths: agent.inputPaths,
+      }))
+      .sort((left, right) => compare(left.key, right.key)),
+    schemas: [...schemaPaths].sort(compare).map((path) => ({ key: schemaKey(path), path })),
+    roles: [...agentsByKey.values()]
+      .filter((agent) => phases.some((phase) => phase.agent === agent.key))
+      .map((agent) => ({
+        key: agent.key,
+        kind: "agent",
+        capabilities: [...AGENT_CAPABILITIES, `${agent.key}-work`].sort(compare),
+        prompt: agent.key,
+        modelPolicy: agent.key,
+        // An element-scoped persona is a fresh conversation each time it works,
+        // which at role level is the same rule as attempt scope. Fan-out members
+        // get their own line whatever the role says.
+        sessionScope: agent.session === "element" ? "attempt" : agent.session,
+        ...(agent.sessionTurns === undefined ? {} : { sessionMaxTurns: agent.sessionTurns }),
+      }))
+      .sort((left, right) => compare(left.key, right.key)),
+    modelPolicies: [...agentsByKey.values()]
+      .filter((agent) => phases.some((phase) => phase.agent === agent.key))
+      .map((agent) => ({ key: agent.key, routes: agent.routes }))
+      .sort((left, right) => compare(left.key, right.key)),
+    sensors: [...sensorSet.values()]
+      .map((sensor) => ({
+        key: sensor.key,
+        argv: sensor.argv,
+        cwd: sensor.cwd,
+        timeoutMs: sensor.timeoutMs,
+        maxStdoutBytes: sensor.maxOutputBytes,
+        maxStderrBytes: sensor.maxOutputBytes,
+        inheritedEnvironment: [...new Set(sensor.environment)].sort(compare),
+        maxAttempts: sensor.maxAttempts,
+        maxReconciliationAttempts: sensor.maxReconciliationAttempts,
+      }))
+      .sort((left, right) => compare(left.key, right.key)),
+    gates: phases
+      .filter((phase) => phase.gates.length > 0)
+      .map((phase) => {
+        const referenced = phase.gates.map((name) => gateSet.get(name) ?? implicitGate(name));
+        return {
+          key: `${phase.name}-gate`,
+          phase: phase.name,
+          blocking: referenced.flatMap((gate) => gate.blocking).map(lowerGateRule),
+          advisory: referenced.flatMap((gate) => gate.advisory).map(lowerGateRule),
+        };
+      })
+      .sort((left, right) => compare(left.key, right.key)),
+    completionEvidenceViews: phases.flatMap((phase) =>
+      phase.completionEvidenceFrom.map((view) => ({
+        key: `${phase.name}-from-${view.phase}`,
+        phase: view.phase,
+        evidenceKinds: [...view.kinds].sort(compare),
+      })),
+    ),
+    forEach: phases
+      .filter((phase) => phase.forEach !== undefined)
+      .map((phase) => {
+        const fanOut = phase.forEach as NonNullable<AuthoredPhase["forEach"]>;
+        return {
+          key: `${phase.name}-items`,
+          source: { kind: "phase-output", phase: fanOut.phase, output: fanOut.phase },
+          pointer: `/${fanOut.field}`,
+          collectionSchema: schemaKey(fanOut.collection),
+          itemSchema: schemaKey(phase.input ?? fanOut.collection),
+          identityPointer: "/id",
+          limits: {
+            maxSelectedItems: 64,
+            maxTotalTasks: 256,
+            // v1 runs members one after another, so concurrency stays at one.
+            maxConcurrency: 1,
+            exhaustion: phase.iteration.onExhausted,
+          },
+        };
+      })
+      .sort((left, right) => compare(left.key, right.key)),
+    taskTemplates: phases
+      .filter((phase) => phase.forEach !== undefined)
+      .map((phase) => ({
+        key: `${phase.name}-work`,
+        generation: 1,
+        role: phase.agent,
+        budgets: agentBudgets(phase.iteration.maximumAttempts),
+        inputSchema: schemaKey(phase.input ?? ""),
+        inputMappings: [
+          { key: "item", source: { kind: "current-item", pointer: "" }, destinationPointer: "" },
+        ],
+        dependencyIdentityPointer: "/dependsOn",
+        repositoryChanges: "allowed",
+        completionPolicy: {
+          criteria: [{ key: `${phase.name}-produced`, generation: 1, required: true, input: null }],
+          completionEvidencePolicy: {
+            mode: phase.completionEvidence.mode,
+            requirements: phase.completionEvidence.require.map((requirement) => ({
+              kind: requirement.kind,
+              minimumCount: requirement.min,
+            })),
+          },
+        },
+      }))
+      .sort((left, right) => compare(left.key, right.key)),
+    phases: phases.map((phase) => lowerPhase(collector, input, phase, phases, workflowInput)),
+  });
+
+  return { diagnostics: sortDiagnostics(collector.diagnostics), document };
+}
+
+interface AuthoredAgent {
+  readonly key: string;
+  readonly prompt: string;
+  readonly provider: string;
+  readonly routes: readonly AuthoredRoute[];
+  readonly session: string;
+  readonly sessionTurns?: number;
+  readonly inputPaths: readonly string[];
+}
+
+interface AuthoredRoute {
+  readonly provider: string;
+  readonly model: string;
+  readonly maxTurns: number;
+  readonly maxSubmissions: number;
+  readonly maxMillidollars: number;
+}
+
+interface AuthoredPhase {
+  readonly name: string;
+  readonly agent: string;
+  readonly session: string;
+  readonly sessionTurns?: number;
+  readonly needs: readonly string[];
+  readonly output: string;
+  readonly outputMaxBytes: number;
+  readonly input?: string;
+  readonly gates: readonly string[];
+  readonly approve: boolean;
+  /** Named pieces of work this phase runs, each with its own input. */
+  readonly items?: readonly { readonly key: string; readonly input: unknown }[];
+  readonly forEach?: {
+    readonly phase: string;
+    readonly field: string;
+    readonly collection: string;
+  };
+  readonly onFailure: string;
+  readonly completionEvidence: AuthoredCompletionEvidence;
+  readonly completionEvidenceFrom: readonly AuthoredCompletionEvidenceView[];
+  readonly iteration: AuthoredIteration;
+  readonly approveRole?: string;
+  /** Whose work one approval covers. Absent means the phase's, as it always did. */
+  readonly approveScope?: "phase" | "member";
+}
+
+interface AuthoredIteration {
+  readonly maximumAttempts: number;
+  readonly onGateRejected: string;
+  readonly onApprovalRejected: string;
+  readonly onUpstreamChanged: string;
+  readonly onExhausted: string;
+}
+
+interface AuthoredCompletionEvidence {
+  readonly mode: string;
+  readonly require: readonly { readonly kind: string; readonly min: number }[];
+}
+
+function readAgents(
+  collector: Collector,
+  input: AuthoredWorkflowInput,
+  value: unknown,
+): ReadonlyMap<string, AuthoredAgent> {
+  const agents = new Map<string, AuthoredAgent>();
+  if (!isRecord(value)) {
+    add(
+      collector,
+      "invalid-document",
+      input.agents.path,
+      "",
+      "Agent definitions must be a mapping",
+    );
+    return agents;
+  }
+  for (const [key, raw] of Object.entries(value)) {
+    const pointer = `/${key}`;
+    if (!isRecord(raw)) {
+      add(collector, "invalid-field", input.agents.path, pointer, "Agent must be a mapping");
+      continue;
+    }
+    const prompt = requiredString(collector, input.agents.path, pointer, raw, "prompt");
+    const routes = readRoutes(collector, input.agents.path, pointer, raw);
+    if (prompt === undefined || routes.length === 0) continue;
+    const session = typeof raw.session === "string" ? raw.session : "run";
+    if (!SESSION_SCOPES.has(session)) {
+      add(
+        collector,
+        "invalid-field",
+        input.agents.path,
+        `${pointer}/session`,
+        `Session scope must be one of ${[...SESSION_SCOPES].sort().join(", ")}`,
+      );
+    }
+    const text = input.prompts.get(prompt);
+    if (text === undefined) {
+      add(
+        collector,
+        "missing-resource-path",
+        input.agents.path,
+        `${pointer}/prompt`,
+        `Prompt template ${prompt} was not supplied`,
+      );
+      continue;
+    }
+    // Declaring input paths by hand is what the compiler already cross-checks
+    // against the template, so read them from the template instead.
+    let inputPaths: readonly string[];
+    try {
+      inputPaths = [...parsePromptTemplate(text).inputPaths].sort(compare);
+    } catch (error) {
+      add(
+        collector,
+        "invalid-prompt-template",
+        prompt,
+        "",
+        error instanceof Error ? error.message : "Prompt template is invalid",
+      );
+      continue;
+    }
+    agents.set(key, {
+      key,
+      prompt,
+      provider: typeof raw.provider === "string" ? raw.provider : "github-copilot",
+      routes,
+      session,
+      ...(typeof raw.sessionTurns === "number" &&
+      Number.isSafeInteger(raw.sessionTurns) &&
+      raw.sessionTurns > 0
+        ? { sessionTurns: raw.sessionTurns }
+        : {}),
+      inputPaths,
+    });
+  }
+  return agents;
+}
+
+interface AuthoredSensor {
+  readonly key: string;
+  readonly argv: readonly string[];
+  readonly deterministic: boolean;
+  readonly cwd: string;
+  readonly timeoutMs: number;
+  readonly maxOutputBytes: number;
+  readonly environment: readonly string[];
+  readonly maxAttempts: number;
+  readonly maxReconciliationAttempts: number;
+}
+
+/** A small positive count, refused rather than clamped when it is out of range. */
+function boundedCount(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  value: unknown,
+  fallback: number,
+): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 16) {
+    add(collector, "invalid-field", path, pointer, "Must be a whole number between 1 and 16");
+    return fallback;
+  }
+  return value;
+}
+
+/** Accepts a plain count, or a duration such as 10m, and refuses anything else. */
+function readDuration(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  value: unknown,
+  fallback: number,
+): number {
+  if (value === undefined) return fallback;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
+  if (typeof value === "string") {
+    const match = /^(\d+)(ms|s|m|h|k)?$/u.exec(value.trim());
+    const amount = match === undefined || match === null ? Number.NaN : Number(match[1]);
+    const unit = match?.[2] ?? "ms";
+    const scale: Readonly<Record<string, number>> = {
+      ms: 1,
+      s: 1_000,
+      m: 60_000,
+      h: 3_600_000,
+      k: 1_024,
+    };
+    const factor = scale[unit];
+    if (Number.isSafeInteger(amount) && amount > 0 && factor !== undefined) return amount * factor;
+  }
+  add(
+    collector,
+    "invalid-field",
+    path,
+    pointer,
+    "Expected a positive count or a duration like 10m",
+  );
+  return fallback;
+}
+
+interface AuthoredGateRule {
+  readonly key: string;
+  readonly sensorKey: string;
+  readonly pointer: string;
+  readonly operator: string;
+  readonly expected: unknown;
+}
+
+interface AuthoredGate {
+  readonly key: string;
+  readonly blocking: readonly AuthoredGateRule[];
+  readonly advisory: readonly AuthoredGateRule[];
+}
+
+/** A phase may name a sensor directly, which means that sensor must exit zero. */
+function implicitGate(sensorKey: string): AuthoredGate {
+  return {
+    key: sensorKey,
+    blocking: [
+      {
+        key: `${sensorKey}-passes`,
+        sensorKey,
+        pointer: "/exitCode",
+        operator: "equals",
+        expected: 0,
+      },
+    ],
+    advisory: [],
+  };
+}
+
+function lowerGateRule(rule: AuthoredGateRule): unknown {
+  return {
+    key: rule.key,
+    condition: {
+      operator: rule.operator,
+      accessor: { sensorKey: rule.sensorKey, pointer: rule.pointer },
+      expected: rule.expected,
+    },
+  };
+}
+
+/**
+ * Reads named gates, so a rule can measure something other than an exit code.
+ *
+ * The author names the reading field; the strict internal pointer is generated.
+ */
+function readGates(
+  collector: Collector,
+  path: string,
+  value: unknown,
+  sensors: ReadonlyMap<string, AuthoredSensor>,
+): ReadonlyMap<string, AuthoredGate> {
+  const gates = new Map<string, AuthoredGate>();
+  if (!isRecord(value) || value.gates === undefined) return gates;
+  if (!isRecord(value.gates)) {
+    add(collector, "invalid-field", path, "/gates", "Gates must be a mapping");
+    return gates;
+  }
+  for (const [key, raw] of Object.entries(value.gates)) {
+    const pointer = `/gates/${key}`;
+    if (!isRecord(raw)) {
+      add(collector, "invalid-gate", path, pointer, "Gate must be a mapping");
+      continue;
+    }
+    const blocking = readGateRules(collector, path, `${pointer}/blocking`, raw.blocking, sensors);
+    const advisory = readGateRules(collector, path, `${pointer}/advisory`, raw.advisory, sensors);
+    if (blocking.length === 0) {
+      add(collector, "invalid-gate", path, pointer, "A gate needs at least one blocking rule");
+      continue;
+    }
+    // A blocking gate with no deterministic reading is the harness agreeing with
+    // itself, so it is refused where it is written.
+    if (!blocking.some((rule) => sensors.get(rule.sensorKey)?.deterministic === true)) {
+      add(
+        collector,
+        "invalid-gate",
+        path,
+        pointer,
+        `Gate ${key} has no deterministic reading to anchor it`,
+      );
+      continue;
+    }
+    gates.set(key, { key, blocking, advisory });
+  }
+  return gates;
+}
+
+/**
+ * Reads an agent's model routes, in either the short or the expanded form.
+ *
+ * The expanded form exists so a run can fall back rather than stall when a model
+ * is unavailable or exhausts its own ceilings.
+ */
+/**
+ * Reads a fan-out declaration, which names an upstream collection to iterate.
+ *
+ * The collection schema is named rather than derived because the kernel
+ * validates the selected array on its own, and no schema for it can be
+ * conjured from the one that describes a single item.
+ */
+/**
+ * Reads the named pieces of work a phase runs.
+ *
+ * `forEach` computes its members from an earlier phase's output. `items` names
+ * them in the workflow, for work an author already knows the shape of and wants
+ * to see written down.
+ */
+function readItems(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+): readonly { readonly key: string; readonly input: unknown }[] | undefined {
+  const declared = raw.items;
+  if (declared === undefined) return undefined;
+  if (!Array.isArray(declared) || declared.length === 0) {
+    add(collector, "invalid-field", path, `${pointer}/items`, "Items must be a non-empty list");
+    return undefined;
+  }
+  const items: { readonly key: string; readonly input: unknown }[] = [];
+  const seen = new Set<string>();
+  for (const [index, entry] of declared.entries()) {
+    const at = `${pointer}/items/${index}`;
+    if (!isRecord(entry)) {
+      add(collector, "invalid-field", path, at, "Item must be a mapping");
+      continue;
+    }
+    const key = requiredString(collector, path, at, entry, "key");
+    if (key === undefined) continue;
+    if (seen.has(key)) {
+      add(collector, "invalid-field", path, `${at}/key`, `Duplicate item ${key}`);
+      continue;
+    }
+    seen.add(key);
+    items.push({ key, input: entry.input ?? null });
+  }
+  return items.length === 0 ? undefined : items;
+}
+
+function readForEach(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+  needs: readonly string[],
+): { readonly phase: string; readonly field: string; readonly collection: string } | undefined {
+  const declared = raw.forEach;
+  if (declared === undefined) return undefined;
+  if (typeof declared !== "string") {
+    add(collector, "invalid-field", path, `${pointer}/forEach`, "forEach must be phase.field");
+    return undefined;
+  }
+  const [phase, ...rest] = declared.split(".");
+  const field = rest.join(".");
+  if (phase === undefined || field.length === 0) {
+    add(collector, "invalid-field", path, `${pointer}/forEach`, "forEach must be phase.field");
+    return undefined;
+  }
+  if (!needs.includes(phase)) {
+    add(
+      collector,
+      "unknown-reference",
+      path,
+      `${pointer}/forEach`,
+      `forEach reads phase ${phase} which is absent from needs`,
+    );
+    return undefined;
+  }
+  const collection = typeof raw.collection === "string" ? raw.collection : undefined;
+  if (collection === undefined) {
+    add(
+      collector,
+      "missing-field",
+      path,
+      `${pointer}/collection`,
+      "A fan-out must name the schema its collection satisfies",
+    );
+    return undefined;
+  }
+  if (typeof raw.input !== "string") {
+    add(
+      collector,
+      "missing-field",
+      path,
+      `${pointer}/input`,
+      "A fan-out member reads one item, so the phase must name that item's schema",
+    );
+    return undefined;
+  }
+  return { phase, field, collection };
+}
+
+function readRoutes(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+): readonly AuthoredRoute[] {
+  const provider = typeof raw.provider === "string" ? raw.provider : "github-copilot";
+  const build = (value: Readonly<Record<string, unknown>>, model: string): AuthoredRoute => ({
+    provider: typeof value.provider === "string" ? value.provider : provider,
+    model,
+    maxTurns: typeof value.turns === "number" ? value.turns : 12,
+    maxSubmissions: typeof value.submissions === "number" ? value.submissions : 4,
+    maxMillidollars: typeof value.spend === "number" ? value.spend : 5_000,
+  });
+
+  if (typeof raw.model === "string") {
+    if (raw.models !== undefined) {
+      add(collector, "invalid-field", path, pointer, "Declare either model or models, not both");
+      return [];
+    }
+    return [build(raw, raw.model)];
+  }
+  if (!Array.isArray(raw.models)) {
+    add(collector, "missing-field", path, `${pointer}/model`, "model is required");
+    return [];
+  }
+  const routes: AuthoredRoute[] = [];
+  for (const [index, entry] of raw.models.entries()) {
+    const routePointer = `${pointer}/models/${index}`;
+    if (!isRecord(entry) || typeof entry.model !== "string") {
+      add(collector, "missing-field", path, `${routePointer}/model`, "model is required");
+      continue;
+    }
+    routes.push(build(entry, entry.model));
+  }
+  if (routes.length === 0) {
+    add(collector, "invalid-field", path, `${pointer}/models`, "Declare at least one route");
+  }
+  return routes;
+}
+
+function readGateRules(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  value: unknown,
+  sensors: ReadonlyMap<string, AuthoredSensor>,
+): readonly AuthoredGateRule[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    add(collector, "invalid-gate", path, pointer, "Rules must be a list");
+    return [];
+  }
+  const rules: AuthoredGateRule[] = [];
+  for (const [index, raw] of value.entries()) {
+    const rulePointer = `${pointer}/${index}`;
+    if (!isRecord(raw)) {
+      add(collector, "invalid-gate", path, rulePointer, "Rule must be a mapping");
+      continue;
+    }
+    const sensorKey = typeof raw.sensor === "string" ? raw.sensor : undefined;
+    if (sensorKey === undefined) {
+      add(collector, "missing-field", path, `${rulePointer}/sensor`, "sensor is required");
+      continue;
+    }
+    if (!sensors.has(sensorKey)) {
+      add(
+        collector,
+        "unknown-reference",
+        path,
+        `${rulePointer}/sensor`,
+        `Unknown sensor ${sensorKey}`,
+      );
+      continue;
+    }
+    const comparison = GATE_COMPARISONS.find((candidate) => raw[candidate.key] !== undefined);
+    if (comparison === undefined) {
+      add(
+        collector,
+        "invalid-gate",
+        path,
+        rulePointer,
+        `A rule needs one of ${GATE_COMPARISONS.map(({ key }) => key).join(", ")}`,
+      );
+      continue;
+    }
+    const field = typeof raw.field === "string" ? raw.field : comparison.defaultPointer;
+    if (field === undefined) {
+      add(collector, "missing-field", path, `${rulePointer}/field`, "field is required");
+      continue;
+    }
+    rules.push({
+      key: gateRuleKey(sensorKey, field, comparison.key),
+      sensorKey,
+      pointer: field.startsWith("/") ? field : `/${field}`,
+      operator: comparison.operator,
+      expected: raw[comparison.key],
+    });
+  }
+  return rules;
+}
+
+/** A rule key names the sensor, the field, and the comparison, so two rules over one sensor stay distinct. */
+function gateRuleKey(sensorKey: string, field: string, comparison: string): string {
+  const kebab = (value: string) =>
+    value.replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`).replace(/[^a-z0-9]+/gu, "-");
+  return [sensorKey, kebab(field), kebab(comparison)]
+    .join("-")
+    .replace(/-+/gu, "-")
+    .replace(/^-|-$/gu, "");
+}
+
+function readSensors(
+  collector: Collector,
+  path: string,
+  value: unknown,
+): ReadonlyMap<string, AuthoredSensor> {
+  const sensors = new Map<string, AuthoredSensor>();
+  if (!isRecord(value)) {
+    add(collector, "invalid-document", path, "", "Sensor definitions must be a mapping");
+    return sensors;
+  }
+  const declared = value.sensors;
+  if (declared === undefined) return sensors;
+  if (!isRecord(declared)) {
+    add(collector, "invalid-field", path, "/sensors", "Sensors must be a mapping");
+    return sensors;
+  }
+  for (const [key, raw] of Object.entries(declared)) {
+    const pointer = `/sensors/${key}`;
+    if (!isRecord(raw)) {
+      add(collector, "invalid-sensor", path, pointer, "Sensor must be a mapping");
+      continue;
+    }
+    const run = requiredString(collector, path, pointer, raw, "run");
+    if (run === undefined) continue;
+    const argv = run.split(/\s+/u).filter((part) => part.length > 0);
+    if (argv.length === 0) {
+      add(collector, "invalid-sensor", path, `${pointer}/run`, "Sensor command is empty");
+      continue;
+    }
+    sensors.set(key, {
+      key,
+      argv,
+      deterministic: raw.deterministic !== false,
+      cwd: typeof raw.cwd === "string" ? raw.cwd : ".",
+      timeoutMs: readDuration(collector, path, `${pointer}/timeout`, raw.timeout, 300_000),
+      maxOutputBytes: readDuration(collector, path, `${pointer}/maxOutput`, raw.maxOutput, 65_536),
+      environment: Array.isArray(raw.env) ? ["PATH", ...raw.env.filter(isString)] : ["PATH"],
+      maxAttempts: boundedCount(collector, path, `${pointer}/attempts`, raw.attempts, 3),
+      maxReconciliationAttempts: boundedCount(
+        collector,
+        path,
+        `${pointer}/reconciliationAttempts`,
+        raw.reconciliationAttempts,
+        2,
+      ),
+    });
+  }
+  return sensors;
+}
+
+interface AuthoredExecution {
+  readonly workspace: "repository" | "worktree";
+  readonly maxWriters: number;
+  readonly integrationRef?: string;
+}
+
+/**
+ * Reads where the run's agents work and how many of them write at once.
+ *
+ * Defaults to one writer in the repository itself, which is the shape a person
+ * can reason about without knowing anything about worktrees. Worktree mode is
+ * the opt-in: it isolates writers from each other, so it is the only way more
+ * than one of them can safely run at a time, and it needs a branch to integrate
+ * their work back onto.
+ */
+function readExecution(
+  collector: Collector,
+  path: string,
+  workflow: Readonly<Record<string, unknown>>,
+): AuthoredExecution {
+  const raw = workflow.execution;
+  if (raw === undefined) return { workspace: "repository", maxWriters: 1 };
+  if (!isRecord(raw)) {
+    add(collector, "invalid-field", path, "/execution", "Execution must be a mapping");
+    return { workspace: "repository", maxWriters: 1 };
+  }
+  for (const key of Object.keys(raw).sort()) {
+    if (key === "workspace" || key === "maxWriters" || key === "integrationRef") continue;
+    add(collector, "unknown-field", path, `/execution/${key}`, `${key} is not an execution field`);
+  }
+
+  const workspace =
+    raw.workspace === undefined || raw.workspace === "repository"
+      ? "repository"
+      : raw.workspace === "worktree"
+        ? "worktree"
+        : undefined;
+  if (workspace === undefined) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      "/execution/workspace",
+      "Workspace must be repository or worktree",
+    );
+  }
+
+  const maxWriters =
+    raw.maxWriters === undefined
+      ? 1
+      : typeof raw.maxWriters === "number" &&
+          Number.isSafeInteger(raw.maxWriters) &&
+          raw.maxWriters > 0
+        ? raw.maxWriters
+        : undefined;
+  if (maxWriters === undefined) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      "/execution/maxWriters",
+      "Writers must be a positive whole number",
+    );
+  }
+
+  const integrationRef =
+    typeof raw.integrationRef === "string" && raw.integrationRef.startsWith("refs/heads/")
+      ? raw.integrationRef
+      : undefined;
+  if (raw.integrationRef !== undefined && integrationRef === undefined) {
+    // The runtime takes a full local ref. Accepting `main` here would compile
+    // and then fail when the run started, which is the worst place to find out.
+    add(
+      collector,
+      "invalid-field",
+      path,
+      "/execution/integrationRef",
+      "Integration ref must be a full local branch ref, such as refs/heads/main",
+    );
+  }
+
+  const resolvedWorkspace = workspace ?? "repository";
+  const resolvedWriters = maxWriters ?? 1;
+  // Two writers in one directory overwrite each other's work, and the run has no
+  // way to tell which edit belongs to whom. Refusing here is better than
+  // producing a result nobody can attribute.
+  if (resolvedWorkspace === "repository" && resolvedWriters > 1) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      "/execution/maxWriters",
+      "More than one writer needs workspace: worktree, or they share one directory",
+    );
+  }
+  if (resolvedWorkspace === "worktree" && integrationRef === undefined) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      "/execution/integrationRef",
+      "Worktree mode needs an integrationRef naming where work is integrated",
+    );
+  }
+
+  return {
+    workspace: resolvedWorkspace,
+    maxWriters: resolvedWriters,
+    ...(integrationRef === undefined ? {} : { integrationRef }),
+  };
+}
+
+function readPhases(
+  collector: Collector,
+  path: string,
+  value: unknown,
+  agents: ReadonlyMap<string, AuthoredAgent>,
+  sensors: ReadonlyMap<string, AuthoredSensor>,
+  gateSet: ReadonlyMap<string, AuthoredGate>,
+): readonly AuthoredPhase[] | undefined {
+  if (!isRecord(value) || !Array.isArray(value.phases)) {
+    add(collector, "missing-field", path, "/phases", "Workflow must declare a phases list");
+    return undefined;
+  }
+  const defaults = readIteration(
+    collector,
+    path,
+    "/defaults",
+    asDefaults(value),
+    DEFAULT_ITERATION,
+  );
+  const phases: AuthoredPhase[] = [];
+  const seen = new Set<string>();
+  const fanOutPhases = new Set(
+    value.phases.flatMap((entry) =>
+      isRecord(entry) && typeof entry.name === "string" && entry.forEach !== undefined
+        ? [entry.name]
+        : [],
+    ),
+  );
+  const declaredNames = new Set(
+    value.phases.flatMap((entry) =>
+      isRecord(entry) && typeof entry.name === "string" ? [entry.name] : [],
+    ),
+  );
+  for (const [index, raw] of value.phases.entries()) {
+    const pointer = `/phases/${index}`;
+    if (!isRecord(raw)) {
+      add(collector, "invalid-field", path, pointer, "Phase must be a mapping");
+      continue;
+    }
+    const name = requiredString(collector, path, pointer, raw, "name");
+    refuseUnknownFields(collector, path, pointer, raw, PHASE_FIELDS);
+    const agent = requiredString(collector, path, pointer, raw, "agent");
+    const output = readOutput(collector, path, pointer, raw);
+    if (name === undefined || agent === undefined || output === undefined) continue;
+    if (seen.has(name)) {
+      add(collector, "duplicate-key", path, `${pointer}/name`, `Phase ${name} is declared twice`);
+      continue;
+    }
+    seen.add(name);
+    if (!agents.has(agent)) {
+      add(collector, "unknown-reference", path, `${pointer}/agent`, `Unknown agent ${agent}`);
+    }
+    const needs = Array.isArray(raw.needs) ? raw.needs.filter(isString) : [];
+    for (const [needIndex, need] of needs.entries()) {
+      if (!value.phases.some((other) => isRecord(other) && other.name === need)) {
+        add(
+          collector,
+          "unknown-reference",
+          path,
+          `${pointer}/needs/${needIndex}`,
+          `Unknown phase ${need}`,
+        );
+      }
+    }
+    const gates = Array.isArray(raw.gates) ? raw.gates.filter(isString) : [];
+    for (const [gateIndex, gate] of gates.entries()) {
+      if (gateSet.has(gate)) continue;
+      const sensor = sensors.get(gate);
+      if (sensor === undefined) {
+        add(
+          collector,
+          "unknown-reference",
+          path,
+          `${pointer}/gates/${gateIndex}`,
+          `Unknown gate or sensor ${gate}`,
+        );
+        continue;
+      }
+      // A blocking gate with no deterministic reading is the harness agreeing
+      // with itself, so it is refused where it is written rather than passing.
+      if (!sensor.deterministic) {
+        add(
+          collector,
+          "invalid-gate",
+          path,
+          `${pointer}/gates/${gateIndex}`,
+          `Sensor ${gate} is not deterministic, so it cannot anchor a blocking gate`,
+        );
+      }
+    }
+    const approve = raw.approve;
+    const approveRole =
+      isRecord(approve) && typeof approve.role === "string" ? approve.role : undefined;
+    // Whose work one approval covers. A phase that says nothing keeps approval's
+    // original meaning, so reading an existing workflow again changes nothing.
+    const approveScope =
+      isRecord(approve) && typeof approve.scope === "string" ? approve.scope : undefined;
+    if (approveScope !== undefined && approveScope !== "phase" && approveScope !== "member") {
+      add(
+        collector,
+        "invalid-field",
+        path,
+        `${pointer}/approve/scope`,
+        "Approval scope must be phase or member",
+      );
+    }
+    // The run is fail-fast when any phase says so, so a phase that says nothing
+    // has to continue. Defaulting to fail-fast made every run fail-fast and the
+    // authored value unable to express anything.
+    const onFailure = typeof raw.onFailure === "string" ? raw.onFailure : "continue";
+    if (!FAILURE_POLICIES.has(onFailure)) {
+      add(
+        collector,
+        "invalid-field",
+        path,
+        `${pointer}/onFailure`,
+        `Failure policy must be one of ${[...FAILURE_POLICIES].sort().join(", ")}`,
+      );
+    }
+    const forEach = readForEach(collector, path, pointer, raw, needs);
+    const items = readItems(collector, path, pointer, raw);
+    if (items !== undefined && forEach !== undefined) {
+      add(
+        collector,
+        "invalid-field",
+        path,
+        `${pointer}/items`,
+        "Declare either items or forEach, not both",
+      );
+    }
+    // v1 runs members as tasks beneath one phase, so a member cannot itself fan
+    // out. Saying so here beats a run that fails once it is already going.
+    if (forEach !== undefined && fanOutPhases.has(forEach.phase)) {
+      add(
+        collector,
+        "invalid-field",
+        path,
+        `${pointer}/forEach`,
+        `Cannot fan out over ${forEach.phase}, which already fans out. v1 supports one level.`,
+      );
+    }
+    // A phase reading more than one upstream output cannot have its input schema
+    // derived unambiguously, so it must name one.
+    const declaredInput = typeof raw.input === "string" ? raw.input : undefined;
+    if (declaredInput === undefined && needs.length > 1) {
+      add(
+        collector,
+        "missing-field",
+        path,
+        `${pointer}/input`,
+        `Phase ${name} reads ${needs.length} upstream outputs, so it must declare an input schema`,
+      );
+    }
+    phases.push({
+      name,
+      agent,
+      session: agents.get(agent)?.session ?? "run",
+      needs,
+      output: output.schema,
+      outputMaxBytes: output.maxBytes,
+      ...(declaredInput === undefined ? {} : { input: declaredInput }),
+      gates,
+      approve: raw.approve === true || isRecord(raw.approve),
+      ...(forEach === undefined ? {} : { forEach }),
+      ...(items === undefined ? {} : { items }),
+      onFailure,
+      completionEvidence: readCompletionEvidence(collector, path, pointer, raw),
+      completionEvidenceFrom: readCompletionEvidenceFrom(
+        collector,
+        path,
+        pointer,
+        raw,
+        declaredNames,
+      ),
+      iteration: readIteration(collector, path, pointer, raw, defaults),
+      ...(approveRole === undefined ? {} : { approveRole }),
+      ...(approveScope === "phase" || approveScope === "member" ? { approveScope } : {}),
+    });
+  }
+  return phases;
+}
+
+/**
+ * Reads the loop policy for one phase, falling back to the workflow defaults.
+ *
+ * These were constants until now, which meant the loop the product is built
+ * around was the one thing an author could not describe.
+ */
+/** One earlier phase's accepted completion evidence, made readable to a later one. */
+export interface AuthoredCompletionEvidenceView {
+  readonly phase: string;
+  readonly kinds: readonly string[];
+}
+
+/**
+ * Reads the phases whose accepted completion evidence this phase may read.
+ *
+ * The kinds are an allowlist, so only the evidence a later phase was written
+ * to read crosses into it.
+ */
+function readCompletionEvidenceFrom(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+  declaredPhases: ReadonlySet<string>,
+): readonly AuthoredCompletionEvidenceView[] {
+  const declared = raw.completionEvidenceFrom;
+  if (declared === undefined) return [];
+  if (!Array.isArray(declared)) {
+    add(collector, "invalid-field", path, `${pointer}/completionEvidenceFrom`, "Must be a list");
+    return [];
+  }
+  const views: AuthoredCompletionEvidenceView[] = [];
+  for (const [index, entry] of declared.entries()) {
+    const at = `${pointer}/completionEvidenceFrom/${index}`;
+    if (!isRecord(entry)) {
+      add(collector, "invalid-field", path, at, "Must be a mapping");
+      continue;
+    }
+    const phase = requiredString(collector, path, at, entry, "phase");
+    if (phase === undefined) continue;
+    if (!declaredPhases.has(phase)) {
+      add(collector, "unknown-reference", path, `${at}/phase`, `Unknown phase ${phase}`);
+      continue;
+    }
+    const kinds = Array.isArray(entry.kinds)
+      ? entry.kinds.filter((kind): kind is string => typeof kind === "string")
+      : [];
+    if (kinds.length === 0) {
+      add(collector, "missing-field", path, `${at}/kinds`, "Name at least one evidence kind");
+      continue;
+    }
+    views.push({ phase, kinds });
+  }
+  return views;
+}
+
+/** Every field a phase may declare. A typo here silently did nothing before. */
+const PHASE_FIELDS = new Set([
+  "name",
+  "agent",
+  "needs",
+  "input",
+  "output",
+  "gates",
+  "approve",
+  "forEach",
+  "items",
+  "collection",
+  "onFailure",
+  "completionEvidence",
+  "completionEvidenceFrom",
+  "attempts",
+  "onGateRejected",
+  "onApprovalRejected",
+  "onUpstreamChanged",
+  "onExhausted",
+]);
+
+/**
+ * Refuses a field the reader does not know.
+ *
+ * Ignoring an unknown field means a misspelled `approve` configures nothing and
+ * says nothing, which reads as the feature being broken rather than misspelled.
+ */
+function refuseUnknownFields(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+  allowed: ReadonlySet<string>,
+): void {
+  for (const key of Object.keys(raw).sort()) {
+    if (allowed.has(key)) continue;
+    add(collector, "unknown-field", path, `${pointer}/${key}`, `${key} is not a phase field`);
+  }
+}
+
+/** The workflow-level defaults block, read with the same rules as a phase. */
+function asDefaults(value: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  return isRecord(value.defaults) ? value.defaults : {};
+}
+
+function readIteration(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+  defaults: AuthoredIteration,
+): AuthoredIteration {
+  const attempts = typeof raw.attempts === "number" ? raw.attempts : defaults.maximumAttempts;
+  if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > MAX_PHASE_ATTEMPTS) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      `${pointer}/attempts`,
+      `attempts must be between 1 and ${MAX_PHASE_ATTEMPTS}`,
+    );
+  }
+  const disposition = (key: string, fallback: string, allowed: ReadonlySet<string>): string => {
+    const value = raw[key];
+    if (value === undefined) return fallback;
+    if (typeof value !== "string" || !allowed.has(value)) {
+      add(
+        collector,
+        "invalid-field",
+        path,
+        `${pointer}/${key}`,
+        `${key} must be one of ${[...allowed].sort().join(", ")}`,
+      );
+      return fallback;
+    }
+    return value;
+  };
+  return {
+    maximumAttempts: attempts,
+    onGateRejected: disposition("onGateRejected", defaults.onGateRejected, ITERATE_OR_FAIL),
+    onApprovalRejected: disposition(
+      "onApprovalRejected",
+      defaults.onApprovalRejected,
+      ITERATE_OR_FAIL,
+    ),
+    onUpstreamChanged: disposition(
+      "onUpstreamChanged",
+      defaults.onUpstreamChanged,
+      ITERATE_OR_FAIL,
+    ),
+    onExhausted: disposition("onExhausted", defaults.onExhausted, ESCALATE_OR_FAIL),
+  };
+}
+
+/** Reads a phase output, in either the short or the expanded form. */
+function readOutput(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+): { schema: string; maxBytes: number } | undefined {
+  const value = raw.output;
+  if (typeof value === "string") {
+    return { schema: value, maxBytes: MAX_OUTPUT_BYTES };
+  }
+  if (!isRecord(value)) {
+    add(collector, "missing-field", path, `${pointer}/output`, "output is required");
+    return undefined;
+  }
+  const schema = requiredString(collector, `${pointer}/output`, "", value, "schema");
+  if (schema === undefined) return undefined;
+  const maxBytes = typeof value.maxBytes === "number" ? value.maxBytes : MAX_OUTPUT_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_OUTPUT_BYTES) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      `${pointer}/output/maxBytes`,
+      `An output may be at most ${MAX_OUTPUT_BYTES} bytes`,
+    );
+  }
+  return { schema, maxBytes };
+}
+
+/** Reads the completion evidence policy, defaulting to requiring none. */
+function readCompletionEvidence(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+): AuthoredCompletionEvidence {
+  const value = raw.completionEvidence;
+  if (value === undefined) return { mode: "none", require: [] };
+  if (!isRecord(value)) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      `${pointer}/completionEvidence`,
+      "completionEvidence must be a mapping",
+    );
+    return { mode: "none", require: [] };
+  }
+  const mode = typeof value.mode === "string" ? value.mode : "none";
+  if (!EVIDENCE_MODES.has(mode)) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      `${pointer}/completionEvidence/mode`,
+      `Mode must be one of ${[...EVIDENCE_MODES].sort().join(", ")}`,
+    );
+  }
+  const declared = Array.isArray(value.require) ? value.require : [];
+  const require: { kind: string; min: number }[] = [];
+  for (const [index, entry] of declared.entries()) {
+    const itemPointer = `${pointer}/completionEvidence/require/${index}`;
+    if (!isRecord(entry)) {
+      add(collector, "invalid-field", path, itemPointer, "Each requirement must be a mapping");
+      continue;
+    }
+    const kind = typeof entry.kind === "string" ? entry.kind : undefined;
+    if (kind === undefined || kind.length === 0) {
+      add(collector, "missing-field", path, `${itemPointer}/kind`, "kind is required");
+      continue;
+    }
+    const min = typeof entry.min === "number" ? entry.min : 1;
+    if (!Number.isSafeInteger(min) || min < 1) {
+      add(collector, "invalid-field", path, `${itemPointer}/min`, "min must be a positive integer");
+      continue;
+    }
+    require.push({ kind, min });
+  }
+  // Requiring evidence while the mode collects none would read as a promise the
+  // gate never keeps, so it is refused where it is written.
+  if (mode === "none" && require.length > 0) {
+    add(
+      collector,
+      "invalid-field",
+      path,
+      `${pointer}/completionEvidence/mode`,
+      "Mode none collects no evidence, so it cannot carry requirements",
+    );
+  }
+  return { mode, require };
+}
+
+/**
+ * What a phase reads, derived from the property names its input schema declares.
+ *
+ * A phase that declares its own input is saying what it merges and under which
+ * names. A property named for a phase it needs is that phase's output;
+ * anything else is the same-named property of the workflow input. Nothing is
+ * guessed: a property that matches neither is refused here rather than at the
+ * moment the phase is dispatched, which is where it used to surface.
+ */
+/**
+ * Lists the schema documents lowering needs to read to bind a phase's input.
+ *
+ * A phase that declares its own input names what it merges by property, so the
+ * property names have to be read before the mapping can be derived.
+ */
+export function listAuthoredSchemaPaths(source: AuthoredSource): readonly string[] {
+  const collector: Collector = { diagnostics: [] };
+  const workflow = parseYaml(collector, source);
+  if (!isRecord(workflow)) return Object.freeze([]);
+  const paths = new Set<string>();
+  if (typeof workflow.input === "string") paths.add(workflow.input);
+  const phases = Array.isArray(workflow.phases) ? workflow.phases : [];
+  for (const phase of phases) {
+    if (isRecord(phase) && typeof phase.input === "string") paths.add(phase.input);
+  }
+  return Object.freeze([...paths].sort(compare));
+}
+
+function declaredInputMappings(
+  collector: Collector,
+  source: AuthoredWorkflowInput,
+  phase: AuthoredPhase,
+  upstream: readonly AuthoredPhase[],
+  workflowInput: string,
+): readonly unknown[] {
+  const properties = schemaProperties(source, phase.input ?? "");
+  if (properties === undefined) {
+    // Without the schema text the old behaviour is the only safe one, and a
+    // phase that reads more than one source already had to declare a schema.
+    return upstream.map((need) => ({
+      key: need.name,
+      source: { kind: "phase-output", phase: need.name, output: need.name, pointer: "" },
+      destinationPointer: upstream.length === 1 ? "" : `/${need.name}`,
+    }));
+  }
+  const workflowProperties = schemaProperties(source, workflowInput) ?? [];
+  const mappings: unknown[] = [];
+  for (const property of properties) {
+    const need = upstream.find(
+      ({ name, output }) => name === property || schemaKey(output) === property,
+    );
+    if (need !== undefined) {
+      mappings.push({
+        key: property,
+        source: { kind: "phase-output", phase: need.name, output: need.name, pointer: "" },
+        destinationPointer: `/${property}`,
+      });
+      continue;
+    }
+    if (workflowProperties.includes(property)) {
+      mappings.push({
+        key: property,
+        source: { kind: "workflow-input", pointer: `/${property}` },
+        destinationPointer: `/${property}`,
+      });
+    }
+    // A property nothing here provides is left unbound rather than refused: a
+    // declared input also carries an assembled completion-evidence view, which
+    // is not a mapping.
+  }
+  if (mappings.length === 0) {
+    add(
+      collector,
+      "invalid-field",
+      source.workflow.path,
+      `/phases/${phase.name}/input`,
+      `Input schema ${phase.input} names no property any source provides`,
+    );
+  }
+  return mappings;
+}
+
+/** The property names a declared object schema names, or undefined if it cannot be read. */
+function schemaProperties(
+  source: AuthoredWorkflowInput,
+  path: string,
+): readonly string[] | undefined {
+  const text = source.schemas?.get(path);
+  if (text === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.properties)) return undefined;
+  return Object.keys(parsed.properties).sort(compare);
+}
+
+function lowerPhase(
+  collector: Collector,
+  source: AuthoredWorkflowInput,
+  phase: AuthoredPhase,
+  phases: readonly AuthoredPhase[],
+  workflowInput: string,
+): unknown {
+  const upstream = phase.needs
+    .map((need) => phases.find(({ name }) => name === need))
+    .filter((found): found is AuthoredPhase => found !== undefined);
+  const inputSchema =
+    phase.input !== undefined
+      ? schemaKey(phase.input)
+      : upstream.length === 1 && upstream[0] !== undefined
+        ? schemaKey(upstream[0].output)
+        : schemaKey(workflowInput);
+  const mappings =
+    // A fan-out phase's `input:` is the shape of one element, and a member
+    // reads its element rather than a merge, so it is not a binding contract.
+    phase.input === undefined || phase.forEach !== undefined
+      ? // With no declared input a phase reads one thing whole: the workflow
+        // input if it is a root, otherwise the single output it needs.
+        upstream.length === 0
+        ? [
+            {
+              key: "input",
+              source: { kind: "workflow-input", pointer: "" },
+              destinationPointer: "",
+            },
+          ]
+        : upstream.map((need) => ({
+            key: need.name,
+            source: { kind: "phase-output", phase: need.name, output: need.name, pointer: "" },
+            destinationPointer: upstream.length === 1 ? "" : `/${need.name}`,
+          }))
+      : declaredInputMappings(collector, source, phase, upstream, workflowInput);
+  return {
+    key: phase.name,
+    generation: 1,
+    dependsOn: [...phase.needs].sort(compare),
+    input: { schema: inputSchema, mappings },
+    executor:
+      phase.forEach !== undefined
+        ? {
+            kind: "task-frontier",
+            forEach: `${phase.name}-items`,
+            template: `${phase.name}-work`,
+          }
+        : phase.items !== undefined
+          ? {
+              kind: "task-set",
+              work: phase.items.map((item) => ({
+                key: item.key,
+                generation: 1,
+                role: phase.agent,
+                budgets: agentBudgets(phase.iteration.maximumAttempts),
+                dependsOn: [],
+                inputSchema: schemaKey(phase.input ?? workflowInput),
+                input: item.input,
+                completionPolicy: {
+                  criteria: [
+                    { key: `${item.key}-produced`, generation: 1, required: true, input: null },
+                  ],
+                  completionEvidencePolicy: {
+                    mode: phase.completionEvidence.mode,
+                    requirements: phase.completionEvidence.require.map((requirement) => ({
+                      kind: requirement.kind,
+                      minimumCount: requirement.min,
+                    })),
+                  },
+                },
+              })),
+            }
+          : {
+              kind: "agent",
+              role: phase.agent,
+              budgets: agentBudgets(phase.iteration.maximumAttempts),
+              resumeAcrossAttempts: phase.session !== "element",
+              completionPolicy: {
+                criteria: [
+                  { key: `${phase.name}-produced`, generation: 1, required: true, input: null },
+                ],
+                completionEvidencePolicy: {
+                  mode: phase.completionEvidence.mode,
+                  requirements: phase.completionEvidence.require.map((requirement) => ({
+                    kind: requirement.kind,
+                    minimumCount: requirement.min,
+                  })),
+                },
+              },
+            },
+    outputs: [
+      {
+        key: phase.name,
+        schema: schemaKey(phase.output),
+        path: `outputs/${phase.name}.json`,
+        maxBytes: phase.outputMaxBytes,
+      },
+    ],
+    actions: [],
+    iteration: phase.iteration,
+    exit: {
+      requiredOutputs: [phase.name],
+      ...(phase.gates.length > 0 ? { gate: `${phase.name}-gate` } : {}),
+      approval: phase.approve
+        ? {
+            policy: "required",
+            authority: { role: phase.approveRole ?? "release-manager" },
+            ...(phase.approveScope === undefined ? {} : { scope: phase.approveScope }),
+          }
+        : { policy: "none" },
+    },
+  };
+}
+
+function parseYaml(collector: Collector, source: AuthoredSource): unknown {
+  const parsed = parseDocument(source.text, { prettyErrors: true });
+  for (const error of parsed.errors) {
+    add(collector, "invalid-document", source.path, "", error.message);
+  }
+  if (parsed.errors.length > 0) return undefined;
+  return parsed.toJS({ maxAliasCount: 100 });
+}
+
+function requiredString(
+  collector: Collector,
+  path: string,
+  pointer: string,
+  value: unknown,
+  field: string,
+): string | undefined {
+  if (isRecord(value) && typeof value[field] === "string" && value[field].length > 0) {
+    return value[field];
+  }
+  add(collector, "missing-field", path, `${pointer}/${field}`, `${field} is required`);
+  return undefined;
+}
+
+function schemaKey(path: string): string {
+  const base = path.slice(path.lastIndexOf("/") + 1);
+  const dot = base.indexOf(".");
+  return dot === -1 ? base : base.slice(0, dot);
+}
+
+function add(
+  collector: Collector,
+  code: ConfigurationDiagnosticCode,
+  locator: string,
+  pointer: string,
+  message: string,
+): void {
+  collector.diagnostics.push({ code, locator, pointer, message });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function compare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}

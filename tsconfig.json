@@ -1,8 +1,41 @@
 {
-  "extends": "./tsconfig.base.json",
-  "compilerOptions": {
-    "noEmit": true,
-    "types": ["node", "vitest/globals"]
-  },
-  "include": ["apps/**/*.ts", "packages/**/*.ts", "scripts/**/*.mjs", "vitest.config.ts"]
+  "files": [],
+  "references": [
+    {
+      "path": "packages/protocol"
+    },
+    {
+      "path": "packages/portal"
+    },
+    {
+      "path": "packages/kernel"
+    },
+    {
+      "path": "packages/configuration"
+    },
+    {
+      "path": "packages/execution-host"
+    },
+    {
+      "path": "packages/runtime"
+    },
+    {
+      "path": "packages/reporting"
+    },
+    {
+      "path": "packages/storage-sqlite"
+    },
+    {
+      "path": "packages/supervisor"
+    },
+    {
+      "path": "packages/testing"
+    },
+    {
+      "path": "apps/senawa"
+    },
+    {
+      "path": "apps/control-plane"
+    }
+  ]
 }

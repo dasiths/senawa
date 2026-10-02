@@ -1,0 +1,230 @@
+import {
+  type TranscriptNames,
+  type TranscriptRow,
+  type TranscriptScope,
+  type TranscriptTurn,
+  type TranscriptView,
+  transcriptDownloadName,
+  transcriptOwnerLabel,
+  transcriptPlainText,
+  transcriptRows,
+  transcriptShowsOwner,
+} from "./transcript-view-model.js";
+
+export interface TranscriptPaneActions {
+  readonly setTranscriptPinned: (pinned: boolean) => void;
+  readonly setTranscriptScope: (scope: TranscriptScope) => void;
+}
+
+export interface TranscriptPaneInput {
+  readonly view: TranscriptView;
+  readonly scope: TranscriptScope;
+  /** Whether there is a node to narrow to, which only a selection provides. */
+  readonly narrowable: boolean;
+  /** What a person sent into this run, shown beside what the agents said. */
+  readonly mine?: readonly TranscriptTurn[];
+  readonly actions: TranscriptPaneActions;
+  readonly names?: TranscriptNames;
+}
+
+export interface TranscriptPaneSnapshot {
+  readonly ownerKind: string | undefined;
+  readonly ownerId: string | undefined;
+  readonly scope: TranscriptScope;
+  readonly lineCount: number;
+  readonly pinned: boolean;
+  readonly unseen: number;
+  readonly plainText: string;
+}
+
+declare global {
+  interface Window {
+    __senawaTranscriptPane?: TranscriptPaneSnapshot;
+  }
+}
+
+const LOG_SELECTOR = ".agent-terminal-log";
+/** Sub-pixel and rounding slack that still counts as sitting at the tail. */
+const TAIL_SLACK = 12;
+
+export function transcriptPaneView(input: TranscriptPaneInput): HTMLElement {
+  const { view, scope, narrowable, actions } = input;
+  const names = input.names ?? {};
+  const pane = element("section", "agent-terminal");
+  const rows = transcriptRows(view, undefined, input.mine ?? []);
+  const plainText = transcriptPlainText(view, undefined, names);
+  pane.append(bar(view, scope, narrowable, rows.length, plainText, actions, names));
+  pane.append(log(view, rows, actions, names));
+  window.__senawaTranscriptPane = Object.freeze({
+    ownerKind: view.owner?.kind,
+    ownerId: view.owner?.id,
+    scope,
+    lineCount: rows.length,
+    pinned: view.pinned,
+    unseen: view.unseen,
+    plainText,
+  });
+  return pane;
+}
+
+function bar(
+  view: TranscriptView,
+  scope: TranscriptScope,
+  narrowable: boolean,
+  lineCount: number,
+  plainText: string,
+  actions: TranscriptPaneActions,
+  names: TranscriptNames,
+): HTMLElement {
+  const header = element("div", "agent-terminal-bar");
+  header.append(
+    textElement(
+      "span",
+      "agent-terminal-scope mono",
+      view.owner === undefined || view.owner.kind === "run"
+        ? scope === "run"
+          ? "every agent"
+          : "no agent selected"
+        : transcriptOwnerLabel(view.owner, names),
+    ),
+  );
+  const controls = element("div", "agent-terminal-controls");
+  const copy = commandButton("Copy", () => {
+    const clipboard = navigator.clipboard as Clipboard | undefined;
+    if (clipboard !== undefined) void clipboard.writeText(plainText).catch(() => undefined);
+  });
+  copy.disabled = lineCount === 0;
+  const download = commandButton("Download", () => {
+    if (view.owner !== undefined) downloadText(plainText, transcriptDownloadName(view.owner));
+  });
+  download.disabled = lineCount === 0 || view.owner === undefined;
+  controls.append(copy, download);
+  if (!view.pinned) {
+    const jump = commandButton(`Jump to latest (${view.unseen} unseen)`, () =>
+      actions.setTranscriptPinned(true),
+    );
+    jump.className = "command agent-terminal-jump";
+    controls.append(jump);
+  }
+  controls.append(textElement("span", "agent-terminal-count", `${lineCount} lines`));
+  header.append(controls);
+  return header;
+}
+
+function log(
+  view: TranscriptView,
+  rows: readonly TranscriptRow[],
+  actions: TranscriptPaneActions,
+  names: TranscriptNames,
+): HTMLElement {
+  const label =
+    view.owner === undefined
+      ? "Agent output"
+      : `Agent output for ${transcriptOwnerLabel(view.owner, names)}`;
+  const pane = element("div", "agent-terminal-log");
+  pane.setAttribute("role", "log");
+  pane.setAttribute("aria-label", label);
+  pane.tabIndex = 0;
+  if (rows.length === 0) {
+    pane.append(
+      textElement(
+        "p",
+        "agent-terminal-empty",
+        view.owner === undefined
+          ? "Select a phase or task node to read its agent output."
+          : view.owner.kind === "run"
+            ? "No durable agent output is recorded for this run."
+            : "No durable agent output is recorded for this node.",
+      ),
+    );
+    return pane;
+  }
+  for (const row of rows) {
+    const line = element("div", `agent-terminal-row ${row.stream}`);
+    line.dataset.sequence = String(row.sequence);
+    line.append(textElement("span", "agent-terminal-time", row.time));
+    // The owner column is what the run-wide grid is built on, so a person's own
+    // turn keeps the cell and leaves it empty: the stream beside it already says
+    // who, and a task digest there would name nothing.
+    if (transcriptShowsOwner(view)) {
+      const label = row.stream === "you" ? "" : transcriptOwnerLabel(row.owner, names);
+      if (label !== "") line.dataset.owner = label;
+      line.append(textElement("span", "agent-terminal-owner", label));
+    }
+    line.append(
+      textElement("span", "agent-terminal-stream", row.stream),
+      textElement("span", "agent-terminal-text", row.text),
+    );
+    pane.append(line);
+  }
+  pane.addEventListener(
+    "scroll",
+    () => {
+      const atTail = pane.scrollHeight - pane.scrollTop - pane.clientHeight <= TAIL_SLACK;
+      if (atTail !== view.pinned) actions.setTranscriptPinned(atTail);
+    },
+    { passive: true },
+  );
+  pane.addEventListener("keydown", (event) => {
+    if (event.key !== "End") return;
+    event.preventDefault();
+    pane.scrollTop = pane.scrollHeight;
+    if (!view.pinned) actions.setTranscriptPinned(true);
+  });
+  return pane;
+}
+
+export function captureTranscriptScroll(root: HTMLElement): number | undefined {
+  return root.querySelector<HTMLElement>(LOG_SELECTOR)?.scrollTop;
+}
+
+export function restoreTranscriptScroll(
+  root: HTMLElement,
+  offset: number | undefined,
+  pinned: boolean,
+): void {
+  const pane = root.querySelector<HTMLElement>(LOG_SELECTOR);
+  if (pane === null) return;
+  pane.scrollTop = pinned ? pane.scrollHeight : (offset ?? 0);
+}
+
+function downloadText(text: string, fileName: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.rel = "noopener";
+  anchor.hidden = true;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function commandButton(label: string, action: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "command";
+  button.textContent = label;
+  button.addEventListener("click", action);
+  return button;
+}
+
+function element<Tag extends keyof HTMLElementTagNameMap>(
+  tag: Tag,
+  className: string,
+): HTMLElementTagNameMap[Tag] {
+  const value = document.createElement(tag);
+  value.className = className;
+  return value;
+}
+
+function textElement<Tag extends keyof HTMLElementTagNameMap>(
+  tag: Tag,
+  className: string,
+  text: string,
+): HTMLElementTagNameMap[Tag] {
+  const value = element(tag, className);
+  value.textContent = text;
+  return value;
+}

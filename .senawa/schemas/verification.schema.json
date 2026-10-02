@@ -1,189 +1,98 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://senawa.dev/schemas/verification/v1",
+  "$id": "urn:senawa:verification",
+  "title": "Verify phase output",
+  "description": "Whether the delivered work satisfies the definition, reported against the definition's acceptance ids rather than against the implementation's own account of itself.",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["verdict", "summary", "checks"],
+  "required": [
+    "verified",
+    "summary",
+    "results"
+  ],
   "properties": {
-    "verdict": {
-      "enum": ["pass", "fail"]
+    "verified": {
+      "type": "boolean"
     },
     "summary": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 8192
     },
-    "checks": {
+    "results": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 24,
+      "description": "One entry per acceptance condition the definition declared.",
       "items": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["name", "verdict", "summary"],
+        "required": [
+          "acceptanceId",
+          "status"
+        ],
         "properties": {
-          "id": {
-            "$ref": "#/$defs/artifactId"
+          "acceptanceId": {
+            "$ref": "#/$defs/slug"
           },
-          "name": {
+          "status": {
             "type": "string",
-            "minLength": 1
+            "enum": [
+              "met",
+              "unmet",
+              "not-assessable"
+            ]
           },
-          "verdict": {
-            "enum": ["pass", "fail", "error"]
-          },
-          "summary": {
+          "basis": {
             "type": "string",
-            "minLength": 1
-          },
-          "evidence": {
-            "type": "string",
-            "minLength": 1
-          },
-          "criterionId": {
-            "$ref": "#/$defs/artifactId"
-          },
-          "taskKey": {
-            "$ref": "#/$defs/artifactId"
-          },
-          "phaseId": {
-            "$ref": "#/$defs/artifactId"
-          },
-          "command": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 300
-          },
-          "evidenceRefs": {
-            "type": "array",
-            "maxItems": 10,
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["kind", "ref"],
-              "properties": {
-                "kind": {
-                  "enum": ["file", "artifact", "sensor", "command", "repository-delta"]
-                },
-                "ref": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 300
-                }
-              }
-            }
+            "maxLength": 1024,
+            "description": "Why this verdict was reached. Not completion evidence in the protocol sense."
           }
-        }
+        },
+        "additionalProperties": false
       }
     },
-    "criteria": {
-      "type": "array",
-      "maxItems": 100,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "source", "verdict"],
-        "properties": {
-          "id": {
-            "$ref": "#/$defs/artifactId"
-          },
-          "source": {
-            "enum": ["definition", "plan", "task"]
-          },
-          "verdict": {
-            "enum": ["pass", "fail", "not-verifiable"]
-          },
-          "summary": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500
-          },
-          "checks": {
-            "type": "array",
-            "maxItems": 10,
-            "items": {
-              "$ref": "#/$defs/artifactId"
-            }
-          }
-        }
-      },
-      "description": "Worker claims about per-criterion coverage. The driver adjudicates them."
-    },
-    "phases": {
+    "unsupportedClaims": {
       "type": "array",
       "maxItems": 20,
+      "description": "Claims made by an earlier phase that the code does not support.",
       "items": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "verdict"],
+        "required": [
+          "claim",
+          "why"
+        ],
         "properties": {
-          "id": {
-            "$ref": "#/$defs/artifactId"
-          },
-          "verdict": {
-            "enum": ["pass", "fail", "not-verifiable"]
-          },
-          "summary": {
+          "claim": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 500
+            "maxLength": 768
           },
-          "checks": {
-            "type": "array",
-            "maxItems": 20,
-            "items": {
-              "$ref": "#/$defs/artifactId"
-            }
-          },
-          "tasks": {
-            "type": "array",
-            "maxItems": 50,
-            "items": {
-              "$ref": "#/$defs/artifactId"
-            }
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 768
           }
-        }
+        },
+        "additionalProperties": false
       }
     },
-    "deviations": {
+    "outOfScopeDelivered": {
       "type": "array",
       "maxItems": 20,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["description", "rationale"],
-        "properties": {
-          "description": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500
-          },
-          "rationale": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500
-          },
-          "impact": {
-            "enum": ["none", "low", "medium", "high"]
-          }
-        }
-      },
-      "description": "Honest limits that do not fail the gate, unlike findings."
-    },
-    "findings": {
-      "type": "array",
+      "description": "Delivered work the definition placed out of scope.",
       "items": {
         "type": "string",
-        "minLength": 1
-      },
-      "description": "Unresolved problems. A non-empty findings array fails the work-done gate."
+        "minLength": 1,
+        "maxLength": 768
+      }
     }
   },
+  "additionalProperties": false,
   "$defs": {
-    "artifactId": {
+    "slug": {
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$",
-      "description": "An id you choose to cross-reference entries inside this artifact, or a task key or plan phase id copied from the plan. Any case is accepted; no spaces or slashes."
+      "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
     }
   }
 }

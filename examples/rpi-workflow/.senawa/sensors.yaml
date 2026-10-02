@@ -1,0 +1,20 @@
+# Sensors measure the work. Gates are rules over what they measured.
+#
+# The sensor runs a real command, in its own process, and the driver runs it
+# rather than the agent. A blocking rule resists progress while its reading is
+# red. Every blocking gate needs a deterministic reading behind it, or the
+# harness is only agreeing with whoever submitted the work.
+
+sensors:
+  # Refuses a project with no tests as loudly as one with failing tests. A
+  # runner that passes because it found nothing would let the gate agree with an
+  # empty repository.
+  tests:
+    run: node scripts/check.mjs
+    timeout: 5m
+
+gates:
+  tests:
+    blocking:
+      - sensor: tests
+        exitCode: 0

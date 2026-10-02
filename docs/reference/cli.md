@@ -1,497 +1,360 @@
-# Senawa CLI Reference
+# CLI Reference
 
-This file is generated from the registered Commander grammar. Run
-`pnpm docs:cli` after changing CLI commands.
+## Commands
 
-Beads is the default runtime. Use the global `--runtime file` option only for
-development, tests, and the deterministic file-backed demo. Runtime selection
-belongs to process composition and is not available through browser HTTP routes.
+### The run loop
 
-The current CLI intentionally omits `init`, `sensor run`, `task done`, and
-`task abort`. Repository initialization does not yet have bundled scaffold
-assets, individual sensor execution has no gate expectation contract, and task
-completion has no authenticated subprocess command bridge. Per-task cancellation
-also lacks coordination with a continuing driver; forced whole-run end does not
-establish that narrower contract.
+These are the commands a consumer uses, in the order they use them.
 
-## Top-level grammar
-
-```text
-Usage: senawa [options] [command]
-
-Drive bounded Senawa workflows
-
-Options:
-  --worker-host <host>          worker execution host (choices: "simulated",
-                                "copilot-subprocess", "copilot-sdk", default:
-                                "copilot-sdk")
-  --caller <caller>             command caller attribution (choices:
-                                "principal-agent")
-  --runtime <runtime>           runtime backend (file is for development and
-                                tests) (choices: "file", "beads", default:
-                                "beads")
-  -h, --help                    display help for command
-
-Commands:
-  doctor [options]
-  model
-  workflow
-  sensor
-  gate
-  work
-  phase
-  task
-  plan
-  ask <question>
-  questions [runId]
-  answer <questionId> <answer>
-  discover <title>
-  note <note>
-  browser [options] [runId]     Open the active run in the local Senawa browser
-                                console
-  approve [options] <phase>
-  reject [options] <phase>
-  steer <task> <instruction>
-  help [command]                display help for command
+```bash
+senawa init                         # write a working .senawa tree
+senawa doctor                       # compile it and report every problem at once
+senawa start request.json [run-id]  # start a run and drive it
+senawa advance <repository> <run>   # drive an existing run one step at a time
 ```
 
-## senawa doctor
+`start` blocks and reports what the run is waiting for. Pass `--detach` to
+return as soon as the first phase is dispatched.
 
-```text
-Usage: senawa doctor [options]
+Both `start` and `advance` stop as soon as the run needs something senawa cannot
+supply, and say which:
 
-Options:
-  --live      check selected live worker host, catalog, models, and capabilities
-  -h, --help  display help for command
+| Output | Meaning |
+|---|---|
+| `dispatched <phase> as <id>` | An agent has work |
+| `waiting for the agent working on <phase>` | The agent has not finished |
+| `waiting for a decision on <phase>` | A person owes an approval |
+| `<phase> did not pass: <sensor>` | A blocking gate refused |
+| `closed <phase>` | The phase closed and the run moved on |
+| `finished` | No phase remains |
+
+A gate refusal exits non-zero. Waiting for an agent or a person does not,
+because neither is a failure.
+
+### Deciding
+
+```bash
+senawa approve <repository> <run>
+senawa reject <repository> <run> <reason>
+senawa answer <repository> <run> <text>
 ```
 
-## senawa model
+A rejection must carry a reason. The next attempt is a guess without one.
 
-```text
-Usage: senawa model [options] [command]
+### Overriding
 
-Options:
-  -h, --help      display help for command
-
-Commands:
-  list
-  help [command]  display help for command
+```bash
+senawa override <repository> <run> <reason>
 ```
 
-## senawa model list
+Accepts work the run judged unfinished, so the rest of the run can continue.
 
-```text
-Usage: senawa model list [options]
+A reason is required and is kept as written. An override is the one place a
+run's outcome stops being derivable from its evidence, so what you said at the
+time is the only thing that explains it afterwards. It is recorded with who you
+are and when, and it stays in the run's history.
 
-Options:
-  -h, --help  display help for command
+Only work that reported it could not finish can be accepted this way. Work still
+running has no outcome to accept.
+
+### Steering
+
+```bash
+senawa steer <repository> <run> <text> [live|queued|abort-retry]
 ```
 
-## senawa workflow
+Redirects the agent that is currently working. Delivery defaults to `queued`.
 
-```text
-Usage: senawa workflow [options] [command]
+| Delivery | When the agent sees it |
+| --- | --- |
+| `live` | during the turn it is taking |
+| `queued` | when the turn it is taking ends |
+| `abort-retry` | the turn stops and the attempt starts again carrying the text |
 
-Options:
-  -h, --help       display help for command
+Only `abort-retry` discards work the agent had already done, so it spends an
+attempt and needs one left.
 
-Commands:
-  list
-  info <name>
-  render <name>
-  validate [name]
-  help [command]   display help for command
+The instruction is recorded before anything tries to deliver it. A run that
+changes course can always say who changed it and what they said, even when
+delivery fails. An agent that has already finished cannot be redirected, because
+an instruction nobody will read is worse than a refusal.
+
+### Measuring
+
+```bash
+senawa run-gates <phase>
 ```
 
-## senawa workflow list
+Runs the phase's sensors and reports what they measured. It spends no attempt,
+so an agent or a person can ask before submitting.
 
-```text
-Usage: senawa workflow list [options]
+### The agent channel
 
-Options:
-  -h, --help  display help for command
+```bash
+senawa worker context
+senawa worker output-schema
+senawa worker complete --output <name>=<file> [--evidence <kind>=<file>] [--summary <text>]
+senawa worker ask <question>
+senawa worker escalate <reason>
 ```
 
-## senawa workflow info
+A phase that requires completion evidence refuses a completion that owes it,
+naming the kind and how much is still missing:
 
 ```text
-Usage: senawa workflow info [options] <name>
-
-Options:
-  -h, --help  display help for command
+This completion owes evidence: this completion needs 2 of task-completion and carries 0
 ```
 
-## senawa workflow render
+Nothing is published by a refused completion, so the phase is left exactly as it
+was and the next call can carry the missing files. Write `--evidence
+<kind>@<criterion>=<file>` when the phase counts evidence per criterion rather
+than per completion; a bare kind is evidence for the completion itself.
 
-```text
-Usage: senawa workflow render [options] <name>
+These require `SENAWA_WORKER_DISPATCH` and `SENAWA_WORKER_CREDENTIAL`, which
+senawa sets on a dispatched agent. `SENAWA_WORKER_CREDENTIAL` names a file
+rather than carrying a token, so the credential can be withdrawn from a process
+that already read it. `senawa start` prints both values when it dispatches. An
+agent never writes these by hand: the generated operating contract in its prompt
+tells it which are available.
 
-Options:
-  -h, --help  display help for command
+`context` and `output-schema` answer today. `complete`, `ask`, and `escalate`
+refuse with a message saying submissions are not accepted yet, rather than
+accepting work and dropping it. The channel is served by the local supervisor,
+so it needs `senawa service start`.
+
+### Managing the service
+
+Start the local supervisor as a detached process, or retain foreground process
+ownership:
+
+```bash
+senawa service start
+senawa service run
 ```
 
-## senawa workflow validate
+`service start` passes no credential on the command line. It writes daemon
+stdout and stderr to a private `service.log`, then waits for an authenticated
+status response. Runtime files use `$XDG_RUNTIME_DIR/senawa`; durable state uses
+`$XDG_STATE_HOME/senawa`. Platform-safe user defaults apply when either variable
+is absent.
 
-```text
-Usage: senawa workflow validate [options] [name]
+The outbound remote connector is disabled unless the daemon inherits both
+`SENAWA_REMOTE_ENDPOINT` and `SENAWA_REMOTE_KEY_FILE`. The latter names a
+bounded, current-user-owned `0600` enrollment file. Connector policy comes from
+the locally persisted canonical configuration snapshot named by that file.
+Neither value appears in `service status` or `service logs`. The [remote
+control-plane reference](remote-control-plane.md) defines the exact enrollment,
+endpoint, status, and hosted-service limits.
 
-Options:
-  -h, --help  display help for command
+Manage the running service through authenticated Unix-socket HTTP:
+
+```bash
+senawa service status
+senawa service drain
+senawa service stop
+senawa service logs [after]
+senawa service recover <repository-id> <run-id>
+senawa service recover <repository-id> <run-id> --direct
 ```
 
-## senawa sensor
+Drain stops new queue claims and effect dispatch. Stop drains before closing
+listeners and authorities. Direct recovery opens the same SQLite authority and
+run controller. It refuses a live foreign lease and can proceed with a higher
+fence only after expiry.
 
-```text
-Usage: senawa sensor [options] [command]
+Create and verify deterministic reporting exports:
 
-Options:
-  -h, --help      display help for command
-
-Commands:
-  list
-  info <id>
-  audit [runId]
-  help [command]  display help for command
+```bash
+senawa report create <repository-id> <run-id> <fresh-directory>
+senawa export verify <directory>
 ```
 
-## senawa sensor list
+Report creation captures every section from one SQLite read transaction. It
+publishes canonical JSON and JSON Lines files under an exact manifest only when
+the destination does not exist. Export verification is read-only and rejects
+unknown files, changed bytes, symbolic links, special files, and exceeded
+limits. A report export contains secret-safe provenance, not authority state.
+`senawa export restore` always refuses; only a verified combined backup can be
+restored.
 
-```text
-Usage: senawa sensor list [options]
+Create, verify, and restore combined authority and SDK state:
 
-Options:
-  -h, --help  display help for command
+```bash
+senawa backup create <fresh-directory>
+senawa backup verify <directory>
+senawa restore verify <directory>
+senawa restore apply <backup-directory> <fresh-state-root>
 ```
 
-## senawa sensor info
+Backup creation is an authenticated IPC operation. The service must already be
+drained. The operation serializes with cycles, recovery, and stop; shuts down
+the owned SDK pool; verifies drained state again; creates SQLite and SDK
+bundles; verifies their semantic and byte manifests; then publishes the outer
+manifest. A retry for the same destination uses a deterministic request
+identity and returns the already verified result. A different request or any
+existing unverified destination is refused.
 
-```text
-Usage: senawa sensor info [options] <id>
+Backup and restore verification are read-only and need no running service.
+Restore apply requires the active supervisor socket to be absent and writes
+only to a fresh state root. Existing, symbolic-link, special-file, overlapping,
+corrupt, or manifest-drifted inputs are refused. The command never replaces the
+active database, assets, or SDK store in place.
 
-Options:
-  -h, --help  display help for command
+SDK backup and restore walk every existing fresh-destination ancestor from the
+absolute filesystem root, reject symbolic links and noncanonical resolution,
+and recheck the destination parent's device and inode before publication. The
+Senawa uses pathname-only Node filesystem APIs, so it cannot prevent a hostile
+process from swapping an ancestor between the final identity check and the
+path-based create or rename. Descriptor-relative publication is not part of
+v1 contract.
+
+Inspect and package sanitized maintenance evidence:
+
+```bash
+senawa integrity check
+senawa diagnostics create <fresh-directory>
+senawa repair plan
+senawa repair apply <verified-backup> <fresh-state-root>
 ```
 
-## senawa sensor audit
+Integrity check opens SQLite read-only and query-only. It reports only fixed
+categories and stable `passed`, `failed`, or `not-checked` codes for storage,
+structure, migrations, canonical authority, normalized projections, context
+and runner state, amendments, workspaces, human authority, portal, supervisor,
+remote delivery, and assets. It never returns SQL rows, canonical payloads,
+internal paths, stack traces, or underlying exception text.
 
-```text
-Usage: senawa sensor audit [options] [runId]
+Diagnostics publishes a fresh `0700` directory with `0600` canonical files and
+the manifest last. The bundle contains product and runtime versions, the fixed
+integrity report, and an allowlisted service summary. It excludes credentials,
+environment variables, local paths, logs, payloads, prompts, answers, and SDK
+session content.
 
-Options:
-  -h, --help  display help for command
+Repair is refusal-first. The plan permits only verified backup restoration to
+a fresh state root. Apply is the same stopped-service, fresh-destination,
+verified-restore operation as `restore apply`. It refuses evidence deletion,
+history truncation, digest recalculation, usage or accounting rewrite,
+synthetic outcomes, and in-place restore. It does not reindex, rewrite derived
+tables, clean staging paths, or repair corrupt authority in place.
+
+Submit workflow commands and query durable results:
+
+```bash
+senawa command submit <json-path|->
+senawa receipt get <command-id>
+senawa receipt list <repository-id> <run-id> [after] [limit]
+senawa event list <repository-id> <run-id> [after] [limit]
+senawa projection get <repository-id> <run-id>
 ```
 
-## senawa gate
+Command files and standard input contain attribution-free protocol submissions.
+The service derives principal, transport, request identity, current time, and
+allocation facts. Exact retries reuse the durable command identity. Command
+files and standard input are limited to 256 KiB before complete buffering and
+protocol parsing.
 
-```text
-Usage: senawa gate [options] [command]
+Review and control additive amendments through the same authenticated service:
 
-Options:
-  -h, --help            display help for command
-
-Commands:
-  check [options] <id>
-  help [command]        display help for command
+```bash
+senawa amendment list <repository-id> <run-id>
+senawa amendment get <repository-id> <run-id> <amendment-id>
+senawa amendment source <repository-id> <run-id> <amendment-id>
+senawa amendment status <repository-id> <run-id> <amendment-id>
+senawa amendment withdraw <repository-id> <run-id> <amendment-id>
+senawa amendment approve <repository-id> <run-id> <amendment-id>
+senawa amendment reject <repository-id> <run-id> <amendment-id>
+senawa amendment recover <repository-id> <run-id>
 ```
 
-## senawa gate check
+List, get, source, and status are immutable review reads. Withdrawal and human
+decisions submit protocol commands bound to the stored proposal digest, base
+graph revision, and reviewed result graph revision. Recovery acquires the
+existing run lease and drives affected cancellation, reconciliation, and apply.
+It never supplies quiescence facts; SQLite rechecks durable affected scopes in
+the apply transaction.
 
-```text
-Usage: senawa gate check [options] <id>
+Create a one-time portal bootstrap URL when the service has a loopback listener:
 
-Options:
-  --phase <phase>
-  --task <task>
-  -h, --help       display help for command
+```bash
+senawa portal
 ```
 
-## senawa work
+The command creates the capability through authenticated IPC and opens no
+daemon lifecycle route on loopback. An installed `senawa` package discovers its
+packaged portal manifest relative to the CLI module, verifies every declared
+asset digest and byte length, and keeps the bytes in memory before serving. A
+source build can override discovery with `SENAWA_PORTAL_MANIFEST` for tests and
+development. If the selected manifest is missing or invalid, the authenticated
+portal shell returns a typed unavailable response while service and query
+commands remain operational.
 
-```text
-Usage: senawa work [options] [command]
+Create a complete `senawa.dev/workflow/v1` standard delivery tree without
+overwriting an existing destination:
 
-Options:
-  -h, --help              display help for command
-
-Commands:
-  start [options] <goal>
-  resume
-  pause
-  finish
-  show [runId]
-  wait [options]
-  end [options]
-  report [runId]
-  web [options] [runId]
-  help [command]          display help for command
+```bash
+senawa init [project-directory]
 ```
 
-## senawa work start
+With no directory, init targets the current project root. An explicit argument
+selects an existing project directory. In both forms, init publishes a
+`.senawa` tree containing `workflow.yaml`, `agents.yaml`, `sensors.yaml`, the
+agent prompts, and the schemas the standard workflow declares. The authored
+surface is YAML; there is no lowered document to write by hand.
 
-```text
-Usage: senawa work start [options] <goal>
+Init creates a private lock and staging directory beneath the project root. It
+creates every file exclusively with private permissions, syncs each file,
+syncs every staging directory, verifies that the final `.senawa` name remains
+absent, renames the complete staged directory into place, and syncs the project
+root. Cleanup removes only staging and lock directories whose device and inode
+still match the objects created by this invocation. Concurrent invocations
+allow one publisher. Any existing `.senawa` filesystem object is refused as
+`already exists` and remains unchanged.
 
-Options:
-  --workflow <name>
-  -h, --help         display help for command
+The tracked repository tree, packaged template assets, default init, and
+explicit-directory init come from one generated template inventory and have
+byte-identical files. The installed-package test verifies this equality.
+
+Validate a JSON workflow configuration and report all deterministic compiler
+diagnostics:
+
+```bash
+senawa doctor [workflow-path|project-directory]
 ```
 
-## senawa work resume
+With no path, doctor reads `.senawa/workflow.yaml` relative to the current
+directory. A directory argument resolves that same file beneath it. Doctor does
+not search ancestors. A missing file exits with code `1`. Doctor refuses
+workflow files above 256 KiB before complete buffering or parsing.
 
-```text
-Usage: senawa work resume [options]
+A valid document exits with code `0`. Invalid configuration and read failures exit with
+code `1`. Parse failures name the file and where in it the problem is. Filesystem failures expose an allowlisted error
+code without stack traces or internal paths. Doctor loads every declared prompt
+and schema through the confined, symlink-refusing resource reader and compiles
+the complete immutable snapshot. It does not execute sensors, start work,
+invoke models, or contact a runner.
 
-Options:
-  -h, --help  display help for command
+Display command help or senawa version:
+
+```bash
+senawa --help
+senawa --version
 ```
 
-## senawa work pause
-
-```text
-Usage: senawa work pause [options]
-
-Options:
-  -h, --help  display help for command
-```
-
-## senawa work finish
-
-```text
-Usage: senawa work finish [options]
-
-Options:
-  -h, --help  display help for command
-```
-
-## senawa work show
-
-```text
-Usage: senawa work show [options] [runId]
-
-Options:
-  -h, --help  display help for command
-```
-
-## senawa work wait
-
-```text
-Usage: senawa work wait [options]
-
-Options:
-  --timeout <seconds>  bounded wait in seconds (default: "30")
-  -h, --help           display help for command
-```
-
-## senawa work end
-
-```text
-Usage: senawa work end [options]
-
-Options:
-  --reason <reason>
-  --force                    cancel and reconcile an active worker before ending
-  --grace-ms <milliseconds>  bounded cancellation grace period (default: "1000")
-  -h, --help                 display help for command
-```
-
-## senawa work report
-
-```text
-Usage: senawa work report [options] [runId]
-
-Options:
-  -h, --help  display help for command
-```
-
-## senawa work web
-
-```text
-Usage: senawa work web [options] [runId]
-
-Options:
-  --port <port>  loopback port (default: "0")
-  -h, --help     display help for command
-```
-
-## senawa phase
-
-```text
-Usage: senawa phase [options] [command]
-
-Options:
-  -h, --help               display help for command
-
-Commands:
-  show [options] <id>
-  brief [options] <id>
-  artifact [options] <id>
-  help [command]           display help for command
-```
-
-## senawa phase show
-
-```text
-Usage: senawa phase show [options] <id>
-
-Options:
-  --run <runId>
-  -h, --help     display help for command
-```
-
-## senawa phase brief
-
-```text
-Usage: senawa phase brief [options] <id>
-
-Options:
-  --run <runId>
-  -h, --help     display help for command
-```
-
-## senawa phase artifact
-
-```text
-Usage: senawa phase artifact [options] <id>
-
-Options:
-  --run <runId>
-  --version <version>
-  -h, --help           display help for command
-```
-
-## senawa task
-
-```text
-Usage: senawa task [options] [command]
-
-Options:
-  -h, --help           display help for command
-
-Commands:
-  show [options] <id>
-  help [command]       display help for command
-```
-
-## senawa task show
-
-```text
-Usage: senawa task show [options] <id>
-
-Options:
-  --run <runId>
-  -h, --help     display help for command
-```
-
-## senawa plan
-
-```text
-Usage: senawa plan [options] [command]
-
-Options:
-  -h, --help        display help for command
-
-Commands:
-  revise [options]
-  help [command]    display help for command
-```
-
-## senawa plan revise
-
-```text
-Usage: senawa plan revise [options]
-
-Options:
-  --add <file>
-  -h, --help    display help for command
-```
-
-## senawa ask
-
-```text
-Usage: senawa ask [options] <question>
-
-Options:
-  -h, --help  display help for command
-```
-
-## senawa questions
-
-```text
-Usage: senawa questions [options] [runId]
-
-Options:
-  -h, --help  display help for command
-```
-
-## senawa answer
-
-```text
-Usage: senawa answer [options] <questionId> <answer>
-
-Options:
-  -h, --help  display help for command
-```
-
-## senawa discover
-
-```text
-Usage: senawa discover [options] <title>
-
-Options:
-  -h, --help  display help for command
-```
-
-## senawa note
-
-```text
-Usage: senawa note [options] <note>
-
-Options:
-  -h, --help  display help for command
-```
-
-## senawa browser
-
-```text
-Usage: senawa browser [options] [runId]
-
-Open the active run in the local Senawa browser console
-
-Options:
-  --port <port>  loopback port (default: "0")
-  --no-open      print a fresh bootstrap URL without opening it
-  -h, --help     display help for command
-```
-
-## senawa approve
-
-```text
-Usage: senawa approve [options] <phase>
-
-Options:
-  --note <note>
-  --expected-version <version>
-  --expected-digest <digest>
-  -h, --help                    display help for command
-```
-
-## senawa reject
-
-```text
-Usage: senawa reject [options] <phase>
-
-Options:
-  --reason <reason>
-  --expected-version <version>
-  --expected-digest <digest>
-  -h, --help                    display help for command
-```
-
-## senawa steer
-
-```text
-Usage: senawa steer [options] <task> <instruction>
-
-Options:
-  -h, --help  display help for command
-```
+The CLI never opens SQLite for normal service or workflow operations. The
+explicit `--direct` recovery path remains available when the service is not
+available and uses the same lease fence.
+
+## Package support
+
+Senawa package supports Node.js 22.12.0 or newer on Linux x64 with glibc
+2.34 or newer. The only supported public executable is `senawa`; service
+ownership remains available through `senawa service start` and
+`senawa service run`.
+
+The installed package includes the standard workflow template, prebuilt process
+and workspace-file helpers, SQLite migrations, and the verified portal asset
+manifest. It does not compile
+native helpers during installation. The no-credit install and ordinary CLI or
+service paths do not declare, resolve, install, or load the Copilot SDK or
+Koffi. Live worker operation requires separately available
+`@github/copilot-sdk` version `1.0.9` and explicit repository configuration.

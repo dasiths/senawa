@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:senawa:task-collection",
+  "title": "The collection the implement phase fans out over",
+  "description": "Names the shape of the tasks array itself. The kernel validates the selected collection separately from each item, so this cannot be derived from the item schema.",
+  "type": "array",
+  "minItems": 1,
+  "maxItems": 36,
+  "items": { "$ref": "urn:senawa:task" }
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:rpi:plan",
+  "title": "Plan phase output",
+  "description": "The tasks array is what the implement phase fans out over, so it stays flat: fan-out selects exactly one array.",
+  "type": "object",
+  "required": ["summary", "tasks"],
+  "properties": {
+    "summary": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "tasks": { "$ref": "urn:rpi:task-collection" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,24 @@
+# Agent definitions for the research, plan, implement workflow.
+#
+# A prompt says what the work is. Senawa appends its own operating contract to
+# every prompt at dispatch, so nothing here names a senawa command, an output
+# file, or how to signal completion.
+#
+# Defaults, applied unless an agent overrides them:
+#   provider: github-copilot
+#   session:  run          one conversation across the phases this agent works
+
+researcher:
+  prompt: prompts/researcher.md
+  model: claude-opus-5
+
+planner:
+  prompt: prompts/planner.md
+  model: claude-opus-5
+
+implementor:
+  prompt: prompts/implementor.md
+  model: claude-sonnet-5
+  # Each piece of work is independent, so a member starts clean rather than
+  # inheriting what a sibling was told.
+  session: element

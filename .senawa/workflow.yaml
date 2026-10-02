@@ -1,0 +1,94 @@
+# The workflow: which agent runs which phase, what each phase reads and writes,
+# and the conditions it must satisfy to pass.
+#
+# Senawa derives the data flow between phases. An author names schemas and
+# dependencies; senawa binds each named input property to the most recent
+# upstream output that provides it and generates the strict internal pointers.
+# There are no JSON Pointers in this file by design.
+
+name: senawa-delivery
+input: schemas/request.schema.json
+
+# Applied to every phase unless that phase overrides it. This is the middle
+# loop's policy: how many times a phase may try, and what happens each way it
+# can fail.
+defaults:
+  attempts: 3
+  onGateRejected: iterate
+  onApprovalRejected: iterate
+  onUpstreamChanged: iterate
+  onExhausted: escalate
+
+phases:
+  - name: define
+    agent: definer
+    output: schemas/definition.schema.json
+
+  - name: research
+    agent: researcher
+    needs: [define]
+    output:
+      schema: schemas/research.schema.json
+      # 262144 is the hard ceiling for any phase output asset. Research is the
+      # largest artifact this workflow produces, so it is given the full budget.
+      maxBytes: 262144
+
+  - name: plan
+    agent: planner
+    needs: [define, research]
+    # Required only when a phase has more than one upstream: it names the shape
+    # senawa binds those outputs into, so the merge is never guessed.
+    input: schemas/plan-input.schema.json
+    output:
+      schema: schemas/plan.schema.json
+      maxBytes: 262144
+    gates: [plan-shaped]
+
+  - name: implement
+    agent: implementor
+    needs: [plan]
+    # Fan-out. One member per element of the named upstream collection, each
+    # running its own loop, then fanning back in.
+    forEach: plan.tasks
+    # The kernel validates the selected collection on its own, so its shape is
+    # named rather than guessed from the item schema.
+    collection: schemas/task-collection.schema.json
+    # A member reads one element rather than the whole collection.
+    input: schemas/task.schema.json
+    output: schemas/implementation.schema.json
+    gates: [build, tests]
+    attempts: 5
+    # Members that cannot pass do not block the ones that did.
+    onFailure: continue
+    # Completion is granted only against recorded evidence, not a claim.
+    # Qualified because a phase also names gates, and gate evidence is a
+    # different thing that no author writes.
+    completionEvidence:
+      mode: task
+      require:
+        - kind: task-completion
+          min: 1
+
+  - name: verify
+    agent: verifier
+    needs: [implement]
+    # Read the accepted completion evidence of an earlier phase, not only its
+    # output. The kinds are allowlisted, so only the evidence this phase was
+    # written to read crosses into it.
+    completionEvidenceFrom:
+      - phase: implement
+        kinds: [task-completion]
+    # Two sources now feed this phase, so the merged shape is named explicitly.
+    input: schemas/verify-input.schema.json
+    output:
+      schema: schemas/verification.schema.json
+      maxBytes: 65536
+    gates: [build, tests, coverage]
+    # Verification failing is a real failure; retrying it would only hide it.
+    onGateRejected: fail
+    # A person rejecting the verification is the same kind of answer as a gate
+    # refusing it. Retrying either one automatically only spends an attempt to
+    # arrive back where it started.
+    onApprovalRejected: fail
+    approve:
+      role: release-manager

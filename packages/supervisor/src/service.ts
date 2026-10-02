@@ -1,0 +1,674 @@
+import { validateOpaqueIdentity } from "@senawa/protocol";
+import type { AsyncEffectHost, EffectHost } from "@senawa/runtime";
+import { LeaseUnavailableError, SqliteRunnerAuthority } from "@senawa/storage-sqlite";
+import {
+  type SqliteSupervisorAuthority,
+  SupervisorServiceUnavailableError,
+} from "./command-queue.js";
+import {
+  type CopilotSessionStoreHealthPort,
+  decodeSupervisorServiceStatus,
+  type RemoteConnectorStatusPort,
+  type SupervisorClock,
+  type SupervisorListenerStatus,
+  type SupervisorLogPage,
+  type SupervisorServiceStatus,
+} from "./contracts.js";
+import {
+  SupervisorRunController,
+  type SupervisorRunControllerOptions,
+  type SupervisorTimer,
+  type SupervisorTimerHandle,
+} from "./run-controller.js";
+
+const DEFAULT_STARTUP_CYCLE_LIMIT = 1_024;
+
+/**
+ * How long after a lease expiry to look again.
+ *
+ * The expiry is the earliest moment a successor could take over, and waking
+ * exactly on it races the clock the authority compares against. A short margin
+ * makes the retry land after the lease is genuinely dead rather than one
+ * millisecond before.
+ */
+const LEASE_RETRY_MARGIN_MILLISECONDS = 250;
+
+/**
+ * How long after a failed pump to look again.
+ *
+ * Long enough that a persistent failure does not spin, short enough that a run
+ * whose lease was taken is picked up before a person notices it has stopped.
+ */
+const FAILED_PUMP_RETRY_MILLISECONDS = 5_000;
+
+const serviceTimer: SupervisorTimer = Object.freeze({
+  schedule(delayMilliseconds: number, callback: () => void): SupervisorTimerHandle {
+    const handle = setTimeout(callback, delayMilliseconds);
+    // A pending retry must not be the reason the process stays alive.
+    handle.unref?.();
+    return Object.freeze({
+      cancel: () => {
+        clearTimeout(handle);
+      },
+    });
+  },
+});
+
+export type SupervisorLifecycleState =
+  | "stopped"
+  | "starting"
+  | "running"
+  | "draining"
+  | "drained"
+  | "stopping";
+
+export interface SupervisorServiceOptions {
+  readonly authority: SqliteSupervisorAuthority;
+  readonly clock: SupervisorClock;
+  readonly ownerId: string;
+  readonly processId?: number;
+  readonly startupCycleLimit?: number;
+  readonly onTransition?: (state: SupervisorLifecycleState) => void;
+  readonly sessionStoreHealth?: CopilotSessionStoreHealthPort;
+  readonly listeners?: readonly SupervisorListener[];
+  readonly effectHost?: EffectHost;
+  readonly asyncEffectHost?: AsyncEffectHost;
+  readonly deliverCompletionOutboxOnce?: () => boolean;
+  readonly deliverAmendmentProposalOutboxOnce?: () => boolean;
+  readonly timer?: SupervisorTimer;
+  readonly runnerBatchSize?: number;
+  readonly failurePolicyForRun?: SupervisorRunControllerOptions["failurePolicyForRun"];
+  readonly scheduleBeforeEffects?: SupervisorRunControllerOptions["scheduleBeforeEffects"];
+  readonly driveRunOnce?: SupervisorRunControllerOptions["driveRunOnce"];
+  readonly listSchedulableRuns?: () => readonly {
+    readonly repositoryId: string;
+    readonly runId: string;
+  }[];
+  readonly closeables?: readonly SupervisorCloseable[];
+  readonly drainables?: readonly SupervisorDrainable[];
+  readonly remoteConnectorStatuses?: readonly RemoteConnectorStatusPort[];
+}
+
+export interface SupervisorCloseable {
+  close(): Promise<void> | void;
+}
+
+export interface SupervisorDrainable {
+  drain(): Promise<void>;
+}
+
+export interface SupervisorListener {
+  start(): Promise<SupervisorListenerStatus>;
+  close(): Promise<void>;
+}
+
+export interface SupervisorCycleResult {
+  readonly worked: boolean;
+  readonly pendingWakeCount: number;
+}
+
+export interface SupervisorQuiescenceProof {
+  assertDrained(): void;
+}
+
+export class SupervisorService {
+  readonly authority: SqliteSupervisorAuthority;
+  readonly clock: SupervisorClock;
+  readonly ownerId: string;
+  readonly processId: number;
+  readonly #startupCycleLimit: number;
+  readonly #onTransition: ((state: SupervisorLifecycleState) => void) | undefined;
+  readonly #sessionStoreHealth: CopilotSessionStoreHealthPort | undefined;
+  readonly #reads = new Set<Promise<unknown>>();
+  readonly #configuredListeners: readonly SupervisorListener[];
+  readonly #closeables: readonly SupervisorCloseable[];
+  readonly #drainables: readonly SupervisorDrainable[];
+  readonly #remoteConnectorStatuses: readonly RemoteConnectorStatusPort[];
+  readonly #effectHostConfigured: boolean;
+  readonly #controller: SupervisorRunController;
+  readonly #runnerAuthority: SqliteRunnerAuthority | undefined;
+  readonly #listSchedulableRuns: SupervisorServiceOptions["listSchedulableRuns"];
+  readonly #timer: SupervisorTimer;
+  readonly #startedAt: string;
+  #listeners: readonly SupervisorListenerStatus[] = [];
+  #startedListeners: SupervisorListener[] = [];
+  #attemptSequence = 0;
+  #state: SupervisorLifecycleState = "stopped";
+  #cycle: Promise<SupervisorCycleResult> | undefined;
+  #operation: Promise<void> = Promise.resolve();
+  #pump: Promise<void> | undefined;
+  #stopOperation: Promise<void> | undefined;
+  #deferredWake: SupervisorTimerHandle | undefined;
+  #deferredWakeAt: number | undefined;
+  #closed = false;
+
+  constructor(options: SupervisorServiceOptions) {
+    if (options.ownerId.length === 0) throw new TypeError("Supervisor ownerId must be non-empty");
+    const startupCycleLimit = options.startupCycleLimit ?? DEFAULT_STARTUP_CYCLE_LIMIT;
+    if (!Number.isSafeInteger(startupCycleLimit) || startupCycleLimit < 1) {
+      throw new TypeError("startupCycleLimit must be a positive safe integer");
+    }
+    this.authority = options.authority;
+    this.clock = options.clock;
+    this.ownerId = options.ownerId;
+    this.processId = options.processId ?? process.pid;
+    this.#startupCycleLimit = startupCycleLimit;
+    this.#onTransition = options.onTransition;
+    this.#sessionStoreHealth = options.sessionStoreHealth;
+    this.#configuredListeners = options.listeners ?? [];
+    this.#closeables = options.closeables ?? [];
+    this.#drainables = options.drainables ?? [];
+    this.#remoteConnectorStatuses = options.remoteConnectorStatuses ?? [];
+    this.#effectHostConfigured =
+      options.effectHost !== undefined || options.asyncEffectHost !== undefined;
+    this.#listSchedulableRuns = options.listSchedulableRuns;
+    this.#timer = options.timer ?? serviceTimer;
+    this.#runnerAuthority =
+      options.effectHost === undefined && options.asyncEffectHost === undefined
+        ? undefined
+        : new SqliteRunnerAuthority({
+            databasePath: options.authority.databasePath,
+            dependencies: options.authority.dependencies,
+          });
+    this.#controller = new SupervisorRunController({
+      authority: options.authority,
+      ...(options.effectHost === undefined
+        ? {}
+        : {
+            effectHost: options.effectHost,
+            runnerAuthority: requiredValue(this.#runnerAuthority),
+          }),
+      ...(options.asyncEffectHost === undefined
+        ? {}
+        : {
+            asyncEffectHost: options.asyncEffectHost,
+            runnerAuthority: requiredValue(this.#runnerAuthority),
+          }),
+      ...(options.deliverCompletionOutboxOnce === undefined
+        ? {}
+        : { deliverCompletionOutboxOnce: options.deliverCompletionOutboxOnce }),
+      ...(options.deliverAmendmentProposalOutboxOnce === undefined
+        ? {}
+        : {
+            deliverAmendmentProposalOutboxOnce: options.deliverAmendmentProposalOutboxOnce,
+          }),
+      ...(options.timer === undefined ? {} : { timer: options.timer }),
+      reportLease: (report) => {
+        this.#log("warn", report.event, report.reason, {
+          repositoryId: report.repositoryId,
+          runId: report.runId,
+          ...report.fields,
+        });
+      },
+      ...(options.runnerBatchSize === undefined
+        ? {}
+        : { runnerBatchSize: options.runnerBatchSize }),
+      ...(options.failurePolicyForRun === undefined
+        ? {}
+        : { failurePolicyForRun: options.failurePolicyForRun }),
+      ...(options.scheduleBeforeEffects === undefined
+        ? {}
+        : { scheduleBeforeEffects: options.scheduleBeforeEffects }),
+      ...(options.driveRunOnce === undefined ? {} : { driveRunOnce: options.driveRunOnce }),
+    });
+    this.#startedAt = this.#now();
+  }
+
+  get state(): SupervisorLifecycleState {
+    return this.#state;
+  }
+
+  async start(): Promise<void> {
+    if (this.#state !== "stopped" || this.#closed) {
+      throw new Error("Supervisor service can only start once from stopped");
+    }
+    this.#transition("starting");
+    try {
+      this.authority.setMode("running", this.#now());
+      for (let index = 0; index < this.#startupCycleLimit; index += 1) {
+        const result = await this.runCycle();
+        if (!result.worked) {
+          const listeners: SupervisorListenerStatus[] = [];
+          for (const listener of this.#configuredListeners) {
+            listeners.push(await listener.start());
+            this.#startedListeners.push(listener);
+          }
+          this.#listeners = Object.freeze(listeners);
+          this.#transition("running");
+          this.#log("info", "service.started", "Supervisor service started", {
+            listenerCount: listeners.length,
+          });
+          return;
+        }
+      }
+      throw new Error("Supervisor startup recovery exceeded its bounded cycle limit");
+    } catch (error) {
+      const cleanupErrors: unknown[] = [];
+      try {
+        this.authority.setMode("stopped", this.#now());
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      cleanupErrors.push(...(await this.#closeOwnedResources()));
+      this.#closed = true;
+      this.#listeners = [];
+      this.#transition("stopped");
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError([error, ...cleanupErrors], "Supervisor startup failed");
+      }
+      throw error;
+    }
+  }
+
+  runCycle(): Promise<SupervisorCycleResult> {
+    if (this.#state !== "starting" && this.#state !== "running" && this.#state !== "draining") {
+      return Promise.resolve({ worked: false, pendingWakeCount: 0 });
+    }
+    if (this.#cycle !== undefined) return this.#cycle;
+    this.#cycle = this.#enqueueOperation(() => this.#runCycle()).finally(() => {
+      this.#cycle = undefined;
+    });
+    return this.#cycle;
+  }
+
+  wake(): void {
+    if (this.#state !== "running" || this.#pump !== undefined) return;
+    let failed = false;
+    this.#pump = this.#runPump()
+      .catch((error: unknown) => {
+        // wake() is called from synchronous notifier callbacks that discard its
+        // result, so a rejection here would surface as an unhandled rejection and
+        // terminate the daemon. Record the failure and let the next wake retry.
+        failed = true;
+        this.#reportBackgroundFailure("service.wake-pump-failed", error);
+      })
+      .finally(() => {
+        this.#pump = undefined;
+        if (failed) {
+          // "Let the next wake retry" assumed a next wake. A live run lost its
+          // lease and died on the fence, and because nothing else wrote to the
+          // record afterwards there was no notification to wake on: the pump
+          // stopped for good with three agents' work unaccepted. A failure is a
+          // reason to look again shortly, not a reason to stop.
+          this.#deferWake(FAILED_PUMP_RETRY_MILLISECONDS);
+          return;
+        }
+        if (this.#state === "running" && this.authority.listPendingWakes().length > 0) this.wake();
+      });
+  }
+
+  #reportBackgroundFailure(event: string, error: unknown): void {
+    try {
+      this.#log("error", event, "Supervisor background work failed", {
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    } catch {
+      // A failing log sink must not escalate back into an unhandled rejection.
+    }
+  }
+
+  async drain(): Promise<void> {
+    if (this.#state === "drained") return;
+    if (this.#state !== "running") {
+      throw new Error("Supervisor service can only drain while running");
+    }
+    this.authority.setMode("draining", this.#now());
+    this.#transition("draining");
+    this.#log("info", "service.draining", "Supervisor service is draining", {});
+    // A retry that fires after the service has stopped driving would wake a
+    // pump that is no longer allowed to run, so the deferred work is dropped
+    // here rather than left to be ignored later.
+    this.#deferredWake?.cancel();
+    this.#deferredWake = undefined;
+    this.#deferredWakeAt = undefined;
+    const drainResults = await Promise.allSettled(
+      this.#drainables.map((drainable) => drainable.drain()),
+    );
+    await this.#cycle;
+    await this.#pump;
+    await this.#operation;
+    this.authority.setMode("drained", this.#now());
+    this.#transition("drained");
+    this.#log("info", "service.drained", "Supervisor service drained", {});
+    const drainErrors = drainResults.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (drainErrors.length > 0) {
+      throw new AggregateError(drainErrors, "Supervisor drain completed with resource errors");
+    }
+  }
+
+  stop(): Promise<void> {
+    if (this.#state === "stopped") return Promise.resolve();
+    if (this.#stopOperation !== undefined) return this.#stopOperation;
+    this.#stopOperation = this.#drainAndStop().finally(() => {
+      this.#stopOperation = undefined;
+    });
+    return this.#stopOperation;
+  }
+
+  withQuiescentState<T>(operation: (proof: SupervisorQuiescenceProof) => Promise<T>): Promise<T> {
+    return this.#enqueueOperation(async () => {
+      const proof = Object.freeze({
+        assertDrained: () => {
+          if (this.#state !== "drained") {
+            throw new Error("Supervisor quiescent operation requires drained service");
+          }
+        },
+      });
+      proof.assertDrained();
+      const result = await operation(proof);
+      proof.assertDrained();
+      return result;
+    });
+  }
+
+  async #drainAndStop(): Promise<void> {
+    let drainError: unknown;
+    if (this.#state === "running") {
+      try {
+        await this.drain();
+      } catch (error) {
+        drainError = error;
+      }
+    }
+    if (this.#state !== "drained") {
+      throw new Error("Supervisor service can only stop after draining");
+    }
+    try {
+      await this.#enqueueOperation(() => this.#stopDrained());
+    } catch (stopError) {
+      if (drainError !== undefined) {
+        throw new AggregateError(
+          [drainError, stopError],
+          "Supervisor drain and stop completed with resource errors",
+        );
+      }
+      throw stopError;
+    }
+    if (drainError !== undefined) throw drainError;
+  }
+
+  async #stopDrained(): Promise<void> {
+    this.#transition("stopping");
+    // Reads run beside work rather than behind it, so stopping has to wait for
+    // the ones in flight before closing what they are reading.
+    await Promise.allSettled([...this.#reads]);
+    const errors: unknown[] = [];
+    try {
+      this.authority.setMode("stopped", this.#now());
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      this.#log("info", "service.stopping", "Supervisor service is stopping", {});
+    } catch (error) {
+      errors.push(error);
+    }
+    errors.push(...(await this.#closeOwnedResources()));
+    this.#closed = true;
+    this.#listeners = [];
+    this.#transition("stopped");
+    if (errors.length > 0) throw errors[0];
+  }
+
+  /**
+   * Reads do not queue. The operation queue serializes work that changes the
+   * run; a cycle awaits a whole agent turn, so queueing a read behind it meant
+   * the supervisor answered nothing for the minutes an agent was working --
+   * measured at fifteen-second timeouts on `service status` and `portal` while
+   * `senawa status`, which reads the database directly, took two seconds. The
+   * console is what a person reaches for while agents work.
+   */
+  async status(): Promise<SupervisorServiceStatus> {
+    this.#assertQueryAvailable();
+    return this.#trackRead(async () => this.#readStatus());
+  }
+
+  async #readStatus(): Promise<SupervisorServiceStatus> {
+    // A status is a reading taken at a moment. The health probe is I/O and the
+    // lifecycle can move while it runs, so what is reported is the lifecycle
+    // this reading was taken of.
+    const lifecycle = this.#state;
+    const listeners = this.#listeners;
+    const snapshot = this.authority.operationalSnapshot();
+    const sdkSessionStore =
+      this.#sessionStoreHealth === undefined
+        ? {
+            status: "unknown" as const,
+            expectedSessionCount: snapshot.startedSessionIds.length,
+            missingSessionIds: Object.freeze([] as string[]),
+            message: "SDK session store health adapter is not configured",
+          }
+        : await this.#sessionStoreHealth.health(snapshot.startedSessionIds);
+    const remoteConnectors = this.#remoteConnectorStatuses.map((connector) => connector.status());
+    return decodeSupervisorServiceStatus({
+      lifecycle,
+      mode: this.authority.mode(),
+      health:
+        sdkSessionStore.status === "healthy" &&
+        remoteConnectors.every((connector) => connector.health === "healthy")
+          ? "healthy"
+          : "degraded",
+      processId: this.processId,
+      startedAt: this.#startedAt,
+      listeners,
+      pending: snapshot.pending,
+      leases: snapshot.leases,
+      sdkSessionStore,
+      remoteConnectors,
+    });
+  }
+
+  async logs(afterCursor?: number, limit?: number): Promise<SupervisorLogPage> {
+    this.#assertQueryAvailable();
+    return this.#trackRead(async () => this.authority.queryLogs(afterCursor, limit));
+  }
+
+  async recover(repositoryId: string, runId: string): Promise<{ readonly worked: boolean }> {
+    if (this.#state !== "running") throw new Error("Supervisor recovery requires running service");
+    return this.#enqueueOperation(async () => {
+      this.#attemptSequence += 1;
+      const result = await this.#controller.runOnceAsync({
+        repositoryId: validateOpaqueIdentity(repositoryId),
+        runId: validateOpaqueIdentity(runId),
+        ownerId: this.ownerId,
+        currentTime: () => this.#now(),
+        attemptId: `${this.ownerId}-recovery-${this.#attemptSequence}`,
+        runEffects: await this.#effectsAllowed(),
+      });
+      this.#log("info", "run.recovered", "Direct run recovery completed", {
+        repositoryId,
+        runId,
+        worked: result.worked,
+      });
+      return Object.freeze({ worked: result.worked });
+    });
+  }
+
+  async #runCycle(): Promise<SupervisorCycleResult> {
+    const wakes = this.authority.listPendingWakes();
+    const wake = wakes[0];
+    const amendmentProposal = this.authority.listPendingAmendmentProposalRuns()[0];
+    const runnable = this.authority.listRunnableRuns()[0];
+    const schedulable = this.#listSchedulableRuns?.()[0];
+    const amendmentRecovery = this.authority.listApprovedAmendmentRecoveries()[0];
+    const target = wake ?? amendmentProposal ?? amendmentRecovery ?? runnable ?? schedulable;
+    if (target === undefined) return { worked: false, pendingWakeCount: 0 };
+    if (this.#state === "draining") {
+      return { worked: false, pendingWakeCount: wakes.length };
+    }
+
+    try {
+      this.#attemptSequence += 1;
+      const result = await this.#controller.runOnceAsync({
+        repositoryId: target.repositoryId,
+        runId: target.runId,
+        ownerId: this.ownerId,
+        currentTime: () => this.#now(),
+        attemptId: `${this.ownerId}-${this.#attemptSequence}`,
+        runEffects: await this.#effectsAllowed(),
+      });
+      if (!result.worked && wake !== undefined) {
+        this.authority.acknowledgeWake(wake.repositoryId, wake.runId, wake.generation);
+      }
+      return {
+        worked: result.worked,
+        pendingWakeCount: this.authority.listPendingWakes().length,
+      };
+    } catch (error) {
+      if (error instanceof LeaseUnavailableError) {
+        this.#deferUntilLeaseExpires(target, error);
+        return { worked: false, pendingWakeCount: wakes.length };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Looks at this run again when the lease that blocked it runs out.
+   *
+   * A supervisor that stops mid-turn leaves a claim naming an owner that no
+   * longer exists. Everything below recovers once that owner's lease expires,
+   * but the service is wake-driven with no clock of its own: the cycle that
+   * found the run reported no work, the pump stopped, and nothing asked again a
+   * minute later. The run was runnable in principle and unreached in practice.
+   *
+   * Retrying immediately would spin against a lease that is still live, so the
+   * retry is scheduled at the expiry the authority already knows. The earliest
+   * pending retry wins, because a later one cannot serve an earlier expiry.
+   */
+  #deferUntilLeaseExpires(
+    target: { readonly repositoryId: string; readonly runId: string },
+    error: LeaseUnavailableError,
+  ): void {
+    this.#log("info", "run.lease-held", "Run is blocked by a lease another owner holds", {
+      repositoryId: target.repositoryId,
+      runId: target.runId,
+      ...(error.expiresAt === undefined ? {} : { expiresAt: error.expiresAt }),
+    });
+    if (error.expiresAt === undefined) return;
+    const at = Date.parse(error.expiresAt) + LEASE_RETRY_MARGIN_MILLISECONDS;
+    if (!Number.isFinite(at)) return;
+    this.#deferWakeUntil(at);
+  }
+
+  /** Looks again in a while, unless something is already going to look sooner. */
+  #deferWake(delayMilliseconds: number): void {
+    this.#deferWakeUntil(Date.parse(this.#now()) + delayMilliseconds);
+  }
+
+  #deferWakeUntil(at: number): void {
+    if (this.#state !== "running" && this.#state !== "starting") return;
+    if (this.#deferredWakeAt !== undefined && this.#deferredWakeAt <= at) return;
+    this.#deferredWake?.cancel();
+    this.#deferredWakeAt = at;
+    const delay = Math.max(0, at - Date.parse(this.#now()));
+    this.#deferredWake = this.#timer.schedule(delay, () => {
+      this.#deferredWake = undefined;
+      this.#deferredWakeAt = undefined;
+      this.wake();
+    });
+  }
+
+  async #runPump(): Promise<void> {
+    for (let index = 0; index < this.#startupCycleLimit; index += 1) {
+      const result = await this.runCycle();
+      if (!result.worked) return;
+    }
+    this.#log("warn", "service.pump-bounded", "Supervisor wake pump reached its cycle bound", {
+      cycleLimit: this.#startupCycleLimit,
+    });
+  }
+
+  #transition(state: SupervisorLifecycleState): void {
+    this.#state = state;
+    this.#onTransition?.(state);
+  }
+
+  #now(): string {
+    return timestamp(this.clock.now());
+  }
+
+  #log(
+    level: "debug" | "info" | "warn" | "error",
+    event: string,
+    message: string,
+    fields: unknown,
+  ): void {
+    this.authority.appendLog({ recordedAt: this.#now(), level, event, message, fields });
+  }
+
+  #enqueueOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#operation.then(operation, operation);
+    this.#operation = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  /** A read in flight. Stopping waits for these; work does not. */
+  #trackRead<T>(operation: () => Promise<T>): Promise<T> {
+    const result = operation();
+    this.#reads.add(result);
+    return result.finally(() => {
+      this.#reads.delete(result);
+    });
+  }
+
+  #assertQueryAvailable(): void {
+    if (this.#closed) throw new SupervisorServiceUnavailableError("stopped");
+  }
+
+  async #closeOwnedResources(): Promise<unknown[]> {
+    const errors: unknown[] = [];
+    for (const listener of [...this.#startedListeners].reverse()) {
+      try {
+        await listener.close();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    this.#startedListeners = [];
+    for (const closeable of [...this.#closeables].reverse()) {
+      try {
+        await closeable.close();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    try {
+      this.#runnerAuthority?.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      this.authority.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    return errors;
+  }
+
+  async #effectsAllowed(): Promise<boolean> {
+    if (!this.#effectHostConfigured) return false;
+    const startedSessionIds = this.authority.operationalSnapshot().startedSessionIds;
+    if (startedSessionIds.length === 0) return true;
+    if (this.#sessionStoreHealth === undefined) return false;
+    const health = await this.#sessionStoreHealth.health(startedSessionIds);
+    return health.status === "healthy" && health.missingSessionIds.length === 0;
+  }
+}
+
+function timestamp(epochMilliseconds: number): string {
+  if (!Number.isSafeInteger(epochMilliseconds) || epochMilliseconds < 0) {
+    throw new TypeError("Supervisor clock must return non-negative epoch milliseconds");
+  }
+  return new Date(epochMilliseconds).toISOString();
+}
+
+function requiredValue<T>(value: T | undefined): T {
+  if (value === undefined) throw new TypeError("Required supervisor service value is missing");
+  return value;
+}

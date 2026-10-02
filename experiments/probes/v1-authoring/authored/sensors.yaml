@@ -1,0 +1,33 @@
+# Sensors measure a property of the work and return an assessment plus evidence.
+# Gates consume readings and resist progress while they are red.
+
+sensors:
+  build:
+    run: pnpm build
+    # A deterministic sensor executes real code, so it can anchor a gate.
+    deterministic: true
+
+  tests:
+    run: pnpm test
+    deterministic: true
+
+  lint:
+    run: pnpm lint
+    deterministic: true
+
+  diff-check:
+    run: git diff --check
+    deterministic: true
+
+gates:
+  build:
+    # Blocking readings must include at least one deterministic sensor, or the
+    # gate is only agreeing with itself. The compiler rejects one that cannot.
+    blocking: [build]
+
+  tests:
+    blocking: [tests]
+    advisory: [diff-check]
+
+  lint:
+    blocking: [lint]

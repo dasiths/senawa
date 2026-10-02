@@ -1,6 +1,6 @@
 {
   "name": "senawa-workspace",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.34.5",
@@ -8,30 +8,28 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "node scripts/build.mjs",
-    "bundle:check": "node scripts/check-bundles.mjs",
+    "benchmark:sqlite-authority": "pnpm build && node scripts/benchmark-sqlite-authority.mjs",
+    "build": "tsc -b && node scripts/stage-standard-template.mjs && pnpm --filter @senawa/portal build && node scripts/stage-portal-assets.mjs && pnpm --filter @senawa/execution-host build:native",
     "check:boundaries": "node scripts/check-boundaries.mjs",
-    "demo": "pnpm build && node examples/demos/file-offline/run.mjs",
-    "demo:beads": "pnpm build && node examples/demos/beads-offline/run.mjs",
-    "demo:docs": "node examples/demos/documentation-consistency/run.mjs",
-    "demo:live": "pnpm build && node examples/demos/live-copilot-worker/run.mjs",
-    "docs:cli": "pnpm build && node scripts/generate-cli-reference.mjs",
+    "check:behaviours": "node scripts/check-behaviour-citations.mjs",
+    "check:claims": "node scripts/check-documented-claims.mjs",
+    "check:register": "node scripts/check-writing-register.mjs",
+    "check:exports": "node scripts/check-exports.mjs",
     "docs:links": "node scripts/check-markdown-links.mjs",
     "format": "biome format --write .",
     "lint": "biome check .",
+    "package:release": "node scripts/package-release.mjs",
     "test": "vitest run --passWithNoTests",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "test:live-worker": "node scripts/test-live-worker.mjs",
+    "test:packaging": "node scripts/test-packaging.mjs",
+    "test:portal": "pnpm build && playwright test",
+    "typecheck": "tsc -b --pretty false"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.4",
+    "@playwright/test": "1.62.1",
     "@types/node": "22.17.2",
-    "esbuild": "0.25.12",
     "typescript": "5.8.3",
     "vitest": "3.2.4"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
   }
 }

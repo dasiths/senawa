@@ -1,8 +1,3 @@
----
-name: senawa
-description: Drive the senawa orchestration harness through its CLI. Use when the user wants to start a piece of work, check how a run is going, approve or reject a phase, add work, or steer a running worker.
----
-
 # Senawa
 
 Senawa runs a phased workflow: it decomposes a goal, dispatches role-scoped

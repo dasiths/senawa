@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:rpi:plan-input",
+  "title": "Plan phase input",
+  "description": "Named because two sources feed this phase. Senawa binds each property to the source that provides it, so the merge is declared rather than guessed.",
+  "type": "object",
+  "required": ["request", "research"],
+  "properties": {
+    "request": { "type": "string", "minLength": 1, "maxLength": 8192 },
+    "research": { "$ref": "urn:rpi:research" }
+  },
+  "additionalProperties": false
+}

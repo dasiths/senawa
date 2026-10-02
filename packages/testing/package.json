@@ -1,17 +1,33 @@
 {
   "name": "@senawa/testing",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./authority-conformance": {
+      "types": "./dist/authority-conformance.d.ts",
+      "default": "./dist/authority-conformance.js"
+    },
+    "./runner-conformance": {
+      "types": "./dist/runner-authority-conformance.d.ts",
+      "default": "./dist/runner-authority-conformance.js"
+    },
+    "./context-broker-conformance": {
+      "types": "./dist/context-broker-conformance.d.ts",
+      "default": "./dist/context-broker-conformance.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@senawa/application": "workspace:*",
-    "@senawa/artifact-store": "workspace:*",
-    "@senawa/domain": "workspace:*",
-    "@senawa/observability": "workspace:*",
-    "@senawa/runtime-file": "workspace:*",
-    "vitest": "3.2.4"
+    "@senawa/kernel": "workspace:*",
+    "@senawa/protocol": "workspace:*",
+    "@senawa/runtime": "workspace:*"
   }
 }

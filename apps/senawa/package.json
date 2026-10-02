@@ -1,31 +1,44 @@
 {
   "name": "senawa",
-  "version": "0.0.0",
-  "private": true,
+  "version": "1.0.0",
   "type": "module",
-  "bin": {
-    "senawa": "./dist/senawa.mjs"
+  "engines": {
+    "node": ">=22.12.0"
   },
-  "exports": {
-    ".": "./src/index.ts"
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "bin": {
+    "senawa": "./dist/main.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/**/fixtures/**",
+    "!dist/**/*.map"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@senawa/artifact-store": "workspace:*",
-    "@senawa/application": "workspace:*",
-    "@senawa/browser": "workspace:*",
     "@senawa/configuration": "workspace:*",
-    "@senawa/domain": "workspace:*",
-    "@senawa/observability": "workspace:*",
+    "@senawa/execution-host": "workspace:*",
+    "@senawa/kernel": "workspace:*",
+    "@senawa/protocol": "workspace:*",
     "@senawa/reporting": "workspace:*",
-    "@senawa/runtime-beads": "workspace:*",
-    "@senawa/runtime-file": "workspace:*",
-    "@senawa/sensors": "workspace:*",
-    "@senawa/workers": "workspace:*",
-    "ajv": "8.17.1",
-    "ajv-formats": "3.0.1",
-    "commander": "14.0.2"
+    "@senawa/runtime": "workspace:*",
+    "@senawa/storage-sqlite": "workspace:*",
+    "@senawa/supervisor": "workspace:*"
   },
   "devDependencies": {
+    "@senawa/control-plane": "workspace:*",
     "@senawa/testing": "workspace:*"
   }
 }
